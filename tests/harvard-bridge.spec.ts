@@ -16,12 +16,13 @@ for(const reverse of [false,true])test(`Harvard Bridge full drive ${reverse?'Cam
  },start);
  await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
  const snapshot=()=>page.evaluate(()=>(window as any).__backbay.snapshot());
+ const waypointRadius=4; // Allow an occupied shore junction without requiring the car's centre on its exact endpoint.
  const held=new Set<string>(),key=async(name:string,down:boolean)=>{if(down&&!held.has(name)){await page.keyboard.down(name);held.add(name);}if(!down&&held.has(name)){await page.keyboard.up(name);held.delete(name);}};
  let cursor=1,lastProgress=Date.now(),car=(await snapshot()).state,arrived=false;const began=Date.now();
  try{while(Date.now()-began<120000){
-  const previous=cursor;while(cursor<points.length-1&&Math.hypot(points[cursor][0]-car.x,points[cursor][1]-car.z)<4)cursor++;
+  const previous=cursor;while(cursor<points.length-1&&Math.hypot(points[cursor][0]-car.x,points[cursor][1]-car.z)<waypointRadius)cursor++;
   if(cursor>previous)lastProgress=Date.now();expect(Date.now()-lastProgress,'no seam may stop the car').toBeLessThan(15000);
-  if(cursor===points.length-1&&Math.hypot(car.x-points[cursor][0],car.z-points[cursor][1])<2){arrived=true;break;}
+  if(cursor===points.length-1&&Math.hypot(car.x-points[cursor][0],car.z-points[cursor][1])<waypointRadius){arrived=true;break;}
   let target=cursor,look=0;while(target<points.length-1&&look<10){look+=Math.hypot(points[target+1][0]-points[target][0],points[target+1][1]-points[target][1]);target++;}
   const desired=Math.atan2(points[target][0]-car.x,points[target][1]-car.z),error=Math.atan2(Math.sin(desired-car.yaw),Math.cos(desired-car.yaw));
   const steer=Math.atan2(2*2.66*Math.sin(error),Math.max(4,Math.hypot(points[target][0]-car.x,points[target][1]-car.z))),limit=Math.min(.48,Math.atan(7.8*2.66/(car.speed*car.speed+16)));
