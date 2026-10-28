@@ -160,3 +160,30 @@ test.describe('phone flight controls', () => {
     await page.screenshot({ path: testInfo.outputPath('helicopter-mobile.png') });
   });
 });
+
+test('hidden HUD: H explains how to undo it and switching travel mode brings it back', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('start-drive')).toBeEnabled({ timeout: 60000 });
+  await page.getByTestId('start-drive').click();
+  await expect(page.locator('#welcome')).toBeHidden();
+  const host = page.locator('#interface'), speed = page.locator('.speed-cluster'), toast = page.locator('#toast');
+  await expect(speed).toHaveCSS('opacity', '1');
+  await page.keyboard.press('h');
+  await expect(host).toHaveClass(/hud-off/);
+  await expect(speed).toHaveCSS('opacity', '0');
+  await expect(toast).toHaveClass(/visible/);
+  await expect(toast).toContainText('Press H to show it');
+  await page.keyboard.press('2');
+  await expect.poll(async () => (await snapshot(page)).travelMode).toBe('helicopter');
+  await expect(host).not.toHaveClass(/hud-off/);
+  await expect(speed).toHaveCSS('opacity', '1');
+  await page.keyboard.press('h');
+  await expect(host).toHaveClass(/hud-off/);
+  await page.keyboard.press('1');
+  await expect.poll(async () => (await snapshot(page)).travelMode).toBe('drive');
+  await expect(host).not.toHaveClass(/hud-off/);
+  await page.keyboard.press('h');
+  await page.keyboard.press('h');
+  await expect(host).not.toHaveClass(/hud-off/);
+  await expect(toast).toContainText('Interface shown');
+});
