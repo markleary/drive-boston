@@ -26,6 +26,42 @@ test.describe('mobile startup memory limits',()=>{
     expect(errors).toEqual([]);
   });
 
+  test('graphics buffers stay bounded after idle streaming and sustained touch driving',async({page},testInfo)=>{
+    test.setTimeout(120000);const errors:string[]=[];
+    page.on('pageerror',e=>errors.push(e.message));page.on('crash',()=>errors.push('page crashed'));
+    page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+    await page.addInitScript(()=>{
+      const state={allocated:0,peak:0},sizes=new WeakMap<WebGLBuffer,number>();
+      Object.assign(window,{__mobileBuffers:state});
+      const proto=WebGL2RenderingContext.prototype,native=proto.bufferData as (...args:unknown[])=>void;
+      proto.bufferData=function(target:number,source:number|AllowSharedBufferSource|null,...rest:unknown[]){
+        const binding=target===this.ARRAY_BUFFER?this.ARRAY_BUFFER_BINDING:target===this.ELEMENT_ARRAY_BUFFER?this.ELEMENT_ARRAY_BUFFER_BINDING:this.COPY_WRITE_BUFFER_BINDING;
+        const buffer=this.getParameter(binding) as WebGLBuffer|null,bytes=typeof source==='number'?source:source?.byteLength??0;
+        if(buffer){state.allocated+=bytes-(sizes.get(buffer)??0);sizes.set(buffer,bytes);state.peak=Math.max(state.peak,state.allocated);}
+        return native.call(this,target,source,...rest);
+      };
+      const remove=proto.deleteBuffer;proto.deleteBuffer=function(buffer){if(buffer){state.allocated-=sizes.get(buffer)??0;sizes.delete(buffer);}return remove.call(this,buffer);};
+    });
+    await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});
+    await page.getByTestId('start-drive').tap();await expect(page.locator('#welcome')).toBeHidden();
+    // The reported failure occurs while idle about ten seconds after Play.
+    // Wait for all four starting tiles, then remain idle beyond that interval.
+    await expect.poll(async()=>(await snapshot(page)).tiles.loaded,{timeout:60000}).toBeGreaterThanOrEqual(4);
+    for(let second=0;second<15;second++){await page.waitForTimeout(1000);await expect(page.locator('#welcome')).toBeHidden();}
+    const session=await page.context().newCDPSession(page),button=(await page.getByRole('button',{name:'Accelerate',exact:true}).boundingBox())!;
+    const before=(await snapshot(page)).state;
+    await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:button.x+button.width/2,y:button.y+button.height/2}]});
+    try{for(let second=0;second<6;second++){await page.waitForTimeout(1000);await expect(page.locator('#welcome')).toBeHidden();}}
+    finally{await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+    const after=(await snapshot(page)).state;expect(Math.hypot(after.x-before.x,after.z-before.z)).toBeGreaterThan(3);
+    const buffers=await page.evaluate(()=>(window as unknown as {__mobileBuffers:{allocated:number;peak:number}}).__mobileBuffers);
+    // A deterministic allocation budget catches the previous ~482 MiB buffer
+    // expansion even on desktop Chrome, which doesn't share iOS's crash limit.
+    expect(buffers.peak).toBeLessThan(160*1024*1024);
+    await testInfo.attach('mobile-buffer-budget.json',{body:JSON.stringify(buffers),contentType:'application/json'});
+    await page.screenshot({path:testInfo.outputPath('sustained-drive-phone.png')});expect(errors).toEqual([]);
+  });
+
   test('start, touch driving, quality, lighting, rotation and neighborhood travel remain usable',async({page},testInfo)=>{
     test.setTimeout(120000);
     const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});

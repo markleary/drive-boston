@@ -5,6 +5,10 @@ import * as THREE from 'three';
 export interface BoxPart { w: number; h: number; d: number; }
 export const box = (w: number, h: number, d: number): BoxPart => ({ w, h, d });
 export type Part = THREE.BufferGeometry | BoxPart;
+export interface TriangleSink {
+  reserve(vertices: number): void;
+  vertex(x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number): void;
+}
 
 // BoxGeometry's buildPlane calls: u, v, w axes (0 x, 1 y, 2 z), u/v direction, the box
 // extent along u and v, and the signed extent along w (its half is the face offset).

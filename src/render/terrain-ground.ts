@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { CityData, Point2 } from '../types';
 import { buildTerrainGeometryData, sampleElevation, terrainGrid } from '../simulation/terrain.ts';
-import { TriangleWriter } from './geometry-writer.ts';
+import { TriangleWriter, type TriangleSink } from './geometry-writer.ts';
 
 /** Subdivide across and along roads so hill crests and cross slopes remain
  * attached to the same surface used by the suspension raycasts. The triangles
@@ -10,7 +10,7 @@ import { TriangleWriter } from './geometry-writer.ts';
  * would draw every grid crease across the asphalt as a shading line, so the
  * ribbon is collected first and written with the face normals of coincident
  * vertices averaged, as an indexed mesh would shade. */
-export function drapedRibbonInto(sink:TriangleWriter,city:CityData,points:Point2[],width:number,offset:number,surface=(x:number,z:number)=>sampleElevation(city,x,z)){
+export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[],width:number,offset:number,surface=(x:number,z:number)=>sampleElevation(city,x,z)){
   let distance=0;const v:number[]=[];
   // Vertices travel as plain numbers (x, y, z, u, v): no objects per vertex or midpoint.
   const emit=(ax:number,ay:number,az:number,au:number,av:number,bx:number,by:number,bz:number,bu:number,bv:number,cx:number,cy:number,cz:number,cu:number,cv:number,depth:number)=>{
