@@ -102,6 +102,15 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     <section class="map-modal hidden" id="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-header"><div><div class="eyebrow">The Boston atlas</div><h2 id="map-title">Find your next turn.</h2></div><button class="close-map" id="close-map">Back to driving <kbd>M</kbd></button></div><canvas id="fullmap" aria-label="Interactive map of Boston streets, buildings and landmarks"></canvas><div class="map-tools"><button id="map-zoom-in" aria-label="Zoom map in">+</button><button id="map-zoom-out" aria-label="Zoom map out">−</button><button id="map-center" aria-label="Center map on car">${svg('target')}</button><button id="map-overview" aria-label="Show all Boston destinations" title="Show all destinations">${svg('map')}</button></div><aside class="map-places" id="map-places"><div class="map-places-heading">Places to explore<span>Choose a place to start nearby</span></div><div class="map-destinations" id="map-destinations" role="navigation" aria-label="Landmark destinations"></div></aside><div class="map-note">Drag to explore · Scroll to zoom</div></section>
     <div class="touch-controls suspended" id="touch-controls" aria-label="Touch driving controls"><div class="touch-pad"><button class="touch-btn" data-touch="left" aria-label="Steer left">←</button><button class="touch-btn" data-touch="right" aria-label="Steer right">→</button></div><button class="touch-btn wheelie-touch" data-touch="wheelie" aria-label="Wheelie">WHEELIE</button><button class="touch-btn brake" data-touch="handbrake" aria-label="Handbrake">BRAKE</button><div class="touch-pad"><button class="touch-btn" data-touch="reverse" aria-label="Brake and reverse">↓</button><button class="touch-btn" data-touch="accelerate" aria-label="Accelerate">↑</button></div></div>
     <div class="flight-touch suspended" id="flight-touch" aria-label="Helicopter lift and rotation"><button class="touch-btn" data-touch="yaw-left" aria-label="Rotate helicopter left">↶</button><button class="touch-btn" data-touch="yaw-right" aria-label="Rotate helicopter right">↷</button><button class="touch-btn" data-touch="descend" aria-label="Descend">⇩</button><button class="touch-btn" data-touch="ascend" aria-label="Ascend">⇧</button></div>
+    <section class="modal-scrim hidden" id="graphics-modal" role="dialog" aria-modal="true" aria-labelledby="graphics-title">
+      <div class="panel"><div class="eyebrow">Drive paused</div><h2 id="graphics-title">Graphics interrupted.</h2>
+        <p id="graphics-status" role="status">Waiting for the browser to restore graphics. Your drive is paused here.</p>
+        <div class="panel-actions"><button class="primary" id="resume-graphics" disabled>Resume drive</button><button class="text-btn" id="reload-graphics">Reload game</button></div>
+        <p><button class="text-btn" id="copy-graphics-report">Copy interruption report</button></p>
+        <textarea class="hidden" id="graphics-report" readonly rows="6" aria-label="Graphics interruption report"></textarea>
+        <div id="graphics-copy-status" role="status"></div>
+      </div>
+    </section>
   `;
   const el = <T extends HTMLElement = HTMLElement>(id: string) => host.querySelector<T>(`#${id}`)!;
   const disposers: (() => void)[] = [];
@@ -113,6 +122,10 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const miniContext = mini.getContext('2d')!, fullContext = full.getContext('2d')!;
   const minimapLabels=createMinimapLabeler(city.roads);
   let started = false, ready = false, mapOpen = false, settingsOpen = false, creditsOpen = false;
+  let graphicsInterrupted = false, graphicsRestored = false;
+  let graphicsFocus: HTMLElement | null = null;
+  let graphicsReport = '';
+  try { graphicsReport = localStorage.getItem('backbay-graphics-interruption-v1') ?? ''; } catch { /* Optional storage. */ }
   let camera: CameraMode = 'chase', lighting: LightingMode = 'golden', sound = true;
   let travelMode: TravelMode = 'drive', altitude = 0;
   let state: VehicleState = { ...city.spawn, y: 1, speed: 0, steering: 0 };
@@ -136,12 +149,12 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const diagnostics=createDiagnostics(host,()=>{
     const road=(travelMode!=='helicopter'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z).road;
     return{state:{...state},groundHeight:latestStats.groundHeight??0,road:{name:road.name,id:road.id},neighborhood:neighborhoodAt(state.x,state.z),camera,lighting,quality:latestStats.quality??'high',travelMode,
-      performance:latestStats.performance??{fps:latestStats.fps??0,frameMs:0,drawCalls:0,triangles:0,geometries:0,textures:0,traffic:0,transit:0,pedestrians:0}};
+      performance:latestStats.performance??{fps:latestStats.fps??0,frameMs:0,drawCalls:0,triangles:0,geometries:0,textures:0,traffic:0,transit:0,pedestrians:0},graphicsInterruption:graphicsReport||undefined};
   });
   const statsHelp='<span>Performance / debug stats</span><span><kbd>P</kbd> <kbd>&#96;</kbd></span>';
   el('controls-help').insertAdjacentHTML('beforeend',statsHelp);
 
-  function isPaused() { return !started || mapOpen || settingsOpen || creditsOpen; }
+  function isPaused() { return graphicsInterrupted || !started || mapOpen || settingsOpen || creditsOpen; }
   function updatePause() {
     const paused = isPaused();
     held.clear(); host.querySelectorAll('.touch-btn').forEach(b => b.classList.remove('held'));
@@ -266,6 +279,23 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     el('start-drive').blur();
   }
   click('start-drive', start); click('open-map', () => setMap(true)); click('minimap-button', () => setMap(true)); click('close-map', () => setMap(false));
+  click('resume-graphics', () => {
+    if (!graphicsRestored || !ready) return;
+    graphicsInterrupted = false; el('graphics-modal').classList.add('hidden');
+    // Keep any map/settings pause that was already open before the loss.
+    updatePause(); if (started && !isPaused()) callbacks.onStart?.();
+    if(!started)el('start-drive').focus();else graphicsFocus?.focus();graphicsFocus=null;
+  });
+  click('reload-graphics', () => location.reload());
+  click('copy-graphics-report', () => {
+    void navigator.clipboard?.writeText(graphicsReport).then(() => { el('graphics-copy-status').textContent = 'Copied. Paste this with your issue.'; }, showGraphicsReport);
+    if (!navigator.clipboard) showGraphicsReport();
+  });
+  function showGraphicsReport() {
+    const field = el<HTMLTextAreaElement>('graphics-report'); field.value = graphicsReport;
+    field.classList.remove('hidden'); field.focus(); field.select();
+    el('graphics-copy-status').textContent = 'Select and copy the report above.';
+  }
   click('cycle-camera', cycleCamera); click('open-settings', () => setSettings(true)); click('close-settings', () => setSettings(false)); click('resume-drive', () => setSettings(false));
   click('reset-drive', () => { reset(); setSettings(false); });
   click('open-credits', () => { creditsOpen = true; el('settings-modal').classList.add('hidden'); focusModal('credits-modal', 'close-credits'); updatePause(); });
@@ -423,13 +453,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   on(window,'resize',resize);
   on(window,'keydown',event=>{
     const e=event as KeyboardEvent;
-    if(e.repeat||e.ctrlKey||e.metaKey||e.altKey||e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||(e.target instanceof HTMLElement&&e.target.isContentEditable))return;
+    if(e.repeat||e.ctrlKey||e.metaKey||e.altKey)return;
     if(e.code==='Tab'&&isPaused()){
-      const active=mapOpen?el('map-modal'):creditsOpen?el('credits-modal'):settingsOpen?el('settings-modal'):el('welcome');
-      const focusable=Array.from(active.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]'));const first=focusable[0],last=focusable[focusable.length-1];
+      const active=graphicsInterrupted?el('graphics-modal'):mapOpen?el('map-modal'):creditsOpen?el('credits-modal'):settingsOpen?el('settings-modal'):el('welcome');
+      const focusable=Array.from(active.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], textarea:not(.hidden)'));const first=focusable[0],last=focusable[focusable.length-1];
       if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}return;
     }
-    if(!started)return;
+    if(e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||(e.target instanceof HTMLElement&&e.target.isContentEditable))return;
+    if(!started||graphicsInterrupted)return;
     if(e.code==='KeyM'){e.preventDefault();setMap(!mapOpen);}
     else if(e.code==='Escape'){e.preventDefault();if(creditsOpen){el('close-credits').click();}else if(mapOpen)setMap(false);else setSettings(!settingsOpen);}
     else if(e.code==='KeyC'&&!isPaused()){e.preventDefault();cycleCamera();}
@@ -478,7 +509,22 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     getTouchInput:():DriveInput=>({throttle:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),brake:0,steer:isPaused()?0:Number(held.has('left'))-Number(held.has('right')),handbrake:!isPaused()&&held.has('handbrake'),wheelie:!isPaused()&&held.has('wheelie')}),
     getFlightTouchInput:()=>({forward:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),strafe:isPaused()?0:Number(held.has('right'))-Number(held.has('left')),yaw:isPaused()?0:Number(held.has('yaw-right'))-Number(held.has('yaw-left')),lift:isPaused()?0:Number(held.has('ascend'))-Number(held.has('descend'))}),
     setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},
-    setReady(){ready=true;cancelAnimationFrame(loadFrame);loadShown=1;drawLoading();el('welcome').classList.add('ready');el<HTMLButtonElement>('start-drive').disabled=false;el('start-drive').focus();},
+    setReady(){ready=true;cancelAnimationFrame(loadFrame);loadShown=1;drawLoading();el('welcome').classList.add('ready');el<HTMLButtonElement>('start-drive').disabled=false;if(graphicsInterrupted)el<HTMLButtonElement>('resume-graphics').disabled=!graphicsRestored;else el('start-drive').focus();},
+    setGraphicsInterrupted(report:string){
+      if(!graphicsInterrupted)graphicsFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
+      graphicsInterrupted=true;graphicsRestored=false;graphicsReport=report;
+      try{localStorage.setItem('backbay-graphics-interruption-v1',report);}catch{/* Optional. */}
+      el('graphics-title').textContent='Graphics interrupted.';
+      el('graphics-status').textContent='Waiting for the browser to restore graphics. Your drive is paused here.';
+      el<HTMLButtonElement>('resume-graphics').disabled=true;
+      el('graphics-report').classList.add('hidden');el('graphics-copy-status').textContent='';
+      el('graphics-modal').classList.remove('hidden');el('copy-graphics-report').focus();updatePause();
+    },
+    setGraphicsRestored(){
+      graphicsRestored=true;el('graphics-title').textContent='Ready to resume.';
+      el('graphics-status').textContent='Graphics restored. Continue from where your drive paused.';
+      el<HTMLButtonElement>('resume-graphics').disabled=!ready;
+    },
     setError(message:string){loadFailed=true;cancelAnimationFrame(loadFrame);el('loading-copy').textContent=message;el('loading-copy').style.color='#ffd1ad';el('welcome').classList.remove('hidden','leaving','ready');host.classList.add('not-started');el<HTMLButtonElement>('start-drive').disabled=true;ready=false;started=false;updatePause();},
     setCamera:(mode:CameraMode)=>setCamera(mode),setLighting:(mode:LightingMode)=>setLighting(mode),setSound:(enabled:boolean)=>setSound(enabled),setQuality:(mode:QualityMode)=>setQuality(mode),setTravelMode:(mode:TravelMode)=>setTravelMode(mode),toast,
     destroy(){diagnostics.destroy();disposers.forEach(fn=>fn());window.clearTimeout(toastTimer);host.innerHTML='';},

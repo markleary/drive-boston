@@ -31,3 +31,8 @@ test('copied location identifies the active elevated vehicle and exact road with
   assert.equal(formatLocationReport({...data,timestamp:undefined}).includes('Captured:'),false);
   assert.equal(data.state.y,88.752,'reporting must not mutate live vehicle data');
 });
+
+test('copied debug report preserves a previous graphics interruption',()=>{
+  const data={state:{x:0,y:0,z:0,yaw:0,speed:0},groundHeight:0,road:{name:'Boylston Street',id:'1'},neighborhood:'Back Bay',camera:'chase',lighting:'golden',quality:'balanced',travelMode:'drive',performance:{},graphicsInterruption:'Captured: previous session\nContext losses this page: 1'};
+  assert.match(formatLocationReport(data),/Last graphics interruption:\nCaptured: previous session\nContext losses this page: 1/);
+});
