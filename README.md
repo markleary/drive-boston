@@ -20,9 +20,9 @@ npm run preview
 
 The `dist/` directory is a static site. Vite uses a relative base so it can be hosted at a GitHub Pages repository path.
 
-The public prototype is hosted at **https://markleary.github.io/drive-boston/**, with source on `main` and the locally built site on `gh-pages`. GitHub Pages publishes the root of `gh-pages`; `.nojekyll` preserves the static output. No repository CI workflows are configured. GitHub still runs its managed Pages deployment when that branch is updated.
+The public prototype is hosted at **https://markleary.github.io/drive-boston/**. The GitHub Actions workflow in `.github/workflows/deploy.yml` builds the site and publishes `dist/` to GitHub Pages on every push to `main`, so merging a pull request deploys it; the workflow can also be started by hand from the repository's Actions tab. The repository's Pages source must be set to GitHub Actions (Settings, Pages) for those deployments to be accepted; the former `gh-pages` branch is no longer used. The workflow only builds and deploys; it does not run the test suites.
 
-To publish a later version manually, run `npm ci` and `npm run build`, replace the contents of a separate `gh-pages` checkout with `dist/` (including `.nojekyll`), then commit and push that branch. Pushing source changes to `main` alone does not update the live site.
+To check a build locally, run `npm ci`, `npm run build`, and `npm run preview`.
 
 ## Play
 
