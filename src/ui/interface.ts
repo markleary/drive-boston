@@ -4,6 +4,7 @@ import { areaAt, indexAreas } from './geography';
 import {createDiagnostics} from './diagnostics';
 import type {HUDPerformanceData} from './diagnostic-report';
 import {closestRoad} from '../simulation/roads';
+import {nextIntersection} from '../simulation/next-intersection';
 import {isMetroCity} from '../simulation/city-tiles.ts';
 import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
@@ -65,7 +66,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   host.classList.add('not-started');
   host.innerHTML = `
     <div class="hud brand"><div class="brand-symbol" aria-hidden="true">B</div><div><div class="brand-name">BOSTON</div><div class="brand-subtitle" id="neighborhood-label">Back Bay, Massachusetts</div></div></div>
-    <div class="hud location-pill"><span class="location-dot"></span><span id="location-label">Copley Square</span></div>
+    <div class="hud location-pill"><span class="location-dot"></span><span class="location-text"><span id="location-label">Copley Square</span><span class="next-street hidden" id="next-street"><span class="next-prefix">Next</span><span id="next-street-label"></span></span></span></div>
     <nav class="hud travel-switch" aria-label="Travel mode"><button data-travel="drive" data-testid="mode-drive" class="active" aria-pressed="true" aria-label="Drive mode">Drive <kbd>1</kbd></button><button data-travel="bike" data-testid="mode-bike" aria-pressed="false" aria-label="Ultra Bee bike mode">Ultra Bee <kbd>2</kbd></button><button data-travel="helicopter" data-testid="mode-helicopter" aria-pressed="false" aria-label="Helicopter mode">Helicopter <kbd>3</kbd></button></nav>
     <nav class="hud toolbar" aria-label="Drive controls">
       <button class="tool-btn wide" id="open-map" aria-label="Open map" title="Map · M">${svg('map')}<span>Map <span class="key">M</span></span></button>
@@ -115,7 +116,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   let camera: CameraMode = 'chase', lighting: LightingMode = 'golden', sound = true;
   let travelMode: TravelMode = 'drive', altitude = 0;
   let state: VehicleState = { ...city.spawn, y: 1, speed: 0, steering: 0 };
-  let lastMapDraw = 0, lastLocation = 0, toastTimer = 0;
+  let lastMapDraw = 0, lastLocation = 0, toastTimer = 0, nextShown = false;
   let mapCenter: Point2 = [(city.bounds.minX + city.bounds.maxX) / 2, (city.bounds.minZ + city.bounds.maxZ) / 2];
   let mapZoom = 1;
   let previousFocus: HTMLElement | null = null;
@@ -461,6 +462,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       el('neighborhood-label').textContent=`${neighborhood}, Massachusetts`;
       if(travelMode==='helicopter')el('journey-label').textContent=`Above ${neighborhood}`;
       el('location-label').textContent=travelMode==='helicopter'?`Above ${label}`:label;lastLocation=now;
+      // Cross street ahead in the direction of travel (facing, or behind while reversing). Mid-turn or
+      // inside an intersection the car is not lined up with the snapped road, so keep the last answer.
+      const onRoad=travelMode!=='helicopter'&&near.distance<=40&&!!near.road?.name;
+      if(!onRoad||Math.abs(Math.cos(state.yaw-near.yaw))>.6){
+        const next=onRoad?nextIntersection(city,near.road,state.x,state.z,state.yaw+(state.speed<-1?Math.PI:0)):null;
+        if(next)el('next-street-label').textContent=next.names.join(' & ');nextShown=!!next;
+      }
+      el('next-street').classList.toggle('hidden',!nextShown||el('next-street-label').textContent===label);
     }
   }
   resize();updatePause();
