@@ -3,13 +3,40 @@ import test from 'node:test';
 import * as THREE from 'three';
 import {facadeStyleFor,stabilizeFacadeUVs} from '../src/render/materials.ts';
 import {expandTriangles} from '../src/render/tile-geometry.ts';
-import {loadCentralCity} from './helpers/metro-city.mjs';
+import {loadCentralCity,loadMetroCity} from './helpers/metro-city.mjs';
+import {tileShellGeometry} from '../src/render/tile-geometry.ts';
+import {prepareNeighborhoodArchitecture,architectureFor} from '../src/render/neighborhood-profiles.ts';
+import {windowGrid,insideWindow} from '../src/render/window-interiors.ts';
+import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 
 test('named church spires keep masonry instead of inheriting office-tower materials',async()=>{
   const city=await loadCentralCity();
   for(const name of ['Old South Church','Arlington Street Church']){
     const building=city.buildings.find(b=>b.name===name);assert.ok(building,`missing source church: ${name}`);
     const style=facadeStyleFor(building);assert.equal(style.kind,'stone');assert.equal(style.detail,'gothic');
+  }
+});
+
+test('Lowell and Summer Street facades use wall eaves rather than the roof peak as their window limit',async()=>{
+  const city=await loadMetroCity({tiles:['-3_-5','-4_-5']});
+  prepareNeighborhoodArchitecture(city);
+  for(const id of ['osm-way-29516178','osm-way-29516172','osm-way-29532161','osm-way-29532168']){
+    const b=city.buildings.find(b=>b.id===id);assert.ok(b);
+    const data=city.geometry.get(id),g=tileShellGeometry(data,b,false),profile=architectureFor(b);
+    if(profile){
+      const floors=b.eaveHeight<8.3?2:3;
+      assert.ok(Math.abs(profile.raisedBase+profile.floorHeight*floors-b.eaveHeight)<1e-6,'occupied floors end at the eaves, not the ridge');
+      if(floors===2)assert.equal(profile.kind,'wood-frame','no third porch floor on a two-storey wall');
+    }
+    const expected=(b.eaveHeight-(profile?.raisedBase??0))/(profile?profile.floorHeight*2:6)*6;
+    assert.ok(g.attributes.facadeTop.array.every(v=>Math.abs(v-expected)<1e-5));
+    const grid=windowGrid(facadeStyleFor(b)),headRow=Math.floor(expected/3)*3+1.56;
+    assert.ok(!insideWindow(grid,grid.spacing/2+.1,headRow,expected),'roof/attic row must not have glazing');
+    assert.ok(b.eaveHeight<=b.height);
+    const roof=tileShellGeometry(data,b,true),merged=mergeGeometries([g,roof]);
+    assert.ok(merged,'park/landmark finishes must still batch roof and facade geometry together');
+    roof.dispose();merged.dispose();
+    g.dispose();
   }
 });
 

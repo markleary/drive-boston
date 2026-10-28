@@ -68,8 +68,12 @@ export function prepareNeighborhoodArchitecture(city:CityData,buildings?:Buildin
       const value=facing*10-Math.abs(length-9)*.15-setback*.05;
       if(value>score){score=value;best={a,b:c,nx,nz,setback,road:road.road.name};}
     }
-    const raisedBase=.65,floorHeight=Math.max(2.65,Math.min(3.35,(b.height-1.25-raisedBase)/3)),palette=hash(b.id)%5;
-    if(best){profiles.set(b,{kind:'triple-decker',palette,floorHeight,raisedBase,front:best});ids.push(b.id);}
+    // Generated roof peaks are not occupied storeys. Fit the house's window
+    // spacing below its known eaves; a two-storey wall cannot get three porches.
+    const raisedBase=.65,wallHeight=b.eaveHeight??b.height;
+    const floors=b.eaveHeight!==undefined&&wallHeight<8.3?2:3;
+    const floorHeight=b.eaveHeight!==undefined?(wallHeight-raisedBase)/floors:Math.max(2.65,Math.min(3.35,(b.height-1.25-raisedBase)/3)),palette=hash(b.id)%5;
+    if(best&&floors===3){profiles.set(b,{kind:'triple-decker',palette,floorHeight,raisedBase,front:best});ids.push(b.id);}
     else if(metro){profiles.set(b,{kind:'wood-frame',palette,floorHeight,raisedBase});woodIds.push(b.id);}
   }
   const result={tripleDeckers:ids.length,woodFrames:woodIds.length,ids};if(!buildings)prepared.set(city,result);return result;

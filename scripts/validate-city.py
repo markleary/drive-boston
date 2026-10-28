@@ -88,6 +88,15 @@ for key in keys:
   p=b['positions'];base=b['baseElevation'];assert len(p)==b['v']>0 and np.isfinite(p).all()
   assert b['facade'].max(initial=-1)<b['v'] and b['roof'].max(initial=-1)<b['v'] and b['facade'].size+b['roof'].size>0
   top=p[:,1].max();bottom=p[:,1].min();step=b.get('scale',tileformat.SCALE);triangles+=len(b['facade'])+len(b['roof'])
+  if b.get('source')=='osm-extrusion':
+   assert 0<b['eaveHeight']<=b['height']+.02,f"{b['id']} lacks a valid wall/eave height"
+   eave=base+b['eaveHeight']
+   assert abs(eave-b['norm']['max'])<.011,f"{b['id']} eave differs from the extrusion audit"
+   for faces in [b['facade'],b['roof']]:
+    a,c,d=p[faces[:,0]],p[faces[:,1]],p[faces[:,2]];n=np.cross(c-a,d-a);length=np.linalg.norm(n,axis=1)
+    ends=(np.maximum.reduce([a[:,1],c[:,1],d[:,1]])>eave+.02)&(np.abs(n[:,1])<length*.05)
+    outward=((a+c+d)/3)[:,[0,2]]-np.asarray(b['center'])
+    assert np.all(np.sum(n[ends][:,[0,2]]*outward[ends],axis=1)>0),f"{b['id']} has an inward-facing gable end"
   if step!=tileformat.SCALE:scaled+=1;assert step in tileformat.SCALES and np.abs(p-np.asarray(b['anchor'])).max()/step<=32767
   assert bottom>=base-step/2-.001,f"{b['id']} falls below its documented base elevation"
   assert top<=base+b['height']+step/2+.012,f"{b['id']} height double-translated or misreported"

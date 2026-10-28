@@ -25,8 +25,9 @@ export function windowGrid(style:WindowGridStyle):WindowGrid {
 }
 /** Analytic glazing test for a point in tile units; mirrors the shader's
  * opening and mullion tests so node tests can check it against the painter. */
-export function insideWindow(grid:WindowGrid,u:number,v:number):boolean {
+export function insideWindow(grid:WindowGrid,u:number,v:number,wallTop=Infinity):boolean {
   if(v<0)return false;
+  if(!windowRowFits(grid,v,wallTop))return false;
   const cu=((u%6)+6)%6,cv=((v%6)+6)%6;
   const col=Math.floor(cu/grid.spacing),du=cu-grid.spacing*(col+.5);
   const row=cv<3?0:1,dv=cv-grid.rows[row];
@@ -38,6 +39,11 @@ export function insideWindow(grid:WindowGrid,u:number,v:number):boolean {
   const wx=(du+w/2)/w,wy=(dv+h/2)/h;
   const barX=Math.abs(((wx*grid.bars[0]+.5)%1)-.5)*w/grid.bars[0],barY=Math.abs(((wy*grid.bars[1]+.5)%1)-.5)*h/grid.bars[1];
   return barX>.0175&&barY>.0175;
+}
+
+/** Keep the entire opening and its painted lintel below the roof edge. */
+export function windowRowFits(grid:WindowGrid,v:number,wallTop:number):boolean {
+  return Math.floor(v/3)*3+grid.rows[0]+grid.height/2+.22<=wallTop;
 }
 
 /** Live interior lighting shared by every facade material. x: emitted glow of
@@ -56,12 +62,15 @@ uniform vec4 interiorRooms; // seed, minimum room bays, maximum room bays, warmt
 uniform vec2 interiorBars; // mullion counts across and up
 uniform vec3 interiorLighting;
 varying vec3 vInteriorWorld;
+varying float vFacadeTop;
+uniform sampler2D interiorWallMap;
 float interiorHash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 `;
 
 const GLSL_VERTEX=/* glsl */`
 #include <project_vertex>
 vInteriorWorld=(modelMatrix*vec4(transformed,1.0)).xyz;
+vFacadeTop=facadeTop;
 `;
 
 /** Parallax room behind each painted opening. Coordinates are tile units: the
@@ -128,6 +137,17 @@ const GLSL_FRAGMENT=/* glsl */`
     totalEmissiveRadiance*=1.0-basement;
   }
   cover*=1.0-basement;
+  // A repeating texture knows nothing about the roof edge. Suppress a whole
+  // opening (paint, room, relief and glow) when its lintel would cross it.
+  // Keeping the ordinary UVs preserves alignment with the physical surrounds.
+  float rowHead=floor(tile.y/3.0)*3.0+1.56+winH*0.5+0.22;
+  if(rowHead>vFacadeTop){
+    diffuseColor.rgb=texture2D(interiorWallMap,vMapUv).rgb;
+    roughnessFactor=0.94;
+    normal=nonPerturbedNormal;
+    totalEmissiveRadiance=vec3(0.0);
+    cover=0.0;
+  }
   if(cover>0.002){
     vec3 ray=normalize(vInteriorWorld-cameraPosition);
     vec3 wallN=transformDirectionByInverseViewMatrix(nonPerturbedNormal,viewMatrix);
@@ -209,20 +229,21 @@ const GLSL_FRAGMENT=/* glsl */`
 
 /** Attach the interior mapping to a painted facade material. Every style
  * shares one program; the grid, head shape and seed are uniforms. */
-export function applyWindowInteriors(material:THREE.MeshStandardMaterial,grid:WindowGrid,seed:number,warmth=.78){
+export function applyWindowInteriors(material:THREE.MeshStandardMaterial,grid:WindowGrid,seed:number,warmth=.78,wallMap:THREE.Texture|null=material.map){
   const minBays=grid.spacing<2.5?2:1,maxBays=minBays+1;
   const uniforms={
     interiorGrid:{value:new THREE.Vector4(grid.spacing,grid.width,grid.height,grid.head)},
     interiorRooms:{value:new THREE.Vector4((seed%977)/13,minBays,maxBays,warmth)},
     interiorBars:{value:new THREE.Vector2(grid.bars[0],grid.bars[1])},
     interiorLighting,
+    interiorWallMap:{value:wallMap},
   };
   material.onBeforeCompile=shader=>{
     Object.assign(shader.uniforms,uniforms);
-    shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 vInteriorWorld;').replace('#include <project_vertex>',GLSL_VERTEX);
+    shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 vInteriorWorld;\nattribute float facadeTop;\nvarying float vFacadeTop;').replace('#include <project_vertex>',GLSL_VERTEX);
     shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\n'+GLSL_PARS).replace('#include <emissivemap_fragment>',GLSL_FRAGMENT);
   };
-  material.customProgramCacheKey=()=>'boston-window-interiors-2';
+  material.customProgramCacheKey=()=>'boston-window-interiors-3';
   material.userData.windowInteriors={head:grid.head,bars:grid.bars,bays:[minBays,maxBays],seed:uniforms.interiorRooms.value.x};
   return material;
 }

@@ -108,6 +108,8 @@ Python 3.11+ with the pinned `pyproj`, NumPy, and Shapely dependencies and Node.
 
 At load time, wall UV projection is stabilized across nearby triangle orientations, with window proportions defined by the assigned procedural architectural family; source horizontal geometry and relative massing are retained.
 
+Generated OpenStreetMap buildings also carry `eaveHeight`, the extrusion's wall height above its base, separately from total ridge height. Wood-frame floor spacing uses that wall height; two-storey walls do not get three-storey porches. Batched façades carry their own window-height limit: a window row whose full opening and lintel cannot fit below the eaves uses the window-free wall finish instead, with no interior, night glow or projecting window trim. Gable caps use outward horizontal normals; testing these vertical triangles against an upward vector had allowed one end to face inward and disappear through backface culling. The October 28 repair checked all 23,902 extrusions and reversed 13,343 inward gable ends across 51 updated tiles, preserving every quantized vertex and the surveyed meshes. `scripts/repair-osm-roofs.py` applies this idempotent migration to older packages using their recorded normalization eaves. New builds emit the metadata and correct winding directly; the data validator rejects missing eaves or inward gable caps. Run `.venv-data/bin/python scripts/test_osm_buildings.py` for rotated/reversed-footprint and courtyard generator regressions, and `npm test -- tests/building-roofs.spec.ts` for the reported Lowell/Summer Street views in golden-hour and night lighting.
+
 ```sh
 python3 -m venv .venv-data
 .venv-data/bin/pip install -r scripts/requirements.txt

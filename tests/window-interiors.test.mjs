@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {FACADE_STYLES} from '../src/render/materials.ts';
-import {applyWindowInteriors,insideWindow,interiorLighting,setInteriorLighting,windowGrid,windowInteriorShader} from '../src/render/window-interiors.ts';
+import {applyWindowInteriors,insideWindow,interiorLighting,setInteriorLighting,windowGrid,windowRowFits,windowInteriorShader} from '../src/render/window-interiors.ts';
 import {MeshStandardMaterial} from 'three';
 
 test('every facade style yields a window grid that matches the painted openings',()=>{
@@ -51,11 +51,26 @@ test('interior mapping hooks into the standard facade program with shared lighti
   assert.equal(shader.uniforms.interiorLighting,interiorLighting,'one live lighting uniform for every style');
   assert.deepEqual([shader.uniforms.interiorGrid.value.x,shader.uniforms.interiorGrid.value.w],[grid.spacing,1]);
   assert.deepEqual(shader.uniforms.interiorBars.value.toArray(),grid.bars);
-  assert.equal(material.customProgramCacheKey(),'boston-window-interiors-2');
+  assert.equal(material.customProgramCacheKey(),'boston-window-interiors-3');
   assert.ok(shader.fragmentShader.includes('float basement=1.0-smoothstep(-py,py,tile.y);')&&shader.fragmentShader.includes('cover*=1.0-basement;'),'the wall below row zero is foundation, not a room');
   assert.deepEqual(material.userData.windowInteriors.bays,[2,3],'two-metre bays make two- or three-bay rooms');
   for(const chunk of ['dFdx(vInteriorWorld)','transformDirectionByInverseViewMatrix(nonPerturbedNormal,viewMatrix)','interiorHash(roomId'])assert.ok(windowInteriorShader.fragment.includes(chunk),chunk);
   assert.ok(!/\bvUv\b/.test(windowInteriorShader.fragment),'three no longer declares vUv for map-only materials');
+});
+
+test('a row is either wholly below the eaves or has no glazing, near or far',()=>{
+  for(const style of FACADE_STYLES){
+    const grid=windowGrid(style),head=7.56+grid.height/2+.22;
+    assert.ok(windowRowFits(grid,7.56,head+.001));
+    assert.ok(!windowRowFits(grid,7.56,head-.001));
+    // A roof at 7.2 used to slice the third row into a short strip. Even the
+    // portion of that opening below the roof must now be wall, not glass.
+    assert.ok(!insideWindow(grid,grid.spacing/2+.1,7.56-grid.height*.3,7.2));
+    assert.ok(insideWindow(grid,grid.spacing/2+.1,4.56-grid.height*.3,7.2));
+    assert.ok(!insideWindow(grid,grid.spacing/2+.1,10.56-grid.height*.3,8.85),'no attic row through the gable');
+  }
+  assert.ok(windowInteriorShader.fragment.includes('diffuseColor.rgb=texture2D(interiorWallMap,vMapUv).rgb;'));
+  assert.ok(windowInteriorShader.fragment.includes('totalEmissiveRadiance=vec3(0.0);\n    cover=0.0;'));
 });
 
 test('night lighting turns rooms on and golden hour keeps a few early lamps',()=>{

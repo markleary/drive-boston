@@ -170,6 +170,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     }
     const normalized=geometry.index?geometry.toNonIndexed():geometry;
     if(!isRoof)stabilizeFacadeUVs(normalized,b);
+    else normalized.setAttribute('facadeTop',new THREE.BufferAttribute(new Float32Array(normalized.getAttribute('position').count).fill(1e6),1));
     if(b&&isMissionChurch(b)){
       for(const part of splitMissionChurchShell(normalized,b,isRoof)){
         const material=missionChurchMaterials[part.kind],key=`${material.uuid}:mission-church`;

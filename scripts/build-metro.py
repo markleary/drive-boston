@@ -598,7 +598,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
   record=tileformat.mesh_record(vertices,faces,[ax,base,az],base)
   if record is None:continue
   name=tags.get('name') or ' '.join(v for v in [tags.get('addr:housenumber'),tags.get('addr:street')] if v) or f'{town} building'
-  entry={'id':identifier,'name':name,'center':center,'height':round(max(v[1] for v in vertices)-base,2),'footprint':footprint,'baseElevation':base,'district':town,'anchor':[ax,base,az],'source':'osm-extrusion','kind':tags.get('building','yes')}
+  entry={'id':identifier,'name':name,'center':center,'height':round(max(v[1] for v in vertices)-base,2),'eaveHeight':height,'footprint':footprint,'baseElevation':base,'district':town,'anchor':[ax,base,az],'source':'osm-extrusion','kind':tags.get('building','yes')}
   if tags.get('amenity'):entry['amenity']=tags['amenity']
   emit(entry,record,{'min':base,'max':round(base+height,4),'ground':base,'policy':policy,'offset':0});stats[policy]+=1
  log('OSM buildings',sum(1 for b in buildings if b['source']=='osm-extrusion'))
@@ -607,6 +607,9 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
 def extrude(poly,base,height,tags):
  """Walls plus a constrained-Delaunay flat roof; small houses get a simple
  gable along the long axis of their bounding rectangle."""
+ # Ring direction supplies the actual outside, including concave walls and
+ # courtyards; a vector from the centroid does not work for those shapes.
+ poly=shapely.orient_polygons(poly)
  vertices=[];faces=[];index={}
  def vertex(x,y,z):
   key=(round(x,4),round(y,4),round(z,4))
@@ -623,7 +626,7 @@ def extrude(poly,base,height,tags):
  rings=[list(poly.exterior.coords)[:-1]]+[list(r.coords)[:-1] for r in poly.interiors]
  for ring in rings:
   for a,b in zip(ring,ring[1:]+ring[:1]):
-   mx,mz=(a[0]+b[0])/2,(a[1]+b[1])/2;outward=[mx-cx,0,mz-cz]
+   outward=[b[1]-a[1],0,a[0]-b[0]]
    b0=vertex(a[0],base,a[1]);b1=vertex(b[0],base,b[1]);t0=vertex(a[0],eave,a[1]);t1=vertex(b[0],eave,b[1])
    triangle(b0,b1,t1,outward);triangle(b0,t1,t0,outward)
  if gable:
@@ -633,16 +636,17 @@ def extrude(poly,base,height,tags):
   rise=min(3.2,.38*min(e0,e1));ridge=eave+rise
   r0=vertex((short[0][0][0]+short[0][1][0])/2,ridge,(short[0][0][1]+short[0][1][1])/2);r1=vertex((short[1][0][0]+short[1][1][0])/2,ridge,(short[1][0][1]+short[1][1][1])/2)
   c=[vertex(p[0],eave,p[1]) for p in corners]
-  # Fill the rectangle at eave level so walls inset from the rectangle are closed.
-  for ring in rings:
-   pass
+  # Close the footprint at eave level below the rectangular roof.
   for tri in shapely.constrained_delaunay_triangles(poly).geoms:
    pts=list(tri.exterior.coords)[:-1];ids=[vertex(p[0],eave,p[1]) for p in pts];triangle(ids[0],ids[1],ids[2],[0,1,0])
+  # Gable ends are vertical, so an upward orientation test has zero (or
+  # floating-point noise) dot product and can leave one end facing inward.
+  for (a,b),r in zip(short,[r0,r1]):
+   outward=[(a[0]+b[0])/2-cx,0,(a[1]+b[1])/2-cz]
+   triangle(vertex(a[0],eave,a[1]),vertex(b[0],eave,b[1]),r,outward)
   if e0>=e1:
-   triangle(c[1],c[2],r0,[0,1,0]);triangle(c[3],c[0],r1,[0,1,0])
    triangle(c[0],c[1],r0,[0,1,0]);triangle(c[0],r0,r1,[0,1,0]);triangle(c[2],c[3],r1,[0,1,0]);triangle(c[2],r1,r0,[0,1,0])
   else:
-   triangle(c[0],c[1],r0,[0,1,0]);triangle(c[2],c[3],r1,[0,1,0])
    triangle(c[1],c[2],r1,[0,1,0]);triangle(c[1],r1,r0,[0,1,0]);triangle(c[3],c[0],r0,[0,1,0]);triangle(c[3],r0,r1,[0,1,0])
  else:
   for tri in shapely.constrained_delaunay_triangles(poly).geoms:
