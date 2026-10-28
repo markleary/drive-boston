@@ -7,9 +7,10 @@ test('cockpit flight past Back Bay towers keeps the composited canvas intact',as
   page.on('pageerror',error=>errors.push(error.message));
   page.on('console',message=>{if(message.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(message.text()))errors.push(message.text());});
   await page.goto('/');await page.getByTestId('start-drive').click({timeout:120000});
-  await page.evaluate(async()=>{const game=(window as any).__backbay;await game.travelTo(680,-450,-2.2048);});
   await page.keyboard.press('3');
-  await page.evaluate(()=>{(window as any).__backbay.snapshot().flight.y=180;});
+  await page.evaluate(()=>(window as any).__backbay.flyTo(680,180,-450,-2.2048));
+  const launch=await page.evaluate(()=>(window as any).__backbay.snapshot().flight);
+  expect(Math.abs(launch.x-680)).toBeLessThan(1);expect(Math.abs(launch.z+450)).toBeLessThan(1);expect(launch.y).toBeGreaterThan(175);
   await page.keyboard.press('Escape');await page.locator('[data-camera="hood"]').click();await page.locator('#resume-drive').click();
   await expect.poll(()=>page.evaluate(()=>(window as any).__backbay.snapshot().camera)).toBe('hood');
   // The flash exposes the page background. Make it unmistakable and inspect
@@ -43,6 +44,7 @@ test('cockpit flight past Back Bay towers keeps the composited canvas intact',as
     await page.keyboard.up('w');await cdp.send('Page.stopScreencast');await Promise.all(pending);await cdp.detach();
   }
   await page.screenshot({path:testInfo.outputPath('cockpit-after-towers.png')});
+  expect(await page.evaluate(()=>(window as any).__backbay.snapshot().flight.y)).toBeGreaterThan(175);
   if(firstFlash)await testInfo.attach('canvas-flash.svg',{body:`<svg xmlns="http://www.w3.org/2000/svg" width="960" height="620"><image width="960" height="620" href="data:image/jpeg;base64,${firstFlash}"/></svg>`,contentType:'image/svg+xml'});
   await testInfo.attach('composited-frames.json',{body:JSON.stringify({frames,flashes}),contentType:'application/json'});
   expect(frames).toBeGreaterThan(60);expect(flashes).toBe(0);expect(errors).toEqual([]);
