@@ -68,7 +68,7 @@ def harmonize_harvard(roads):
  ids=['15082-0-0','11255-0-0','14557-0-1','water-link-14557-0-0','14557-0-0','osm-29328400-0','osm-1329523286-0','osm-961263635-0']
  by_id={r['id']:r for r in roads};points=[];sections=[]
  for n,id in enumerate(ids):
-  r=by_id[id];r['width']=16;r.pop('deckWidths',None)
+  r=by_id[id];r['width']=16;r.pop('deckWidths',None);r.pop('deckTangents',None)
   if n==0:
    lengths=[0]
    for a,b in zip(r['points'],r['points'][1:]):lengths.append(lengths[-1]+math.dist(a,b))
