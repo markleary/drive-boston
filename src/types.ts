@@ -23,8 +23,8 @@ export interface CityData {
   tiles?: { size:number; directory:string; keys:string[]; far:string; buildingCount:number };
   landmarkBuildings?: Building[];
 }
-export interface DriveInput { throttle: number; brake: number; steer: number; handbrake: boolean; }
+export interface DriveInput { throttle: number; brake: number; steer: number; handbrake: boolean; wheelie?: boolean; }
 export interface VehicleState { x: number; y: number; z: number; yaw: number; speed: number; steering: number; }
 export type LightingMode = 'golden' | 'day' | 'night';
 export type CameraMode = 'chase' | 'hood' | 'aerial';
-export type TravelMode = 'drive' | 'helicopter';
+export type TravelMode = 'drive' | 'helicopter' | 'bike';
