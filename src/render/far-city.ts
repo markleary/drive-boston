@@ -1,15 +1,15 @@
 import * as THREE from 'three';
 import type { CityData } from '../types';
 import type { MetroCity } from '../simulation/city-tiles.ts';
-import type { FarBuilding } from '../simulation/far-format.ts';
+import type { FarBuilding, FarTile } from '../simulation/far-format.ts';
 import { terrainGrid } from '../simulation/terrain.ts';
-import { FACADE_STYLES } from './materials';
+import { FACADE_STYLES } from './materials.ts';
 
 /** Distant representation of the whole metro: one flat-shaded box per hull
  * (its minimum-area oriented rectangle) and a coarse terrain sheet, both per
  * 1 km chunk. The streamer hides a chunk's pair while its detailed tile is
  * built, and nothing here depends on which tiles are loaded. */
-export interface FarCityView { group: THREE.Group; setChunkDetailed(key: string, detailed: boolean): void; update(position: THREE.Vector3, altitude: number): void; chunkCount: number; buildingCount: number; }
+export interface FarCityView { group: THREE.Group; setChunkDetailed(key: string, detailed: boolean): void; update(position: THREE.Vector3, altitude: number): void; chunkCount: number; buildingCount: number; stats(): { residentChunks: number; buildings: number; geometryBytes: number }; }
 
 const FAR_STEP = 5; // grid cells per coarse terrain vertex (30 m at 6 m cells)
 
@@ -32,17 +32,22 @@ function styleColor(style: number) {
   return base.lerp(new THREE.Color('#b9bcb8'), .22);
 }
 
-export function createFarCity(scene: THREE.Scene, city: CityData): FarCityView | undefined {
+export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false): FarCityView | undefined {
   const metro = city as MetroCity; if (!metro.far || !metro.tiles) return undefined;
   const group = new THREE.Group(); group.name = 'Distant metro'; scene.add(group);
-  const chunks = new Map<string, { buildings?: THREE.Mesh; ground?: THREE.Mesh; detailed: boolean; center: THREE.Vector3 }>();
+  const chunks = new Map<string, { buildings?: THREE.Mesh; ground?: THREE.Mesh; detailed: boolean; center: THREE.Vector3; count: number }>();
   const size = metro.tiles.size, buildingMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
   const groundMaterial = new THREE.MeshLambertMaterial({ color: '#b9bea8' });
   let buildingCount = 0;
   const colors = FACADE_STYLES.map((_, i) => styleColor(i)), roofColor = new THREE.Color('#7d7a72');
-  for (const tile of metro.far.tiles.values()) {
+  const grid = terrainGrid(city);
+  for (const key of metro.tiles.keys) {
+    const [tx, tz] = key.split('_').map(Number);
+    chunks.set(key, { detailed: false, count: 0, center: new THREE.Vector3((tx + .5) * size, 0, (tz + .5) * size) });
+  }
+  function buildBuildings(tile: FarTile) {
     const list = tile.buildings.filter(b => !b.hidden && b.height >= 3 && b.footprint.length >= 3);
-    if (!list.length) continue;
+    if (!list.length) return;
     // Five faces per box (no floor), flat normals from a non-indexed layout: 30 vertices.
     const count = list.length, positions = new Float32Array(count * 30 * 3), normals = new Float32Array(count * 30 * 3), color = new Uint8Array(count * 30 * 3);
     let v = 0;
@@ -66,36 +71,71 @@ export function createFarCity(scene: THREE.Scene, city: CityData): FarCityView |
     geometry.setAttribute('color', new THREE.BufferAttribute(color, 3, true)); geometry.computeBoundingSphere();
     const mesh = new THREE.Mesh(geometry, buildingMaterial); mesh.name = `Distant blocks ${tile.key}`; mesh.userData.noAO = true; mesh.receiveShadow = false; mesh.castShadow = false;
     group.add(mesh); buildingCount += count;
-    chunks.set(tile.key, { buildings: mesh, detailed: false, center: new THREE.Vector3((tile.tx + .5) * size, 0, (tile.tz + .5) * size) });
+    const chunk = chunks.get(tile.key)!; chunk.buildings = mesh; chunk.count = count;
   }
-  // Coarse ground sheet per chunk, sampled every FAR_STEP cells with the
-  // chunk's edge rows included so neighbouring sheets meet.
-  const grid = terrainGrid(city);
-  if (grid) {
+  // Coarse ground shares the full-resolution terrain's datum and chunk edges.
+  function buildGround(key: string) {
+    if (!grid) return;
     const step = grid.cellSize * FAR_STEP;
     const cellsX = Math.ceil(size / step), cellsZ = cellsX;
-    for (const key of metro.tiles.keys) {
-      const [tx, tz] = key.split('_').map(Number), x0 = tx * size, z0 = tz * size;
-      const w = cellsX + 1, h = cellsZ + 1, positions = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), indices = new Uint16Array(cellsX * cellsZ * 6);
-      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
-        const x = Math.min(x0 + i * step, x0 + size), z = Math.min(z0 + j * step, z0 + size), n = j * w + i;
-        positions[n * 3] = x; positions[n * 3 + 1] = sampleGrid(grid, x, z) - .35; positions[n * 3 + 2] = z; uv[n * 2] = x / 4; uv[n * 2 + 1] = z / 4;
-      }
-      let o = 0;
-      for (let j = 0; j < cellsZ; j++) for (let i = 0; i < cellsX; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; indices.set([a, c, b, b, c, d], o); o += 6; }
-      const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-      geometry.setIndex(new THREE.BufferAttribute(indices, 1)); geometry.computeVertexNormals(); geometry.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geometry, groundMaterial); mesh.name = `Distant ground ${key}`; mesh.renderOrder = -4; mesh.userData.noAO = true; group.add(mesh);
-      const chunk = chunks.get(key) ?? { detailed: false, center: new THREE.Vector3((tx + .5) * size, 0, (tz + .5) * size) }; chunk.ground = mesh; chunks.set(key, chunk);
+    const [tx, tz] = key.split('_').map(Number), x0 = tx * size, z0 = tz * size;
+    const w = cellsX + 1, h = cellsZ + 1, positions = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), indices = new Uint16Array(cellsX * cellsZ * 6);
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const x = Math.min(x0 + i * step, x0 + size), z = Math.min(z0 + j * step, z0 + size), n = j * w + i;
+      positions[n * 3] = x; positions[n * 3 + 1] = sampleGrid(grid, x, z) - .35; positions[n * 3 + 2] = z; uv[n * 2] = x / 4; uv[n * 2 + 1] = z / 4;
     }
+    let o = 0;
+    for (let j = 0; j < cellsZ; j++) for (let i = 0; i < cellsX; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; indices.set([a, c, b, b, c, d], o); o += 6; }
+    const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1)); geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geometry, groundMaterial); mesh.name = `Distant ground ${key}`; mesh.renderOrder = -4; mesh.userData.noAO = true; group.add(mesh);
+    chunks.get(key)!.ground = mesh;
   }
-  function setChunkDetailed(key: string, detailed: boolean) { const chunk = chunks.get(key); if (!chunk) return; chunk.detailed = detailed; if (chunk.buildings) chunk.buildings.visible = !detailed; if (chunk.ground) chunk.ground.visible = !detailed; }
+  function release(key: string) {
+    const chunk = chunks.get(key)!;
+    for (const mesh of [chunk.buildings, chunk.ground]) if (mesh) { group.remove(mesh); mesh.geometry.dispose(); }
+    buildingCount -= chunk.count; chunk.count = 0; chunk.buildings = undefined; chunk.ground = undefined;
+  }
+  function build(key: string) {
+    const tile = metro.far.tiles.get(key); if (tile) buildBuildings(tile); buildGround(key);
+  }
+  // Desktop retains its complete skyline. Mobile creates nearby chunks on
+  // demand and releases geometry behind the observer, instead of retaining
+  // the entire metro's vertex arrays and GPU buffers for the session.
+  if (!mobile) for (const key of chunks.keys()) build(key);
+  function setChunkDetailed(key: string, detailed: boolean) {
+    const chunk = chunks.get(key); if (!chunk) return; chunk.detailed = detailed;
+    if (mobile && detailed) release(key);
+    if (chunk.buildings) chunk.buildings.visible = !detailed;
+    if (chunk.ground) chunk.ground.visible = !detailed;
+  }
   function update(position: THREE.Vector3, altitude: number) {
-    // Chunks beyond the far plane cost draw calls for nothing; hide them.
-    const reach = 2300 + altitude * 1.5;
-    for (const chunk of chunks.values()) { const visible = !chunk.detailed && Math.hypot(chunk.center.x - position.x, chunk.center.z - position.z) < reach; if (chunk.buildings) chunk.buildings.visible = visible; if (chunk.ground) chunk.ground.visible = visible; }
+    const reach = mobile ? Math.min(3000, 1600 + altitude * .6) : 2300 + altitude * 1.5;
+    // One new mobile chunk per frame, nearest first. Hysteresis prevents
+    // repeated allocation/disposal when driving along a distance boundary.
+    let next: { key: string; distance: number } | undefined;
+    for (const [key, chunk] of chunks) {
+      const distance = Math.hypot(chunk.center.x - position.x, chunk.center.z - position.z);
+      if (mobile && distance > reach + 700 && (chunk.buildings || chunk.ground)) release(key);
+      const visible = !chunk.detailed && distance < reach;
+      if (chunk.buildings) chunk.buildings.visible = visible;
+      if (chunk.ground) chunk.ground.visible = visible;
+      if (mobile && visible && !chunk.buildings && !chunk.ground && (!next || distance < next.distance)) next = { key, distance };
+    }
+    if (next) build(next.key);
   }
-  return { group, setChunkDetailed, update, chunkCount: chunks.size, buildingCount };
+  function stats() {
+    let residentChunks = 0, geometryBytes = 0;
+    for (const chunk of chunks.values()) {
+      if (chunk.buildings || chunk.ground) residentChunks++;
+      for (const mesh of [chunk.buildings, chunk.ground]) if (mesh) {
+        for (const attribute of Object.values(mesh.geometry.attributes)) geometryBytes += attribute.array.byteLength;
+        geometryBytes += mesh.geometry.index?.array.byteLength ?? 0;
+      }
+    }
+    return { residentChunks, buildings: buildingCount, geometryBytes };
+  }
+  return { group, setChunkDetailed, update, chunkCount: chunks.size, get buildingCount() { return buildingCount; }, stats };
 }
 
 function sampleGrid(grid: NonNullable<ReturnType<typeof terrainGrid>>, x: number, z: number) {

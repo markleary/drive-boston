@@ -5,6 +5,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
+import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
 import { inTransitCorridor, shareTransitCorridors } from '../simulation/transit-corridors.ts';
 import { planTrafficSignals, type PlacedSignal } from '../simulation/signal-placement.ts';
@@ -40,7 +41,7 @@ export interface TileContext {
   trees: TreeField; parkTrees: TreeField;
   /** Live id lookup of the detailed buildings currently in the scene. */
   buildingMap: Map<string, Building>;
-  ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material;
+  ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material; mobile?: boolean;
 }
 export interface TileStats {
   buildings: number; exactMeshes: number; triangles: number; roads: number; structures: number; trees: number; lamps: number; signs: number; signals: number; parkTrees: number; storefronts: number; facades: number; rooftops: number; porches: number; colliders: number;
@@ -94,13 +95,7 @@ export function createTileBuilder(ctx: TileContext) {
   const overlaps = (a: Bounds, b: Bounds) => a.minX <= b.maxX && a.maxX >= b.minX && a.minZ <= b.maxZ && a.maxZ >= b.minZ;
   const grow = (b: Bounds, m: number): Bounds => ({ minX: b.minX - m, maxX: b.maxX + m, minZ: b.minZ - m, maxZ: b.maxZ + m });
   const roadsNear = (bounds: Bounds) => collect(roadCells, bounds, road => overlaps(roadBounds.get(road)!, bounds));
-  const midpoint = (road: Road): Point2 => {
-    let length = 0; const steps: number[] = [0];
-    for (let i = 1; i < road.points.length; i++) { length += Math.hypot(road.points[i][0] - road.points[i - 1][0], road.points[i][1] - road.points[i - 1][1]); steps.push(length); }
-    const half = length / 2; let i = 1; while (i < steps.length - 1 && steps[i] < half) i++;
-    const a = road.points[i - 1], b = road.points[i], span = steps[i] - steps[i - 1] || 1, t = (half - steps[i - 1]) / span;
-    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-  };
+  const midpoint = roadMidpoint;
   // Source tiles include park monuments, shelters and utility structures among
   // the building meshes. Keep their measured forms without residential windows.
   const principalParks = (city.parks ?? []).filter(p => /^(Boston Common|Public Garden)$/.test(p.name) && p.rings[0]);
@@ -181,8 +176,9 @@ export function createTileBuilder(ctx: TileContext) {
     }
     yield 'roads';
 
-    // Surveyed curb paths follow terrain; their raised faces remain visual detail.
-    {
+    // Raised curb boxes are decorative and dominate retained neighborhood
+    // buffers. Mobile keeps the sidewalk surface and shared terrain/collisions.
+    if (!ctx.mobile) {
       const batches = new PartBatches(500), matrix = new THREE.Matrix4();
       for (const points of tile.curbs) {
         if (due(pace)) yield 'curbs';

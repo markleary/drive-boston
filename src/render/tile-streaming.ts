@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { loadTile, tilesNear, type CityTile, type Reader } from '../simulation/city-tiles.ts';
+import { RoadTileCoverage } from '../simulation/road-tile-coverage.ts';
 import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import type { FarCityView } from './far-city';
 import { createTileBuilder, type BuiltTile, type PartialTile, type TileContext, type TileStage } from './tile-builder';
@@ -26,8 +27,12 @@ const TARGET_FRAME_MS = 1000 / 60, MIN_BUDGET_MS = .5, MAX_BUDGET_MS = 4;
  * which pauses whenever the frame's deadline has passed, except tiles the
  * observer is practically on, which finish at once. Built tiles beyond the
  * unload radius are disposed. */
-export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCityView): TileStreamer {
+export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCityView, mobile = false): TileStreamer {
   const { scene, city } = ctx, builder = createTileBuilder(ctx);
+  const loadRadius = mobile ? 450 : LOAD_RADIUS, unloadRadius = mobile ? 700 : UNLOAD_RADIUS;
+  const maxFetches = mobile ? 1 : MAX_FETCHES;
+  const coverage = mobile ? new RoadTileCoverage(city, builder.roadsNear) : undefined;
+  const wantedAround = (x: number, z: number, radius: number) => coverage?.tilesNear(x, z, radius) ?? tilesNear(city, x, z, radius);
   const group = new THREE.Group(); group.name = 'Streamed tiles'; scene.add(group);
   const loaded = new Map<string, BuiltTile>(), fetched = new Map<string, CityTile>(), fetching = new Map<string, Promise<CityTile>>(), failed = new Set<string>();
   type Active = { key: string; tile: CityTile; generator: Generator<TileStage, BuiltTile>; partial: PartialTile; stage?: TileStage; stageMs: Record<string, number> };
@@ -71,23 +76,28 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     lastEnd = performance.now();
   }
   function stream(position: THREE.Vector3, altitude: number, began: number) {
-    const reach = LOAD_RADIUS + Math.max(0, altitude) * .6, drop = UNLOAD_RADIUS + Math.max(0, altitude) * .6, now = began;
+    const expansion = mobile ? Math.min(200, Math.max(0, altitude) * .2) : Math.max(0, altitude) * .6;
+    const reach = loadRadius + expansion, drop = unloadRadius + expansion, now = began;
     if (focus && focus.until < now) focus = undefined;
-    const wanted = tilesNear(city, position.x, position.z, reach);
+    const wanted = wantedAround(position.x, position.z, reach);
+    const retained = mobile ? new Set(wantedAround(position.x, position.z, drop).map(t => t.key)) : undefined;
+    if (retained && focus) for (const t of wantedAround(focus.x, focus.z, drop)) retained.add(t.key);
     // Unload at most one far tile per frame; disposal walks the tile's objects.
     for (const [key, built] of loaded) {
-      if (distanceTo(built, position.x, position.z) <= drop || (focus && distanceTo(built, focus.x, focus.z) <= drop)) continue;
+      if (retained ? retained.has(key) : distanceTo(built, position.x, position.z) <= drop || (focus && distanceTo(built, focus.x, focus.z) <= drop)) continue;
       unload(key); break;
     }
-    if (active && distanceTo({ bounds: boundsOf(active.tile) }, position.x, position.z) > drop && !(focus && distanceTo({ bounds: boundsOf(active.tile) }, focus.x, focus.z) <= drop)) abandon();
-    for (const t of wanted) { if (fetching.size >= MAX_FETCHES) break; fetch(t.tx, t.tz, t.key)?.catch(() => undefined); }
+    if (active && (retained ? !retained.has(active.key) : distanceTo({ bounds: boundsOf(active.tile) }, position.x, position.z) > drop && !(focus && distanceTo({ bounds: boundsOf(active.tile) }, focus.x, focus.z) <= drop))) abandon();
+    // Discard decoded downloads left behind by travel, including late arrivals.
+    if (retained) for (const key of fetched.keys()) if (!retained.has(key)) fetched.delete(key);
+    for (const t of wanted) { if (fetching.size >= maxFetches) break; fetch(t.tx, t.tz, t.key)?.catch(() => undefined); }
     if (!active) {
       let best: { key: string; distance: number } | undefined;
       for (const t of wanted) { if (!fetched.has(t.key)) continue; if (!best || t.distance < best.distance) best = { key: t.key, distance: t.distance }; }
       if (best) active = start(best.key, fetched.get(best.key)!);
     }
     if (!active) return;
-    const distance = distanceTo({ bounds: boundsOf(active.tile) }, position.x, position.z);
+    const distance = wanted.find(t => t.key === active!.key)?.distance ?? distanceTo({ bounds: boundsOf(active.tile) }, position.x, position.z);
     pace.deadline = distance > SYNC_RADIUS ? began + budget : Infinity;
     while (true) {
       const built = step(active);
@@ -96,16 +106,18 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     }
   }
 
-  async function ensureAround(x: number, z: number, radius = 350) {
+  async function ensureAround(x: number, z: number, radius = mobile ? 180 : 350) {
     focus = { x, z, until: performance.now() + 8000 };
-    const wanted = tilesNear(city, x, z, radius);
-    await Promise.all(wanted.map(t => loaded.has(t.key) || (active?.key === t.key) || fetched.has(t.key) ? undefined : fetch(t.tx, t.tz, t.key)?.catch(() => undefined)));
+    const wanted = wantedAround(x, z, radius);
+    if (!mobile) await Promise.all(wanted.map(t => loaded.has(t.key) || (active?.key === t.key) || fetched.has(t.key) ? undefined : fetch(t.tx, t.tz, t.key)?.catch(() => undefined)));
     for (const t of wanted) {
+      if (mobile && !loaded.has(t.key) && active?.key !== t.key && !fetched.has(t.key)) await fetch(t.tx, t.tz, t.key)?.catch(() => undefined);
       if (loaded.has(t.key)) continue;
       if (active?.key === t.key) { runToCompletion(active); active = undefined; continue; }
       const tile = fetched.get(t.key); if (!tile) continue;
       if (active) { const pending = active; active = undefined; runToCompletion(pending); }
       runToCompletion(start(t.key, tile));
+      if (mobile) await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
 
@@ -115,7 +127,7 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     for (const t of loaded.values()) { for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] += t.stats[k]; for (const [stage, ms] of Object.entries(t.stats.stageMs ?? {})) stageMs[stage] = (stageMs[stage] ?? 0) + ms; }
     for (const stage of Object.keys(stageMs)) stageMs[stage] = Math.round(stageMs[stage]);
     const tiles = [...loaded.values()].map(t => ({ key: t.key, buildings: t.stats.buildings, triangles: t.stats.triangles, buildMs: t.stats.buildMs, cpuMs: t.stats.cpuMs, stageMs: t.stats.stageMs }));
-    return { loaded: loaded.size, keys: [...loaded.keys()], fetching: fetching.size, pending: fetched.size, failed: failed.size, building: active?.key, stage: active?.stage, budgetMs: Math.round(budget * 10) / 10, tileSize: city.tiles.size, available: city.tiles.keys.length, farBuildings: city.tiles.buildingCount, ...totals, stageMs, tiles };
+    return { loadRadius, unloadRadius, maxFetches, loaded: loaded.size, keys: [...loaded.keys()], fetching: fetching.size, pending: fetched.size, failed: failed.size, building: active?.key, stage: active?.stage, budgetMs: Math.round(budget * 10) / 10, tileSize: city.tiles.size, available: city.tiles.keys.length, farBuildings: city.tiles.buildingCount, ...totals, stageMs, tiles };
   }
   return { group, buildingChunks, lampPositions, signals, update, ensureAround, loaded, stats };
 }
