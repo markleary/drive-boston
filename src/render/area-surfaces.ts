@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import type {CityData,Point2} from '../types';
 import {sampleElevation} from '../simulation/terrain.ts';
 import type {Bounds} from './city-parks';
+import {uncoveredWater} from './water-pavement.ts';
+// Above lawn decals (.024 m), below ground-road asphalt (.045 m).
+export const WATER_SURFACE_OFFSET=.035;
 const triangulations=new WeakMap<Point2[][],{vertices:THREE.Vector2[];faces:number[][]}>();
 
 /** Clip polygon triangulation against the exact DEM triangles. This preserves
@@ -16,13 +19,14 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
   }
   const {vertices,faces}=triangulated;
   const positions:number[]=[],uv:number[]=[];
-  const emit=(poly:Point2[])=>{
+  const emitTriangles=(poly:Point2[])=>{
     for(let i=1;i<poly.length-1;i++){
       const a=poly[0],b=poly[i],c=poly[i+1],cross=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
       if(Math.abs(cross)<1e-7)continue;
       for(const p of cross>0?[a,c,b]:[a,b,c]){const ground=sampleElevation(city,...p);positions.push(p[0],(coverTerrain?Math.max(flatHeight??ground,ground):flatHeight??ground)+offset,p[1]);uv.push(p[0]/7,p[1]/7);}
     }
   };
+  const emit=(poly:Point2[])=>{for(const part of coverTerrain?uncoveredWater(city,poly):[poly])emitTriangles(part);};
   const clip=(poly:Point2[],nx:number,nz:number,limit:number)=>{
     const out:Point2[]=[];if(!poly.length)return out;
     let a=poly[poly.length-1],da=a[0]*nx+a[1]*nz-limit;

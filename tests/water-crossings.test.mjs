@@ -7,7 +7,7 @@ import {surveyViaductSupports} from '../src/simulation/viaduct-supports.ts';
 import {coverageTester} from '../src/simulation/coverage.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {addCharlesBridgeDetails} from '../src/render/charles-bridges.ts';
-import {parkSurface} from '../src/render/area-surfaces.ts';
+import {parkSurface,WATER_SURFACE_OFFSET} from '../src/render/area-surfaces.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 import {read,readJson,windowCity} from './helpers/metro-city.mjs';
 const metro=await resolveCity(readJson('city.json'),read);
@@ -15,11 +15,11 @@ const metro=await resolveCity(readJson('city.json'),read);
 test('Charles River water covers the detailed terrain at the two reported grass locations',()=>{
  const water=metro.water.find(w=>w.id==='water-merged-55');
  for(const [x,z]of [[-1184,-575],[-40,-1455]]){
-  const bounds={minX:x-18,maxX:x+18,minZ:z-18,maxZ:z+18},g=parkSurface(metro,water.rings,.095,-3.63,bounds,true),p=g.getAttribute('position');
+  const bounds={minX:x-18,maxX:x+18,minZ:z-18,maxZ:z+18},g=parkSurface(metro,water.rings,WATER_SURFACE_OFFSET,-3.63,bounds,true),p=g.getAttribute('position');
   assert.ok(p.count>30);
   for(let i=0;i<p.count;i+=3){
    const x=(p.getX(i)+p.getX(i+1)+p.getX(i+2))/3,z=(p.getZ(i)+p.getZ(i+1)+p.getZ(i+2))/3,y=(p.getY(i)+p.getY(i+1)+p.getY(i+2))/3;
-   assert.ok(y>sampleElevation(metro,x,z)+.09,'grass must stay below the water inside each detailed DEM triangle');
+   assert.ok(y>sampleElevation(metro,x,z)+.03,'grass must stay below the water inside each detailed DEM triangle');
   }
   g.dispose();
  }
