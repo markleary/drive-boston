@@ -114,6 +114,7 @@ python3 -m venv .venv-data
 .venv-data/bin/python scripts/build-metro.py --output-dir /tmp/boston-staging
 node scripts/grade-terrain.mjs --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/build-road-structures.py --data-dir /tmp/boston-staging
+.venv-data/bin/python scripts/restore-water-crossings.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/validate-city.py --data-dir /tmp/boston-staging
 ```
 
