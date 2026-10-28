@@ -112,8 +112,8 @@ test('map-wide major road crossfall improves across actual rendered widths, incl
   // Percentiles alone would hide the isolated locations reported by players.
   // The 1 km tiles around the original package add embankments the sources
   // leave at grade: the Memorial Drive ramps and the Cambridge approach of the
-  // BU Bridge, Mountfort Street beside the Turnpike cut, the Jamaicaway at
-  // Perkins Street. The grader has no wall or level to work with there, so
+  // BU Bridge, Mountfort Street beside the Turnpike cut. The grader has no
+  // wall or level to work with there, so
   // those banks are held to a short list and a hard ceiling instead of the
   // 6% that every other full-width section meets.
   const banked=rows.filter(row=>row.grade>=.06),roads=new Set(banked.map(row=>row.id));
@@ -132,9 +132,9 @@ test('all road widths stay smooth between the curbs, including narrow lanes and 
   assert.ok(quantile(local,.95)<.02,'95% of pavement cross-sections must have no internal lateral segment steeper than 2%');
   const maximum=local.reduce((a,b)=>a.grade>b.grade?a:b),steep=local.filter(row=>row.grade>.06),steepRoads=new Set(steep.map(row=>row.id));
   // Internal banks beyond 6% sit where a DEM embankment is narrower than the
-  // assumed pavement (Frontage Road on the Expressway fill, the BU Bridge and
-  // Memorial Drive ramps, First Street in Cambridge, Chapel Street in
-  // Brookline); they stay a short list with a drivable ceiling.
+  // assumed pavement (the BU Bridge and Memorial Drive ramps, Mountfort and
+  // Saint Mary's Streets beside the Turnpike cut); they stay a short list with
+  // a drivable ceiling.
   assert.ok(steep.length<=200&&steepRoads.size<=45,`internal banks beyond 6% must stay confined to the known embankments: ${steep.length} sections on ${steepRoads.size} roads`);
   assert.ok(maximum.grade<=.3,`remaining absolute internal bank on ${maximum.id} at ${maximum.x},${maximum.z}: ${(maximum.grade*100).toFixed(2)}%`);
   const worst=audited.reduce((a,b)=>a.newBankExcess>b.newBankExcess?a:b),span=worst.worstSpan,introduced=new Set(audited.filter(row=>row.newBankExcess>.02).map(row=>row.id));

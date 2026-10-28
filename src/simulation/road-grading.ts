@@ -43,9 +43,10 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
   }
   // A bridge endpoint at ground level is a hard datum, not a second ordinary
   // road to flatten into the lower surface. Keep the two structure levels apart.
+  const landings:{x:number;z:number;height:number}[]=[];
   for(const road of city.roads){if(!road.elevations)continue;
     for(const [i,level]of [[0,road.startLevel],[road.points.length-1,road.endLevel]]){
-      if(level!==0)continue;const n=node(road.points[i!]);n.height=road.elevations[i!];n.pinned=true;
+      if(level!==0)continue;const p=road.points[i!],n=node(p);n.height=road.elevations[i!];n.pinned=true;landings.push({x:p[0],z:p[1],height:n.height});
     }
   }
   // Shared junction anchors use local centerline samples. Median filtering
@@ -129,6 +130,39 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
     const i=Math.min(grid.width-2,Math.floor(fx)),j=Math.min(grid.height-2,Math.floor(fz)),tx=fx-i,tz=fz-j,k=j*grid.width+i;
     return tx+tz<=1?{indices:[k,k+1,k+grid.width],weights:[1-tx-tz,tx,tz]}:{indices:[k+grid.width+1,k+grid.width,k+1],weights:[tx+tz-1,1-tx,1-tz]};
   };
+  // A surface-level bridge arrival is a hard datum. Its actual interpolation
+  // triangle is held as an equality inside every solver pass below, so the
+  // crossfall, grade and building constraints around a landing settle against
+  // the pinned height instead of being forced back at the very end, which built
+  // a cone wherever a neighbouring street had pulled the landing away. Only the
+  // landing centre is pinned: the street that ends there shares its node and
+  // its own crossfall constraints level the pavement, whereas pinning the whole
+  // deck end line proved harmful, since the lines of neighbouring landings at
+  // different heights interleave in the same cells and a cell with a small
+  // weight then absorbs the conflict with the inverse of that weight as
+  // leverage. A broad radial correction around the centre still closes a
+  // one-cell seam at a ramp toe that no ordinary road reaches.
+  const pins=landings.map(n=>{
+    const interpolation=triangleWeights(n.x,n.z),radius=Math.max(14,grid.cellSize*2),indices:number[]=[],weights:number[]=[];
+    const ix0=clamp(Math.floor((n.x-radius-grid.originX)/grid.cellSize),0,grid.width-1),ix1=clamp(Math.ceil((n.x+radius-grid.originX)/grid.cellSize),0,grid.width-1);
+    const iz0=clamp(Math.floor((n.z-radius-grid.originZ)/grid.cellSize),0,grid.height-1),iz1=clamp(Math.ceil((n.z+radius-grid.originZ)/grid.cellSize),0,grid.height-1);
+    for(let z=iz0;z<=iz1;z++)for(let x=ix0;x<=ix1;x++){
+      const distance=Math.hypot(grid.originX+x*grid.cellSize-n.x,grid.originZ+z*grid.cellSize-n.z);if(distance>=radius)continue;
+      indices.push(z*grid.width+x);weights.push(1-smooth(distance/radius));
+    }
+    const scale=interpolation.indices.reduce((sum,id,j)=>sum+interpolation.weights[j]*(weights[indices.indexOf(id)]??0),0);
+    return{x:n.x,z:n.z,height:n.height,interpolation,indices,weights,scale,divisor:interpolation.weights.reduce((sum,w)=>sum+w*w,0)};
+  });
+  const landing=(pin:typeof pins[number])=>pin.interpolation.indices.reduce((sum,id,j)=>sum+heights[id]*pin.interpolation.weights[j],0);
+  const pin=()=>{for(const pin of pins){
+    const correction=(pin.height-landing(pin))/pin.divisor;if(Math.abs(correction)<.000001)continue;
+    pin.interpolation.indices.forEach((id,j)=>{heights[id]+=correction*pin.interpolation.weights[j];});
+  }};
+  const blendPins=()=>{for(const pin of pins){
+    const correction=(pin.height-landing(pin))/pin.scale;if(Math.abs(correction)<.000001)continue;
+    pin.indices.forEach((id,j)=>{heights[id]+=correction*pin.weights[j];});
+  }};
+  blendPins();
 
   // Preserve source ground under buildings without reseating their fixed models.
   // Every footprint receives fill ceilings, while low-rise yards may be cut
@@ -151,7 +185,16 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
       const divisor=q.weights.reduce((s,w)=>s+w*w,0);protections.push({...q,target:sample(...p),lower:p===b.center?-Infinity:b.height<20&&area<1000?-.5:-Infinity,upper:p===b.center?.15:Math.max(.2,(b.baseElevation??sample(...p))+.25-sample(...p)),divisor});
     }
   }
-  const protect=()=>{for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=value-clamp(value,c.lower,c.upper);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*.1);}};
+  // Building protections are the only absolute anchor a hill street has against
+  // its own grade and crossfall limits, which preserve the mean height of every
+  // triangle they level and would otherwise lift a yard by metres, so they may
+  // lower pavement vertices too. A free vertex with a small weight, though, used
+  // to absorb a hopeless footprint sample a little every pass and sink into a pit
+  // (a shed in the Haul Road cut reached 8 m below its ground), and a foundation
+  // skirt bridges only a modest cut: no vertex is cut more than 3 m below the
+  // source ground, and beyond that the sample stays buried.
+  const lower=(id:number,amount:number)=>{heights[id]=Math.max(heights[id]-amount,Math.min(heights[id],raw[id]-3));};
+  const protect=()=>{for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=value-clamp(value,c.lower,c.upper);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>lower(id,error/c.divisor*c.weights[j]*.1));}};
   const crossfalls:Constraint[]=[],grades:Constraint[]=[],curves:Constraint[]=[];
   const gradientKeys=new Set<string>();
   // A line crosses grid rows, columns and the shared diagonal. Constrain the
@@ -218,37 +261,24 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
     const correction=error/constraint.divisor*(constraints===curves?.2:.55);
     constraint.indices.forEach((id,j)=>{heights[id]-=correction*constraint.weights[j];});
   }
-  }
+  pin();}
   // Resolve isolated remaining banks and facade fill without insisting that
   // every nearby sloping yard retain its exact source elevation.
   for(let pass=0;pass<120;pass++){
-    for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=Math.max(0,value-c.upper);if(error>.0001)c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*.8);}
+    for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=Math.max(0,value-c.upper);if(error>.0001)c.indices.forEach((id,j)=>lower(id,error/c.divisor*c.weights[j]*.8));}
     for(const set of [curves,crossfalls,grades])for(const c of set){const limit=set===crossfalls?.018:set===grades?.2:c.limit*1.5,value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-(c.target??0),error=value-clamp(value,-limit,limit);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*(set===curves?.3:.8));}
+    pin();
   }
   // Safety bounds take precedence over soft profile matching at a tight hill
   // junction. Only remaining outliers move during this final reconciliation.
   for(let pass=0;pass<80;pass++){
-    for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=Math.max(0,value-c.upper);if(error>.0001)c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*.8);}
+    for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=Math.max(0,value-c.upper);if(error>.0001)c.indices.forEach((id,j)=>lower(id,error/c.divisor*c.weights[j]*.8));}
     for(const set of [crossfalls,grades])for(const c of set){const limit=set===crossfalls?.045:.21,value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0),error=value-clamp(value,-limit,limit);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*.8);}
+    pin();
   }
-  // Finally pin the actual interpolation triangles at every surface-level
-  // bridge arrival, including endpoints that are absent from the ordinary-road
-  // graph. A broad radial correction avoids a one-cell seam at the ramp toe.
-  const pins=[...nodes.values()].filter(n=>n.pinned).map(n=>{
-    const interpolation=triangleWeights(n.x,n.z),radius=Math.max(14,grid.cellSize*2),indices:number[]=[],weights:number[]=[];
-    const ix0=clamp(Math.floor((n.x-radius-grid.originX)/grid.cellSize),0,grid.width-1),ix1=clamp(Math.ceil((n.x+radius-grid.originX)/grid.cellSize),0,grid.width-1);
-    const iz0=clamp(Math.floor((n.z-radius-grid.originZ)/grid.cellSize),0,grid.height-1),iz1=clamp(Math.ceil((n.z+radius-grid.originZ)/grid.cellSize),0,grid.height-1);
-    for(let z=iz0;z<=iz1;z++)for(let x=ix0;x<=ix1;x++){
-      const distance=Math.hypot(grid.originX+x*grid.cellSize-n.x,grid.originZ+z*grid.cellSize-n.z);if(distance>=radius)continue;
-      indices.push(z*grid.width+x);weights.push(1-smooth(distance/radius));
-    }
-    const scale=interpolation.indices.reduce((sum,id,j)=>sum+interpolation.weights[j]*(weights[indices.indexOf(id)]??0),0);
-    return{...n,interpolation,indices,weights,scale};
-  });
-  for(let pass=0;pass<20;pass++)for(const pin of pins){
-    const y=pin.interpolation.indices.reduce((sum,id,j)=>sum+heights[id]*pin.interpolation.weights[j],0),correction=(pin.height-y)/pin.scale;
-    if(Math.abs(correction)<.000001)continue;pin.indices.forEach((id,j)=>{heights[id]+=correction*pin.weights[j];});
-  }
+  // The landings were exact at the end of every pass, so this final radial
+  // reconciliation only closes a seam at a ramp toe without an ordinary road.
+  for(let pass=0;pass<20;pass++)blendPins();
   for(let i=0;i<count;i++){
     const difference=heights[i]-raw[i];if(Math.abs(difference)>.001)stats.changedVertices++;
     stats.maxCut=Math.max(stats.maxCut,-difference);stats.maxFill=Math.max(stats.maxFill,difference);
