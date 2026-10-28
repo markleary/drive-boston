@@ -3,11 +3,21 @@ import type { Building } from '../types';
 import type { TileBuildingGeometry } from '../simulation/tile-format.ts';
 import { stabilizeFacadeUVs } from './materials.ts';
 
-/** Flat (non-indexed) copies of indexed tile triangles. */
+/** Flat copies of the survey's nonzero-area triangles. Collinear survey faces
+ * have no surface, but can still rasterize a sample after GPU projection. Their
+ * zero normals produce NaNs that bloom spreads over much of the view. */
 export function expandTriangles(positions: Float32Array, indices: ArrayLike<number>): Float32Array {
   const out = new Float32Array(indices.length * 3);
-  for (let i = 0; i < indices.length; i++) { const k = indices[i] * 3; out[i * 3] = positions[k]; out[i * 3 + 1] = positions[k + 1]; out[i * 3 + 2] = positions[k + 2]; }
-  return out;
+  let count = 0;
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i] * 3, b = indices[i + 1] * 3, c = indices[i + 2] * 3;
+    const abx = positions[b] - positions[a], aby = positions[b + 1] - positions[a + 1], abz = positions[b + 2] - positions[a + 2];
+    const acx = positions[c] - positions[a], acy = positions[c + 1] - positions[a + 1], acz = positions[c + 2] - positions[a + 2];
+    const nx = aby * acz - abz * acy, ny = abz * acx - abx * acz, nz = abx * acy - aby * acx;
+    if (!(nx * nx + ny * ny + nz * nz > 0)) continue;
+    for (let j = 0; j < 3; j++) { const k = indices[i + j] * 3; out[count++] = positions[k]; out[count++] = positions[k + 1]; out[count++] = positions[k + 2]; }
+  }
+  return out.subarray(0, count);
 }
 
 /** The renderable shell of one part of a surveyed tile building, in the form the
