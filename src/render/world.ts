@@ -212,7 +212,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   let mode:LightingMode='golden';
   const direction=new THREE.Vector3(-270,255,330);
   function setLighting(next:LightingMode){
-    mode=next;const night=mode==='night';materials.setNight(night);lampMat.emissiveIntensity=night?5:.1;
+    mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;
     sky.visible=!night;environmentSky.visible=!night;
     scene.background=night?new THREE.Color('#07111e'):null;
     environmentScene.background=night?new THREE.Color('#152638'):null;

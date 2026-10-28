@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import type { Building } from '../types';
+import type { Building, LightingMode } from '../types';
 import { architectureFor } from './neighborhood-profiles.ts';
+import { applyWindowInteriors, interiorLighting, setInteriorLighting, windowGrid } from './window-interiors.ts';
 
 export interface FacadeStyle {
   id:string; base:string; kind:'brick'|'stone'|'panel'|'wood'; detail:'brick'|'arched'|'brownstone'|'classical'|'terracotta'|'loft'|'office'|'modern'|'gothic'|'clapboard';
@@ -119,7 +120,7 @@ function landmarkMasonry(base:string,seed:number,course:number){
 
 function architecturalFacade(style:FacadeStyle,seed:number){
   const {canvas,ctx:c}=makeCanvas(),{canvas:glow,ctx:e}=makeCanvas(),{canvas:relief,ctx:b}=makeCanvas(),{canvas:rough,ctx:r}=makeCanvas();
-  const random=seeded(seed),S=512/6,spacing=6/style.columns;
+  const random=seeded(seed),S=512/6,grid=windowGrid(style),spacing=grid.spacing;
   c.fillStyle=style.base;c.fillRect(0,0,512,512);
   e.fillStyle='#000';e.fillRect(0,0,512,512);
   b.fillStyle='#808080';b.fillRect(0,0,512,512);
@@ -168,8 +169,9 @@ function architecturalFacade(style:FacadeStyle,seed:number){
     const x=(col*spacing+.05)*S;c.fillStyle='#d9c2a06b';c.fillRect(x,0,9,512);c.fillStyle='#76614b55';c.fillRect(x+9,0,3,512);
   }
   for(let row=0;row<2;row++)for(let col=0;col<style.columns;col++){
-    const w=style.windowWidth*S,h=style.windowHeight*S,x=(spacing*(col+.5))*S-w/2,y=(6-(1.56+row*3))*S-h/2;
-    const arched=style.detail==='arched',pointed=style.detail==='gothic',head=pointed?w*.82:arched?w/2:0;
+    // The interior-mapping shader derives every opening from the same grid.
+    const w=grid.width*S,h=grid.height*S,x=(spacing*(col+.5))*S-w/2,y=(6-grid.rows[row])*S-h/2;
+    const arched=grid.head===1,pointed=grid.head===2,head=pointed?w*.82:arched?w/2:0;
     const opening=(ctx:CanvasRenderingContext2D)=>{
       ctx.beginPath();ctx.moveTo(x,y+h);ctx.lineTo(x+w,y+h);ctx.lineTo(x+w,y+head);
       if(pointed){ctx.quadraticCurveTo(x+w,y+head*.35,x+w/2,y);ctx.quadraticCurveTo(x,y+head*.35,x,y+head);}
@@ -213,8 +215,7 @@ function architecturalFacade(style:FacadeStyle,seed:number){
       const bh=h*(.15+random()*.39);c.fillStyle=modern?'#989c9088':'#a49b8488';c.fillRect(x,y,w,bh);
       if(lit){e.fillStyle='#625b47';e.fillRect(x,y,w,bh);}
     }
-    const gx=style.detail==='loft'?3:style.detail==='office'?2:style.detail==='modern'?1:2;
-    const gy=style.detail==='loft'?3:style.detail==='modern'||pointed?1:2;
+    const [gx,gy]=grid.bars;
     c.strokeStyle=style.frame;c.lineWidth=style.detail==='modern'?2.3:3.5;opening(c);c.stroke();
     c.fillStyle=style.frame;e.fillStyle='#000';r.fillStyle='#d0d0d0';
     for(let i=1;i<gx;i++)for(const ctx of [c,e,r])ctx.fillRect(x+i*w/gx-1.5,y,3,h);
@@ -223,7 +224,10 @@ function architecturalFacade(style:FacadeStyle,seed:number){
     if(arched||pointed){c.strokeStyle=style.trim;c.lineWidth=8;opening(c);c.stroke();}
   }
   const material=new THREE.MeshStandardMaterial({map:canvasTexture(canvas,true),bumpMap:reliefTexture(relief),bumpScale:style.kind==='panel'?0:.006,roughnessMap:reliefTexture(rough),roughness:.94,metalness:0,envMapIntensity:1.5,emissiveMap:canvasTexture(glow,true),emissive:0xffffff,emissiveIntensity:.008});
-  material.name=style.id;material.userData.facadeStyle=style;return material;
+  material.name=style.id;material.userData.facadeStyle=style;
+  // Rooms behind the glass up close; the painted glazing and night glow remain
+  // the filtered far-distance look.
+  return applyWindowInteriors(material,grid,seed,style.kind==='panel'?.55:.8);
 }
 
 function curtainWall(){
@@ -307,7 +311,8 @@ export function createMaterials() {
   const paint = new THREE.MeshStandardMaterial({ color: '#dbd7c4', roughness: .94 });
   const yellow = new THREE.MeshStandardMaterial({ color: '#c6a850', roughness: .94 });
   return { facades, glass, library, church, roof, asphalt, sidewalk, curb, paint, yellow,
-    setNight(night: boolean) { for (const m of [...facades, church, library]) m.emissiveIntensity = night ? .78 : .008; },
+    setLighting(mode: LightingMode) { setInteriorLighting(mode); for (const m of facades) m.emissiveIntensity = mode === 'night' ? .78 : .008; },
+    interiors() { const v = interiorLighting.value; return { styles: facades.filter(m => m.userData.windowInteriors).length, glow: v.x, litFraction: v.y, daylight: v.z }; },
   };
 }
 
