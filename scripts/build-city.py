@@ -6,6 +6,7 @@ See DATA_SOURCES.md for reproducible download and provenance details.
 from __future__ import annotations
 import argparse, csv, io, json, math, pathlib, struct, zipfile, hashlib, subprocess, sys
 from collections import Counter
+from building_semantics import apply_building_identity
 from pyproj import Transformer
 from shapely.geometry import Point, LineString, Polygon, box
 from shapely.ops import unary_union
@@ -280,6 +281,7 @@ def main():
   elif r['Name']=='Boston Public Library':landmark='library'
   elif r['Name'].startswith('John Hancock Tower'):landmark='hancock'
   entry={'id':r['Model_ID'],'name':r['Name'] or c['district']+' building','center':c['center'],'height':height,'footprint':c['footprint'],'baseElevation':base,'district':c['district']}
+  apply_building_identity(entry)
   if landmark:entry['landmark']=landmark
   if 'parent' in c:entry['partOf']=c['parent']['r']['Model_ID'];entry['sourceBaseOffset']=offset
   buildings.append(entry)

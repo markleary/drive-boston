@@ -20,6 +20,7 @@ from shapely.strtree import STRtree
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 import tileformat
+from building_semantics import apply_building_identity,facade_style
 spec=importlib.util.spec_from_file_location('city_compiler',ROOT/'scripts/build-city.py');central=importlib.util.module_from_spec(spec);spec.loader.exec_module(central)
 xy,rounded,hull,load_layer,feature_polygons,polygon_rings,polygon_parts,context_polygons,visible_floor,geographic_polygon=central.xy,central.rounded,central.hull,central.load_layer,central.feature_polygons,central.polygon_rings,central.polygon_parts,central.context_polygons,central.visible_floor,central.geographic_polygon
 FT=central.FT;ORIGIN=central.ORIGIN;TO_GEO=central.TO_GEO
@@ -484,6 +485,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
  buildings=[];geometry=[];seen_sig=set();seen_ids=set();stats=Counter();landmark_hits={}
  point_targets=[(key,Point(xy(lon,lat))) for key,lon,lat in LANDMARK_POINTS]
  def emit(entry,record,audit):
+  apply_building_identity(entry)
   entry['norm']=audit;buildings.append(entry);geometry.append(record)
   poly=Polygon(entry['footprint'])
   for key,pt in point_targets:
@@ -597,6 +599,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
   if record is None:continue
   name=tags.get('name') or ' '.join(v for v in [tags.get('addr:housenumber'),tags.get('addr:street')] if v) or f'{town} building'
   entry={'id':identifier,'name':name,'center':center,'height':round(max(v[1] for v in vertices)-base,2),'footprint':footprint,'baseElevation':base,'district':town,'anchor':[ax,base,az],'source':'osm-extrusion','kind':tags.get('building','yes')}
+  if tags.get('amenity'):entry['amenity']=tags['amenity']
   emit(entry,record,{'min':base,'max':round(base+height,4),'ground':base,'policy':policy,'offset':0});stats[policy]+=1
  log('OSM buildings',sum(1 for b in buildings if b['source']=='osm-extrusion'))
  return buildings,geometry,dict(stats),landmark_hits
@@ -765,22 +768,6 @@ def write_tiles(out,buildings,geometry,curbs,park_paths,roads):
  log('Wrote',len(keys),'tiles')
  return keys
 
-def js_hash(text):
- """Same 32-bit string hash as src/render/materials.ts, so far-distance colours
- match the facade family the detailed tile will show."""
- n=0
- for c in text:n=(n*31+ord(c))&0xFFFFFFFF
- if n>=2**31:n-=2**32
- return abs(n)
-def facade_style(b):
- if re.search(r'\b(church|chapel|cathedral)\b',b['name'],re.I):return 10
- p=b['footprint'];area=abs(sum(p[i][0]*p[(i+1)%len(p)][1]-p[(i+1)%len(p)][0]*p[i][1] for i in range(len(p))))/2;n=js_hash(b['id']);h=b['height']
- if h>65:return [7,8,9][n%3]
- if h>36:return [3,4,7,8,7][n%5]
- if area>1500:return [0,3,4,5,6,7][n%6]
- if h<12:return [0,1,2,6][n%4]
- return [0,0,1,2,3,5][n%6]
-
 # Buildings the runtime addresses by identity before their tile streams in:
 # the State House dome, Prudential complex, 145 Dartmouth and the four Fenway
 # Park shells (see src/render/*.ts and src/simulation/building-collisions.ts).
@@ -810,7 +797,7 @@ def far_fragments(vertices,base,height,cell=20):
    poly=hull([p for k in group for p in points[k]])
    if len(poly)>=3:out.append({'footprint':[rounded(p) for p in poly],'height':round(min(cap,max(cells[k] for k in group)),2)})
  return out
-LANDMARK_FIELDS={'id','name','center','height','footprint','baseElevation','district','landmark','anchor'}
+LANDMARK_FIELDS={'id','name','center','height','footprint','baseElevation','district','landmark','anchor','kind','amenity','sourceName'}
 
 def write_far(out,buildings):
  """Coarse far-distance representation: convex footprints with height, base
