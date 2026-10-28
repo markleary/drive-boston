@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
+import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
 import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface } from '../simulation/road-surfaces.ts';
@@ -260,8 +261,25 @@ export class DrivingPhysics {
     if (!Number.isFinite(p.x + p.y + p.z) || p.y < sampleElevation(this.city, p.x, p.z) - 8 || this.overturnedTime > 2.5 ||
         p.x < this.bounds.minX - 24 || p.x > this.bounds.maxX + 24 ||
         p.z < this.bounds.minZ - 24 || p.z > this.bounds.maxZ + 24) {
-      this.reset(this.rescue.x, this.rescue.z, this.rescue.yaw,this.rescue.roadId);
+      this.recoverFromCrash(p);
     }
+  }
+
+  private recoverFromCrash(position:{x:number;y:number;z:number}){
+    if(this.bike&&[position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
+      // Keep recovery inside the already-streamed neighborhood.
+      const road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,accept:spot=>{
+        if(spot.x<this.bounds.minX+1||spot.x>this.bounds.maxX-1||spot.z<this.bounds.minZ+1||spot.z>this.bounds.maxZ-1)return false;
+        const surface=sampleDriveSurface(this.city,spot.x,spot.z,undefined,spot.road.id),n=surface.normal;
+        const center={x:spot.x-.06*n.x,y:surface.height+ULTRA_BEE.spawnHeight/Math.max(.5,n.y)-.06*n.y,z:spot.z-.06*n.z};
+        return !this.world.intersectionWithShape(center,rotationFromNormal(n,spot.yaw),this.chassisCollider.shape,undefined,undefined,this.chassisCollider,this.body);
+      }});
+      if(Number.isFinite(road.distance)){
+        const yaw=road.road.oneway===0&&Math.cos(road.yaw-this.getState().yaw)<0?road.yaw+Math.PI:road.yaw;
+        this.reset(road.x,road.z,yaw,road.road.id);return;
+      }
+    }
+    this.reset(this.rescue.x,this.rescue.z,this.rescue.yaw,this.rescue.roadId);
   }
 
   getState(): PhysicsVehicleState {
