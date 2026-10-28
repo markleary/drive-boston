@@ -10,7 +10,7 @@ const indexes=new WeakMap<CityData,Map<string,Cutout[]>>(),CELL=64;
 function index(city:CityData){
   let cells=indexes.get(city);if(cells)return cells;cells=new Map();
   for(const road of city.roads){
-    const expanded={...road,width:road.width+(road.elevations ? .3 : 6.1)};
+    const margin=road.elevations ? .3 : 6.1,expanded={...road,width:road.width+margin,deckWidths:road.deckWidths?.map(w=>w+margin)};
     for(let i=1;i<road.points.length;i++){
       const points=[deckEdge(expanded,i-1,-1),deckEdge(expanded,i-1,1),deckEdge(expanded,i,1),deckEdge(expanded,i,-1)];
       if(road.elevations){

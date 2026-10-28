@@ -33,7 +33,7 @@ export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:TH
     }
     for(const p of bridgeSupports(city,road)){
       piers.push(new THREE.BoxGeometry(1.8,p.top-p.bottom,2.4).rotateY(p.yaw).translate(p.x,(p.top+p.bottom)/2,p.z));
-      piers.push(new THREE.BoxGeometry(road.width-.5,.55,2.8).rotateY(p.yaw).translate(p.x,p.top-.28,p.z));
+      piers.push(new THREE.BoxGeometry(p.width-.5,.55,2.8).rotateY(p.yaw).translate(p.x,p.top-.28,p.z));
     }
   }
   for(const [geometries,material]of [[decks,asphalt],[slabs,steel],[markings,paint],[rails,concrete],[piers,concrete]]as const){

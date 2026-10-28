@@ -160,7 +160,7 @@ export class DrivingPhysics {
     for (const p of bridgeSupports(city, road)) {
       const rotation={x:0,y:Math.sin(p.yaw/2),z:0,w:Math.cos(p.yaw/2)};
       colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.9, (p.top - p.bottom) / 2, 1.2).setTranslation(p.x, (p.top + p.bottom) / 2, p.z).setRotation(rotation).setFriction(.5)));
-      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid((road.width - .5) / 2, .275, 1.4).setTranslation(p.x, p.top - .28, p.z).setRotation(rotation).setFriction(.5)));
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid((p.width - .5) / 2, .275, 1.4).setTranslation(p.x, p.top - .28, p.z).setRotation(rotation).setFriction(.5)));
     }
     return colliders;
   }

@@ -1,4 +1,5 @@
 import type {CityData,Point2,Road} from '../types';
+import {isHarvardBridgeRoad} from './harvard-bridge.ts';
 import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
 
 export function roadProjection(road:Road,x:number,z:number){
@@ -52,33 +53,44 @@ function elevatedNear(city:CityData,x:number,z:number){
  * an overpass stays below it; explicit road IDs make deck destination resets unambiguous. */
 export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
   const chosen=roadId?city.roads?.find(r=>r.id===roadId):undefined;
-  if(chosen&&roadProjection(chosen,x,z).distance<=chosen.width/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
+  if(chosen&&roadProjection(chosen,x,z).distance<=roadWidthAt(chosen,x,z)/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
   let height=sampleElevation(city,x,z),normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
   for(const candidate of elevatedNear(city,x,z)){
     if(!candidate.elevations)continue;
-    const hit=roadProjection(candidate,x,z);if(hit.distance>candidate.width/2+.05)continue;
+    const hit=roadProjection(candidate,x,z);if(hit.distance>roadWidthAt(candidate,x,z)/2+.05)continue;
     const h=sampleRoadElevation(city,candidate,x,z);
     if(h>height&&h<=yReference+.4){height=h;normal=roadNormal(city,candidate,x,z);road=candidate;}
   }
   return{height,normal,road};
 }
 
+/** Optional per-section widths taper shore ramps without a step in the deck edge. */
+export function roadWidthAt(road:Road,x:number,z:number){
+  if(!road.deckWidths)return road.width;
+  const hit=roadProjection(road,x,z),a=road.deckWidths?.[hit.index]??road.width,b=road.deckWidths?.[hit.index+1]??road.width;return a+(b-a)*hit.t;
+}
+function deckDirection(road:Road,i:number){
+  const override=i===0?road.deckTangents?.start:i===road.points.length-1?road.deckTangents?.end:undefined;
+  if(override)return override;const a=road.points[Math.max(0,i-1)],b=road.points[Math.min(road.points.length-1,i+1)];return[b[0]-a[0],b[1]-a[1]];
+}
+
 /** Shared exact deck ribbon for rendering and Rapier. Width may include parapets. */
 export function roadDeckGeometry(city:CityData,road:Road,width=road.width,offset=0){
   const vertices:number[]=[],indices:number[]=[],uv:number[]=[];let along=0;
   for(let i=0;i<road.points.length;i++){
-    const p=road.points[i],a=road.points[Math.max(0,i-1)],b=road.points[Math.min(road.points.length-1,i+1)],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz)||1;
+    const p=road.points[i],[dx,dz]=deckDirection(road,i),length=Math.hypot(dx,dz)||1;
     if(i)along+=Math.hypot(p[0]-road.points[i-1][0],p[1]-road.points[i-1][1]);
     const y=(road.elevations?.[i]??sampleElevation(city,...p))+offset;
-    for(const side of [-1,1]){vertices.push(p[0]-dz/length*width/2*side,y,p[1]+dx/length*width/2*side);uv.push((side+1)*width/10,along/5);}
+    const sectionWidth=(road.deckWidths?.[i]??road.width)+(width-road.width);
+    for(const side of [-1,1]){vertices.push(p[0]-dz/length*sectionWidth/2*side,y,p[1]+dx/length*sectionWidth/2*side);uv.push((side+1)*sectionWidth/10,along/5);}
     if(i){const j=(i-1)*2;indices.push(j,j+1,j+2,j+1,j+3,j+2);}
   }
   return{vertices:new Float32Array(vertices),indices:new Uint32Array(indices),uv:new Float32Array(uv)};
 }
 
 export function deckEdge(road:Road,i:number,side:number,inset=0):Point2{
-  const p=road.points[i],a=road.points[Math.max(0,i-1)],b=road.points[Math.min(road.points.length-1,i+1)],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz)||1;
-  return[p[0]-dz/length*(road.width/2-inset)*side,p[1]+dx/length*(road.width/2-inset)*side];
+  const p=road.points[i],[dx,dz]=deckDirection(road,i),length=Math.hypot(dx,dz)||1;
+  const width=road.deckWidths?.[i]??road.width;return[p[0]-dz/length*(width/2-inset)*side,p[1]+dx/length*(width/2-inset)*side];
 }
 
 /** Closed slab gives both a driving top and a physical underside/edge. */
@@ -103,13 +115,13 @@ export function roadSlabGeometry(city:CityData,road:Road){
 export function bridgeSupports(city:CityData,road:Road){
   if(!road.elevations||!road.bridge)return[];
   if(road.name==='Longfellow Bridge')return[]; // Shared granite piers and arch ribs in charles-bridges.ts.
-  const supports:{x:number;z:number;bottom:number;top:number;yaw:number}[]=[];let along=0,next=18;
+  const supports:{x:number;z:number;bottom:number;top:number;yaw:number;width:number}[]=[];let along=0,next=18;
   for(let i=1;i<road.points.length;i++){
     const a=road.points[i-1],b=road.points[i],length=Math.hypot(b[0]-a[0],b[1]-a[1]);
     while(along+length>=next){
       const t=(next-along)/length,x=a[0]+(b[0]-a[0])*t,z=a[1]+(b[1]-a[1])*t,top=road.elevations[i-1]+(road.elevations[i]-road.elevations[i-1])*t-road.bridge.thickness,bottom=sampleElevation(city,x,z);
       const blocksRoad=city.roads.some(r=>r!==road&&roadProjection(r,x,z).distance<r.width/2+2.1&&sampleRoadElevation(city,r,x,z)<top-1);
-      if(top-bottom>2.5&&!blocksRoad)supports.push({x,z,bottom:bottom-.5,top,yaw:Math.atan2(b[0]-a[0],b[1]-a[1])});next+=34;
+      if(top-bottom>2.5&&!blocksRoad)supports.push({x,z,bottom:bottom-.5,top,yaw:Math.atan2(b[0]-a[0],b[1]-a[1]),width:roadWidthAt(road,x,z)});next+=34;
     }
     along+=length;
   }
@@ -200,6 +212,7 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
 }
 
 export function bridgeBarriers(city:CityData,road:Road){
+  if(isHarvardBridgeRoad(road))return[]; // Outer sidewalk parapets are built in harvard-bridge.ts.
   // The outside probe preserves protection on the union's exposed perimeter,
   // including where two source road ribbons share the same outer edge.
   return bridgeEdgeSections(city,road,.18,-.06).map(({a,b,ya,yb})=>{
