@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createMissionChurchMaterials, isMissionChurch, splitMissionChurchShell } from './mission-church';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Sky } from 'three/addons/objects/Sky.js';
@@ -131,6 +132,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   for(const b of city.buildings)buildingMap.set(b.id,b);
   const fenwayMaterials=createFenwayShellMaterials();
   const stateHouseMaterials=createStateHouseShellMaterials();
+  const missionChurchMaterials=createMissionChurchMaterials();
   const prudentialPenthouse=createPrudentialPenthouseMaterial();
   // Source tiles include park monuments, shelters and utility structures among
   // the building meshes. Keep their measured forms without residential windows.
@@ -162,6 +164,13 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     }
     const normalized=geometry.index?geometry.toNonIndexed():geometry;
     if(!isRoof)stabilizeFacadeUVs(normalized,b);
+    if(b&&isMissionChurch(b)){
+      for(const part of splitMissionChurchShell(normalized,b,isRoof)){
+        const material=missionChurchMaterials[part.kind],key=`${material.uuid}:mission-church`;
+        const bucket=buckets.get(key)??{material,geometries:[]};bucket.geometries.push(part.geometry);buckets.set(key,bucket);
+      }
+      normalized.dispose();if(normalized!==geometry)geometry.dispose();return;
+    }
     if(isStateHouse(b)){
       for(const part of splitStateHouseShell(normalized,isRoof)){
         const stateMaterial=stateHouseMaterials[part.kind],key=`${stateMaterial.uuid}:state-house`;

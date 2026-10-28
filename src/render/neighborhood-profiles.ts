@@ -2,6 +2,7 @@ import type { Building, CityData, Point2 } from '../types';
 import { closestRoad, pointInside } from '../simulation/roads.ts';
 import { isMetroCity, type MetroCity } from '../simulation/city-tiles.ts';
 import { streetCharacter } from './street-character.ts';
+import { isReligiousBuilding } from '../simulation/building-identities.ts';
 
 export interface TripleDeckerProfile {
   kind:'triple-decker'; palette:number; floorHeight:number; raisedBase:number;
@@ -34,7 +35,7 @@ export function prepareNeighborhoodArchitecture(city:CityData,buildings?:Buildin
   const neighborsOf=(b:Building)=>metro?(city as MetroCity).index.near(b.center[0],b.center[1],34):city.buildings;
   for(const b of buildings??city.buildings){
     if(considered.has(b))continue;considered.add(b);
-    if(b.landmark||b.height<8.3||b.height>14.4||/church|chapel|school|hospital|college/i.test(b.name)||!inDistrict(b.center))continue;
+    if(b.landmark||isReligiousBuilding(b)||b.height<8.3||b.height>14.4||/school|hospital|college/i.test(b.name)||!inDistrict(b.center))continue;
     const p=b.footprint,area=Math.abs(p.reduce((s,a,i)=>{const c=p[(i+1)%p.length];return s+a[0]*c[1]-c[0]*a[1];},0))/2;
     if(area<65||area>245)continue;
     let best:TripleDeckerProfile['front']|undefined,score=-Infinity;
