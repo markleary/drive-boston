@@ -1,3 +1,4 @@
+import {inLongfellowCorridor} from '../simulation/longfellow.ts';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { canvasTexture, hash, seeded } from './materials';
@@ -117,7 +118,7 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
   const field:TreeField={group,
     add(owner,positions){
       const random=seeded(owner==='all'?9311:9311+hash(owner)%100000);
-      for(const p of positions)sites.push({p,species:options.grates===false?Math.floor(random()*4):Math.floor(random()*3),scale:scale*(.82+random()*.30),yaw:random()*Math.PI*2,owner});
+      for(const p of positions.filter(p=>!inLongfellowCorridor(p.x,p.z)))sites.push({p,species:options.grates===false?Math.floor(random()*4):Math.floor(random()*3),scale:scale*(.82+random()*.30),yaw:random()*Math.PI*2,owner});
       dirty=true;refreshGrates();group.userData.treeCount=sites.length;
     },
     remove(owner){sites=sites.filter(s=>s.owner!==owner);dirty=true;refreshGrates();group.userData.treeCount=sites.length;},

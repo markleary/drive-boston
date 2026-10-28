@@ -10,7 +10,7 @@ import { PartBatches, box, type Part } from './geometry-writer';
 import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
 import { insideEmbracePlaza } from './the-embrace';
-import {parkSurface} from './area-surfaces.ts';
+import {parkSurface,WATER_SURFACE_OFFSET} from './area-surfaces.ts';
 export {parkSurface} from './area-surfaces.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -84,7 +84,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     // Hydro unions join the tidal harbour to higher river DEM plateaus. Clip
     // against the same DEM triangles and cover those plateaus rather than
     // allowing detailed grass to occlude the water when its tile streams in.
-    const geometry=parkSurface(city,water.rings,.095,waterHeight(city,water),bounds,true);if(geometry.attributes.position.count)waterSheets.push(geometry);else geometry.dispose();
+    const geometry=parkSurface(city,water.rings,WATER_SURFACE_OFFSET,waterHeight(city,water),bounds,true);if(geometry.attributes.position.count)waterSheets.push(geometry);else geometry.dispose();
     // Small pond edges get a narrow ground-following border; river shorelines
     // retain the source's natural geometry without an invented concrete wall.
     const extent=areaBounds(water);
