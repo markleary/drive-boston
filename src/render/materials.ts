@@ -199,22 +199,21 @@ function architecturalFacade(style:FacadeStyle,seed:number){
     }
     c.fillStyle='#d6e4df16';c.fillRect(x+2,y+5,w-4,h*.11);
     r.fillStyle=modern?'#414141':'#565656';r.fillRect(x,y,w,h);
-    const lit=random()>.57;
-    if(lit){
-      e.fillStyle=['#b18d60','#dbc09a','#caad81','#809497'][Math.floor(random()*4)];e.fillRect(x,y,w,h);
-      e.fillStyle='#292b27';e.fillRect(x+w*.12,y+h*.78,w*.72,h*.22);
-    }
+    // Every opening carries its glow; the shader switches rooms on per window
+    // so the lit share does not repeat with the six-metre tile.
+    e.fillStyle=['#b18d60','#dbc09a','#caad81','#809497'][Math.floor(random()*4)];e.fillRect(x,y,w,h);
+    e.fillStyle='#292b27';e.fillRect(x+w*.12,y+h*.78,w*.72,h*.22);
     if(!modern&&style.detail!=='loft'&&random()>.4){
       const cw=w*(.15+random()*.12);
       for(const xx of [x,x+w-cw]){
         c.fillStyle='#d1c7b073';c.fillRect(xx,y,cw,h);
-        if(lit){e.fillStyle='#7e6c50';e.fillRect(xx,y,cw,h);}
+        e.fillStyle='#7e6c50';e.fillRect(xx,y,cw,h);
         for(let j=3;j<cw;j+=5){c.fillStyle='#2c302a22';c.fillRect(xx+j,y,1,h);}
       }
     }
     if(random()>.66){
       const bh=h*(.15+random()*.39);c.fillStyle=modern?'#989c9088':'#a49b8488';c.fillRect(x,y,w,bh);
-      if(lit){e.fillStyle='#625b47';e.fillRect(x,y,w,bh);}
+      e.fillStyle='#625b47';e.fillRect(x,y,w,bh);
     }
     const [gx,gy]=grid.bars;
     c.strokeStyle=style.frame;c.lineWidth=style.detail==='modern'?2.3:3.5;opening(c);c.stroke();

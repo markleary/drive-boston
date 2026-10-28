@@ -37,7 +37,8 @@ test('interior mapping hooks into the standard facade program with shared lighti
   material.onBeforeCompile(shader,undefined);
   assert.ok(shader.vertexShader.includes('vInteriorWorld=(modelMatrix*vec4(transformed,1.0)).xyz'));
   assert.ok(shader.fragmentShader.includes('#include <emissivemap_fragment>'),'the painted emissive stays as the far look');
-  assert.ok(shader.fragmentShader.includes('totalEmissiveRadiance*=1.0-region;'),'painted glow is cleared under near windows');
+  assert.ok(shader.fragmentShader.includes('totalEmissiveRadiance*=litMask*(1.0-region);'),'painted glow follows each room switch and is cleared under near windows');
+  assert.ok(shader.fragmentShader.indexOf('float lit=')<shader.fragmentShader.indexOf('if(cover>0.002)'),'far and near windows share one per-room light switch');
   assert.ok(shader.fragmentShader.includes('totalEmissiveRadiance+=glow*cover;'));
   assert.ok(shader.fragmentShader.includes('diffuseColor.rgb=mix(diffuseColor.rgb'));
   assert.equal(shader.uniforms.interiorLighting,interiorLighting,'one live lighting uniform for every style');
@@ -56,6 +57,6 @@ test('night lighting turns rooms on and golden hour keeps a few early lamps',()=
   assert.ok(day.x<golden.x&&golden.x<night.x,'glow rises toward night');
   assert.ok(day.y<golden.y&&golden.y<night.y,'more rooms are lit toward night');
   assert.ok(night.z<golden.z&&golden.z<=day.z,'less daylight reaches rooms at night');
-  assert.ok(night.y>.35&&night.y<.6,'under half the rooms are lit at night');
+  assert.ok(night.y>=.4&&night.y<=.5,'40 to 50 percent of rooms are lit at night');
   setInteriorLighting('golden');
 });
