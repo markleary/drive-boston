@@ -21,7 +21,8 @@ test('pedestrians follow a distant neighborhood without teleporting nearby actor
     const count=life.count;assert.equal(count,112,'the city-wide population must stay bounded');
     const initialLocal=life.pedestrians.filter(p=>distance(p.position)<350).length;
     let previous=life.pedestrians.map(p=>p.position.clone()),jumps=0;
-    const matrix=new THREE.Matrix4(),soles=scene.getObjectByName('Shoe soles');assert.ok(soles?.isInstancedMesh);
+    const matrix=new THREE.Matrix4(),vertex=new THREE.Vector3(),soles=scene.getObjectByName('Shoe soles');assert.ok(soles?.isInstancedMesh);
+    const soleVertices=soles.geometry.attributes.position;
     for(let step=1;step<=100;step++){
       life.update(.31,step*.31,observer);
       assert.equal(life.pedestrians.length,count);
@@ -36,7 +37,7 @@ test('pedestrians follow a distant neighborhood without teleporting nearby actor
         let lowestSole=Infinity;
         for(let side=0;side<2;side++){
           soles.getMatrixAt(index*2+side,matrix);assert.ok(matrix.elements.every(Number.isFinite));
-          lowestSole=Math.min(lowestSole,matrix.elements[13]-Math.abs(matrix.elements[5])*.5);
+          for(let j=0;j<soleVertices.count;j++)lowestSole=Math.min(lowestSole,vertex.fromBufferAttribute(soleVertices,j).applyMatrix4(matrix).y);
         }
         assert.ok(Math.abs(lowestSole-person.position.y)<.002,'at least one stance foot must remain at the actor ground plane through each gait phase');
       }
