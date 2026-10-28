@@ -98,3 +98,7 @@
 #graphics-status{font-size:14px;line-height:1.6}
 #graphics-report{width:100%;font:11px/1.5 monospace;resize:vertical;pointer-events:auto}
 #graphics-copy-status{font-size:12px;line-height:1.5}
+
+/* Touch controls replace keyboard hints in the HUD and settings. */
+@media(pointer:coarse){#drive-hint,#controls-help,#interface kbd,#interface .key{display:none}}
+@media(pointer:coarse) and (max-width:700px){.toast{top:172px}}
