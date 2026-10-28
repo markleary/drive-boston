@@ -9,6 +9,7 @@ type P=[number,number,number];
 export function createBike(){
   const group=new THREE.Group();group.name='PlayerUltraBee';
   const rider=new THREE.Group();rider.name='UltraBeeRider';group.add(rider);
+  const helmet=new THREE.Group();helmet.name='UltraBeeHelmet';rider.add(helmet);
   const mat={
     frame:new THREE.MeshStandardMaterial({color:0x566f68,metalness:.7,roughness:.32}),
     black:new THREE.MeshStandardMaterial({color:0x141b1d,roughness:.65}),
@@ -101,11 +102,11 @@ export function createBike(){
     rod('jacket',[side*.27,.66,-.12],[side*.37,.58,.25],.042,rider,.031);
     sphere('black',[side*.37,.58,.25],[.045,.035,.05],rider);
   }
-  sphere('white',[0,1.02,-.06],[.125,.15,.14],rider);
-  sphere('visor',[0,1.04,.05],[.109,.060,.066],rider);
-  box('white',[.20,.035,.18],[0,1.13,.075],rider,.13); // Motocross peak
-  box('black',[.13,.055,.11],[0,.95,.07],rider,-.25); // Chin guard
-  box('yellow',[.034,.04,.19],[0,1.153,.055],rider);
+  sphere('white',[0,1.02,-.06],[.125,.15,.14],helmet);
+  sphere('visor',[0,1.04,.05],[.109,.060,.066],helmet);
+  box('white',[.20,.035,.18],[0,1.13,.075],helmet,.13); // Motocross peak
+  box('black',[.13,.055,.11],[0,.95,.07],helmet,-.25); // Chin guard
+  box('yellow',[.034,.04,.19],[0,1.153,.055],helmet);
   // Merge static detail by material; spokes and tread blocks cost no extra draws.
   for(const [parent,batch] of batches)for(const [key,parts] of batch){const g=mergeGeometries(parts,false)!;parts.forEach(p=>p.dispose());const mesh=new THREE.Mesh(g,mat[key]);mesh.castShadow=true;mesh.receiveShadow=true;parent.add(mesh);}
   if(typeof document!=='undefined'){
@@ -116,12 +117,13 @@ export function createBike(){
     for(const side of [-1,1]){const m=new THREE.Mesh(new THREE.PlaneGeometry(.30,.075),decalMat);m.rotation.y=side*Math.PI/2;m.position.set(side*.176,.295,-.04);group.add(m);}
   }
   const lamp=new THREE.SpotLight(0xffedcd,0,32,.50,.6,1.5);lamp.position.set(0,.28,.49);lamp.target.position.set(0,-.4,15);group.add(lamp,lamp.target);lamp.visible=false;
-  return {group,rider,
-    update(s:PhysicsVehicleState,night:boolean,showRider=true){
+  return {group,rider,helmet,
+    update(s:PhysicsVehicleState,night:boolean,firstPerson=false){
       group.position.set(s.x,s.y,s.z);group.quaternion.set(s.rotation.x,s.rotation.y,s.rotation.z,s.rotation.w);
       front.rotation.y=s.steering;
       wheels.forEach((w,i)=>{w.pivot.position.y=-.06-(s.suspension[i]??.19);w.pivot.rotation.y=i===0?s.steering:0;w.spin.rotation.x=s.wheelAngles[i]??0;});
-      rider.visible=showRider;rider.rotation.x=s.wheelie*.18;rider.rotation.z=-s.lean*.08;
+      // Keep the body and hands in first person; the camera sits inside the helmet.
+      helmet.visible=!firstPerson;rider.rotation.x=s.wheelie*.18;rider.rotation.z=-s.lean*.08;
       mat.headlight.emissiveIntensity=night?3:.5;mat.rear.emissiveIntensity=s.braking?4:night?1.8:.3;lamp.visible=night;lamp.intensity=night?24:0;
     },
   };
