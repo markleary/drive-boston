@@ -4,11 +4,14 @@ import { buildTerrainGeometryData, sampleElevation, terrainGrid } from '../simul
 import { TriangleWriter } from './geometry-writer.ts';
 
 /** Subdivide across and along roads so hill crests and cross slopes remain
- * attached to the same surface used by the suspension raycasts. The flat-shaded
- * triangles go straight into `sink`, so a tile's roads, dashes and crossings
- * accumulate into a few buffers instead of thousands of geometries. */
+ * attached to the same surface used by the suspension raycasts. The triangles
+ * go into `sink`, so a tile's roads, dashes and crossings accumulate into a
+ * few buffers instead of thousands of geometries. Flat-shaded ribbon triangles
+ * would draw every grid crease across the asphalt as a shading line, so the
+ * ribbon is collected first and written with the face normals of coincident
+ * vertices averaged, as an indexed mesh would shade. */
 export function drapedRibbonInto(sink:TriangleWriter,city:CityData,points:Point2[],width:number,offset:number,surface=(x:number,z:number)=>sampleElevation(city,x,z)){
-  let distance=0;
+  let distance=0;const v:number[]=[];
   // Vertices travel as plain numbers (x, y, z, u, v): no objects per vertex or midpoint.
   const emit=(ax:number,ay:number,az:number,au:number,av:number,bx:number,by:number,bz:number,bu:number,bv:number,cx:number,cy:number,cz:number,cu:number,cv:number,depth:number)=>{
     const abx=(ax+bx)/2,abz=(az+bz)/2,aby=surface(abx,abz)+offset,abu=(au+bu)/2,abv=(av+bv)/2;
@@ -19,7 +22,7 @@ export function drapedRibbonInto(sink:TriangleWriter,city:CityData,points:Point2
       emit(ax,ay,az,au,av,abx,aby,abz,abu,abv,cax,cay,caz,cau,cav,depth+1);emit(abx,aby,abz,abu,abv,bx,by,bz,bu,bv,bcx,bcy,bcz,bcu,bcv,depth+1);
       emit(cax,cay,caz,cau,cav,bcx,bcy,bcz,bcu,bcv,cx,cy,cz,cu,cv,depth+1);emit(abx,aby,abz,abu,abv,bcx,bcy,bcz,bcu,bcv,cax,cay,caz,cau,cav,depth+1);return;
     }
-    sink.triangle(ax,ay,az,bx,by,bz,cx,cy,cz,au,av,bu,bv,cu,cv);
+    v.push(ax,ay,az,au,av,bx,by,bz,bu,bv,cx,cy,cz,cu,cv);
   };
   const section=(i:number)=>{
     const p=points[i],before=points[Math.max(0,i-1)],after=points[Math.min(points.length-1,i+1)];
@@ -42,6 +45,15 @@ export function drapedRibbonInto(sink:TriangleWriter,city:CityData,points:Point2
     }
     distance+=length;
   }
+  const n=v.length/5,sums=new Map<string,number[]>(),keys=new Array<string>(n);
+  for(let i=0;i<n;i+=3){
+    const ax=v[i*5],ay=v[i*5+1],az=v[i*5+2],bx=v[i*5+5],by=v[i*5+6],bz=v[i*5+7],cx=v[i*5+10],cy=v[i*5+11],cz=v[i*5+12];
+    const abx=ax-bx,aby=ay-by,abz=az-bz,cbx=cx-bx,cby=cy-by,cbz=cz-bz;
+    let nx=cby*abz-cbz*aby,ny=cbz*abx-cbx*abz,nz=cbx*aby-cby*abx;const length=Math.hypot(nx,ny,nz);if(length>0){nx/=length;ny/=length;nz/=length;}
+    for(let k=i;k<i+3;k++){const key=keys[k]=`${Math.round(v[k*5]*50)},${Math.round(v[k*5+2]*50)}`,s=sums.get(key);if(s){s[0]+=nx;s[1]+=ny;s[2]+=nz;}else sums.set(key,[nx,ny,nz]);}
+  }
+  sink.reserve(n);
+  for(let k=0;k<n;k++){const s=sums.get(keys[k])!,l=Math.hypot(s[0],s[1],s[2])||1;sink.vertex(v[k*5],v[k*5+1],v[k*5+2],s[0]/l,s[1]/l,s[2]/l,v[k*5+3],v[k*5+4]);}
 }
 export function drapedRibbon(city:CityData,points:Point2[],width:number,offset:number,surface?:(x:number,z:number)=>number){
   const sink=new TriangleWriter();drapedRibbonInto(sink,city,points,width,offset,surface);return sink.geometry();

@@ -1,5 +1,7 @@
 export type Point2 = [number, number];
-export interface Road { id: string; name: string; points: Point2[]; width: number; oneway: number; elevations?:number[]; startLevel?:number; endLevel?:number; bridge?:{id:string;thickness:number;clearanceEstimated:boolean}; }
+/** `kind` is the OpenStreetMap highway class of a town street (Cambridge, Somerville, Brookline); Boston centerlines carry a surveyed width instead. */
+export interface Road { id: string; name: string; points: Point2[]; width: number; oneway: number; kind?: string; elevations?:number[]; startLevel?:number; endLevel?:number; bridge?:{id:string;thickness:number;clearanceEstimated:boolean}; }
+/** `kind` is the OpenStreetMap building tag of a town extrusion (house, apartments, retail...). */
 export interface Building { id: string; name: string; center: Point2; height: number; footprint: Point2[]; landmark?: string; baseElevation?: number; kind?: string; amenity?: string; sourceName?: string; }
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
 export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; }

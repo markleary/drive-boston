@@ -19,6 +19,13 @@ test('every facade style yields a window grid that matches the painted openings'
       assert.ok(!insideWindow(grid,cx,cy+grid.height/2+.1),`${style.id}: above the lintel`);
       assert.ok(!insideWindow(grid,cx,cy-grid.height/2-.1),`${style.id}: below the sill`);
     }
+    // A profile's raised ground floor leaves the wall below row zero as
+    // foundation: the previous tile's upper row never shows there, even though
+    // its head would reach 0.09 m above the base on the periodic texture.
+    const cx0=grid.spacing/2;
+    assert.ok(!insideWindow(grid,cx0,grid.rows[1]-6),`${style.id}: no window centred below the base`);
+    assert.ok(!insideWindow(grid,cx0,-.02),`${style.id}: no glazing just below the base`);
+    assert.ok(insideWindow(grid,cx0-grid.width*.25,grid.rows[1]-grid.height*.3),`${style.id}: the upper row itself is glazed`);
     // Mullions split the glazing where the painter draws frame bars.
     const [gx,gy]=grid.bars,cx=grid.spacing/2,cy=grid.rows[0];
     if(gx>1)assert.ok(!insideWindow(grid,cx-grid.width/2+grid.width/gx,cy-grid.height*.3),`${style.id}: vertical mullion`);
@@ -43,7 +50,8 @@ test('interior mapping hooks into the standard facade program with shared lighti
   assert.equal(shader.uniforms.interiorLighting,interiorLighting,'one live lighting uniform for every style');
   assert.deepEqual([shader.uniforms.interiorGrid.value.x,shader.uniforms.interiorGrid.value.w],[grid.spacing,1]);
   assert.deepEqual(shader.uniforms.interiorBars.value.toArray(),grid.bars);
-  assert.equal(material.customProgramCacheKey(),'boston-window-interiors-1');
+  assert.equal(material.customProgramCacheKey(),'boston-window-interiors-2');
+  assert.ok(shader.fragmentShader.includes('float basement=1.0-smoothstep(-py,py,tile.y);')&&shader.fragmentShader.includes('cover*=1.0-basement;'),'the wall below row zero is foundation, not a room');
   assert.deepEqual(material.userData.windowInteriors.bays,[2,3],'two-metre bays make two- or three-bay rooms');
   for(const chunk of ['dFdx(vInteriorWorld)','transformDirectionByInverseViewMatrix(nonPerturbedNormal,viewMatrix)','interiorHash(roomId'])assert.ok(windowInteriorShader.fragment.includes(chunk),chunk);
   assert.ok(!/\bvUv\b/.test(windowInteriorShader.fragment),'three no longer declares vUv for map-only materials');
