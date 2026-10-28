@@ -42,7 +42,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const pmrem=new THREE.PMREMGenerator(renderer);let skyEnvironment:THREE.WebGLRenderTarget|undefined,reflectionEnvironment:THREE.WebGLRenderTarget|undefined;
   const probeTarget=new THREE.WebGLCubeRenderTarget(256,{type:THREE.HalfFloatType,generateMipmaps:true,minFilter:THREE.LinearMipmapLinearFilter});
   const probe=new THREE.CubeCamera(.4,900,probeTarget);scene.add(probe);
-  const probePosition=new THREE.Vector3(Infinity,Infinity,Infinity);let reflectionDirty=true,lastProbeTime=-100;
+  const probePosition=new THREE.Vector3(Infinity,Infinity,Infinity);let reflectionDirty=true,lastProbeTime=-100,probeFace=-1;
   let highQuality=true;
   const groundMaterial=createGrassMaterial('#c6cbb2');groundMaterial.polygonOffset=true;groundMaterial.polygonOffsetFactor=1;groundMaterial.polygonOffsetUnits=4;
   for(const geometry of terrainTiles(city)){const ground=new THREE.Mesh(geometry,groundMaterial);ground.position.y=-.04;ground.receiveShadow=true;ground.renderOrder=-3;scene.add(ground);}
@@ -208,7 +208,10 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   }
   mergeAdd(signHardware,iron);
   const signalSystem=createTrafficSignals(scene,city);
-  const localLights:THREE.PointLight[]=[];for(let i=0;i<8;i++){const light=new THREE.PointLight(0xffcc89,0,21,2);scene.add(light);localLights.push(light);}
+  // Lamp lights are hidden outside night mode: a light at intensity 0 adds
+  // nothing but still costs a loop iteration in every lit fragment.
+  const localLights:THREE.PointLight[]=[];for(let i=0;i<8;i++){const light=new THREE.PointLight(0xffcc89,0,21,2);light.visible=false;scene.add(light);localLights.push(light);}
+  const nearLamps=new Int32Array(localLights.length),nearDistances=new Float64Array(localLights.length);
   let mode:LightingMode='golden';
   const direction=new THREE.Vector3(-270,255,330);
   function setLighting(next:LightingMode){
@@ -227,7 +230,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     sun.color.set(mode==='golden'?0xffd5a6:mode==='day'?0xfff3df:0x8eaad8);
     sun.intensity=night?.16:mode==='golden'?3.6:3.4;hemi.intensity=night?.24:.68;
     scene.environmentIntensity=night?.22:.16;renderer.toneMappingExposure=night?1.05:.93;
-    reflectionDirty=true;
+    reflectionDirty=true;probeFace=-1;
   }
   setLighting('golden');
   function update(position:THREE.Vector3,time:number){
@@ -238,21 +241,52 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     const shadowExtent=Math.max(105,Math.min(330,105+Math.max(0,position.y-groundY)*.72));
     if(Math.abs(sun.shadow.camera.right-shadowExtent)>2){sun.shadow.camera.left=-shadowExtent;sun.shadow.camera.right=shadowExtent;sun.shadow.camera.top=shadowExtent;sun.shadow.camera.bottom=-shadowExtent;sun.shadow.camera.updateProjectionMatrix();}
     for(const mesh of buildingChunks){const sphere=mesh.geometry.boundingSphere!;mesh.visible=Math.hypot(sphere.center.x-position.x,sphere.center.z-position.z)<1100+Math.max(0,position.y-groundY)*2+sphere.radius;}
-    const near=lampPositions.map(p=>({p,d:p.distanceToSquared(position)})).sort((a,b)=>a.d-b.d).slice(0,8);
-    localLights.forEach((l,i)=>{if(near[i]){l.position.copy(near[i].p);l.position.y+=5.6;}l.intensity=mode==='night'?70:0;});
+    const night=mode==='night';
+    if(night){
+      // Keep the nearest lamps in ascending distance with ties in lamp order,
+      // the same selection a stable sort of every lamp would give.
+      let count=0;const slots=nearLamps.length;
+      for(let i=0;i<lampPositions.length;i++){
+        const d=lampPositions[i].distanceToSquared(position);if(count===slots&&d>=nearDistances[slots-1])continue;
+        let j=count<slots?count++:slots-1;while(j>0&&nearDistances[j-1]>d){nearDistances[j]=nearDistances[j-1];nearLamps[j]=nearLamps[j-1];j--;}
+        nearDistances[j]=d;nearLamps[j]=i;
+      }
+      localLights.forEach((l,i)=>{if(i<count){l.position.copy(lampPositions[nearLamps[i]]);l.position.y+=5.6;}});
+    }
+    for(const l of localLights){l.visible=night;l.intensity=night?70:0;}
     signalSystem.update(time);
+  }
+  // One face of CubeCamera.update: mipmaps are generated only after face 5.
+  function renderProbeFace(face:number,player:THREE.Object3D){
+    const visible=player.visible,autoShadow=renderer.shadowMap.autoUpdate,environment=scene.environment,mipmaps=probeTarget.texture.generateMipmaps;
+    const target=renderer.getRenderTarget(),cubeFace=renderer.getActiveCubeFace(),mipLevel=renderer.getActiveMipmapLevel(),xr=renderer.xr.enabled;
+    player.visible=false;renderer.shadowMap.autoUpdate=false;scene.environment=skyEnvironment!.texture;skyUniforms.showSunDisc.value=false;
+    try{
+      if(probe.coordinateSystem!==renderer.coordinateSystem){probe.coordinateSystem=renderer.coordinateSystem;probe.updateCoordinateSystem();}
+      renderer.xr.enabled=false;if(face<5)probeTarget.texture.generateMipmaps=false;
+      renderer.setRenderTarget(probeTarget,face);renderer.render(scene,probe.children[face] as THREE.Camera);
+    }finally{
+      probeTarget.texture.generateMipmaps=mipmaps;renderer.setRenderTarget(target,cubeFace,mipLevel);renderer.xr.enabled=xr;
+      player.visible=visible;renderer.shadowMap.autoUpdate=autoShadow;scene.environment=environment;skyUniforms.showSunDisc.value=true;
+    }
   }
   function updateReflections(position:THREE.Vector3,time:number,player:THREE.Object3D){
     // Let the main view allocate the depth-comparison shadow texture before a
     // probe capture; a shadow sampler cannot use an uninitialized color texture.
     if(!sun.shadow.map)return;
-    if(!reflectionDirty&&(!highQuality||time-lastProbeTime<2.5||probePosition.distanceToSquared(position)<144))return;
-    const visible=player.visible,autoShadow=renderer.shadowMap.autoUpdate;
-    player.visible=false;renderer.shadowMap.autoUpdate=false;scene.environment=skyEnvironment!.texture;
-    skyUniforms.showSunDisc.value=false;probe.position.copy(position);probe.position.y=Math.max(height(position.x,position.z)+2.1,position.y);
-    try{probe.update(renderer,scene);}finally{player.visible=visible;renderer.shadowMap.autoUpdate=autoShadow;skyUniforms.showSunDisc.value=true;}
-    reflectionEnvironment=pmrem.fromCubemap(probeTarget.texture,reflectionEnvironment);
-    scene.environment=reflectionEnvironment.texture;probePosition.copy(position);lastProbeTime=time;reflectionDirty=false;
+    if(probeFace<0){
+      if(!reflectionDirty&&(!highQuality||time-lastProbeTime<2.5||probePosition.distanceToSquared(position)<144))return;
+      probe.position.copy(position);probe.position.y=Math.max(height(position.x,position.z)+2.1,position.y);
+      probePosition.copy(position);lastProbeTime=time;probeFace=0;
+      // The first capture and lighting changes render all six faces now so the
+      // new environment shows at once. Travel refreshes spread the six faces
+      // over consecutive frames, with the probe held at the captured position.
+      if(reflectionDirty){reflectionDirty=false;while(probeFace<6)renderProbeFace(probeFace++,player);}
+      else renderProbeFace(probeFace++,player);
+    }else renderProbeFace(probeFace++,player);
+    if(probeFace<6)return;
+    probeFace=-1;probeTarget.texture.needsPMREMUpdate=true;
+    reflectionEnvironment=pmrem.fromCubemap(probeTarget.texture,reflectionEnvironment);scene.environment=reflectionEnvironment.texture;
   }
   function setQuality(high:boolean){
     highQuality=high;const size=high?4096:2048;

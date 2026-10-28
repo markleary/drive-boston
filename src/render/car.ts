@@ -347,7 +347,7 @@ export function createCar() {
   }
   const lights: THREE.SpotLight[] = [];
   for (const x of [-.55, .55]) {
-    const light = new THREE.SpotLight(0xffedc4, 0, 45, .42, .65, 1.5);
+    const light = new THREE.SpotLight(0xffedc4, 0, 45, .42, .65, 1.5); light.visible = false;
     light.position.set(x, .075, 2.18); light.target.position.set(x, -.4, 24);
     group.add(light, light.target); lights.push(light);
   }
@@ -368,7 +368,7 @@ export function createCar() {
       materials.headlight.emissiveIntensity = night ? 3 : .45;
       materials.taillight.emissiveIntensity = s.braking ? 4 : night ? 1.8 : .35;
       materials.amber.emissiveIntensity = night ? .45 : .12;
-      for (const light of lights) light.intensity = night ? 38 : 0;
+      for (const light of lights) { light.intensity = night ? 38 : 0; light.visible = night; }
     },
     dispose() {
       const ownedMaterials = new Set<THREE.Material>();

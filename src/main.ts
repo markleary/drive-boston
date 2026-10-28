@@ -139,6 +139,7 @@ async function boot(){
     }
     const target=new THREE.Vector3(),desired=new THREE.Vector3(),look=new THREE.Vector3(),cameraDirection=new THREE.Vector3();
     const cameraRay=new Ray(target,cameraDirection);
+    let warmNightPasses:(()=>void)|undefined;
     let previous=performance.now(),accumulator=0,elapsed=0,saveTimer=0,frameCount=0,fpsTimer=0,fps=0,distance=0,frameMs=0,averageFrameMs=0;
     const tick=(now:number)=>{
       const raw=(now-previous)/1000;previous=now;const dt=Math.min(.05,Math.max(0,raw));const paused=ui.isPaused()||document.hidden;
@@ -177,7 +178,9 @@ async function boot(){
       camera.near=flying?1:.15;camera.lookAt(look);camera.updateProjectionMatrix();cameraSnap=false;
       world!.update(target,elapsed);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,carState);updateFoliage(scene,target,elapsed,quality==='high');groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
-      renderer.info.reset();world!.updateReflections(target,elapsed,flying?helicopter.group:car.group);graphics!.render(dt);frameCount++;fpsTimer+=raw;frameMs=raw*1000;if(fpsTimer>=.5){fps=Math.round(frameCount/fpsTimer);averageFrameMs=fpsTimer/frameCount*1000;frameCount=0;fpsTimer=0;}
+      renderer.info.reset();world!.updateReflections(target,elapsed,flying?helicopter.group:car.group);
+      if(warmNightPasses){const shown=switchedLights.map(light=>light.visible);for(const lampsOnly of [false,true]){switchedLights.forEach(light=>{light.visible=!lampsOnly||light instanceof THREE.PointLight;});graphics!.render(0);}switchedLights.forEach((light,i)=>{light.visible=shown[i];});warmNightPasses();warmNightPasses=undefined;}
+      graphics!.render(dt);frameCount++;fpsTimer+=raw;frameMs=raw*1000;if(fpsTimer>=.5){fps=Math.round(frameCount/fpsTimer);averageFrameMs=fpsTimer/frameCount*1000;frameCount=0;fpsTimer=0;}
       ui.update(state,{fps,distance,travelMode,quality,groundHeight:sampleElevation(city,state.x,state.z),performance:{fps,frameMs:averageFrameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,traffic:traffic!.count,transit:transit!.count,pedestrians:streetLife.count},gear:carState.gear,rpm:carState.rpm,altitude:flying?state.y-sampleElevation(city,state.x,state.z):0,verticalSpeed:flying?flight!.state.verticalSpeed:0});saveTimer+=dt;if(saveTimer>5){saveTimer=0;save();}
       requestAnimationFrame(tick);
     };
@@ -188,7 +191,27 @@ async function boot(){
     };
     const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,lighting,quality,fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape.userData.storefrontCount,facades:facadeDetails.userData,rooftops:rooftops.userData,park:park.group.userData,cityParks:cityParks.userData,cityLandmarks:cityLandmarks.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails.userData,groundCover:groundCover.group.userData,signalCount:world!.signals.length,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length,pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city};
     Object.assign(window,{__backbay:diagnostic});
-    ui.setReady();requestAnimationFrame(tick);
+    // Lamp and headlight lights are hidden outside night mode, which changes the
+    // light count compiled into every lit shader. Compile the night, night with
+    // the car hidden (hood camera, reflection probe) and daytime variants now so
+    // the lighting toggle never waits on shader compilation. An offscreen target
+    // selects the same tone-mapping and color-space variants as the passes use.
+    const switchedLights:THREE.Light[]=[];scene.traverse(object=>{if(object instanceof THREE.PointLight||object instanceof THREE.SpotLight)switchedLights.push(object);});
+    // compileAsync waits on each material's current program, so run the variants one at a time.
+    const warmTarget=new THREE.WebGLRenderTarget(1,1,{type:THREE.HalfFloatType});
+    for(const shown of [(_:THREE.Light)=>true,(light:THREE.Light)=>light instanceof THREE.PointLight,()=>false]){
+      switchedLights.forEach(light=>{light.visible=shown(light);});
+      const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(warmTarget);
+      let compiled:Promise<unknown>;try{compiled=renderer.compileAsync(scene,camera);}finally{renderer.setRenderTarget(previousTarget);}
+      await compiled;
+    }
+    warmTarget.dispose();
+    // The shadow and ambient-occlusion passes draw with their own depth and
+    // normal materials, which compile() does not see, and three.js keys those
+    // programs by the scene's light count as well. Render the first frame once
+    // in each night light state too, still under the loading screen.
+    await new Promise<void>(resolve=>{warmNightPasses=resolve;requestAnimationFrame(tick);});
+    ui.setReady();
   }catch(error){console.error(error);ui.setError(error instanceof Error?error.message:'Unable to prepare the drive. Reload to try again.');}
 }
 boot().catch(error=>{console.error(error);const host=document.querySelector('#interface');if(host)host.textContent='Unable to load Boston. Check your connection and reload.';});
