@@ -3,6 +3,7 @@ import test from 'node:test';
 import {spawnSync} from 'node:child_process';
 import {facadeStyleIndex} from '../src/render/materials.ts';
 import {buildingIdentities,isMissionChurch,isReligiousBuilding} from '../src/simulation/building-identities.ts';
+import {prepareNeighborhoodArchitecture} from '../src/render/neighborhood-profiles.ts';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 
 const fixture=(fields={})=>({id:'ordinary-building',name:'Unnamed building',center:[0,0],height:72,footprint:[[0,0],[40,0],[40,60],[0,60]],...fields});
@@ -42,6 +43,8 @@ test('both shipped address-only basilica meshes have corrected identities and ma
 
 test('shipped Temple Place and Church Court addresses keep ordinary facades at both distances',async()=>{
   const city=await loadMetroCity({tiles:['1_-1','0_-3']});
+  // The shipped far family follows the runtime typology (a detached Charlestown house is clapboard at both distances), so prepare it as the tile builder does.
+  prepareNeighborhoodArchitecture(city);
   for(const [id,name]of [['BOS-BQBJ2-G5TIJ-7TP9U','59 Temple Place'],['BOS-HVX3J-QQVH7-HOV5Y','1 CHURCH CT'],['BOS-EVGTT-7V88U-0W43M','7 CHURCH CT']]){
     const b=city.buildings.find(b=>b.id===id);assert.ok(b,id);assert.equal(b.name,name);assert.equal(isReligiousBuilding(b),false,name);
     const style=facadeStyleIndex(b);assert.notEqual(style,10,name);

@@ -25,7 +25,7 @@ export function* neighborhoodDetailSteps(scene:THREE.Scene,city:CityData,options
   };
   for(const building of buildings){
     if(due(pace))yield;
-    const profile=architectureFor(building);if(!profile)continue;
+    const profile=architectureFor(building);if(profile?.kind!=='triple-decker')continue;
     const base=building.baseElevation??0,fh=profile.floorHeight;
     for(let e=0;e<building.footprint.length;e++){
       const a=building.footprint[e],b=building.footprint[(e+1)%building.footprint.length];
@@ -34,26 +34,35 @@ export function* neighborhoodDetailSteps(scene:THREE.Scene,city:CityData,options
       if(nx*profile.front.nx+nz*profile.front.nz<-.1)continue;
       const center=sampler.sample(mx,mz,nx,nz,base+profile.raisedBase+fh*.52);if(!center||Math.abs(center.depth)>.45)continue;
       const draw=(g:Part,m:THREE.Material,u:number,y:number,d=.12)=>add(g,m,mx+tx*u+nx*(center.depth+d),base+y,mz+tz*u+nz*(center.depth+d),yaw);
+      // Trim stops at the surveyed wall: a hip or gable roof ends the facade
+      // below three nominal floors and a lower wing shortens it near the top.
+      const wall=(u:number,y:number)=>{const hit=sampler.sample(mx+tx*u,mz+tz*u,nx,nz,base+y);return !!hit&&Math.abs(hit.depth-center.depth)<.2;};
+      const wallTop=(u:number,from:number,to:number)=>{let top=-Infinity;for(let y=from;y<=to+1e-6;y+=.15){if(!wall(u,y))break;top=y;}return top;};
       const start=Math.ceil((center.u-length/2+.85-1.5)/3),end=Math.floor((center.u+length/2-.85-1.5)/3);
       for(let column=start;column<=end;column++){
         const u=1.5+column*3-center.u;
         for(let floor=0;floor<3;floor++){
           const y=profile.raisedBase+fh*(floor+.52),h=1.86*fh/3;
           const hits=[-.7,0,.7].map(offset=>sampler.sample(mx+tx*(u+offset),mz+tz*(u+offset),nx,nz,base+y));
-          if(hits.some(hit=>!hit||Math.abs(hit.depth-center.depth)>.15))continue;
+          if(hits.some(hit=>!hit||Math.abs(hit.depth-center.depth)>.15)||wallTop(u,y,y+h/2+.3)<y+h/2+.15)continue;
           for(const side of [-1,1])draw(box(.11,h+.16,.15),trim,u+side*.68,y,.12);
           draw(box(1.58,.14,.26),trim,u,y+h/2+.13,.17);
           draw(box(1.63,.13,.34),trim,u,y-h/2-.08,.21);
           draw(box(1.47,.06,.18),shadow,u,y-h/2-.16,.14);windows++;
         }
       }
-      const corniceY=profile.raisedBase+3*fh+.18;
-      const top=sampler.sample(mx,mz,nx,nz,base+corniceY-.3);
-      if(top&&Math.abs(top.depth-center.depth)<.2){
-        draw(box(length,.19,.28),trim,0,corniceY,.14);
-        draw(box(length+.12,.12,.46),trim,0,corniceY+.16,.23);
-        for(let u=-length/2+.4;u<length/2;u+=.75)draw(box(.13,.3,.25),trim,u,corniceY-.19,.14);
-        cornices++;
+      const eave=wallTop(0,profile.raisedBase+3*fh-.4,profile.raisedBase+3*fh+.5),corniceY=Math.min(profile.raisedBase+3*fh+.18,eave-.22);
+      if(eave>-Infinity){
+        const solid=(u:number)=>wall(u,corniceY+.2)&&wall(u,corniceY-.3);
+        let u0=-length/2+.3,u1=length/2-.3;
+        while(u0<u1&&!solid(u0))u0+=.75;while(u1>u0&&!solid(u1))u1-=.75;
+        if(u1-u0>=1.5){
+          const span=u1-u0+.4,mid=(u0+u1)/2;
+          draw(box(span,.19,.28),trim,mid,corniceY,.14);
+          draw(box(span+.12,.12,.46),trim,mid,corniceY+.16,.23);
+          for(let u=u0+.1;u<u1;u+=.75)draw(box(.13,.3,.25),trim,u,corniceY-.19,.14);
+          cornices++;
+        }
       }
     }
     const {a,b,nx,nz,setback}=profile.front,length=Math.hypot(b[0]-a[0],b[1]-a[1]);

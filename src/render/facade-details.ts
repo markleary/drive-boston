@@ -96,7 +96,7 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
     const road=closestRoad(city,x,z,true);
     if(road.distance<road.road.width/2+1.1||road.distance>road.road.width/2+22)return;
     if(((road.x-x)*nx+(road.z-z)*nz)/road.distance<.48)return;
-    const character=streetCharacter(road.road.name,road.road.width),commercial=character==='commercial',residential=character==='residential';
+    const character=streetCharacter(road.road.name,road.road.width,road.road.kind),commercial=character==='commercial',residential=character==='residential';
     if(!commercial&&!residential)return;
     const style=facadeStyleFor(building),modern=style.detail==='modern',office=style.detail==='office';
     // Probe each 6m frontage bay once, then repeat its physical window trim vertically.
@@ -127,6 +127,7 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
         const key=`${Math.round((mx+tx*xx)*4)},${Math.round((mz+tz*xx)*4)}`;
         if(used.has(key))continue;used.add(key);
         for(let y=commercial?7.56:4.56;y<top-.4;y+=3){
+          const head=sampler.sample(mx+tx*xx,mz+tz*xx,nx,nz,base+y+hh+.3);if(!head||Math.abs(head.depth-depth)>.24)break;
           if(windows>=budget)break;windows++;
           styles[style.id]=(styles[style.id]??0)+1;
           // Recessed glazing remains the base texture. Jambs project far enough
@@ -166,11 +167,17 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
       // Roof cornices belong near the real roof, never at the detail-distance
       // cutoff in the middle of a tower facade.
       if(building.height-top<6&&!modern){
-        const eave=top+.35;cornices++;
-        draw(box(span-.08,.16,.26),shadowStone,0,eave-.24,.12);
-        draw(box(span+.05,.24,.42),stone,0,eave,.23);
-        draw(box(span+.14,.12,.55),stone,0,eave+.2,.3);
-        if(!office&&style.detail!=='loft')for(let xx=-half+.25;xx<half-.1;xx+=.56)draw(box(.16,.19,.22),stone,xx,eave-.24,.21);
+        // The cornice sits under the surveyed wall top across the whole bay,
+        // never above a hip roof or past a lower wing at the end of the bay.
+        let wallTop=top;for(let y=top+.25;y<top+3.1;y+=.25){const hit=sampler.sample(mx,mz,nx,nz,base+y);if(!hit||Math.abs(hit.depth-depth)>.24)break;wallTop=y;}
+        const eave=Math.min(top+.35,wallTop-.3),solid=[-half+.15,half-.15].every(xx=>{const hit=sampler.sample(mx+tx*xx,mz+tz*xx,nx,nz,base+eave+.25);return !!hit&&Math.abs(hit.depth-depth)<.24;});
+        if(solid){
+          cornices++;
+          draw(box(span-.08,.16,.26),shadowStone,0,eave-.24,.12);
+          draw(box(span+.05,.24,.42),stone,0,eave,.23);
+          draw(box(span+.14,.12,.55),stone,0,eave+.2,.3);
+          if(!office&&style.detail!=='loft')for(let xx=-half+.25;xx<half-.1;xx+=.56)draw(box(.16,.19,.22),stone,xx,eave-.24,.21);
+        }
       }
       draw(box(span-.08,.2,.18),stone,0,commercial?4.55:3.2,.13);
       if(style.detail==='terracotta'&&span>4){

@@ -4,7 +4,9 @@ import type { LightingMode } from '../types';
 /** Window grid of one six-unit facade tile, shared by the canvas painter and the
  * interior-mapping shader so both agree on every opening to the pixel. Units are
  * canvas tile units: six per tile horizontally (always six metres) and six per
- * tile vertically (six metres, or two floors of a neighborhood profile). */
+ * tile vertically (six metres, or two floors of a neighborhood profile). Row
+ * zero sits at the building base, or at a profile's raised ground floor; the
+ * wall below it is exposed foundation and gets no glazing. */
 export interface WindowGrid {
   columns:number; spacing:number; width:number; height:number;
   /** Window-center heights of the two rows above the tile base. */
@@ -24,6 +26,7 @@ export function windowGrid(style:WindowGridStyle):WindowGrid {
 /** Analytic glazing test for a point in tile units; mirrors the shader's
  * opening and mullion tests so node tests can check it against the painter. */
 export function insideWindow(grid:WindowGrid,u:number,v:number):boolean {
+  if(v<0)return false;
   const cu=((u%6)+6)%6,cv=((v%6)+6)%6;
   const col=Math.floor(cu/grid.spacing),du=cu-grid.spacing*(col+.5);
   const row=cv<3?0:1,dv=cv-grid.rows[row];
@@ -106,6 +109,25 @@ const GLSL_FRAGMENT=/* glsl */`
   // shrinks to a few pixels the mask settles to the lit share to avoid shimmer.
   float litMask=mix(lit,interiorLighting.y,smoothstep(0.35,0.9,px/spacing));
   totalEmissiveRadiance*=litMask*(1.0-region);
+  // Below tile row zero a neighborhood profile raises the ground floor above
+  // the surveyed base, so that band of wall is exposed foundation: footing
+  // concrete with a shadow line under the first course and a small basement
+  // light under each bay, never the painted texture's lower window row, whose
+  // head would otherwise show half buried on top of the footing skirt.
+  float py=fwidth(tile.y)+1e-5;
+  float basement=1.0-smoothstep(-py,py,tile.y);
+  if(basement>0.002){
+    float lightY=abs(tile.y+0.34);
+    float light=smoothstep(0.34+aa,0.34-aa,dx)*smoothstep(0.13+py,0.13-py,lightY);
+    float pane=smoothstep(0.29+aa,0.29-aa,dx)*smoothstep(0.09+py,0.09-py,lightY);
+    vec3 footing=vec3(0.223,0.202,0.153)*mix(1.0,0.72,smoothstep(0.035+py,0.035-py,-tile.y));
+    footing=mix(footing,mix(vec3(0.46,0.45,0.41),vec3(0.028,0.034,0.034),pane),light);
+    diffuseColor.rgb=mix(diffuseColor.rgb,footing,basement);
+    roughnessFactor=mix(roughnessFactor,0.95,basement);
+    normal=normalize(mix(normal,nonPerturbedNormal,basement));
+    totalEmissiveRadiance*=1.0-basement;
+  }
+  cover*=1.0-basement;
   if(cover>0.002){
     vec3 ray=normalize(vInteriorWorld-cameraPosition);
     vec3 wallN=transformDirectionByInverseViewMatrix(nonPerturbedNormal,viewMatrix);
@@ -200,7 +222,7 @@ export function applyWindowInteriors(material:THREE.MeshStandardMaterial,grid:Wi
     shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 vInteriorWorld;').replace('#include <project_vertex>',GLSL_VERTEX);
     shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\n'+GLSL_PARS).replace('#include <emissivemap_fragment>',GLSL_FRAGMENT);
   };
-  material.customProgramCacheKey=()=>'boston-window-interiors-1';
+  material.customProgramCacheKey=()=>'boston-window-interiors-2';
   material.userData.windowInteriors={head:grid.head,bars:grid.bars,bays:[minBays,maxBays],seed:uniforms.interiorRooms.value.x};
   return material;
 }

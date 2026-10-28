@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {sampleElevation} from '../src/simulation/terrain.ts';
+import {WALK} from '../src/simulation/road-grading.ts';
 import {loadMetroCity,windowCity,rawHeights} from './helpers/metro-city.mjs';
 
 // Shipped (offline graded) grid against the ungraded USGS grid, central window.
@@ -68,6 +69,11 @@ function crossSections(){
         const nx=na[0]+(nb[0]-na[0])*t,nz=na[1]+(nb[1]-na[1])*t,half=road.width/2;
         const left=[x+nx*half,z+nz*half],right=[x-nx*half,z-nz*half],width=Math.hypot(left[0]-right[0],left[1]-right[1]);
         const crossfall=data=>Math.abs(sampleElevation(data,...left)-sampleElevation(data,...right))/width;
+        // The rendered sidewalk ribbon reaches WALK beyond each curb: its outer
+        // edges must sit level with the pavement, and each strip must not tilt
+        // up the hillside behind it.
+        const outer=side=>sampleElevation(city,x+nx*side*(half+WALK),z+nz*side*(half+WALK)),curb=side=>sampleElevation(city,x+nx*side*(half+.3),z+nz*side*(half+.3));
+        const corridor=Math.abs(outer(1)-outer(-1))/(width+2*WALK),walkTilt=Math.max(Math.abs(outer(1)-curb(1)),Math.abs(outer(-1)-curb(-1)))/(WALK-.3);
         // Equal curb heights can conceal a V-shaped dip in the middle. Sample
         // every metre or less across the complete rendered pavement as well.
         const divisions=Math.ceil(width),step=width/divisions;
@@ -83,7 +89,7 @@ function crossSections(){
           }
           previousOld=oldHeight;previousHeight=height;
         }
-        samples.push({id:road.id,width:road.width,x,z,old:crossfall(source),grade:crossfall(city),junction:nearJunction(x,z),separated:nearSeparation(x,z),localGrade,localOld,newBankExcess,worstSpan});
+        samples.push({id:road.id,width:road.width,x,z,old:crossfall(source),grade:crossfall(city),corridor,walkTilt,junction:nearJunction(x,z),separated:nearSeparation(x,z),localGrade,localOld,newBankExcess,worstSpan});
       }
     }
   }
@@ -151,6 +157,48 @@ test('all road widths stay smooth between the curbs, including narrow lanes and 
   }
 });
 
+test('sidewalks stay level with their street across the whole corridor',()=>{
+  // Before the corridor model, the blending shoulder started under the sidewalk
+  // and every hillside sidewalk tilted with the yard behind it.
+  const rows=audited.filter(row=>row.width>=7&&!row.junction);
+  const corridor=rows.map(row=>({...row,grade:row.corridor})),walks=rows.map(row=>({...row,grade:row.walkTilt}));
+  assert.ok(quantile(corridor,.95)<.012,`95% of corridors (pavement and both sidewalks) stay within 1.2% crossfall: ${quantile(corridor,.95)}`);
+  assert.ok(quantile(corridor,.99)<.03,`corridor crossfall tail: ${quantile(corridor,.99)}`);
+  assert.ok(quantile(walks,.95)<.03,`95% of sidewalk strips tilt less than 3% toward the yard: ${quantile(walks,.95)}`);
+  assert.ok(quantile(walks,.99)<.08,`sidewalk tilt tail: ${quantile(walks,.99)}`);
+});
+
+test('Summer Street in Somerville is level across its pavement and sidewalks on the side of Spring Hill',async()=>{
+  // The reported wavy street: a 13.7 m OpenStreetMap secondary on a 10-14%
+  // cross slope between close-set wood-frame houses, with no surveyed curbs.
+  const area={minX:-3300,maxX:-2800,minZ:-4550,maxZ:-4050},local=windowCity(await loadMetroCity({tiles:[]}),area),raw=windowCity(metro,area,{heights:rawHeights(metro)});
+  const roads=local.roads.filter(road=>road.name==='Summer Street'&&!road.elevations);
+  assert.ok(roads.length>=2,'the Summer Street pieces beside Porter Street are in the window');
+  // Junction approaches reconcile the climbing side streets with the level
+  // corridor; as in the map-wide audit above, the street interior is judged.
+  // The interior stays within standard road camber: the final solver stage
+  // releases crossfall to 2 percent, and the fade of Porter Street's climbing
+  // corridor adds a little just beyond the 16 m junction radius.
+  const ends=local.roads.filter(road=>!road.elevations).flatMap(road=>[road.points[0],road.points.at(-1)]);
+  const junction=(x,z)=>ends.some(p=>Math.hypot(p[0]-x,p[1]-z)<16);
+  let stations=0,worst={corridor:0},worstWalk={tilt:0},sourceCross=0;
+  for(const road of roads)for(let i=1;i<road.points.length;i++){
+    const a=road.points[i-1],b=road.points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz),nx=-dz/length,nz=dx/length,half=road.width/2+WALK;
+    for(let d=4;d<length-4;d+=3){
+      const x=a[0]+dx*d/length,z=a[1]+dz*d/length;
+      if(Math.hypot(x+3044.4,z+4306.67)>140||junction(x,z))continue;
+      const heights=[];for(let o=-half;o<=half+1e-9;o+=.5)heights.push(sampleElevation(local,x+nx*o,z+nz*o));
+      const corridor=(Math.max(...heights)-Math.min(...heights))/(2*half);stations++;
+      sourceCross=Math.max(sourceCross,Math.abs(sampleElevation(raw,x+nx*half,z+nz*half)-sampleElevation(raw,x-nx*half,z-nz*half))/(2*half));
+      if(corridor>worst.corridor)worst={corridor,x,z,id:road.id};
+      for(const side of [-1,1]){const tilt=Math.abs(sampleElevation(local,x+nx*side*half,z+nz*side*half)-sampleElevation(local,x+nx*side*(half-WALK+.3),z+nz*side*(half-WALK+.3)))/(WALK-.3);if(tilt>worstWalk.tilt)worstWalk={tilt,x,z,id:road.id};}
+    }
+  }
+  assert.ok(stations>40&&sourceCross>.08,`the fixture must span the real side-hill: ${stations} stations, source cross slope ${sourceCross}`);
+  assert.ok(worst.corridor<.025,`Summer Street corridor must be level: ${(worst.corridor*100).toFixed(2)}% on ${worst.id} at ${worst.x},${worst.z}`);
+  assert.ok(worstWalk.tilt<.03,`Summer Street sidewalks must not tilt into the hill: ${(worstWalk.tilt*100).toFixed(2)}% on ${worstWalk.id} at ${worstWalk.x},${worstWalk.z}`);
+});
+
 test('leveling across streets does not introduce short artificial longitudinal humps or dips',()=>{
   for(const fixture of [
     {id:'13860-0-0',x:-2465.0389926085445,z:2475.700773570404,name:'Fisher Avenue',kind:'crest'},
@@ -189,6 +237,9 @@ test('roadbed leveling preserves the broad elevation range of all four Mission H
     assert.ok(points.length>10,`${name} needs real source fixtures`);
     const range=data=>{const heights=points.map(point=>sampleElevation(data,...point));return Math.max(...heights)-Math.min(...heights);};
     const before=range(source),after=range(city);
-    assert.ok(before>15&&Math.abs(after-before)<1,`${name} must retain its hill: ${before}m before, ${after}m after`);
+    // A side-hill end drops toward its corridor datum (Fisher Avenue at Parker
+    // Street) and a crest held up by uphill houses rises a little, so the range
+    // may grow by the datum allowance; the hill must never flatten.
+    assert.ok(before>15&&after>before-1&&after<before+1.6,`${name} must retain its hill: ${before}m before, ${after}m after`);
   }
 });
