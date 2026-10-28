@@ -2,6 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import type { CityData, Point2 } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, terrainRange } from './terrain.ts';
+import { isMetroCity, type IndexedBuilding, type MetroCity } from './city-tiles.ts';
 
 export interface FlightInput { forward: number; strafe: number; turn: number; lift: number; }
 export interface HelicopterState {
@@ -42,13 +43,28 @@ export function createHelicopterFlight(city: CityData, physics: DrivingPhysics) 
     [diagonal, diagonal], [-diagonal, diagonal], [diagonal, -diagonal], [-diagonal, -diagonal]];
   const terrainFloor = (x: number, z: number) => minimumAltitude + Math.max(...supports.map(([dx, dz]) => sampleElevation(city, x + dx, z + dz)));
   const launchHeight = () => sampleElevation(city, city.spawn.x, city.spawn.z) + 20;
-  const buildings = city.buildings.filter(b => b.footprint.length >= 3 && b.height > 0&&!physics.meshBuildingIds.has(b.id)).map(b => ({
-    polygon: b.footprint, top: buildingBaseElevation(city, b) + b.height + verticalClearance,
-    minX: Math.min(...b.footprint.map(p => p[0])) - radius, maxX: Math.max(...b.footprint.map(p => p[0])) + radius,
-    minZ: Math.min(...b.footprint.map(p => p[1])) - radius, maxZ: Math.max(...b.footprint.map(p => p[1])) + radius,
-  }));
+  type Obstacle = { polygon: Point2[]; top: number; minX: number; maxX: number; minZ: number; maxZ: number };
+  const obstacle = (polygon: Point2[], top: number): Obstacle => ({
+    polygon, top: top + verticalClearance,
+    minX: Math.min(...polygon.map(p => p[0])) - radius, maxX: Math.max(...polygon.map(p => p[0])) + radius,
+    minZ: Math.min(...polygon.map(p => p[1])) - radius, maxZ: Math.max(...polygon.map(p => p[1])) + radius,
+  });
+  // A metro city answers from its hull index whether or not a tile is loaded;
+  // exact-mesh complexes are queried through their colliders instead.
+  const staticObstacles = isMetroCity(city) ? undefined : city.buildings.filter(b => b.footprint.length >= 3 && b.height > 0 && !physics.meshBuildingIds.has(b.id)).map(b => obstacle(b.footprint, buildingBaseElevation(city, b) + b.height));
+  const indexed = new WeakMap<IndexedBuilding, Obstacle | null>();
+  const obstaclesIn = (minX: number, maxX: number, minZ: number, maxZ: number): Obstacle[] => {
+    if (staticObstacles) return staticObstacles;
+    const result: Obstacle[] = [];
+    for (const b of (city as MetroCity).index.query(minX - radius, maxX + radius, minZ - radius, maxZ + radius)) {
+      let record = indexed.get(b);
+      if (record === undefined) { record = b.exactMesh || b.footprint.length < 3 || b.height <= 0 ? null : obstacle(b.footprint, b.base + b.height); indexed.set(b, record); }
+      if (record) result.push(record);
+    }
+    return result;
+  };
   const bounds = { minX: city.bounds.minX + radius, maxX: city.bounds.maxX - radius, minZ: city.bounds.minZ + radius, maxZ: city.bounds.maxZ - radius };
-  const overlaps = (x: number, z: number, building: typeof buildings[number]) =>
+  const overlaps = (x: number, z: number, building: Obstacle) =>
     x >= building.minX && x <= building.maxX && z >= building.minZ && z <= building.maxZ &&
     (inside(x, z, building.polygon) || building.polygon.some((a, i, points) => edgeDistance(x, z, a, points[(i + 1) % points.length]) <= radius + .001));
   const current: HelicopterState = { x: city.spawn.x, y: launchHeight(), z: city.spawn.z, yaw: city.spawn.yaw, speed: 0, verticalSpeed: 0, bank: 0, pitch: 0 };
@@ -64,7 +80,7 @@ export function createHelicopterFlight(city: CityData, physics: DrivingPhysics) 
     const inspect = (x: number, z: number, y: number): Position | undefined => {
       x = clamp(x, bounds.minX, bounds.maxX); z = clamp(z, bounds.minZ, bounds.maxZ);
       y = Math.max(y, terrainFloor(x, z));
-      for (const building of buildings) if (overlaps(x, z, building)) y = Math.max(y, building.top + .2);
+      for (const building of obstaclesIn(x, x, z, z)) if (overlaps(x, z, building)) y = Math.max(y, building.top + .2);
       // Exact source complexes may contain a street-sized opening. Query their
       // triangles rather than filling the opening with their footprint's roof.
       if(physics.detailedColliders.size){
@@ -138,7 +154,7 @@ export function createHelicopterFlight(city: CityData, physics: DrivingPhysics) 
       const detail=physics.world.castShape(start,identity,delta,clearanceShape,.01,1,true,undefined,undefined,collider,body,isDetail);
       if(detail)accept(detail.time_of_impact,detail.normal1.x,detail.normal1.y,detail.normal1.z);
     }
-    for (const building of buildings) {
+    for (const building of obstaclesIn(Math.min(start.x, start.x + delta.x), Math.max(start.x, start.x + delta.x), Math.min(start.z, start.z + delta.z), Math.max(start.z, start.z + delta.z))) {
       if (Math.min(start.y, start.y + delta.y) > building.top + .001 ||
         Math.max(start.x, start.x + delta.x) < building.minX || Math.min(start.x, start.x + delta.x) > building.maxX ||
         Math.max(start.z, start.z + delta.z) < building.minZ || Math.min(start.z, start.z + delta.z) > building.maxZ) continue;

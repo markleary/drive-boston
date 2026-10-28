@@ -3,6 +3,7 @@ import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import type {Building,CityData} from '../types';
 import {sampleElevation} from '../simulation/terrain.ts';
 import {canvasTexture,seeded} from './materials.ts';
+import { landmarkBuildings } from '../simulation/city-tiles.ts';
 
 export const STATE_HOUSE_ID='BOS-1WKHX-X382F-V5VL1';
 export const isStateHouse=(building?:Building)=>building?.id===STATE_HOUSE_ID;
@@ -70,7 +71,7 @@ export function createStateHouseShellMaterials(){
  * Reference: NPS exterior photograph and Massachusetts State House Art
  * Commission's “Italy under the Golden Dome”. Ornament is simplified. */
 export function addStateHouseFacade(scene:THREE.Scene,city:CityData){
-  const state=city.buildings.find(isStateHouse);if(!state)return;
+  const state=landmarkBuildings(city).find(isStateHouse);if(!state)return;
   const group=new THREE.Group();group.name='Massachusetts State House — Bulfinch facade';
   const white=new THREE.MeshStandardMaterial({color:'#e5e1cf',roughness:.76});
   const granite=new THREE.MeshStandardMaterial({color:'#a5a499',roughness:.92});

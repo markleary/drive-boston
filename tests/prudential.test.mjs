@@ -1,31 +1,16 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import * as THREE from 'three';
 import {PRUDENTIAL_CROWN as C,PRUDENTIAL_FACES,PRUDENTIAL_ID,PRUDENTIAL_TOWER as T,PRUDENTIAL_WORD,isPrudential,prudentialCrownCollider,prudentialLettering,prudentialWordLayout,splitPrudentialShell} from '../src/render/prudential.ts';
+import {loadCentralCity,shellGeometry} from './helpers/metro-city.mjs';
 
-const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+const city=await loadCentralCity();
 const building=city.buildings.find(isPrudential);
 
-/** The Prudential primitives from the bundled GLB, as non-indexed geometry. */
+/** The Prudential shell parts from its tile, as the renderer builds them (2 cm quantized: the complex spans 750 m). */
 function sourcePrimitives(){
-  const bytes=readFileSync(new URL('../public/data/city.glb',import.meta.url));
-  const jsonSize=bytes.readUInt32LE(12),gltf=JSON.parse(bytes.subarray(20,20+jsonSize).toString()),binary=20+jsonSize+8;
-  const node=gltf.nodes.find(n=>n.extras?.buildingId===PRUDENTIAL_ID);
-  assert.ok(node,'the crown must target the existing Prudential complex');
-  const attribute=index=>{
-    const a=gltf.accessors[index],view=gltf.bufferViews[a.bufferView],start=binary+(view.byteOffset??0)+(a.byteOffset??0),size={SCALAR:1,VEC2:2,VEC3:3}[a.type];
-    const values=new Float32Array(a.count*size);
-    for(let i=0;i<values.length;i++)values[i]=a.componentType===5126?bytes.readFloatLE(start+i*4):a.componentType===5123?bytes.readUInt16LE(start+i*2):bytes.readUInt32LE(start+i*4);
-    return new THREE.BufferAttribute(values,size);
-  };
-  return gltf.meshes[node.mesh].primitives.map(primitive=>{
-    const geometry=new THREE.BufferGeometry();
-    for(const [key,name]of [['POSITION','position'],['NORMAL','normal'],['TEXCOORD_0','uv']])if(primitive.attributes[key]!==undefined)geometry.setAttribute(name,attribute(primitive.attributes[key]));
-    geometry.setIndex(Array.from(attribute(primitive.indices).array));
-    const source=geometry.toNonIndexed();geometry.dispose();
-    return {roof:gltf.materials[primitive.material].name==='roof',geometry:source};
-  });
+  assert.ok(city.geometry.has(PRUDENTIAL_ID),'the crown must target the existing Prudential complex');
+  return [false,true].map(roof=>({roof,geometry:shellGeometry(city,PRUDENTIAL_ID,roof)})).filter(p=>p.geometry);
 }
 const toLocal=(x,z)=>{const dx=x-T.x,dz=z-T.z,c=Math.cos(T.yaw),s=Math.sin(T.yaw);return {u:dx*c-dz*s,v:dx*s+dz*c};};
 

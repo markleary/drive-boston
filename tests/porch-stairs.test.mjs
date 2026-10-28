@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {planPorchStairs} from '../src/render/porch-stairs.ts';
 import {prepareNeighborhoodArchitecture,architectureFor} from '../src/render/neighborhood-profiles.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
-import {prepareRoadTerrain} from '../src/simulation/road-grading.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 
-const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+import {loadCentralCity} from './helpers/metro-city.mjs';
+const city=await loadCentralCity();
 prepareNeighborhoodArchitecture(city);
 const ground=(x,z)=>sampleElevation(city,x,z);
 
@@ -87,7 +86,7 @@ test('small-rise real houses retain grounded entrances instead of being needless
 });
 
 test('road grading retains grounded entrances on the previously repaired Calumet and Eldora houses',()=>{
-  const graded={...city};prepareRoadTerrain(graded);
+  const graded=city;// the shipped grid is graded offline (scripts/grade-terrain.mjs)
   const terrain=(x,z)=>sampleElevation(graded,x,z);
   for(const id of ['BOS-3OZN2-AKS2H-DAMY1','BOS-KGDEA-NSZGY-WPOOR','BOS-7P41I-76GYS-LS75Z','BOS-C8WFL-95U7F-IFGWT','BOS-2NYVA-KCMKF-2EGOT']){
     const{site,clear}=sourceSite(id),plan=planPorchStairs(site,terrain,clear);

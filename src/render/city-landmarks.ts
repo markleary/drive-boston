@@ -4,6 +4,7 @@ import type { CityData } from '../types';
 import { sampleElevation } from '../simulation/terrain';
 import { addFenwayPark } from './fenway-park';
 import {addStateHouseFacade} from './state-house';
+import { landmarkBuildings } from '../simulation/city-tiles.ts';
 
 /** Original landmark accents. Dome profile follows the actual Boston source
  * mesh's upper rings; the ceremonial gate follows OSM way 212123982's location,
@@ -19,7 +20,7 @@ export function addCityLandmarkDetails(scene:THREE.Scene,city:CityData){
   const dark=new THREE.MeshStandardMaterial({color:'#253e36',roughness:.7});
   const batches=new Map<THREE.Material,THREE.BufferGeometry[]>();
   const add=(g:THREE.BufferGeometry,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{g.rotateY(yaw);g.translate(x,y,z);const list=batches.get(m)??[];list.push(g);batches.set(m,list);};
-  const state=city.buildings.find(b=>b.id==='BOS-1WKHX-X382F-V5VL1');
+  const state=landmarkBuildings(city).find(b=>b.id==='BOS-1WKHX-X382F-V5VL1');
   if(state){
     const x=912.52,z=-897.34,translation=(state.baseElevation??0)+state.height-73.68104;
     const profile=[[8.17,57.78],[8.17,60.51],[7.56,61.98],[6.58,63.46],[4.96,64.93],[2.86,65.66]].map(([r,y])=>new THREE.Vector2(r,y+translation));

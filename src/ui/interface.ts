@@ -4,6 +4,8 @@ import { areaAt, indexAreas } from './geography';
 import {createDiagnostics} from './diagnostics';
 import type {HUDPerformanceData} from './diagnostic-report';
 import {closestRoad} from '../simulation/roads';
+import {isMetroCity} from '../simulation/city-tiles.ts';
+import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
 import {HELICOPTER} from '../simulation/helicopter';
 import {createMinimapLabeler} from './minimap-labels';
@@ -119,6 +121,13 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const held = new Set<string>();
   const neighborhoods=indexAreas(city.neighborhoods??[]);
   const mapRoads=city.roads.map(road=>({road,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
+  const boxed=<T extends {rings:Point2[][]}>(areas:T[])=>areas.filter(a=>a.rings[0]?.length).map(area=>{const ring=area.rings[0];let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of ring){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}return{area,minX,maxX,minZ,maxZ};});
+  const mapParks=boxed(city.parks??[]),mapWater=boxed(city.water??[]);
+  const metro=isMetroCity(city)?city:undefined;
+  // Footprints come from the hull index in a metro, so the map shows every
+  // building whether or not its tile is streamed in; zoomed far out they are skipped.
+  type MapBuilding=Pick<Building,'footprint'|'center'>&{landmark?:string|boolean};
+  const mapBuildings=(minX:number,maxX:number,minZ:number,maxZ:number,scale:number):MapBuilding[]=>metro?(scale<.09?[]:metro.index.query(minX,maxX,minZ,maxZ).slice(0,9000)):city.buildings;
   const mapExtent=Math.max(city.bounds.maxX-city.bounds.minX,city.bounds.maxZ-city.bounds.minZ);
   const neighborhoodAt=(x:number,z:number)=>areaAt(neighborhoods,x,z)?.name??'Boston';
   let latestStats:InterfaceStats={};
@@ -302,8 +311,10 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(city.coverage?.length){for(const polygon of city.coverage){ctx.beginPath();polygon.forEach((point,i)=>{const p=project(point);if(i)ctx.lineTo(...p);else ctx.moveTo(...p);});ctx.closePath();ctx.fill();}}
     else ctx.fillRect(b1[0], b1[1], b2[0] - b1[0], b2[1] - b1[1]);
     const traceRings=(rings:Point2[][])=>{ctx.beginPath();for(const ring of rings){ring.forEach((point,i)=>{const p=project(point);if(i)ctx.lineTo(...p);else ctx.moveTo(...p);});ctx.closePath();}};
-    for(const park of city.parks??[]){traceRings(park.rings);ctx.fillStyle='#c6d4b3';ctx.fill('evenodd');}
-    for(const water of city.water??[]){traceRings(water.rings);ctx.fillStyle='#a7c8ca';ctx.fill('evenodd');}
+    const viewMinX=center[0]-centerX/scale-30,viewMaxX=center[0]+(w-centerX)/scale+30,viewMinZ=center[1]-centerY/scale-30,viewMaxZ=center[1]+(h-centerY)/scale+30;
+    const inView=(item:{minX:number;maxX:number;minZ:number;maxZ:number})=>item.maxX>viewMinX&&item.minX<viewMaxX&&item.maxZ>viewMinZ&&item.minZ<viewMaxZ;
+    for(const {area} of mapParks.filter(inView)){traceRings(area.rings);ctx.fillStyle='#c6d4b3';ctx.fill('evenodd');}
+    for(const {area} of mapWater.filter(inView)){traceRings(area.rings);ctx.fillStyle='#a7c8ca';ctx.fill('evenodd');}
     for(const path of city.parkPaths??[]){
       if(path.points.length<2)continue;
       ctx.beginPath();path.points.forEach((point,i)=>{const p=project(point);if(i)ctx.lineTo(...p);else ctx.moveTo(...p);});
@@ -313,14 +324,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       ctx.strokeStyle='#72857366';ctx.lineWidth=.8;ctx.setLineDash([3,5]);
       for(const area of neighborhoods){traceRings(area.rings);ctx.stroke();}ctx.setLineDash([]);
     }
-    const visibleRoads=mapRoads.filter(item=>item.maxX>center[0]-centerX/scale-30&&item.minX<center[0]+(w-centerX)/scale+30&&item.maxZ>center[1]-centerY/scale-30&&item.minZ<center[1]+(h-centerY)/scale+30);
+    const visibleRoads=mapRoads.filter(inView);
     for (const {road} of visibleRoads) {
       if (road.points.length < 2) continue;
       ctx.beginPath(); road.points.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); });
       ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#c3ccc0'; ctx.lineWidth = Math.max(2, (road.width + 4) * scale); ctx.stroke();
       ctx.strokeStyle = '#faf8f0'; ctx.lineWidth = Math.max(1.4, road.width * scale); ctx.stroke();
     }
-    for (const building of city.buildings) {
+    for (const building of mapBuildings(viewMinX,viewMaxX,viewMinZ,viewMaxZ,scale)) {
       if (!building.footprint.length || !inside(project(building.center), large ? 180 : 90)) continue;
       ctx.beginPath(); building.footprint.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0],q[1]); }); ctx.closePath();
       ctx.fillStyle = building.landmark ? '#b9a28b' : '#bbc3b7'; ctx.fill();
@@ -439,9 +450,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(now-lastMapDraw>90){drawMiniMap();if(mapOpen)drawFullMap();lastMapDraw=now;}
     if(now-lastLocation>500){
       const neighborhood=neighborhoodAt(state.x,state.z);
-      let nearest=Infinity,label=neighborhood;
-      for(const road of city.roads){if(!road.name)continue;for(let i=1;i<road.points.length;i++){const d=distanceToSegment([state.x,state.z],road.points[i-1],road.points[i]);if(d<nearest){nearest=d;label=road.name;}}}
-      if(nearest>110)label=neighborhood;
+      const near=closestRoad(city,state.x,state.z);
+      const label=near.distance<=110&&near.road?.name?near.road.name:neighborhood;
       el('neighborhood-label').textContent=`${neighborhood}, Massachusetts`;
       if(travelMode==='helicopter')el('journey-label').textContent=`Above ${neighborhood}`;
       el('location-label').textContent=travelMode==='helicopter'?`Above ${label}`:label;lastLocation=now;

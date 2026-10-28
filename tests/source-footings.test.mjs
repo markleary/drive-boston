@@ -1,28 +1,28 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import * as THREE from 'three';
-import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 import {sourceFootingGeometry,addSourceFooting} from '../src/render/source-footings.ts';
+import {tileSourceGeometry} from '../src/render/tile-geometry.ts';
+import {loadCentralCity} from './helpers/metro-city.mjs';
 
 test('real concave source wall bottoms ground to terrain without filling streets or Fenway field',async()=>{
-  const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
-  const bytes=readFileSync(new URL('../public/data/city.glb',import.meta.url));
-  const gltf=await new Promise((resolve,reject)=>new GLTFLoader().parse(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'',resolve,reject));
-  const generated=new Map(),scene=new THREE.Scene();gltf.scene.updateMatrixWorld(true);
-  gltf.scene.traverse(object=>{
-    if(!object.isMesh||object.material.name!=='facade')return;
-    let owner=object;while(owner&&!owner.userData.buildingId)owner=owner.parent;
-    const id=owner?.userData.buildingId;if(!meshBuildingIds.has(id))return;
-    const building=city.buildings.find(b=>b.id===id),source=object.geometry.clone().applyMatrix4(object.matrixWorld),before=source.attributes.position.array.slice();
-    const edges=[],p=source.attributes.position,index=source.index,n=source.attributes.normal,base=building.baseElevation??0;
-    for(let i=0;i<(index?.count??p.count);i+=3){
-      const ids=[0,1,2].map(j=>index?index.getX(i+j):i+j);if(Math.abs(n.getY(ids[0]))>.28)continue;
+  const city=await loadCentralCity();
+  const generated=new Map(),scene=new THREE.Scene(),a=new THREE.Vector3(),b=new THREE.Vector3(),c=new THREE.Vector3(),normal=new THREE.Vector3();
+  for(const id of meshBuildingIds){
+    const building=city.buildings.find(x=>x.id===id),data=city.geometry.get(id);
+    if(!building){assert.ok(city.metro.landmarkBuildings.some(b=>b.id===id),`${id} must at least be a landmark building`);continue;}
+    assert.ok(data,`${id} must be in the central tiles`);
+    const source=tileSourceGeometry(data),before=source.attributes.position.array.slice();
+    const edges=[],p=source.attributes.position,index=source.index,base=building.baseElevation??0;
+    for(let i=0;i<index.count;i+=3){
+      const ids=[0,1,2].map(j=>index.getX(i+j));
+      a.fromBufferAttribute(p,ids[0]);b.fromBufferAttribute(p,ids[1]);c.fromBufferAttribute(p,ids[2]);normal.crossVectors(b.sub(a),c.sub(a)).normalize();
+      if(Math.abs(normal.y)>.28)continue;
       for(let j=0;j<3;j++){
-        const a=ids[j],b=ids[(j+1)%3];if(Math.abs(p.getY(a)-base)>.03||Math.abs(p.getY(b)-base)>.03)continue;
-        edges.push([[p.getX(a),p.getZ(a)],[p.getX(b),p.getZ(b)]]);
+        const u=ids[j],v=ids[(j+1)%3];if(Math.abs(p.getY(u)-base)>.03||Math.abs(p.getY(v)-base)>.03)continue;
+        edges.push([[p.getX(u),p.getZ(u)],[p.getX(v),p.getZ(v)]]);
       }
     }
     const footing=sourceFootingGeometry(city,building,source),f=footing.attributes.position;
@@ -40,8 +40,8 @@ test('real concave source wall bottoms ground to terrain without filling streets
     assert.deepEqual(collider.vertices,visible.geometry.attributes.position.array,'rendering and collision must use identical triangles');
     assert.deepEqual(source.attributes.position.array,before,'measured source walls must never be moved');
     generated.set(id,visible);footing.dispose();source.dispose();
-  });
-  assert.deepEqual(new Set(generated.keys()),meshBuildingIds);
+  }
+  assert.deepEqual(new Set(generated.keys()),new Set([...meshBuildingIds].filter(id=>city.buildings.some(b=>b.id===id))),'every exact-mesh building in the central tiles gets a footing');
   scene.updateMatrixWorld(true);
   const ray=new THREE.Raycaster();
   for(const[x,z]of[[-400,340],[67.477,283.182],[-1850,390]]){

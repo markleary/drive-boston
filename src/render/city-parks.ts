@@ -4,9 +4,14 @@ import type { CityArea, CityData, Point2 } from '../types';
 import { pointInside } from '../simulation/roads';
 import { sampleElevation } from '../simulation/terrain';
 import { canvasTexture, seeded } from './materials';
-import { createStreetTrees } from './foliage';
+import { createStreetTrees, type TreeField } from './foliage';
 import { drapedRibbon } from './terrain-ground';
 import { createGrassMaterial } from './ground-cover';
+import { insideEmbracePlaza } from './the-embrace';
+
+export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
+const triangulations=new WeakMap<Point2[][],{vertices:THREE.Vector2[];faces:number[][]}>();
+const waterLevels=new WeakMap<CityArea,number>();
 
 export function insideArea(p:Point2,area:CityArea){
   return !!area.rings[0]&&pointInside(p,area.rings[0])&&!area.rings.slice(1).some(r=>pointInside(p,r));
@@ -15,10 +20,14 @@ export function insideArea(p:Point2,area:CityArea){
 /** Clip polygon triangulation against the exact DEM triangles. This preserves
  * shore/park boundaries and hill crests without recursively oversampling long,
  * thin shoreline triangles. Holes are removed by Earcut before ground clipping. */
-export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeight?:number){
-  const contour=rings[0]?.map(p=>new THREE.Vector2(...p))??[];
-  const holes=rings.slice(1).map(r=>r.map(p=>new THREE.Vector2(...p)));
-  const vertices=[...contour,...holes.flat()],faces=THREE.ShapeUtils.triangulateShape(contour,holes);
+export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeight?:number,bounds?:Bounds){
+  let triangulated=triangulations.get(rings);
+  if(!triangulated){
+    const contour=rings[0]?.map(p=>new THREE.Vector2(...p))??[];
+    const holes=rings.slice(1).map(r=>r.map(p=>new THREE.Vector2(...p)));
+    triangulated={vertices:[...contour,...holes.flat()],faces:THREE.ShapeUtils.triangulateShape(contour,holes)};triangulations.set(rings,triangulated);
+  }
+  const {vertices,faces}=triangulated;
   const positions:number[]=[],uv:number[]=[];
   const emit=(poly:Point2[])=>{
     for(let i=1;i<poly.length-1;i++){
@@ -37,7 +46,12 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
   };
   const grid=city.elevation,cell=grid?.cellSize??6,ox=grid?.originX??0,oz=grid?.originZ??0;
   for(const f of faces){
-    const triangle=f.map(i=>[vertices[i].x,vertices[i].y] as Point2);
+    let triangle=f.map(i=>[vertices[i].x,vertices[i].y] as Point2);
+    // A streamed tile keeps only its own part of a park that spans several tiles.
+    if(bounds){
+      triangle=clip(triangle,-1,0,-bounds.minX);triangle=clip(triangle,1,0,bounds.maxX);triangle=clip(triangle,0,-1,-bounds.minZ);triangle=clip(triangle,0,1,bounds.maxZ);
+      if(triangle.length<3)continue;
+    }
     if(flatHeight!==undefined){emit(triangle);continue;}
     const minX=Math.floor((Math.min(...triangle.map(p=>p[0]))-ox)/cell),maxX=Math.floor((Math.max(...triangle.map(p=>p[0]))-ox)/cell);
     const minZ=Math.floor((Math.min(...triangle.map(p=>p[1]))-oz)/cell),maxZ=Math.floor((Math.max(...triangle.map(p=>p[1]))-oz)/cell);
@@ -54,11 +68,21 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
 /** A single water level estimated from interior DEM samples, excluding the
  * shoreline so bank elevations do not set the pond level. */
 export function waterHeight(city:CityData,area:CityArea){
+  const cached=waterLevels.get(area);if(cached!==undefined)return cached;
   const bounds=areaBounds(area),step=Math.max(6,Math.sqrt((bounds.maxX-bounds.minX)*(bounds.maxZ-bounds.minZ)/1800)),values:number[]=[];
-  for(let x=bounds.minX+step/2;x<bounds.maxX;x+=step)for(let z=bounds.minZ+step/2;z<bounds.maxZ;z+=step){if(insideArea([x,z],area)&&!area.rings.some(r=>r.some((p,i)=>distanceToSegment([x,z],p,r[(i+1)%r.length])<3)))values.push(sampleElevation(city,x,z));}
+  // Shore samples are rejected by distance to the nearest ring edge; a cell
+  // index over the ring edges keeps that bounded for harbour-sized outlines.
+  const cell=24,edges=new Map<string,[Point2,Point2][]>();
+  for(const r of area.rings)for(let i=0;i<r.length;i++){
+    const a=r[i],b=r[(i+1)%r.length];
+    for(let x=Math.floor((Math.min(a[0],b[0])-3)/cell);x<=Math.floor((Math.max(a[0],b[0])+3)/cell);x++)for(let z=Math.floor((Math.min(a[1],b[1])-3)/cell);z<=Math.floor((Math.max(a[1],b[1])+3)/cell);z++){const key=`${x},${z}`,list=edges.get(key)??[];list.push([a,b]);edges.set(key,list);}
+  }
+  const nearShore=(p:Point2)=>(edges.get(`${Math.floor(p[0]/cell)},${Math.floor(p[1]/cell)}`)??[]).some(([a,b])=>distanceToSegment(p,a,b)<3);
+  for(let x=bounds.minX+step/2;x<bounds.maxX;x+=step)for(let z=bounds.minZ+step/2;z<bounds.maxZ;z+=step){if(!nearShore([x,z])&&insideArea([x,z],area))values.push(sampleElevation(city,x,z));}
   if(!values.length)values.push(...area.rings[0].map(p=>sampleElevation(city,...p)));
-  values.sort((a,b)=>a-b);return values[Math.floor((values.length-1)*.85)];
+  values.sort((a,b)=>a-b);const level=values[Math.floor((values.length-1)*.85)];waterLevels.set(area,level);return level;
 }
+export function areaBoundsOf(area:CityArea){return areaBounds(area);}
 
 function areaBounds(area:CityArea){
   const p=area.rings[0];return {minX:Math.min(...p.map(p=>p[0])),maxX:Math.max(...p.map(p=>p[0])),minZ:Math.min(...p.map(p=>p[1])),maxZ:Math.max(...p.map(p=>p[1]))};
@@ -68,40 +92,51 @@ function distanceToSegment(p:Point2,a:Point2,b:Point2){
   return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dz);
 }
 
+let parkMaterials:{lawn:THREE.Material;gardenLawn:THREE.Material;pathMaterial:THREE.Material;waterMaterial:THREE.Material;bankMaterial:THREE.Material;iron:THREE.Material;wood:THREE.Material;stone:THREE.Material;lampGlass:THREE.Material}|undefined;
+export interface ParkOptions {
+  /** Streamed tile: surfaces are clipped to this box and only paths/ponds owned by it are built. */
+  bounds?:Bounds; owner?:string; pathOwned?:(path:ParkPath)=>boolean; treeField?:TreeField; target?:THREE.Object3D;
+  budgets?:{trees?:number;benches?:number};
+}
+type ParkPath=NonNullable<CityData['parkPaths']>[number];
 /** Real Boston park boundaries, hydrography and mapped pedestrian alignments.
  * Planting, furnishings and bridge details are original procedural interpretations. */
-export function addCityParkDetails(scene:THREE.Scene,city:CityData){
+export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkOptions={}){
   const group=new THREE.Group();group.name='Boston parks and waterways';
+  const bounds=options.bounds,owned=(p:Point2)=>!bounds||(p[0]>=bounds.minX&&p[0]<bounds.maxX&&p[1]>=bounds.minZ&&p[1]<bounds.maxZ);
   const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3);
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
-  const paths=city.parkPaths??[];
-  const lawn=createGrassMaterial('#c7cfb0');
-  const gardenLawn=createGrassMaterial('#ccd5b6');
-  const pathMaterial=new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96});
-  const waterMaterial=new THREE.MeshPhysicalMaterial({color:'#507d7b',roughness:.21,metalness:.25,clearcoat:1,clearcoatRoughness:.2});
-  const bankMaterial=new THREE.MeshStandardMaterial({color:'#8d9674',roughness:.96});
-  const iron=new THREE.MeshStandardMaterial({color:'#303f36',metalness:.35,roughness:.65});
-  const wood=new THREE.MeshStandardMaterial({color:'#876b45',roughness:.91});
-  const stone=new THREE.MeshStandardMaterial({color:'#baaf96',roughness:.91});
-  const lampGlass=new THREE.MeshStandardMaterial({color:'#f4e9ca',emissive:'#ffdba1',emissiveIntensity:.25,roughness:.35});
+  const paths=(city.parkPaths??[]).filter(p=>options.pathOwned?options.pathOwned(p):true);
+  parkMaterials??={lawn:createGrassMaterial('#c7cfb0'),gardenLawn:createGrassMaterial('#ccd5b6'),pathMaterial:new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96}),
+    waterMaterial:new THREE.MeshPhysicalMaterial({color:'#507d7b',roughness:.21,metalness:.25,clearcoat:1,clearcoatRoughness:.2}),bankMaterial:new THREE.MeshStandardMaterial({color:'#8d9674',roughness:.96}),
+    iron:new THREE.MeshStandardMaterial({color:'#303f36',metalness:.35,roughness:.65}),wood:new THREE.MeshStandardMaterial({color:'#876b45',roughness:.91}),stone:new THREE.MeshStandardMaterial({color:'#baaf96',roughness:.91}),
+    lampGlass:new THREE.MeshStandardMaterial({color:'#f4e9ca',emissive:'#ffdba1',emissiveIntensity:.25,roughness:.35})};
+  const {lawn,gardenLawn,pathMaterial,waterMaterial,bankMaterial,iron,wood,stone,lampGlass}=parkMaterials;
+  const treeBudget=options.budgets?.trees??760,benchBudget=options.budgets?.benches??140;
   const batches=new Map<string,{material:THREE.Material;geometries:THREE.BufferGeometry[]}>();
   const add=(g:THREE.BufferGeometry,m:THREE.Material,x:number,z:number)=>{
     const key=`${m.uuid}:${Math.floor(x/240)}:${Math.floor(z/240)}`;let batch=batches.get(key);if(!batch){batch={material:m,geometries:[]};batches.set(key,batch);}batch.geometries.push(g);
   };
   const part=(g:THREE.BufferGeometry,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{g.rotateY(yaw);g.translate(x,y,z);add(g,m,x,z);};
+  const lawns:THREE.BufferGeometry[]=[],gardens:THREE.BufferGeometry[]=[],plazas:THREE.BufferGeometry[]=[],waterSheets:THREE.BufferGeometry[]=[];
   for(const park of parks){
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
-    const material=/plaza/i.test(park.name)?pathMaterial:/public garden/i.test(park.name)?gardenLawn:lawn;
-    const mesh=new THREE.Mesh(parkSurface(city,park.rings),material);mesh.name=park.name;mesh.receiveShadow=true;group.add(mesh);
+    const list=/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
+    const geometry=parkSurface(city,park.rings,.024,undefined,bounds);if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
   }
   for(const water of waters){
-    const mesh=new THREE.Mesh(parkSurface(city,water.rings,.095,waterHeight(city,water)),waterMaterial);mesh.name=water.name;mesh.receiveShadow=true;mesh.userData.noAO=true;group.add(mesh);
+    const geometry=parkSurface(city,water.rings,.095,waterHeight(city,water),bounds);if(geometry.attributes.position.count)waterSheets.push(geometry);else geometry.dispose();
     // Small pond edges get a narrow ground-following border; river shorelines
     // retain the source's natural geometry without an invented concrete wall.
-    const bounds=areaBounds(water);
-    if(Math.max(bounds.maxX-bounds.minX,bounds.maxZ-bounds.minZ)<350){
+    const extent=areaBounds(water);
+    if(Math.max(extent.maxX-extent.minX,extent.maxZ-extent.minZ)<350&&owned(water.rings[0][0])){
       for(const ring of water.rings)add(drapedRibbon(city,[...ring,ring[0]],.65,.085),bankMaterial,ring[0][0],ring[0][1]);
     }
+  }
+  for(const [list,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[plazas,pathMaterial,'Plazas'],[waterSheets,waterMaterial,'Water']] as const){
+    if(!list.length)continue;
+    const merged=mergeGeometries(list,false);list.forEach(g=>g.dispose());if(!merged)continue;merged.computeBoundingSphere();
+    const mesh=new THREE.Mesh(merged,material);mesh.name=name;mesh.receiveShadow=true;if(material===waterMaterial)mesh.userData.noAO=true;group.add(mesh);
   }
   let bridges=0,benches=0,lamps=0;
   for(const path of paths){
@@ -150,14 +185,15 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData){
   }
   const waterBounds=waters.map(w=>({area:w,...areaBounds(w)}));
   const wet=(p:Point2)=>waterBounds.some(w=>p[0]>=w.minX-2&&p[0]<=w.maxX+2&&p[1]>=w.minZ-2&&p[1]<=w.maxZ+2&&insideArea(p,w.area));
-  const safe=(p:Point2)=>!wet(p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
+  const safe=(p:Point2)=>!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
   const treePoints:THREE.Vector3[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
-  const selected=principal.length?principal:parks;
-  const limits=selected.map(p=>/public garden/i.test(p.name)?190:/boston common/i.test(p.name)?260:/fens/i.test(p.name)?190:Math.min(35,Math.round((areaBounds(p).maxX-areaBounds(p).minX)*(areaBounds(p).maxZ-areaBounds(p).minZ)/1300)));
+  const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
+  const clipped=(p:CityArea):Bounds=>{const b=areaBounds(p);return bounds?{minX:Math.max(b.minX,bounds.minX),maxX:Math.min(b.maxX,bounds.maxX),minZ:Math.max(b.minZ,bounds.minZ),maxZ:Math.min(b.maxZ,bounds.maxZ)}:b;};
+  const limits=selected.map(p=>{const b=clipped(p),area=Math.max(0,b.maxX-b.minX)*Math.max(0,b.maxZ-b.minZ);return /public garden/i.test(p.name)?190:/boston common/i.test(p.name)?260:/fens/i.test(p.name)?190:Math.min(bounds?60:35,Math.round(area/1300));});
   selected.forEach((park,index)=>{
-    const b=areaBounds(park),limit=limits[index];let count=0;
-    for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length<760;attempt++){
+    const b=clipped(park),limit=limits[index];let count=0;if(b.maxX<=b.minX||b.maxZ<=b.minZ)return;
+    for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length<treeBudget;attempt++){
       const p:Point2=[b.minX+random()*(b.maxX-b.minX),b.minZ+random()*(b.maxZ-b.minZ)];if(!insideArea(p,park)||!safe(p))continue;
       const cx=Math.floor(p[0]/10),cz=Math.floor(p[1]/10);let near=false;
       for(let x=cx-1;x<=cx+1;x++)for(let z=cz-1;z<=cz+1;z++)if((treeCells.get(`${x},${z}`)??[]).some(q=>Math.hypot(p[0]-q[0],p[1]-q[1])<8))near=true;
@@ -165,15 +201,15 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData){
       treePoints.push(new THREE.Vector3(p[0],sampleElevation(city,...p)+.025,p[1]));count++;
     }
   });
-  if(treePoints.length){const trees=createStreetTrees(treePoints,{scale:1.65,grates:false});trees.name='Park specimen trees';group.add(trees);}
+  if(treePoints.length){if(options.treeField)options.treeField.add(options.owner??'parks',treePoints);else{const trees=createStreetTrees(treePoints,{scale:1.65,grates:false});trees.name='Park specimen trees';group.add(trees);}}
   // Benches and restrained lamps sit beside real paths. Count is fixed per
   // length rather than per OSM segment, preventing dense clusters at junctions.
   for(const path of paths){
     if('bridge' in path&&path.bridge)continue;
     let next=22+random()*25,distance=0;
-    for(let i=1;i<path.points.length&&benches<140;i++){
+    for(let i=1;i<path.points.length&&benches<benchBudget;i++){
       const a=path.points[i-1],b=path.points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.1)continue;
-      while(next<distance+length&&benches<140){
+      while(next<distance+length&&benches<benchBudget){
         const t=(next-distance)/length,side=benches%2?1:-1,offset=path.width/2+2.1;
         const p:Point2=[a[0]+dx*t-dz/length*offset*side,a[1]+dz*t+dx/length*offset*side];next+=58;
         if(!selected.some(park=>insideArea(p,park))||!safe(p))continue;
@@ -197,7 +233,7 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData){
     new Set([...geometries,...normalized]).forEach(g=>g.dispose());
   }
   group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length,benches,lamps,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting and furnishings are procedural'};
-  scene.add(group);return group;
+  (options.target??scene).add(group);return group;
 }
 
 function grassTexture(){

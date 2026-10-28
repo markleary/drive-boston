@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {drapedRibbon,terrainTiles,terrainGeometry} from '../src/render/terrain-ground.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 
+import {loadCentralCity} from './helpers/metro-city.mjs';
 test('render tiles preserve the collision triangles and seamless boundary normals',()=>{
   const width=13,height=10,city={bounds:{minX:0,maxX:72,minZ:0,maxZ:54},elevation:{width,height,cellSize:6,originX:0,originZ:0,heights:Array.from({length:width*height},(_,i)=>Math.sin(i%width)*2+Math.cos(Math.floor(i/width)))}},full=terrainGeometry(city),tiles=terrainTiles(city,4);
   let triangles=0;const positions=new Map();
@@ -25,8 +25,8 @@ test('render tiles preserve the collision triangles and seamless boundary normal
   assert.equal(triangles,(width-1)*(height-1)*2);assert.equal(positions.size,width*height);full.dispose();
 });
 
-test('Parker Hill road triangles follow the physical surface through crests and grades',()=>{
-  const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+test('Parker Hill road triangles follow the physical surface through crests and grades',async()=>{
+  const city=await loadCentralCity();
   const roads=city.roads.filter(r=>/Parker Hill Avenue|Calumet Street/.test(r.name));
   assert.ok(roads.length>3,'actual hilly road fixture is required');
   let triangles=0,maxError=0;

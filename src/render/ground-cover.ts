@@ -4,6 +4,7 @@ import {pointInside} from '../simulation/roads.ts';
 import {sampleElevation,sampleTerrainNormal} from '../simulation/terrain.ts';
 import {seeded,canvasTexture} from './materials';
 import {mergeSpatialGeometries} from './spatial-batches';
+import {insideEmbracePlaza} from './the-embrace';
 
 let grassMaps:{color:THREE.Texture;relief:THREE.Texture}|undefined;
 export function createGrassMaterial(tint='#a2af84'){
@@ -55,6 +56,7 @@ export function createGroundCover(scene:THREE.Scene,city:CityData){
     for(let iz=Math.floor((observer.z-radius)/1.1);iz<=Math.ceil((observer.z+radius)/1.1)&&count<budget;iz++)for(let ix=Math.floor((observer.x-radius)/1.1);ix<=Math.ceil((observer.x+radius)/1.1)&&count<budget;ix++){
       const random=seeded(Math.imul(ix,73856093)^Math.imul(iz,19349663)),x=ix*1.1+(random()-.5)*.8,z=iz*1.1+(random()-.5)*.8,p:Point2=[x,z];
       if(Math.hypot(x-observer.x,z-observer.z)>radius||!parks.some(a=>x>a.minX&&x<a.maxX&&z>a.minZ&&z<a.maxZ&&polygonContains(p,a.rings)))continue;
+      if(insideEmbracePlaza(x,z,-.6))continue;
       if(waters.some(w=>x>w.minX&&x<w.maxX&&z>w.minZ&&z<w.maxZ&&polygonContains(p,w.rings)))continue;
       const key=`${Math.floor(x/cell)},${Math.floor(z/cell)}`;
       if((barriers.get(key)??[]).some(s=>segmentDistance(p,s.a,s.b)<s.radius)||(buildingCells.get(key)??[]).some(b=>pointInside(p,b.footprint)))continue;

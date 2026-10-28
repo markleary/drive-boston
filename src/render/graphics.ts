@@ -18,10 +18,12 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   ao.updatePdMaterial({ radius: 5, rings: 2, samples: 8, depthPhi: 2, normalPhi: 3 });
   // The normal override used by GTAO cannot preserve alpha-cutout leaves. Keep
   // their opaque cards out of that buffer while retaining their real shadows.
-  const exclusions: THREE.Object3D[] = [];
-  scene.traverse(object => { if (object.userData.noAO) exclusions.push(object); });
+  // Streamed tiles add and remove such objects; `scene.userData.version` says when to look again.
+  let exclusions: THREE.Object3D[] = [], version: unknown = Symbol('unscanned');
+  const refresh = () => { if (scene.userData.version === version) return; version = scene.userData.version; exclusions = []; scene.traverse(object => { if (object.userData.noAO) exclusions.push(object); }); };
   const renderAO = ao.render.bind(ao);
   ao.render = (r, write, read, dt, mask) => {
+    refresh();
     const visible = exclusions.filter(object => object.visible);
     const autoShadow = r.shadowMap.autoUpdate;
     r.shadowMap.autoUpdate = false;

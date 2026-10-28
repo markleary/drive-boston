@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {closestRoad} from '../src/simulation/roads.ts';
+import {loadMetroCity} from './helpers/metro-city.mjs';
 
-test('spatial road lookup returns the exact nearest drivable segment across the expanded city',()=>{
-  const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+test('spatial road lookup returns the exact nearest drivable segment across the expanded city',async()=>{
+  const city=await loadMetroCity({tiles:[]});
   for(let i=0;i<180;i++)for(const majorOnly of [false,true]){
     const x=city.bounds.minX-200+(city.bounds.maxX-city.bounds.minX+400)*((i*.61803398875)%1),z=city.bounds.minZ-200+(city.bounds.maxZ-city.bounds.minZ+400)*((i*.41421356237)%1);
     let distance=Infinity;

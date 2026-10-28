@@ -17,8 +17,8 @@ export const ACTIVITY:Record<ActivityProfile['level'],Readonly<ActivityProfile>>
 
 export function createActivityProfile(city:CityData){
   const areas=(city.neighborhoods??[]).map(area=>{
-    const level:ActivityProfile['level']=/^(Back Bay|Downtown|Chinatown|Leather District)$/.test(area.name)?'busy':
-      /^(Fenway|Longwood)$/.test(area.name)?'mixed':'residential';
+    const level:ActivityProfile['level']=/^(Back Bay|Downtown|Chinatown|Leather District|North End|West End|South Boston Waterfront|Bay Village)$/.test(area.name)?'busy':
+      /^(Fenway|Longwood|South End|Charlestown|Allston|East Boston|Cambridge|Somerville|Brookline)$/.test(area.name)?'mixed':'residential';
     const rings=area.rings.map(points=>({points,minX:Math.min(...points.map(p=>p[0])),maxX:Math.max(...points.map(p=>p[0])),minZ:Math.min(...points.map(p=>p[1])),maxZ:Math.max(...points.map(p=>p[1]))}));
     return {profile:ACTIVITY[level],rings};
   });

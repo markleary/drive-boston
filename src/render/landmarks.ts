@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CityData } from '../types';
+import { landmarkBuildings } from '../simulation/city-tiles.ts';
 
 /** Original architectural detailing placed on measured Boston model surfaces.
  * Positions below are taken from the compiled mesh footprint/front-wall planes.
@@ -70,7 +71,7 @@ export function addLandmarkDetails(scene: THREE.Scene, city: CityData): THREE.Gr
   }
 
   if (city.landmarks.some(l => l.id === 'library')) {
-    baseElevation=city.buildings.find(b=>b.landmark==='library')?.baseElevation??0;
+    baseElevation=landmarkBuildings(city).find(b=>b.landmark==='library')?.baseElevation??0;
     // McKim's east facade on Dartmouth: the source wall runs from
     // (-228.929,32.233) to (-204.414,98.186), length 70.36 metres.
     const draw = facade(-216.6715, 65.2095, .9373, -.3484);
@@ -125,7 +126,7 @@ export function addLandmarkDetails(scene: THREE.Scene, city: CityData): THREE.Gr
   }
 
   if (city.landmarks.some(l => l.id === 'trinity')) {
-    baseElevation=city.buildings.find(b=>b.landmark==='trinity')?.baseElevation??0;
+    baseElevation=landmarkBuildings(city).find(b=>b.landmark==='trinity')?.baseElevation??0;
     // West-facing Copley facade: original hull's closing edge, not an arbitrary axis-aligned box.
     const draw = facade(-83.0725, 30.055, -.9380, .3467);
     for (const x of [-10.4, -5.2, 0, 5.2, 10.4]) arch(draw, x, .65, 3.1, 3.5, sandstoneLight, dark, .45);
@@ -152,7 +153,7 @@ export function addLandmarkDetails(scene: THREE.Scene, city: CityData): THREE.Gr
   }
 
   if (city.landmarks.some(l => l.id === 'hancock')) {
-    baseElevation=city.buildings.find(b=>b.landmark==='hancock')?.baseElevation??0;
+    baseElevation=landmarkBuildings(city).find(b=>b.landmark==='hancock')?.baseElevation??0;
     // Four outer tower corners sampled from the source mesh above 100m;
     // the low podium footprint is intentionally not used for curtain-wall fins.
     const corners: [number, number][] = [[-73.881,70.866],[-40.221,58.678],[23.882,118.764],[-9.342,131.477]];

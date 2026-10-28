@@ -2,15 +2,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Sky } from 'three/addons/objects/Sky.js';
-import type { CityData, LightingMode, Point2 } from '../types';
+import type { Building, CityData, LightingMode, Point2 } from '../types';
+import type { DrivingPhysics } from '../physics/vehicle';
 import { closestRoad, pointInside } from '../simulation/roads';
 import { createMaterials, facadeStyleIndex, seeded, stabilizeFacadeUVs } from './materials';
-import { createStreetTrees } from './foliage';
+import { createStreetTrees, createTreeField } from './foliage';
 import { createStreetSign } from './signs';
-import { sampleElevation } from '../simulation/terrain';
+import { sampleElevation, terrainRange } from '../simulation/terrain';
 import { drapedRibbon, terrainTiles, foundationGeometry, backBayPaving } from './terrain-ground';
 import { mergeSpatialGeometries, spatialInstances } from './spatial-batches';
-import { createTrafficSignals } from './traffic-signals';
+import { createTrafficSignals, updateTrafficSignals } from './traffic-signals';
 import { createGrassMaterial } from './ground-cover';
 import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
@@ -20,14 +21,18 @@ import { inTransitCorridor } from '../simulation/transit-corridors';
 import { addSourceFooting } from './source-footings';
 import {isStateHouse,createStateHouseShellMaterials,splitStateHouseShell} from './state-house';
 import {createPrudentialPenthouseMaterial,isPrudential,prudentialCrownCollider,splitPrudentialShell} from './prudential';
+import { isMetroCity, type Reader } from '../simulation/city-tiles.ts';
+import type { PlacedSignal } from '../simulation/signal-placement.ts';
+import { createFarCity } from './far-city';
+import { createTileStreamer, type TileStreamer } from './tile-streaming';
 
-export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData) {
-  prepareNeighborhoodArchitecture(city);
+export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; }
+
+export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData,options:WorldOptions={}) {
+  const metro=isMetroCity(city)?city:undefined;
+  if(!metro)prepareNeighborhoodArchitecture(city);
   const materials=createMaterials();
-  const ribbon=(points:Point2[],width:number,y:number)=>drapedRibbon(city,points,width,y);
   const height=(x:number,z:number)=>sampleElevation(city,x,z);
-  const buildingChunks:THREE.Mesh[]=[];
-  const buildingCollisions:{id:string;vertices:Float32Array;indices:Uint32Array}[]=[];
   scene.background=null;scene.fog=new THREE.Fog('#aeb9bc',250,1050);
   const hemi=new THREE.HemisphereLight(0xb8d9f1,0x625343,.6);scene.add(hemi);
   const sun=new THREE.DirectionalLight(0xffdfad,3.8);sun.position.set(-270,255,330);sun.castShadow=true;
@@ -45,13 +50,41 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const probePosition=new THREE.Vector3(Infinity,Infinity,Infinity);let reflectionDirty=true,lastProbeTime=-100,probeFace=-1;
   let highQuality=true;
   const groundMaterial=createGrassMaterial('#c6cbb2');groundMaterial.polygonOffset=true;groundMaterial.polygonOffsetFactor=1;groundMaterial.polygonOffsetUnits=4;
-  for(const geometry of terrainTiles(city)){const ground=new THREE.Mesh(geometry,groundMaterial);ground.position.y=-.04;ground.receiveShadow=true;ground.renderOrder=-3;scene.add(ground);}
-  const {minX,maxX,minZ,maxZ}=city.bounds;
   // These survey layers are only centimeters apart. Explicit order plus a bias
   // away from the camera prevents the underlay overwriting roads at altitude.
   materials.sidewalk.polygonOffset=true;materials.sidewalk.polygonOffsetFactor=1;materials.sidewalk.polygonOffsetUnits=2;
   for(const paint of [materials.paint,materials.yellow]){paint.polygonOffset=true;paint.polygonOffsetUnits=-1;}
   materials.sidewalk.map?.repeat.set(1,1);
+  const iron=new THREE.MeshStandardMaterial({color:'#34443f',metalness:.45,roughness:.55});
+  const lampMat=new THREE.MeshStandardMaterial({color:'#fff0cc',emissive:'#ffca76',emissiveIntensity:.15});
+  const buildingMap=new Map<string,Building>();
+  const buildingCollisions:{id:string;vertices:Float32Array;indices:Uint32Array}[]=[];
+  let buildingChunks:THREE.Mesh[]=[],lampPositions:THREE.Vector3[]=[],signalPlacements:PlacedSignal[]=[],roadStructures:THREE.Group,streamer:TileStreamer|undefined,updateSignals=updateTrafficSignals;
+  let far:ReturnType<typeof createFarCity>;
+
+  if(metro){
+    if(!options.physics||!options.read)throw new Error('A metro city streams its tiles: createWorld needs physics and a tile reader');
+    // Below every tile a flat sheet in the far-ground colour, so the fog line
+    // never reveals the edge of the tiled area from the air.
+    const range=terrainRange(city),surround=new THREE.Mesh(new THREE.PlaneGeometry(60000,60000).rotateX(-Math.PI/2),new THREE.MeshLambertMaterial({color:'#b9bea8'}));
+    surround.position.set((city.bounds.minX+city.bounds.maxX)/2,range.min-2,(city.bounds.minZ+city.bounds.maxZ)/2);surround.name='Metro surround';surround.userData.noAO=true;scene.add(surround);
+    far=createFarCity(scene,city);
+    const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
+    const parkTrees=createTreeField({scale:1.65,grates:false});parkTrees.group.name='Park specimen trees';scene.add(parkTrees.group);
+    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat},options.read,far);
+    buildingChunks=streamer.buildingChunks;lampPositions=streamer.lampPositions;signalPlacements=streamer.signals;
+    roadStructures=new THREE.Group();roadStructures.name='Streamed road structures';
+    const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);
+  }else{
+    const whole=await buildWholeCity();
+    buildingChunks=whole.buildingChunks;lampPositions=whole.lampPositions;signalPlacements=whole.signals.placements;roadStructures=whole.roadStructures;updateSignals=whole.signals.update;
+  }
+
+  /** The original single-survey build: every road, curb, building and prop at once. */
+  async function buildWholeCity(){
+  const ribbon=(points:Point2[],width:number,y:number)=>drapedRibbon(city,points,width,y);
+  const buildingChunks:THREE.Mesh[]=[];
+  for(const geometry of terrainTiles(city)){const ground=new THREE.Mesh(geometry,groundMaterial);ground.position.y=-.04;ground.receiveShadow=true;ground.renderOrder=-3;scene.add(ground);}
   const oldDistrictPaving=new THREE.Mesh(backBayPaving(city),materials.sidewalk);oldDistrictPaving.receiveShadow=true;oldDistrictPaving.renderOrder=-2;scene.add(oldDistrictPaving);
   const streets:THREE.BufferGeometry[]=[],sidewalks:THREE.BufferGeometry[]=[],lines:THREE.BufferGeometry[]=[],yellow:THREE.BufferGeometry[]=[];
   const crossingKeys=new Set<string>();
@@ -95,7 +128,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
 
   const gltf=await new GLTFLoader().loadAsync(`${import.meta.env.BASE_URL}data/city.glb`);
   gltf.scene.updateMatrixWorld(true);
-  const buildingMap=new Map(city.buildings.map(b=>[b.id,b]));
+  for(const b of city.buildings)buildingMap.set(b.id,b);
   const fenwayMaterials=createFenwayShellMaterials();
   const stateHouseMaterials=createStateHouseShellMaterials();
   const prudentialPenthouse=createPrudentialPenthouseMaterial();
@@ -195,8 +228,6 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   }
   const dummy=new THREE.Object3D();
   scene.add(createStreetTrees(treePositions));
-  const iron=new THREE.MeshStandardMaterial({color:'#34443f',metalness:.45,roughness:.55});
-  const lampMat=new THREE.MeshStandardMaterial({color:'#fff0cc',emissive:'#ffca76',emissiveIntensity:.15});
   const poles=new THREE.InstancedMesh(new THREE.CylinderGeometry(.055,.1,5.7,6),iron,lampPositions.length);
   const lamps=new THREE.InstancedMesh(new THREE.SphereGeometry(.27,8,6),lampMat,lampPositions.length);
   lampPositions.forEach((p,i)=>{dummy.position.copy(p).add(new THREE.Vector3(0,2.85,0));dummy.rotation.set(0,0,0);dummy.scale.set(1,1,1);dummy.updateMatrix();poles.setMatrixAt(i,dummy.matrix);dummy.position.y=p.y+5.85;dummy.updateMatrix();lamps.setMatrixAt(i,dummy.matrix);});poles.castShadow=true;scene.add(...spatialInstances(poles),...spatialInstances(lamps));
@@ -207,7 +238,10 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     const plate=createStreetSign(sign.name);plate.position.set(sign.position.x,sign.position.y+3,sign.position.z);plate.rotation.y=sign.yaw;scene.add(plate);
   }
   mergeAdd(signHardware,iron);
-  const signalSystem=createTrafficSignals(scene,city);
+  const signals=createTrafficSignals(scene,city);
+  return {buildingChunks,lampPositions,signals,roadStructures};
+  }
+
   // Lamp lights are hidden outside night mode: a light at intensity 0 adds
   // nothing but still costs a loop iteration in every lit fragment.
   const localLights:THREE.PointLight[]=[];for(let i=0;i<8;i++){const light=new THREE.PointLight(0xffcc89,0,21,2);light.visible=false;scene.add(light);localLights.push(light);}
@@ -236,11 +270,12 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   function update(position:THREE.Vector3,time:number){
     // Keep the shadow focus on the ground as the helicopter climbs. Widen the
     // coverage from street detail to the district without moving the world datum.
-    const groundY=height(position.x,position.z);
+    const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);
     sun.target.position.set(position.x,groundY,position.z);sun.position.copy(sun.target.position).add(direction);sky.position.copy(position);
-    const shadowExtent=Math.max(105,Math.min(330,105+Math.max(0,position.y-groundY)*.72));
+    const shadowExtent=Math.max(105,Math.min(330,105+altitude*.72));
     if(Math.abs(sun.shadow.camera.right-shadowExtent)>2){sun.shadow.camera.left=-shadowExtent;sun.shadow.camera.right=shadowExtent;sun.shadow.camera.top=shadowExtent;sun.shadow.camera.bottom=-shadowExtent;sun.shadow.camera.updateProjectionMatrix();}
-    for(const mesh of buildingChunks){const sphere=mesh.geometry.boundingSphere!;mesh.visible=Math.hypot(sphere.center.x-position.x,sphere.center.z-position.z)<1100+Math.max(0,position.y-groundY)*2+sphere.radius;}
+    streamer?.update(position,altitude);far?.update(position,altitude);
+    for(const mesh of buildingChunks){const sphere=mesh.geometry.boundingSphere!;mesh.visible=Math.hypot(sphere.center.x-position.x,sphere.center.z-position.z)<1100+altitude*2+sphere.radius;}
     const night=mode==='night';
     if(night){
       // Keep the nearest lamps in ascending distance with ties in lamp order,
@@ -254,7 +289,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
       localLights.forEach((l,i)=>{if(i<count){l.position.copy(lampPositions[nearLamps[i]]);l.position.y+=5.6;}});
     }
     for(const l of localLights){l.visible=night;l.intensity=night?70:0;}
-    signalSystem.update(time);
+    updateSignals(time);
   }
   // One face of CubeCamera.update: mipmaps are generated only after face 5.
   function renderProbeFace(face:number,player:THREE.Object3D){
@@ -292,5 +327,5 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     highQuality=high;const size=high?4096:2048;
     if(sun.shadow.mapSize.x!==size){sun.shadow.mapSize.set(size,size);sun.shadow.map?.dispose();sun.shadow.map=null;sun.shadow.needsUpdate=true;}
   }
-  return {setLighting,update,updateReflections,setQuality,materials,buildings:buildingMap,buildingCollisions,signals:signalSystem.placements,roadStructures};
+  return {setLighting,update,updateReflections,setQuality,materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
 }

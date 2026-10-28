@@ -12,6 +12,8 @@ export function reserveTransitCorridors(city:CityData,routes:{kind:string;points
   }
   corridors.set(city,cells);
 }
+/** A tile-local city view answers corridor queries from the metro's reservation. */
+export function shareTransitCorridors(target:CityData,source:CityData){const cells=corridors.get(source);if(cells)corridors.set(target,cells);}
 export function inTransitCorridor(city:CityData,x:number,z:number){
   return(corridors.get(city)?.get(`${Math.floor(x/32)},${Math.floor(z/32)}`)??[]).some(({a,b})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));

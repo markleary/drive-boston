@@ -68,16 +68,28 @@ export function terrainTiles(city:CityData,cellCount=64){
   full.dispose();return result;
 }
 
+export const BACK_BAY_PAVING={minX:-470.396,maxX:356.823,minZ:-432.484,maxZ:238.068};
 /** Preserve the original paved Back Bay courtyards while the extension gets
- * individual sidewalk strips and vegetated ground between its buildings. */
-export function backBayPaving(city:CityData){
-  const data=buildTerrainGeometryData(city),positions:number[]=[],uv:number[]=[];
-  for(let i=0;i<data.indices.length;i+=3){
-    const ids=[data.indices[i],data.indices[i+1],data.indices[i+2]],cx=ids.reduce((n,j)=>n+data.vertices[j*3],0)/3,cz=ids.reduce((n,j)=>n+data.vertices[j*3+2],0)/3;
-    if(cx< -470.396||cx>356.823||cz< -432.484||cz>238.068)continue;
-    for(const j of ids){const x=data.vertices[j*3],z=data.vertices[j*3+2];positions.push(x,data.vertices[j*3+1]+.005,z);uv.push(x/4,z/4);}
+ * individual sidewalk strips and vegetated ground between its buildings. The
+ * grid cells are walked directly (optionally a streamed tile's cell range) with
+ * the terrain mesh's own diagonal, so the paving sits exactly on the ground. */
+export function backBayPaving(city:CityData,cells?:{i0:number;i1:number;j0:number;j1:number}){
+  const grid=terrainGrid(city),positions:number[]=[],uv:number[]=[];
+  const g=new THREE.BufferGeometry();
+  if(!grid)return g;
+  const box=BACK_BAY_PAVING,cs=grid.cellSize;
+  const i0=Math.max(cells?.i0??0,Math.floor((box.minX-grid.originX)/cs)-1),i1=Math.min(cells?.i1??grid.width-1,Math.ceil((box.maxX-grid.originX)/cs)+1,grid.width-1);
+  const j0=Math.max(cells?.j0??0,Math.floor((box.minZ-grid.originZ)/cs)-1),j1=Math.min(cells?.j1??grid.height-1,Math.ceil((box.maxZ-grid.originZ)/cs)+1,grid.height-1);
+  const vertex=(i:number,j:number):[number,number,number]=>[grid.originX+i*cs,grid.heights[j*grid.width+i]+.005,grid.originZ+j*cs];
+  for(let j=j0;j<j1;j++)for(let i=i0;i<i1;i++){
+    const a=vertex(i,j),b=vertex(i+1,j),c=vertex(i,j+1),d=vertex(i+1,j+1);
+    for(const tri of [[a,c,b],[b,c,d]]){
+      const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3,cz=(tri[0][2]+tri[1][2]+tri[2][2])/3;
+      if(cx<box.minX||cx>box.maxX||cz<box.minZ||cz>box.maxZ)continue;
+      for(const v of tri){positions.push(...v);uv.push(v[0]/4,v[2]/4);}
+    }
   }
-  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.computeVertexNormals();return g;
+  g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.computeVertexNormals();return g;
 }
 
 export function foundationGeometry(city:CityData){

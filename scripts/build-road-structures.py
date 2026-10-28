@@ -30,6 +30,11 @@ def main():
   source={'source':SERVICE,'retrieved':'2026-10-27','authority':'Boston street centerlines and level topology; MassDOT Bowker Overpass project confirms crossings','reference':'https://www.mass.gov/bowker-overpass-project','features':selected}
   a.source_file.parent.mkdir(parents=True,exist_ok=True);a.source_file.write_text(json.dumps(source,separators=(',',':'))+'\n')
  city_path=a.data_dir/'city.json';city=json.loads(city_path.read_text());grid=city['elevation'];new=[]
+ if 'heights' not in grid:
+  # Metro builds store the grid as gzip int16 centimetres in a sidecar file.
+  import gzip;import numpy as np
+  heights=np.frombuffer(gzip.decompress((a.data_dir/grid['file']).read_bytes()),dtype='<i2').astype(np.float64)*grid.get('scale',.01)
+  grid=dict(grid,heights=heights)
  ids={str(f['attributes']['OBJECTID'])for f in source['features']}
  # Idempotent replacement only for selected source roads; bounds/models unchanged.
  city['roads']=[r for r in city['roads'] if r['id'].split('-')[0]not in ids and r.get('bridge',{}).get('id')not in ('bowker','muddy-river')]

@@ -1,0 +1,345 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import type RAPIER from '@dimforge/rapier3d-compat';
+import type { Building, CityArea, CityData, Point2, Road } from '../types';
+import type { DrivingPhysics } from '../physics/vehicle';
+import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
+import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
+import { inTransitCorridor, shareTransitCorridors } from '../simulation/transit-corridors.ts';
+import { planTrafficSignals, type PlacedSignal } from '../simulation/signal-placement.ts';
+import { meshBuildingIds } from '../simulation/building-collisions.ts';
+import { pointInside } from '../simulation/roads.ts';
+import { type createMaterials, facadeStyleIndex, hash, seeded } from './materials';
+import { tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
+import { drapedRibbon, foundationGeometry, backBayPaving, BACK_BAY_PAVING } from './terrain-ground';
+import { mergeSpatialGeometries, spatialInstances } from './spatial-batches';
+import { createTrafficSignals } from './traffic-signals';
+import { createStreetSign } from './signs';
+import { addRoadStructures } from './bridges';
+import { addSourceFooting } from './source-footings';
+import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
+import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
+import { isStateHouse, createStateHouseShellMaterials, splitStateHouseShell } from './state-house';
+import { createPrudentialPenthouseMaterial, isPrudential, splitPrudentialShell } from './prudential';
+import { landmarkShellMaterial } from './metro-landmarks';
+import { sourceWallSampler, addFacadeDetails } from './facade-details';
+import { addStreetscape } from './streetscape';
+import { addRooftopDetails } from './rooftops';
+import { addNeighborhoodDetails } from './neighborhood-architecture';
+import { addCityParkDetails, areaBoundsOf, type Bounds } from './city-parks';
+import type { TreeField } from './foliage';
+
+export interface TileContext {
+  scene: THREE.Scene; city: MetroCity; physics: DrivingPhysics; materials: ReturnType<typeof createMaterials>;
+  /** Shared instanced fields: street trees (with grates) and park specimens. */
+  trees: TreeField; parkTrees: TreeField;
+  /** Live id lookup of the detailed buildings currently in the scene. */
+  buildingMap: Map<string, Building>;
+  ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material;
+}
+export interface TileStats { buildings: number; exactMeshes: number; triangles: number; roads: number; structures: number; trees: number; lamps: number; signs: number; signals: number; parkTrees: number; storefronts: number; facades: number; rooftops: number; porches: number; colliders: number; buildMs: number; }
+export interface BuiltTile {
+  key: string; tile: CityTile; group: THREE.Group; bounds: Bounds; colliders: RAPIER.Collider[]; meshes: THREE.Mesh[]; lamps: THREE.Vector3[]; signals: PlacedSignal[]; stats: TileStats;
+  dispose(): void;
+}
+export type TileStage = 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
+export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; }
+
+/** Everything world.ts once built for the whole survey, rebuilt here for one
+ * 1 km tile at a time as a generator: each stage yields so the streamer can
+ * spread a tile over several frames. The tile sees a sub-city view (nearby
+ * roads, its own buildings, curbs, paths and the parks and water it touches),
+ * so every helper keeps its original per-city logic without walking the metro. */
+export function createTileBuilder(ctx: TileContext) {
+  const { city, physics, materials, scene } = ctx;
+  const fenwayMaterials = createFenwayShellMaterials(), stateHouseMaterials = createStateHouseShellMaterials(), prudentialPenthouse = createPrudentialPenthouseMaterial();
+  const parkStone = new THREE.MeshStandardMaterial({ color: '#a5a397', roughness: .9 });
+  const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
+  const ribbon = (points: Point2[], width: number, y: number) => drapedRibbon(city, points, width, y);
+  const height = (x: number, z: number) => sampleElevation(city, x, z);
+  // Road, signal and area lookups by 250 m cell, built once for the metro.
+  const CELL = 250, roadCells = new Map<string, Road[]>(), signalCells = new Map<string, Point2[]>(), parkCells = new Map<string, CityArea[]>(), waterCells = new Map<string, CityArea[]>();
+  const cellKey = (cx: number, cz: number) => `${cx},${cz}`;
+  const spread = <T>(map: Map<string, T[]>, item: T, minX: number, maxX: number, minZ: number, maxZ: number) => {
+    for (let cx = Math.floor(minX / CELL); cx <= Math.floor(maxX / CELL); cx++) for (let cz = Math.floor(minZ / CELL); cz <= Math.floor(maxZ / CELL); cz++) { const key = cellKey(cx, cz), list = map.get(key); if (list) list.push(item); else map.set(key, [item]); }
+  };
+  const roadBounds = new Map<Road, Bounds>();
+  for (const road of city.roads) {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const [x, z] of road.points) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+    roadBounds.set(road, { minX, maxX, minZ, maxZ }); spread(roadCells, road, minX, maxX, minZ, maxZ);
+  }
+  for (const signal of city.signals) spread(signalCells, signal, signal[0], signal[0], signal[1], signal[1]);
+  const areaBounds = new Map<CityArea, Bounds>();
+  for (const [list, map] of [[city.parks ?? [], parkCells], [city.water ?? [], waterCells]] as const) for (const area of list) { if (!area.rings[0]?.length) continue; const b = areaBoundsOf(area); areaBounds.set(area, b); spread(map, area, b.minX, b.maxX, b.minZ, b.maxZ); }
+  const collect = <T>(map: Map<string, T[]>, bounds: Bounds, test: (item: T) => boolean) => {
+    const seen = new Set<T>(), result: T[] = [];
+    for (let cx = Math.floor(bounds.minX / CELL); cx <= Math.floor(bounds.maxX / CELL); cx++) for (let cz = Math.floor(bounds.minZ / CELL); cz <= Math.floor(bounds.maxZ / CELL); cz++) for (const item of map.get(cellKey(cx, cz)) ?? []) { if (seen.has(item)) continue; seen.add(item); if (test(item)) result.push(item); }
+    return result;
+  };
+  const overlaps = (a: Bounds, b: Bounds) => a.minX <= b.maxX && a.maxX >= b.minX && a.minZ <= b.maxZ && a.maxZ >= b.minZ;
+  const grow = (b: Bounds, m: number): Bounds => ({ minX: b.minX - m, maxX: b.maxX + m, minZ: b.minZ - m, maxZ: b.maxZ + m });
+  const roadsNear = (bounds: Bounds) => collect(roadCells, bounds, road => overlaps(roadBounds.get(road)!, bounds));
+  const midpoint = (road: Road): Point2 => {
+    let length = 0; const steps: number[] = [0];
+    for (let i = 1; i < road.points.length; i++) { length += Math.hypot(road.points[i][0] - road.points[i - 1][0], road.points[i][1] - road.points[i - 1][1]); steps.push(length); }
+    const half = length / 2; let i = 1; while (i < steps.length - 1 && steps[i] < half) i++;
+    const a = road.points[i - 1], b = road.points[i], span = steps[i] - steps[i - 1] || 1, t = (half - steps[i - 1]) / span;
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  };
+  // Source tiles include park monuments, shelters and utility structures among
+  // the building meshes. Keep their measured forms without residential windows.
+  const principalParks = (city.parks ?? []).filter(p => /^(Boston Common|Public Garden)$/.test(p.name) && p.rings[0]);
+  const parkStructure = (b: Building) => b.height < 30 && principalParks.some(p => { const box = areaBounds.get(p)!; return b.center[0] >= box.minX && b.center[0] <= box.maxX && b.center[1] >= box.minZ && b.center[1] <= box.maxZ && pointInside(b.center, p.rings[0]) && !p.rings.slice(1).some(r => pointInside(b.center, r)); });
+  const grid = terrainGrid(city) ?? (() => { throw new Error('A metro city needs its elevation grid before tiles can be built'); })();
+
+  /** `partial` is owned by the caller so an interrupted build can be undone with `abandon`. */
+  function* build(tile: CityTile, partial: PartialTile = { group: new THREE.Group(), colliders: [], key: tile.key, tile }): Generator<TileStage, BuiltTile> {
+    const began = performance.now(), key = tile.key, size = tile.size, x0 = tile.tx * size, z0 = tile.tz * size, x1 = x0 + size, z1 = z0 + size;
+    const bounds: Bounds = { minX: x0, maxX: x1, minZ: z0, maxZ: z1 }, insideTile = (x: number, z: number) => x >= x0 && x < x1 && z >= z0 && z < z1;
+    const group = partial.group; group.name = `Tile ${key}`;
+    const colliders = partial.colliders, meshes: THREE.Mesh[] = [], owned: THREE.Material[] = [], lamps: THREE.Vector3[] = [];
+    const stats: TileStats = { buildings: 0, exactMeshes: 0, triangles: 0, roads: 0, structures: 0, trees: 0, lamps: 0, signs: 0, signals: 0, parkTrees: 0, storefronts: 0, facades: 0, rooftops: 0, porches: 0, colliders: 0, buildMs: 0 };
+    const near = grow(bounds, 80), roads = roadsNear(near), ownedRoads = roads.filter(r => { const m = midpoint(r); return insideTile(m[0], m[1]); });
+    const subCity: CityData = { ...city, roads, buildings: tile.buildings, signals: collect(signalCells, grow(bounds, 40), s => s[0] >= x0 - 40 && s[0] < x1 + 40 && s[1] >= z0 - 40 && s[1] < z1 + 40), curbs: tile.curbs, parkPaths: tile.parkPaths,
+      parks: collect(parkCells, bounds, p => overlaps(areaBounds.get(p)!, bounds)), water: collect(waterCells, grow(bounds, 30), w => overlaps(areaBounds.get(w)!, grow(bounds, 30))) };
+    shareTransitCorridors(subCity, city);
+    const mergeAdd = (geometries: THREE.BufferGeometry[], material: THREE.Material, cell = 500) => {
+      for (const m of mergeSpatialGeometries(geometries, material, cell)) { m.receiveShadow = true; if (material === materials.asphalt) m.renderOrder = -1; else if (material === materials.sidewalk) m.renderOrder = -2; group.add(m); }
+    };
+
+    // Terrain: the grid quads this tile covers, plus the quad column and row on
+    // its far edges so neighbouring tiles overlap by one cell instead of leaving
+    // a seam when only one of them is loaded. Overlapping triangles are identical.
+    {
+      const cs = grid.cellSize, i0 = Math.max(0, Math.floor((x0 - grid.originX) / cs)), i1 = Math.min(grid.width - 1, Math.floor((x1 - grid.originX) / cs) + 1);
+      const j0 = Math.max(0, Math.floor((z0 - grid.originZ) / cs)), j1 = Math.min(grid.height - 1, Math.floor((z1 - grid.originZ) / cs) + 1);
+      const w = i1 - i0 + 1, h = j1 - j0 + 1;
+      if (w >= 2 && h >= 2) {
+        const positions = new Float32Array(w * h * 3), normals = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), heights = grid.heights, W = grid.width, H = grid.height;
+        for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+          const gi = i0 + i, gj = j0 + j, n = j * w + i, x = grid.originX + gi * cs, z = grid.originZ + gj * cs;
+          positions[n * 3] = x; positions[n * 3 + 1] = heights[gj * W + gi]; positions[n * 3 + 2] = z; uv[n * 2] = x / 4; uv[n * 2 + 1] = z / 4;
+          const hl = heights[gj * W + Math.max(gi - 1, 0)], hr = heights[gj * W + Math.min(gi + 1, W - 1)], hu = heights[Math.max(gj - 1, 0) * W + gi], hd = heights[Math.min(gj + 1, H - 1) * W + gi];
+          const nx = -(hr - hl) / (2 * cs), nz = -(hd - hu) / (2 * cs), length = Math.hypot(nx, 1, nz);
+          normals[n * 3] = nx / length; normals[n * 3 + 1] = 1 / length; normals[n * 3 + 2] = nz / length;
+        }
+        const indices = new Uint32Array((w - 1) * (h - 1) * 6); let o = 0;
+        for (let j = 0; j < h - 1; j++) for (let i = 0; i < w - 1; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; indices[o++] = a; indices[o++] = c; indices[o++] = b; indices[o++] = b; indices[o++] = c; indices[o++] = d; }
+        const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); geometry.setIndex(new THREE.BufferAttribute(indices, 1)); geometry.computeBoundingSphere();
+        const ground = new THREE.Mesh(geometry, ctx.ground); ground.name = 'Terrain'; ground.position.y = -.04; ground.receiveShadow = true; ground.renderOrder = -3; group.add(ground);
+        colliders.push(physics.addTerrainTile(positions, indices));
+        if (overlaps(bounds, BACK_BAY_PAVING)) {
+          const paving = backBayPaving(city, { i0, i1, j0, j1 });
+          if (paving.attributes.position?.count) { const mesh = new THREE.Mesh(paving, materials.sidewalk); mesh.name = 'Back Bay paving'; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh); } else paving.dispose();
+        }
+      }
+    }
+    yield 'terrain';
+
+    // Roads owned by this tile (their midpoint lies inside it), exactly as the survey build drew them.
+    {
+      const streets: THREE.BufferGeometry[] = [], sidewalks: THREE.BufferGeometry[] = [], lines: THREE.BufferGeometry[] = [], yellow: THREE.BufferGeometry[] = [];
+      const crossingKeys = new Set<string>();
+      for (const road of ownedRoads) {
+        if (road.elevations) continue; stats.roads++;
+        sidewalks.push(ribbon(road.points, road.width + 5.8, .012));
+        streets.push(ribbon(road.points, road.width, .045));
+        for (let i = 1; i < road.points.length; i++) {
+          const a = road.points[i - 1], b = road.points[i], dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz); if (len < 8) continue;
+          const tx = dx / len, tz = dz / len;
+          if (road.width >= 9) for (let d = 8; d < len - 7; d += 9) { const end = Math.min(d + 3, len - 7); (road.oneway ? lines : yellow).push(ribbon([[a[0] + tx * d, a[1] + tz * d], [a[0] + tx * end, a[1] + tz * end]], .12, .065)); }
+        }
+        if (road.width < 7 || /alley|unnamed/i.test(road.name)) continue;
+        for (const reverse of [false, true]) {
+          const a = road.points[reverse ? road.points.length - 1 : 0], b = road.points[reverse ? road.points.length - 2 : 1]; if (!b) continue;
+          const len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 18) continue;
+          const tx = (b[0] - a[0]) / len, tz = (b[1] - a[1]) / len, crossing = `${Math.round(a[0] / 3)},${Math.round(a[1] / 3)},${Math.round(Math.atan2(tx, tz) * 2)}`;
+          if (crossingKeys.has(crossing)) continue; crossingKeys.add(crossing);
+          for (let side = -road.width / 2 + .8; side < road.width / 2 - .5; side += 1.35) {
+            const x = a[0] + tx * 8 - tz * side, z = a[1] + tz * 8 + tx * side;
+            lines.push(ribbon([[x, z], [x + tx * 3, z + tz * 3]], .65, .068));
+          }
+        }
+      }
+      mergeAdd(sidewalks, materials.sidewalk); mergeAdd(streets, materials.asphalt); mergeAdd(lines, materials.paint); mergeAdd(yellow, materials.yellow);
+    }
+    yield 'roads';
+
+    // Surveyed curb paths follow terrain; their raised faces remain visual detail.
+    {
+      const curbFaces: THREE.BufferGeometry[] = [];
+      for (const points of tile.curbs) for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1], b = points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .05) continue;
+        const n = Math.max(1, Math.ceil(length / 3));
+        for (let j = 0; j < n; j++) {
+          const t = (j + .5) / n, x = a[0] + dx * t, z = a[1] + dz * t;
+          const g = new THREE.BoxGeometry(.18, .17, length / n).rotateY(Math.atan2(dx, dz)).translate(x, .085, z), p = g.attributes.position;
+          for (let k = 0; k < p.count; k++) p.setY(k, p.getY(k) + height(p.getX(k), p.getZ(k)));
+          g.computeVertexNormals(); curbFaces.push(g);
+        }
+      }
+      mergeAdd(curbFaces, materials.curb);
+    }
+    yield 'curbs';
+
+    // Elevated decks, barriers and supports, with their Rapier solids.
+    {
+      const elevated = ownedRoads.filter(r => r.elevations);
+      if (elevated.length) { addRoadStructures(group, subCity, materials.asphalt, elevated); for (const road of elevated) colliders.push(...physics.addRoadDeck(subCity, road)); stats.structures = elevated.length; }
+    }
+    yield 'structures';
+
+    // Buildings: the quantized tile shells become the same façade-styled,
+    // spatially bucketed chunks the survey build produced, with exact-mesh
+    // landmarks collided as meshes and everything else as convex hulls.
+    {
+      prepareNeighborhoodArchitecture(subCity, tile.buildings);
+      const buckets = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();
+      const bucket = (material: THREE.Material, geometry: THREE.BufferGeometry, cx: number, cz: number, tag = '') => {
+        const k = `${material.uuid}:${tag || `${Math.floor(cx / 500)}:${Math.floor(cz / 500)}`}`; let entry = buckets.get(k); if (!entry) { entry = { material, geometries: [] }; buckets.set(k, entry); } entry.geometries.push(geometry);
+      };
+      let n = 0;
+      for (const b of tile.buildings) {
+        const data = tile.geometry.get(b.id); if (!data) continue;
+        ctx.buildingMap.set(b.id, b); stats.buildings++; stats.triangles += (data.facade.length + data.roof.length) / 3;
+        const style = facadeStyleIndex(b), isStone = parkStructure(b), fenway = isFenwayBuilding(b);
+        const choose = (isRoof: boolean) => {
+          let material: THREE.Material = isRoof ? materials.roof : materials.facades[style];
+          if (!isRoof && b.landmark === 'hancock') material = materials.glass;
+          else if (!isRoof && b.landmark === 'library') material = materials.library;
+          else if (!isRoof && b.landmark === 'trinity') material = materials.church;
+          else material = landmarkShellMaterial(b, isRoof, materials) ?? material;
+          if (isStone) material = parkStone;
+          if (fenway) material = isRoof ? fenwayMaterials.roof : fenwayMaterials.wall;
+          return material;
+        };
+        if (meshBuildingIds.has(b.id)) {
+          colliders.push(physics.addStaticMesh(data.positions, tileCollisionIndices(data))); stats.exactMeshes++;
+          const source = tileSourceGeometry(data);
+          const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));
+          source.dispose();
+        } else { const hull = physics.addBuildingHull(b); if (hull) colliders.push(hull); }
+        for (const isRoof of [false, true]) {
+          const geometry = tileShellGeometry(data, b, isRoof); if (!geometry) continue;
+          if (isStateHouse(b)) { for (const part of splitStateHouseShell(geometry, isRoof)) bucket(stateHouseMaterials[part.kind], part.geometry, 0, 0, 'state-house'); geometry.dispose(); continue; }
+          const material = choose(isRoof), parts = !isRoof && isPrudential(b) ? splitPrudentialShell(geometry, b) : [{ kind: 'facade', geometry }];
+          for (const part of parts) bucket(part.kind === 'penthouse' ? prudentialPenthouse : material, part.geometry, b.center[0], b.center[1]);
+          if (parts[0].geometry !== geometry) geometry.dispose();
+        }
+        if (++n % 150 === 0) yield 'buildings';
+      }
+      for (const { material, geometries } of buckets.values()) {
+        const geometry = mergeGeometries(geometries, false); for (const g of geometries) g.dispose(); if (!geometry) continue;
+        const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'Boston surveyed buildings'; geometry.computeBoundingSphere(); meshes.push(mesh); group.add(mesh);
+      }
+      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !meshBuildingIds.has(b.id)) });
+      if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; group.add(mesh); } else footings.dispose();
+      addTileBuildings(city, tile);
+    }
+    yield 'buildings';
+
+    // Street furniture on the owned roads: trees, lamps and name signs.
+    {
+      const treePositions: THREE.Vector3[] = [], signRecords: { position: THREE.Vector3; name: string; yaw: number }[] = [];
+      const random = seeded(342 + hash(key) % 1000);
+      const occupied = (x: number, z: number) => inTransitCorridor(city, x, z) || !!city.index.at(x, z);
+      const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
+      for (const road of roads) for (let i = 1; i < road.points.length; i++) {
+        const a = road.points[i - 1], b = road.points[i], radius = road.width / 2 + .8, segment = { a, b, radius };
+        for (let x = Math.floor((Math.min(a[0], b[0]) - radius) / 64); x <= Math.floor((Math.max(a[0], b[0]) + radius) / 64); x++) for (let z = Math.floor((Math.min(a[1], b[1]) - radius) / 64); z <= Math.floor((Math.max(a[1], b[1]) + radius) / 64); z++) {
+          const k = `${x},${z}`, list = segmentCells.get(k) ?? []; list.push(segment); segmentCells.set(k, list);
+        }
+      }
+      const inRoad = (x: number, z: number) => (segmentCells.get(`${Math.floor(x / 64)},${Math.floor(z / 64)}`) ?? []).some(({ a, b, radius }) => {
+        const dx = b[0] - a[0], dz = b[1] - a[1], t = THREE.MathUtils.clamp(((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+        return Math.hypot(x - a[0] - t * dx, z - a[1] - t * dz) < radius;
+      });
+      const taken = new Set<string>(), signCells = new Map<string, number>();
+      for (const road of ownedRoads) {
+        if (road.elevations || road.width < 7 || /alley|unnamed/i.test(road.name)) continue;
+        let run = 0;
+        for (let i = 1; i < road.points.length; i++) {
+          const a = road.points[i - 1], b = road.points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .1) continue;
+          const tx = dx / length, tz = dz / length;
+          for (let d = 14; d < length - 8; d += 25) {
+            for (const side of [-1, 1]) {
+              const x = a[0] + tx * d - tz * (road.width / 2 + 2) * side, z = a[1] + tz * d + tx * (road.width / 2 + 2) * side;
+              const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (occupied(x, z) || inRoad(x, z) || taken.has(k)) continue; taken.add(k);
+              if (!/Boylston/.test(road.name) || random() > .5) treePositions.push(new THREE.Vector3(x, height(x, z), z));
+              if (side === 1 && !inRoad(x - tx * 5, z - tz * 5) && !occupied(x - tx * 5, z - tz * 5)) lamps.push(new THREE.Vector3(x - tx * 5, height(x - tx * 5, z - tz * 5), z - tz * 5));
+            }
+          }
+          if (run === 0 && length > 15) { const x = a[0] + tx * 10 - tz * (road.width / 2 + 1.2), z = a[1] + tz * 10 + tx * (road.width / 2 + 1.2), cell = `${Math.floor(x / 320)},${Math.floor(z / 320)}`; if ((signCells.get(cell) ?? 0) < 3 && !occupied(x, z) && !inRoad(x, z)) { signRecords.push({ position: new THREE.Vector3(x, height(x, z), z), name: road.name.replace('Street', 'ST').replace('Avenue', 'AVE').toUpperCase(), yaw: Math.atan2(tx, tz) }); signCells.set(cell, (signCells.get(cell) ?? 0) + 1); } }
+          run += length;
+        }
+      }
+      if (treePositions.length) ctx.trees.add(key, treePositions); stats.trees = treePositions.length; stats.lamps = lamps.length; stats.signs = signRecords.length;
+      const dummy = new THREE.Object3D();
+      if (lamps.length) {
+        const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(.055, .1, 5.7, 6), ctx.iron, lamps.length), bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(.27, 8, 6), ctx.lampMat, lamps.length);
+        lamps.forEach((p, i) => { dummy.position.copy(p).add(new THREE.Vector3(0, 2.85, 0)); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); poles.setMatrixAt(i, dummy.matrix); dummy.position.y = p.y + 5.85; dummy.updateMatrix(); bulbs.setMatrixAt(i, dummy.matrix); });
+        poles.castShadow = true; poles.name = 'Lamp poles'; bulbs.name = 'Lamp globes'; group.add(...spatialInstances(poles, 500), ...spatialInstances(bulbs, 500));
+      }
+      const signHardware: THREE.BufferGeometry[] = [];
+      for (const sign of signRecords) {
+        signHardware.push(new THREE.CylinderGeometry(.04, .04, 3.2, 6).translate(sign.position.x, sign.position.y + 1.6, sign.position.z));
+        signHardware.push(new THREE.BoxGeometry(2.67, .5, .045).rotateY(sign.yaw).translate(sign.position.x, sign.position.y + 3, sign.position.z));
+        const plate = createStreetSign(sign.name); plate.position.set(sign.position.x, sign.position.y + 3, sign.position.z); plate.rotation.y = sign.yaw; group.add(plate); owned.push(plate.material as THREE.Material);
+      }
+      mergeAdd(signHardware, ctx.iron);
+    }
+    yield 'props';
+
+    const placements = planTrafficSignals(subCity);
+    if (placements.length) createTrafficSignals(group, subCity, placements);
+    stats.signals = placements.length;
+    yield 'signals';
+
+    {
+      const parks = addCityParkDetails(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group, budgets: { trees: 120, benches: 25 } });
+      stats.parkTrees = parks.userData.trees ?? 0;
+    }
+    yield 'parks';
+
+    // Architectural detail probes see only this tile's shells.
+    {
+      const sampler = sourceWallSampler(scene, meshes);
+      const half = Math.ceil(tile.buildings.length / 2), subsets = [tile.buildings.slice(0, half), tile.buildings.slice(half)];
+      for (const subset of subsets) {
+        if (!subset.length) continue;
+        const facades = addFacadeDetails(scene, subCity, { buildings: subset, sampler, budget: 1300, target: group });
+        stats.facades += facades.userData.facades ?? 0;
+        yield 'details';
+      }
+      const shops = addStreetscape(scene, subCity, { buildings: tile.buildings, sampler, budget: 100, target: group }); stats.storefronts = shops.userData.storefrontCount ?? 0;
+      yield 'details';
+      const roofs = addRooftopDetails(scene, subCity, { buildings: tile.buildings, meshes, budget: 90, target: group }); stats.rooftops = roofs.userData.units ?? 0;
+      const porches = addNeighborhoodDetails(scene, subCity, { buildings: tile.buildings, sampler, budget: 60, target: group }); stats.porches = porches.userData.porches ?? 0;
+    }
+    stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
+    group.userData = { tile: key, ...stats };
+    const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps, signals: placements, stats, dispose: () => dispose(built, owned) };
+    return built;
+  }
+
+  function dispose(built: BuiltTile, owned: THREE.Material[]) {
+    physics.removeColliders(built.colliders); built.colliders.length = 0;
+    removeTileBuildings(city, built.tile); for (const b of built.tile.buildings) ctx.buildingMap.delete(b.id);
+    ctx.trees.remove(built.key); ctx.parkTrees.remove(built.key);
+    built.group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+    for (const material of owned) { const m = material as THREE.MeshStandardMaterial; m.map?.dispose(); m.emissiveMap?.dispose(); m.dispose(); }
+    built.group.removeFromParent();
+  }
+
+  /** Abandon a tile whose build was interrupted: whatever stages ran are undone. */
+  function abandon(partial: PartialTile) {
+    physics.removeColliders(partial.colliders);
+    removeTileBuildings(city, partial.tile); for (const b of partial.tile.buildings) ctx.buildingMap.delete(b.id);
+    ctx.trees.remove(partial.key); ctx.parkTrees.remove(partial.key);
+    partial.group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+    partial.group.removeFromParent();
+  }
+
+  return { build, abandon, roadsNear, midpoint };
+}

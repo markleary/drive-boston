@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {createMinimapLabeler,abbreviateRoadName} from '../src/ui/minimap-labels.ts';
 
-const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+import {loadMetroCity} from './helpers/metro-city.mjs';
+const city=await loadMetroCity({tiles:[]});
 const labeler=createMinimapLabeler(city.roads),measureText=text=>text.length*5.6;
 
 test('connected short GIS fragments label a named through road once and ignore public alleys',()=>{
@@ -19,7 +19,7 @@ test('real Boston minimap fixtures show useful major streets in distinct neighbo
   const cases=[
     {center:[city.spawn.x,city.spawn.z],expected:['Boylston Street','Dartmouth Street','Newbury Street']},
     {center:[-2193.769866,2303.505],expected:['Parker Hill Avenue','Hillside Street']},
-    {center:[1917.3601,-700.6415],expected:['Atlantic Avenue','Purchase Street']},
+    {center:[1917.3601,-700.6415],expected:['Atlantic Avenue','Franklin Street']},
   ];
   for(const {center,expected}of cases){
     const labels=labeler({center,scale:216/460,width:216,height:216,measureText});

@@ -9,6 +9,8 @@ test('free roam has moving MBTA services, clear controls, and a drivable elevate
   page.on('pageerror',error=>errors.push(error.message));
   page.on('console',message=>{if(message.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)/i.test(message.text()))errors.push(message.text());});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
+  // Signals and exact building colliders arrive with the streamed tiles around the spawn.
+  await expect.poll(async()=>{const s=await snapshot(page);return s.signalCount>180&&s.exactBuildingColliders>=3;},{timeout:60000}).toBe(true);
   let state=await snapshot(page);
   expect(state.transitCount).toBe(4);expect(state.transit.filter(a=>a.kind==='tram')).toHaveLength(2);expect(state.transit.filter(a=>a.kind==='bus')).toHaveLength(2);
   expect(state.signalCount).toBeGreaterThan(180);expect(state.exactBuildingColliders).toBeGreaterThanOrEqual(3);expect(state.groundCover.puddles).toBeGreaterThan(15);

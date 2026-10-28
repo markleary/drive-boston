@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {fenwayDiamond,createFenwayRoofSampler} from '../src/render/fenway-layout.ts';
 import {prepareNeighborhoodArchitecture,architectureFor} from '../src/render/neighborhood-profiles.ts';
 
+import {loadCentralCity} from './helpers/metro-city.mjs';
 test('Fenway diamond is a regulation square aligned to both mapped foul poles',()=>{
   const f=fenwayDiamond(),length=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
   for(const[a,b]of[[f.home,f.first],[f.first,f.second],[f.second,f.third],[f.third,f.home]])assert.ok(Math.abs(length(a,b)-27.432)<1e-6);
@@ -14,8 +14,8 @@ test('Fenway diamond is a regulation square aligned to both mapped foul poles',(
   assert.ok(f.second[0]>f.home[0]&&f.second[1]<f.home[1],'fair territory faces northeast');
 });
 
-test('Mission Hill typology selects detached houses without replacing every low building',()=>{
-  const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+test('Mission Hill typology selects detached houses without replacing every low building',async()=>{
+  const city=await loadCentralCity();
   const before=JSON.stringify(city.buildings),result=prepareNeighborhoodArchitecture(city);
   assert.ok(result.tripleDeckers>60&&result.tripleDeckers<350);
   assert.equal(JSON.stringify(city.buildings),before,'classification must preserve all source geometry/data');

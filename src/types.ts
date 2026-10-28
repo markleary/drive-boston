@@ -2,7 +2,7 @@ export type Point2 = [number, number];
 export interface Road { id: string; name: string; points: Point2[]; width: number; oneway: number; elevations?:number[]; startLevel?:number; endLevel?:number; bridge?:{id:string;thickness:number;clearanceEstimated:boolean}; }
 export interface Building { id: string; name: string; center: Point2; height: number; footprint: Point2[]; landmark?: string; baseElevation?: number; }
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
-export interface CityArea { id: string; name: string; rings: Point2[][]; }
+export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; }
 export interface ParkPath { id: string; points: Point2[]; width: number; bridge?: boolean; }
 export interface CityData {
   origin: { xFeet: number; yFeet: number; longitude: number; latitude: number };
@@ -11,12 +11,17 @@ export interface CityData {
   curbs: Point2[][]; signals: Point2[];
   spawn: { x: number; z: number; yaw: number };
   sources: { name: string; url: string; license: string }[];
-  elevation?: { width:number; height:number; cellSize:number; originX:number; originZ:number; heights:number[] };
+  /** Metro builds store the grid in a gzip int16 sidecar (`file`, `scale`) and
+   * may ship it already road-graded (`graded`). */
+  elevation?: { width:number; height:number; cellSize:number; originX:number; originZ:number; heights:ArrayLike<number>; file?:string; scale?:number; encoding?:string; graded?:boolean; grading?:Record<string,unknown> };
   coverage?: Point2[][];
   neighborhoods?: CityArea[];
   parks?: CityArea[];
   water?: CityArea[];
   parkPaths?: ParkPath[];
+  /** Present on metro builds: buildings stream from 1 km tiles (see simulation/city-tiles.ts). */
+  tiles?: { size:number; directory:string; keys:string[]; far:string; buildingCount:number };
+  landmarkBuildings?: Building[];
 }
 export interface DriveInput { throttle: number; brake: number; steer: number; handbrake: boolean; }
 export interface VehicleState { x: number; y: number; z: number; yaw: number; speed: number; steering: number; }

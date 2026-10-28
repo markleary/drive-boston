@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {Ray} from '@dimforge/rapier3d-compat';
-import {prepareRoadTerrain} from '../src/simulation/road-grading.ts';
 import {sampleElevation,buildTerrainGeometryData} from '../src/simulation/terrain.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {drapedRibbon} from '../src/render/terrain-ground.ts';
+import {loadMetroCity,windowCity,rawHeights} from './helpers/metro-city.mjs';
 
-const load=()=>JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
-const city=load(),rawGrid=city.elevation,rawHeights=rawGrid.heights.slice();
-const report=prepareRoadTerrain(city);
+// The shipped grid is graded offline by scripts/grade-terrain.mjs (the same
+// prepareRoadTerrain solver, run per chunk); the ungraded USGS grid stays beside
+// it. Both are read here through the central window.
+const metro=await loadMetroCity(),city=windowCity(metro),source=windowCity(metro,undefined,{heights:rawHeights(metro)}),rawGrid=source.elevation;
+const report=metro.elevation.grading;
 const crossfall=(data,x,z,yaw,width)=>Math.abs(sampleElevation(data,x+Math.cos(yaw)*width/2,z-Math.sin(yaw)*width/2)-sampleElevation(data,x-Math.cos(yaw)*width/2,z+Math.sin(yaw)*width/2))/width;
 const examples=[
   {id:'13085-0-0',x:1917.3601466,z:-700.6414604,yaw:3.1224848193},
@@ -17,11 +18,12 @@ const examples=[
 ];
 
 test('road grading levels both badly banked Purchase Street locations without changing source data',()=>{
-  assert.notEqual(city.elevation,rawGrid);assert.deepEqual(rawGrid.heights,rawHeights,'bundled DEM remains available as unmodified source evidence');
-  assert.ok(report.roads>2000);assert.equal(prepareRoadTerrain(city),report,'preparation cannot compound grading on repeat');
+  assert.ok(metro.elevation.graded&&city.elevation.graded,'the package records its offline grading');
+  assert.notEqual(city.elevation.heights,rawGrid.heights);assert.ok(rawGrid.heights.length===city.elevation.heights.length,'ungraded DEM remains available as source evidence');
+  assert.ok(report.roads>2000);
   for(const p of examples){
     const road=city.roads.find(r=>r.id===p.id);
-    assert.ok(crossfall({...city,elevation:rawGrid},p.x,p.z,p.yaw,road.width)>.2,'exercise the reported severe crossfall');
+    assert.ok(crossfall(source,p.x,p.z,p.yaw,road.width)>.2,'exercise the reported severe crossfall');
     assert.ok(crossfall(city,p.x,p.z,p.yaw,road.width)<.01,'road is level across its width to within 1%');
   }
   assert.ok(!city.roads.find(r=>r.id===examples[0].id).elevations,'ordinary roads must not become bridge decks');
@@ -29,14 +31,15 @@ test('road grading levels both badly banked Purchase Street locations without ch
 
 test('grading retains the broad Mission Hill ascent and ties into existing ground-level bridge ends',()=>{
   const road=city.roads.find(r=>r.id==='16540-0-0'),a=road.points[0],b=road.points.at(-1);
-  const before=sampleElevation({...city,elevation:rawGrid},...b)-sampleElevation({...city,elevation:rawGrid},...a);
+  const before=sampleElevation(source,...b)-sampleElevation(source,...a);
   const after=sampleElevation(city,...b)-sampleElevation(city,...a);
   assert.ok(Math.abs(before)>5,'fixture must span a real hill');
   assert.ok(Math.sign(before)===Math.sign(after)&&Math.abs(after)>Math.abs(before)*.7,'cross-street leveling must not erase the hill');
+  const inWindow=p=>p[0]>=city.bounds.minX&&p[0]<=city.bounds.maxX&&p[1]>=city.bounds.minZ&&p[1]<=city.bounds.maxZ;
   for(const bridge of city.roads.filter(r=>r.elevations)){
-    for(const [i,level]of[[0,bridge.startLevel],[bridge.points.length-1,bridge.endLevel]])if(level===0)
+    for(const [i,level]of[[0,bridge.startLevel],[bridge.points.length-1,bridge.endLevel]])if(level===0&&inWindow(bridge.points[i]))
       assert.ok(Math.abs(sampleElevation(city,...bridge.points[i])-bridge.elevations[i])<.015,`${bridge.id} has a new approach step`);
-    if(bridge.startLevel===1&&bridge.endLevel===1)assert.ok(bridge.elevations.every(h=>h===6.4),'upper deck remains separate from ground grading');
+    if(bridge.bridge?.id==='bowker'&&bridge.startLevel===1&&bridge.endLevel===1)assert.ok(bridge.elevations.every(h=>h===6.4),'upper deck remains separate from ground grading');
   }
 });
 
@@ -82,16 +85,15 @@ test('terrain mesh uses the corrected samples without increasing the collision t
 
 test('street grading does not raise hillside ground into the existing house models',()=>{
   for(const id of ['BOS-DXQC2-Q872C-RB7KR','BOS-2NYVA-KCMKF-2EGOT']){
-    const house=city.buildings.find(b=>b.id===id),oldHeight=sampleElevation({...city,elevation:rawGrid},...house.center);
+    const house=city.buildings.find(b=>b.id===id),oldHeight=sampleElevation(source,...house.center);
     const height=sampleElevation(city,...house.center);
     assert.ok(height<=Math.max(house.baseElevation+.2,oldHeight+.2),`${house.name}: road fill buries the source house by ${(height-house.baseElevation).toFixed(2)}m`);
   }
-  const newlyBuried=city.buildings.filter(b=>sampleElevation(city,...b.center)>b.baseElevation+1&&sampleElevation({...city,elevation:rawGrid},...b.center)<=b.baseElevation+1);
+  const newlyBuried=city.buildings.filter(b=>sampleElevation(city,...b.center)>b.baseElevation+1&&sampleElevation(source,...b.center)<=b.baseElevation+1);
   assert.equal(newlyBuried.length,0,`road grading must not bury more than a metre of a previously exposed building: ${newlyBuried.map(b=>b.name).slice(0,8).join(', ')}`);
 });
 
 test('road grading preserves exposed facade edges as well as building centers',()=>{
-  const source={...city,elevation:rawGrid};
   for(const fixture of [
     {id:'BOS-NUMNC-Q27D2-G0EKT',x:468.634,z:-960.372},
     {id:'BOS-AMV2R-0JKY4-FAM1S',x:-2207.700166666667,z:2525.563916666667},

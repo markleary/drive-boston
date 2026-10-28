@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
-import { pointInside } from '../simulation/roads.ts';
+import { closestRoad, pointInside } from '../simulation/roads.ts';
+import { isMetroCity } from '../simulation/city-tiles.ts';
+import { coverageTester } from '../simulation/coverage.ts';
 import { createVehicleGeometry, createVehiclePlateGeometry, createMassachusettsPlateMaterial } from './car.ts';
 import type { VehicleSurface } from './car.ts';
 import { sampleElevation, sampleTerrainNormal, terrainRotation } from '../simulation/terrain.ts';
@@ -55,11 +57,21 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   const activity = createActivityProfile(city);
   let seed = 21761;
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
-  const segments: Segment[] = [];
+  const metro = isMetroCity(city) ? city : undefined, covered = coverageTester(city);
+  const segments: Segment[] = [], segmentCells = new Map<string, Segment[]>();
   for (const road of city.roads.filter(r=>!r.elevations)) for (let i = 1; i < road.points.length; i++) {
     const a = road.points[i - 1], b = road.points[i], length = gap(a, b);
-    if (length > .2) segments.push({ road, a, b, length, tx: (b[0] - a[0]) / length, tz: (b[1] - a[1]) / length, index: i });
+    if (length <= .2) continue;
+    const segment = { road, a, b, length, tx: (b[0] - a[0]) / length, tz: (b[1] - a[1]) / length, index: i }; segments.push(segment);
+    const key = `${Math.floor((a[0] + b[0]) / 256)},${Math.floor((a[1] + b[1]) / 256)}`, list = segmentCells.get(key); if (list) list.push(segment); else segmentCells.set(key, [segment]);
   }
+  /** Segments whose midpoint lies within `radius` (by 128 m cell), or all of them. */
+  const segmentsNear = (x: number, z: number, radius: number) => {
+    if (!Number.isFinite(radius)) return segments;
+    const result: Segment[] = [];
+    for (let cx = Math.floor((x - radius) / 128); cx <= Math.floor((x + radius) / 128); cx++) for (let cz = Math.floor((z - radius) / 128); cz <= Math.floor((z + radius) / 128); cz++) for (const s of segmentCells.get(`${cx},${cz}`) ?? []) if (Math.hypot((s.a[0] + s.b[0]) / 2 - x, (s.a[1] + s.b[1]) / 2 - z) <= radius) result.push(s);
+    return result;
+  };
   // Reserve the tree and lamp bands used by world.ts. Including potential
   // tree sites that were randomly omitted keeps these walking routes robust.
   const streetObstacles: Point2[] = [];
@@ -73,15 +85,17 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       if (side === 1) streetObstacles.push([x - segment.tx * 5, z - segment.tz * 5]);
     }
   }
-  const footprints = city.buildings.map(building => ({
+  type Footprint = { points: Point2[]; minX: number; maxX: number; minZ: number; maxZ: number };
+  const footprints: Footprint[] = metro ? [] : city.buildings.map(building => ({
     points: building.footprint,
     minX: Math.min(...building.footprint.map(p => p[0])), maxX: Math.max(...building.footprint.map(p => p[0])),
     minZ: Math.min(...building.footprint.map(p => p[1])), maxZ: Math.max(...building.footprint.map(p => p[1])),
   }));
-  const nearFootprints=spatialIndex(footprints,p=>[p.minX,p.minZ,p.maxX,p.maxZ],3);
+  // A metro answers from its hull index whether or not the tile is loaded.
+  const nearFootprints: (p: Point2) => Footprint[] = metro ? p => metro.index.query(p[0] - 3, p[0] + 3, p[1] - 3, p[1] + 3).map(b => ({ points: b.footprint, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ })) : spatialIndex(footprints,p=>[p.minX,p.minZ,p.maxX,p.maxZ],3);
   const nearSegments=spatialIndex(segments,s=>[Math.min(s.a[0],s.b[0])-s.road.width/2,Math.min(s.a[1],s.b[1])-s.road.width/2,Math.max(s.a[0],s.b[0])+s.road.width/2,Math.max(s.a[1],s.b[1])+s.road.width/2],3);
   const nearObstacles=spatialIndex(streetObstacles,p=>[p[0],p[1],p[0],p[1]],1);
-  const inBounds = ([x, z]: Point2, margin = 5) => x > city.bounds.minX + margin && x < city.bounds.maxX - margin && z > city.bounds.minZ + margin && z < city.bounds.maxZ - margin && (!city.coverage?.length||city.coverage.some(polygon=>pointInside([x,z],polygon)));
+  const inBounds = ([x, z]: Point2, margin = 5) => x > city.bounds.minX + margin && x < city.bounds.maxX - margin && z > city.bounds.minZ + margin && z < city.bounds.maxZ - margin && covered(x, z);
   function buildingClear(p: Point2, clearance: number) {
     return nearFootprints(p).every(footprint => {
       if (p[0] < footprint.minX - clearance || p[0] > footprint.maxX + clearance || p[1] < footprint.minZ - clearance || p[1] > footprint.maxZ + clearance) return true;
@@ -92,9 +106,13 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     return !inTransitCorridor(city,...p) && inBounds(p) && buildingClear(p, clearance) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > segment.road.width / 2 + clearance);
   }
 
-  const routes: WalkRoute[] = [];
-  for (const segment of segments) {
-    if (segment.road.width < 7 || /alley|unnamed|private|ring road|cahners|copley place/i.test(segment.road.name) || segment.length < 20) continue;
+  // Sidewalk stretches are verified per segment the first time a neighborhood
+  // asks for them, so a metro never walks every street up front.
+  const segmentRoutes = new Map<Segment, WalkRoute[]>();
+  function routesFor(segment: Segment): WalkRoute[] {
+    const cached = segmentRoutes.get(segment); if (cached) return cached;
+    const routes: WalkRoute[] = []; segmentRoutes.set(segment, routes);
+    if (segment.road.width < 7 || /alley|unnamed|private|ring road|cahners|copley place/i.test(segment.road.name) || segment.length < 20) return routes;
     for (const side of [-1, 1]) {
       let best: WalkRoute[] = [], bestLength=0;
       for (const setback of [1.1, 1.65, 2.2]) {
@@ -128,17 +146,16 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
         }
       }
     }
+    return routes;
   }
+  const routesNear = (x: number, z: number, radius: number) => { const result: WalkRoute[] = []; for (const segment of segmentsNear(x, z, Number.isFinite(radius) ? radius + 60 : radius)) result.push(...routesFor(segment)); return result; };
   const routeCenter=(route:WalkRoute):Point2=>[(route.start[0]+route.end[0])/2,(route.start[1]+route.end[1])/2];
-  const nearestStreet=(x:number,z:number)=>{
-    let nearest=Infinity,name='';
-    for(const segment of segments){const distance=pointSegment([x,z],segment.a,segment.b);if(distance<nearest){nearest=distance;name=segment.road.name;}}
-    return name;
-  };
+  const nearestStreet=(x:number,z:number)=>closestRoad(city,x,z).road?.name??'';
   const spawnStreet=nearestStreet(city.spawn.x,city.spawn.z);
   // Spend most of the bounded pool on the neighborhood around the camera. The
   // rest remains distributed on busy sidewalks and can follow later map trips.
-  const ranked = routes.map(route => {
+  // A metro only considers the surrounding kilometre and a half for that reserve.
+  const ranked = routesNear(city.spawn.x, city.spawn.z, metro ? 1400 : Infinity).map(route => {
     const point=routeCenter(route),distance=gap(point,[city.spawn.x,city.spawn.z]);
     return {route,distance,score:distance+(route.road===spawnStreet?-90:0)+random()*24,activity:activity(...point)};
   }).sort((a,b)=>a.score-b.score);
@@ -200,8 +217,11 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
 
   const parked: ParkedVehicle[] = [];
   const candidates: { segment: Segment; x: number; z: number; side: number; yaw: number; score: number }[] = [];
-  for (const segment of segments) {
-    if (!/^(Boylston|Dartmouth|Parker|Tremont|Wigglesworth|Calumet|Saint Alphonsus|Smith|Worthington) Street$/.test(segment.road.name) || segment.road.width < 9.5) continue;
+  // Kerbside parking: the original streets in the survey, or in a metro any named
+  // street or avenue of parking width within reach of the spawn.
+  const parkable = (road: Road) => metro ? road.width >= 9.5 && road.width <= 15 && /\b(Street|Avenue)$/.test(road.name) : /^(Boylston|Dartmouth|Parker|Tremont|Wigglesworth|Calumet|Saint Alphonsus|Smith|Worthington) Street$/.test(road.name) && road.width >= 9.5;
+  for (const segment of segmentsNear(city.spawn.x, city.spawn.z, metro ? 700 : Infinity)) {
+    if (!parkable(segment.road)) continue;
     for (let d = 21; d < segment.length - 21; d += 18) for (const side of [-1, 1]) {
       const offset = side * (segment.road.width / 2 - 1.1);
       const x = segment.a[0] + segment.tx * d - segment.tz * offset, z = segment.a[1] + segment.tz * d + segment.tx * offset;
@@ -297,7 +317,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   function refill(observer:{x:number;z:number},player?:{x:number;z:number},immediate=false){
     const {local,target}=population(observer);if(local>=target)return;
     const street=nearestStreet(observer.x,observer.z),minDistance=immediate?30:125;
-    const available=routes.map(route=>{
+    const available=routesNear(observer.x,observer.z,320).map(route=>{
       const point=routeCenter(route),distance=Math.hypot(point[0]-observer.x,point[1]-observer.z);
       return {route,distance,score:distance+(route.road===street?-90:0)+random()*35};
     }).filter(({route,distance})=>distance>minDistance&&distance<320&&!pedestrians.some(p=>p.route===route)).sort((a,b)=>a.score-b.score);

@@ -5,14 +5,14 @@ import {drapedRibbon} from './terrain-ground.ts';
 import {mergeSpatialGeometries} from './spatial-batches';
 
 /** The source-defined upper road is independent from the streets beneath it. */
-export function addRoadStructures(scene:THREE.Scene,city:CityData,asphalt?:THREE.Material){
+export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:THREE.Material,structures=city.roads.filter(r=>r.elevations)){
   const group=new THREE.Group();group.name='Bowker elevated roads';
   const concrete=new THREE.MeshStandardMaterial({color:'#9b9a8e',roughness:.92});
   const steel=new THREE.MeshStandardMaterial({color:'#525f58',roughness:.7,metalness:.45});
   const paint=new THREE.MeshStandardMaterial({color:'#dbd9bc',roughness:.87});
   asphalt??=new THREE.MeshStandardMaterial({color:'#50565a',roughness:.94});
   const decks:THREE.BufferGeometry[]=[],slabs:THREE.BufferGeometry[]=[],markings:THREE.BufferGeometry[]=[],rails:THREE.BufferGeometry[]=[],piers:THREE.BufferGeometry[]=[];
-  for(const road of city.roads){
+  for(const road of structures){
     if(!road.elevations)continue;
     const deck=roadDeckGeometry(city,road,road.width,.025),top=new THREE.BufferGeometry();
     top.setAttribute('position',new THREE.BufferAttribute(deck.vertices,3));top.setAttribute('uv',new THREE.BufferAttribute(deck.uv,2));top.setIndex(new THREE.BufferAttribute(deck.indices,1));top.computeVertexNormals();decks.push(top);
@@ -39,6 +39,6 @@ export function addRoadStructures(scene:THREE.Scene,city:CityData,asphalt?:THREE
   for(const [geometries,material]of [[decks,asphalt],[slabs,steel],[markings,paint],[rails,concrete],[piers,concrete]]as const){
     for(const mesh of mergeSpatialGeometries(geometries,material)){mesh.castShadow=geometries!==markings;mesh.receiveShadow=true;group.add(mesh);}
   }
-  group.userData={roads:city.roads.filter(r=>r.elevations).length,deckHeight:'Estimated profile on official source alignments',collision:'Independent closed decks; clear mapped underpasses'};
+  group.userData={roads:structures.length,deckHeight:'Estimated profile on official source alignments',collision:'Independent closed decks; clear mapped underpasses'};
   scene.add(group);return group;
 }
