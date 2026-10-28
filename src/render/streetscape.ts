@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { mergeSpatialGeometries } from './spatial-batches';
+import { PartBatches, box, type Part } from './geometry-writer';
+import { drain, due } from './pacing';
 import type { CityData } from '../types';
 import { closestRoad } from '../simulation/roads';
 import { hash, seeded } from './materials';
@@ -37,18 +38,18 @@ function shopMaterials(){
  * Candidate street-facing hull edges are checked against the actual loaded mesh;
  * recessed/gapped boundaries are skipped rather than covering them with a fake wall.
  */
-export function addStreetscape(scene: THREE.Scene, city: CityData, options: DetailOptions = {}): THREE.Group {
+export function addStreetscape(scene: THREE.Scene, city: CityData, options: DetailOptions = {}): THREE.Group { return drain(streetscapeSteps(scene, city, options)); }
+export function* streetscapeSteps(scene: THREE.Scene, city: CityData, options: DetailOptions = {}): Generator<void, THREE.Group> {
   const group = new THREE.Group(); group.name = 'Boston storefronts';
-  const batches = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const batches = new PartBatches(), pace = options.pace;
   const {trim,sill,frame,bronze,glass,interiors,warm,awnings,labels,signs}=shopMaterials();
   const budget=options.budget??650;
   const matrix = new THREE.Matrix4();
   const q = new THREE.Quaternion();
-  const unit = new THREE.Vector3(1,1,1);
-  function add(geo: THREE.BufferGeometry, material: THREE.Material, x:number,y:number,z:number,yaw:number,rx=0) {
-    q.setFromEuler(new THREE.Euler(rx,yaw,0,'YXZ'));
-    matrix.compose(new THREE.Vector3(x,y,z),q,unit);geo.applyMatrix4(matrix);
-    const bucket=batches.get(material)??[];bucket.push(geo);batches.set(material,bucket);
+  const unit = new THREE.Vector3(1,1,1), position = new THREE.Vector3(), euler = new THREE.Euler();
+  function add(geo: Part, material: THREE.Material, x:number,y:number,z:number,yaw:number,rx=0) {
+    q.setFromEuler(euler.set(rx,yaw,0,'YXZ'));
+    matrix.compose(position.set(x,y,z),q,unit);batches.part(geo,material,matrix);
   }
 
   // Reuse the spatial wall index: probes touch only nearby triangles.
@@ -56,6 +57,7 @@ export function addStreetscape(scene: THREE.Scene, city: CityData, options: Deta
   const used = new Set<string>();
   let count=0;const areaCount=new Map<string,number>();
   for (const building of [...(options.buildings??city.buildings)].sort((a,b)=>hash(a.id)-hash(b.id))) {
+    if(due(pace))yield;
     if(architectureFor(building)||isFenwayBuilding(building))continue;
     if (building.landmark || building.height<7 || building.height>75) continue;
     const base=building.baseElevation??0,area=`${Math.floor(building.center[0]/320)},${Math.floor(building.center[1]/320)}`;
@@ -87,43 +89,41 @@ export function addStreetscape(scene: THREE.Scene, city: CityData, options: Deta
         if(!valid)continue;
         used.add(key);count++;areaCount.set(area,(areaCount.get(area)??0)+1);
         const width=5.7+random()*.45;
-        const draw=(geo:THREE.BufferGeometry,mat:THREE.Material,xx:number,yy:number,depth=.1,rx=0)=>add(geo,mat,x+Math.cos(yaw)*xx+nx*depth,base+yy,z-Math.sin(yaw)*xx+nz*depth,yaw,rx);
+        const draw=(geo:Part,mat:THREE.Material,xx:number,yy:number,depth=.1,rx=0)=>add(geo,mat,x+Math.cos(yaw)*xx+nx*depth,base+yy,z-Math.sin(yaw)*xx+nz*depth,yaw,rx);
         // Ground floor: masonry base, display glazing, inset door and narrow frames.
-        draw(new THREE.BoxGeometry(width,.62,.22),sill,0,.32,.13);
+        draw(box(width,.62,.22),sill,0,.32,.13);
         const interior=interiors[count%interiors.length];
-        draw(new THREE.BoxGeometry(width,3.4,.12),frame,0,2.0,.075);
+        draw(box(width,3.4,.12),frame,0,2.0,.075);
         draw(new THREE.PlaneGeometry(width-1.65,2.5),interior,-.66,1.92,.145);
         draw(new THREE.PlaneGeometry(width-1.65,2.5),glass,-.66,1.92,.43);
         draw(new THREE.PlaneGeometry(1.05,2.65),interior,width/2-.69,1.86,.15);
         draw(new THREE.PlaneGeometry(1.05,2.65),glass,width/2-.69,1.86,.43);
-        for(const xx of [-width/2+.12,width/2-1.32,width/2-.1])draw(new THREE.BoxGeometry(.16,3.0,.46),trim,xx,1.8,.28);
-        draw(new THREE.BoxGeometry(width,.19,.55),trim,0,3.48,.31);
-        draw(new THREE.BoxGeometry(width,.16,.28),trim,0,.65,.23);
-        draw(new THREE.BoxGeometry(.075,2.5,.16),bronze,-.66,1.92,.46);
-        draw(new THREE.BoxGeometry(width-1.65,.08,.16),bronze,-.66,2.6,.46);
-        draw(new THREE.BoxGeometry(.055,.45,.12),bronze,width/2-1.05,1.42,.55);
+        for(const xx of [-width/2+.12,width/2-1.32,width/2-.1])draw(box(.16,3.0,.46),trim,xx,1.8,.28);
+        draw(box(width,.19,.55),trim,0,3.48,.31);
+        draw(box(width,.16,.28),trim,0,.65,.23);
+        draw(box(.075,2.5,.16),bronze,-.66,1.92,.46);
+        draw(box(width-1.65,.08,.16),bronze,-.66,2.6,.46);
+        draw(box(.055,.45,.12),bronze,width/2-1.05,1.42,.55);
         // Actual shelf/counter layers sit behind the glazing, giving parallax
         // and framed shadows as the player passes the storefront.
-        draw(new THREE.BoxGeometry(width-1.82,.34,.15),warm,-.66,.97,.27);
-        draw(new THREE.BoxGeometry(width-1.77,.055,.2),bronze,-.66,1.17,.29);
-        for(let j=0;j<4;j++)draw(new THREE.BoxGeometry(.27+random()*.23,.24+random()*.34,.08),warm,-width/2+.62+j*.88,1.35,.25);
+        draw(box(width-1.82,.34,.15),warm,-.66,.97,.27);
+        draw(box(width-1.77,.055,.2),bronze,-.66,1.17,.29);
+        for(let j=0;j<4;j++)draw(box(.27+random()*.23,.24+random()*.34,.08),warm,-width/2+.62+j*.88,1.35,.25);
         const label=Math.floor(random()*labels.length);
-        draw(new THREE.BoxGeometry(width,.68,.22),frame,0,3.94,.19);
+        draw(box(width,.68,.22),frame,0,3.94,.19);
         draw(new THREE.PlaneGeometry(width-.22,.56),signs[label],0,3.94,.315);
         if(random()<.48) {
           const material=awnings[Math.floor(random()*awnings.length)];
           // A restrained fabric canopy above the display window, clear of the curb.
-          draw(new THREE.BoxGeometry(width+.15,.075,1.5),material,0,3.43,.82,.19);
-          draw(new THREE.BoxGeometry(width+.15,.27,.075),material,0,3.16,1.55);
-          draw(new THREE.BoxGeometry(width+.2,.07,.07),bronze,0,3.58,.16);
-          for(const side of [-1,1])draw(new THREE.BoxGeometry(.045,.045,1.45),bronze,side*(width/2-.12),3.37,.83,.19);
+          draw(box(width+.15,.075,1.5),material,0,3.43,.82,.19);
+          draw(box(width+.15,.27,.075),material,0,3.16,1.55);
+          draw(box(width+.2,.07,.07),bronze,0,3.58,.16);
+          for(const side of [-1,1])draw(box(.045,.045,1.45),bronze,side*(width/2-.12),3.37,.83,.19);
         }
       }
     }
   }
-  for(const [material,geometries] of batches){
-    for(const mesh of mergeSpatialGeometries(geometries,material)){mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);}
-  }
+  for(const mesh of batches.meshes()){mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);}
   group.userData.storefrontCount=count;
   group.userData.drawCalls=group.children.length;
   group.userData.wallProbes=sampler.samples-startSamples;

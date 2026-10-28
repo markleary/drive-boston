@@ -40,7 +40,10 @@ function cell(grid: ElevationGrid, x: number, z: number) {
 /** Exact height of the rendered/Rapier triangles, with their NE-to-SW diagonal. */
 export function sampleElevation(city: TerrainCity, x: number, z: number) {
   const grid = terrainGrid(city); if (!grid) return 0;
-  const { tx, tz, a, b, c, d } = cell(grid, x, z);
+  // The hottest query in the tile builder (every ribbon, curb and footing vertex): cell() inlined without its result object.
+  const fx = clamp((x - grid.originX) / grid.cellSize, 0, grid.width - 1), fz = clamp((z - grid.originZ) / grid.cellSize, 0, grid.height - 1);
+  const i = Math.min(grid.width - 2, Math.floor(fx)), j = Math.min(grid.height - 2, Math.floor(fz)), offset = j * grid.width + i, heights = grid.heights;
+  const tx = fx - i, tz = fz - j, a = heights[offset], b = heights[offset + 1], c = heights[offset + grid.width], d = heights[offset + grid.width + 1];
   return tx + tz <= 1 ? a + (b - a) * tx + (c - a) * tz : d + (c - d) * (1 - tx) + (b - d) * (1 - tz);
 }
 export const sampleSurfaceElevation = sampleElevation;
