@@ -213,7 +213,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     host.querySelector<HTMLButtonElement>('[data-camera="hood"]')!.textContent = flying ? 'Cockpit' : riding ? 'Rider' : 'Hood';
     el('drive-hint').innerHTML = flying
       ? '<span><kbd>W</kbd><kbd>S</kbd> Forward / back</span><span><kbd>A</kbd><kbd>D</kbd> Strafe</span><span><kbd>Q</kbd><kbd>E</kbd> Turn</span><span><kbd>Space</kbd> Up</span><span><kbd>Shift</kbd> Down</span>'
-      : riding ? '<span><kbd>W</kbd><kbd>S</kbd> Ride / brake</span><span><kbd>A</kbd><kbd>D</kbd> Lean</span><span><kbd>Space</kbd> Brake</span><span><kbd>X</kbd> Wheelie · 3s</span>'
+      : riding ? '<span><kbd>W</kbd><kbd>S</kbd> Ride / brake</span><span><kbd>A</kbd><kbd>D</kbd> Steer / lean</span><span><kbd>Space</kbd> Brake</span><span><kbd>X</kbd> Wheelie · 3s</span>'
       : '<span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Drive</span><span><kbd>Space</kbd> Handbrake</span><span><kbd>R</kbd> Reset</span>';
     el('controls-help').innerHTML = flying
       ? '<span>Forward / backward</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Move left / right</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Turn left / right</span><span><kbd>Q</kbd> <kbd>E</kbd></span><span>Rise / descend</span><span><kbd>Space</kbd> <kbd>Shift</kbd></span><span>Car / Ultra Bee / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Reset helicopter / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Mute sound</span><kbd>N</kbd><span>Pause</span><kbd>Esc</kbd>'

@@ -118,7 +118,7 @@ test('road-speed steering uses inner/outer front angles and limits lateral deman
  const flat={bounds:{minX:-500,maxX:500,minZ:-500,maxZ:500},buildings:[],roads:[],spawn:{x:0,z:0,yaw:0}},physics=await DrivingPhysics.create(flat);
  try{
   run(physics,1,{steer:1});const parking=physics.getState();
-  assert.ok(parking.steering>.45,'retain low-speed maneuverability');
+  assert.ok(parking.steering>.50&&parking.steering<.53,'slightly more parking lock gives a tighter turning radius');
   assert.ok(physics.controller.wheelSteering(0)>physics.controller.wheelSteering(1),'inside front wheel turns farther');
   physics.reset(0,0,0);run(physics,6,{throttle:1});const fast=run(physics,.6,{throttle:1,steer:1});
   assert.ok(fast.speed>18);assert.ok(fast.steering<.075,'road speed limits abrupt keyboard oversteer');

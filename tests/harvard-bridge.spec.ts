@@ -1,3 +1,4 @@
+import {carSteeringLimit} from '../src/physics/vehicle.ts';
 import {test,expect} from '@playwright/test';
 import {harvardBridgeSpine} from '../src/simulation/harvard-bridge';
 import {deckEdge} from '../src/simulation/road-surfaces';
@@ -25,7 +26,7 @@ for(const reverse of [false,true])test(`Harvard Bridge full drive ${reverse?'Cam
   if(cursor===points.length-1&&Math.hypot(car.x-points[cursor][0],car.z-points[cursor][1])<waypointRadius){arrived=true;break;}
   let target=cursor,look=0;while(target<points.length-1&&look<10){look+=Math.hypot(points[target+1][0]-points[target][0],points[target+1][1]-points[target][1]);target++;}
   const desired=Math.atan2(points[target][0]-car.x,points[target][1]-car.z),error=Math.atan2(Math.sin(desired-car.yaw),Math.cos(desired-car.yaw));
-  const steer=Math.atan2(2*2.66*Math.sin(error),Math.max(4,Math.hypot(points[target][0]-car.x,points[target][1]-car.z))),limit=Math.min(.48,Math.atan(7.8*2.66/(car.speed*car.speed+16)));
+  const steer=Math.atan2(2*2.66*Math.sin(error),Math.max(4,Math.hypot(points[target][0]-car.x,points[target][1]-car.z))),limit=carSteeringLimit(car.speed);
   await page.evaluate(value=>{(window as any).__testSteer=value;},Math.max(-1,Math.min(1,steer/limit)));
   await key('w',car.speed<8);await page.waitForTimeout(80);car=(await snapshot()).state;
  }}finally{await page.evaluate(()=>{(window as any).__testSteer=0;});for(const name of [...held])await key(name,false);}
