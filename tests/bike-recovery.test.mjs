@@ -5,6 +5,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {closestRoad} from '../src/simulation/roads.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
+import {sampleDriveSurface,sampleRoadElevation,roadProjection} from '../src/simulation/road-surfaces.ts';
 import {loadCentralCity} from './helpers/metro-city.mjs';
 const released={throttle:0,brake:0,steer:0,handbrake:false};
 const road=(id,z,oneway=0)=>({id,name:id,width:10,oneway,points:[[-400,z],[400,z]]});
@@ -41,6 +42,45 @@ test('bike crash recovery selects the correct level at a bridge/underpass crossi
     assert.ok(Math.abs(recovered.y-height-.577)<.15,`recover at the ${height===0?'underpass':'bridge'} height, not the crossing road`);
     assert.ok(upY(recovered)>.98&&[0,1].every(i=>p.controller.wheelIsInContact(i)));
   }finally{p.dispose();}}
+});
+
+test('wide underpass edge crashes cannot trade a road-level mismatch for a closer bridge centerline',async()=>{
+  const upper={...road('Crossing bridge',0),width:7,elevations:[3,3]},lower={...road('Wide underpass',0),width:16,points:[[0,-400],[0,400]]};
+  const city={...flat,roads:[upper,lower,...flat.roads]};
+  for(const height of [0,3]){const p=await create(city);try{
+    layOnSide(p,{x:6,y:height+.25,z:1});const recovered=advance(p,4);
+    assert.ok(Math.abs(recovered.y-height-.577)<.15,`keep the ${height===0?'lower':'upper'} road level at its edge`);
+    assert.ok(height===0?Math.abs(recovered.x)<.2:Math.abs(recovered.x-6)<.2,'choose the correct road before minimizing centerline distance');
+    assert.ok(upY(recovered)>.98);
+  }finally{p.dispose();}}
+});
+
+test('road-level matching follows a ramp grade rather than rejecting its elevation change',async()=>{
+  const ramp={...road('Sloped deck',0),points:[[0,0],[300,0]],elevations:[0,45]},city={...flat,roads:[ramp,...flat.roads]},p=await create(city);
+  try{
+    const x=299,z=.5;layOnSide(p,{x,y:sampleRoadElevation(city,ramp,x,z)+.25,z});const recovered=advance(p,4);
+    assert.ok(recovered.x>280&&Math.abs(recovered.z)<1,'recover near the upper end of the same ramp rather than at the distant saved start');
+    assert.ok(Math.abs(recovered.y-sampleRoadElevation(city,ramp,recovered.x,recovered.z)-.577)<.2,'remain supported by the sloping deck');
+    assert.ok(upY(recovered)>.95&&[0,1].every(i=>p.controller.wheelIsInContact(i)));
+  }finally{p.dispose();}
+});
+
+test('crashes at both edges of the bundled First Street underpass remain below Longfellow Bridge',async()=>{
+  const city=await loadCentralCity(),street=city.roads.find(r=>r.id==='osm-827504926-0'),bridge=city.roads.find(r=>r.id==='osm-1228698551-0');
+  assert.equal(street.width,16);assert.ok(bridge.elevations);
+  for(const x of [-340.3534932126863,-352.2980459089349]){
+    const hit=roadProjection(bridge,x,-1286.81),z=hit.z,y=sampleElevation(city,x,z),p=await create(city);
+    try{
+      assert.ok(roadProjection(street,x,z).distance>5&&roadProjection(street,x,z).distance<8,'crash remains inside the wide lower roadway');
+      assert.ok(sampleRoadElevation(city,bridge,x,z)-y>2.5,'the real crossing has separate levels');
+      layOnSide(p,{x,y:y+.25,z});const recovered=advance(p,4);
+      const support=sampleDriveSurface(city,recovered.x,recovered.z,recovered.y);
+      assert.ok(recovered.y<-.8,`remain under Longfellow rather than jumping to its deck: ${JSON.stringify(recovered)}`);
+      assert.notEqual(support.road?.name,'Longfellow Bridge');
+      assert.ok(Math.hypot(recovered.x-x,recovered.z-z)<12,'recover locally on First Street');
+      assert.ok(upY(recovered)>.9&&[0,1].every(i=>p.controller.wheelIsInContact(i)));
+    }finally{p.dispose();}
+  }
 });
 
 test('a blocked road projection is skipped rather than recovering inside a collision body',async()=>{

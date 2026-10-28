@@ -267,10 +267,15 @@ export class DrivingPhysics {
 
   private recoverFromCrash(position:{x:number;y:number;z:number}){
     if(this.bike&&[position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
+      const crashSurface=sampleDriveSurface(this.city,position.x,position.z,position.y);
       // Keep recovery inside the already-streamed neighborhood.
       const road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,accept:spot=>{
         if(spot.x<this.bounds.minX+1||spot.x>this.bounds.maxX-1||spot.z<this.bounds.minZ+1||spot.z>this.bounds.maxZ-1)return false;
         const surface=sampleDriveSurface(this.city,spot.x,spot.z,undefined,spot.road.id),n=surface.normal;
+        // Level compatibility is a constraint, not a distance tradeoff. Compare
+        // the candidate's support plane at the crash point so slopes still match.
+        const level=surface.height-(n.x*(position.x-spot.x)+n.z*(position.z-spot.z))/Math.max(.5,n.y);
+        if(Math.abs(level-crashSurface.height)>1.25)return false;
         const center={x:spot.x-.06*n.x,y:surface.height+ULTRA_BEE.spawnHeight/Math.max(.5,n.y)-.06*n.y,z:spot.z-.06*n.z};
         return !this.world.intersectionWithShape(center,rotationFromNormal(n,spot.yaw),this.chassisCollider.shape,undefined,undefined,this.chassisCollider,this.body);
       }});
