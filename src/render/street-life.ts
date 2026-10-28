@@ -10,6 +10,7 @@ import type { VehicleSurface } from './car.ts';
 import { sampleElevation, sampleTerrainNormal, terrainRotation } from '../simulation/terrain.ts';
 import { inTransitCorridor } from '../simulation/transit-corridors.ts';
 import { createActivityProfile } from '../simulation/activity.ts';
+import { createPedestrianModel } from './pedestrian-model.ts';
 
 interface Segment { road: Road; a: Point2; b: Point2; length: number; tx: number; tz: number; index: number; }
 interface WalkRoute { road: string; start: Point2; end: Point2; length: number; yaw: number; }
@@ -174,46 +175,8 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       phase, bag: random() < .42, scarf: random() < .28, outfit:pedestrians.length%5 });
   }
 
-  const coats = [0x354753, 0x80634d, 0x4f5547, 0x3f4245, 0x7b403b, 0xa29379, 0x42656a, 0x5d4d61];
-  const trousers = [0x343b40, 0x283b4c, 0x4c4940, 0x5c5b53];
-  const skins = [0xb28165, 0xd6a789, 0x8f624b, 0x654636, 0xc39976, 0xe0b69a];
-  const hairs = [0x302b26, 0x544231, 0x837059, 0x29282a, 0x8e8b80];
-  const unitSphere = () => new THREE.SphereGeometry(.5, 10, 8);
-  const capsule = () => new THREE.CapsuleGeometry(.5, 1, 3, 7).scale(1, .5, 1);
-  function peopleBatch(name: string, geometry: THREE.BufferGeometry, capacity: number, roughness = .93) {
-    const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness }); ownedMaterials.add(material);
-    const mesh = new THREE.InstancedMesh(geometry, material, capacity); mesh.name = name;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.castShadow = true; mesh.receiveShadow = true;
-    mesh.frustumCulled = false; peopleGroup.add(mesh); return mesh;
-  }
   const count = pedestrians.length;
-  const bodyProfile=[[-.5,.39],[-.32,.43],[.16,.46],[.35,.49],[.46,.40],[.5,.21]].map(([y,r])=>new THREE.Vector2(r,y));
-  const torso = peopleBatch('Tailored jackets', new THREE.LatheGeometry(bodyProfile,12), count);
-  const arms = peopleBatch('Sleeves', capsule(), count * 4);
-  const legs = peopleBatch('Trousers', capsule(), count * 4);
-  const skin = peopleBatch('Faces and hands', unitSphere(), count * 5);
-  const hair = peopleBatch('Hair', new THREE.SphereGeometry(.5, 10, 7, 0, Math.PI * 2, 0, Math.PI * .42), count);
-  const shoes = peopleBatch('Shoes', new THREE.BoxGeometry(1, 1, 1), count * 2, .72);
-  const bags = peopleBatch('Bags', new THREE.BoxGeometry(1, 1, 1), count, .9);
-  const scarves = peopleBatch('Scarves', new THREE.CylinderGeometry(.5, .5, 1, 8), count);
-  const eyes = peopleBatch('Face details', unitSphere(), count * 2);
-  const collar=peopleBatch('Shirts and collars',new THREE.BoxGeometry(1,1,1),count);
-  const skirt=peopleBatch('Long coats and skirts',new THREE.CylinderGeometry(.39,.5,1,12),count);
-  const longHair=peopleBatch('Long hairstyles',unitSphere(),count);
-  const ears=peopleBatch('Ears',unitSphere(),count*2);
-  const soles=peopleBatch('Shoe soles',new THREE.BoxGeometry(1,1,1),count*2);
-  const straps=peopleBatch('Bag straps',new THREE.BoxGeometry(1,1,1),count*2);
-  pedestrians.forEach((person, i) => {
-    const coat = new THREE.Color(coats[i % coats.length]), pants = new THREE.Color(trousers[i % trousers.length]);
-    const complexion = new THREE.Color(skins[i % skins.length]);
-    torso.setColorAt(i, coat); hair.setColorAt(i, new THREE.Color(hairs[i % hairs.length]));
-    collar.setColorAt(i,new THREE.Color([0xd3d2c5,0x9daeb2,0x383a42][i%3]));skirt.setColorAt(i,i%5===1?pants:coat);longHair.setColorAt(i,new THREE.Color(hairs[i%hairs.length]));
-    for(let j=0;j<2;j++){ears.setColorAt(i*2+j,complexion);soles.setColorAt(i*2+j,new THREE.Color(i%3?0xaaa99c:0x393b38));straps.setColorAt(i*2+j,new THREE.Color(0x373c3a));}
-    bags.setColorAt(i, new THREE.Color(i % 2 ? 0x574538 : 0x273638)); scarves.setColorAt(i, new THREE.Color(i % 2 ? 0x8b6e4d : 0x4d6770));
-    for (let j = 0; j < 4; j++) { arms.setColorAt(i * 4 + j, coat); legs.setColorAt(i * 4 + j, pants); }
-    for (let j = 0; j < 5; j++) skin.setColorAt(i * 5 + j, complexion);
-    for (let j = 0; j < 2; j++) { shoes.setColorAt(i * 2 + j, new THREE.Color(i % 3 === 0 ? 0x645248 : 0x252b2e)); eyes.setColorAt(i * 2 + j, new THREE.Color(0x33302c)); }
-  });
+  const pedestrianModel = createPedestrianModel(peopleGroup,pedestrians,ownedMaterials);
 
   const parked: ParkedVehicle[] = [];
   const candidates: { segment: Segment; x: number; z: number; side: number; yaw: number; score: number }[] = [];
@@ -295,18 +258,6 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     }
   }
 
-  const actorMatrix = new THREE.Matrix4(), localMatrix = new THREE.Matrix4(), worldMatrix = new THREE.Matrix4();
-  const position = new THREE.Vector3(), size = new THREE.Vector3(), quaternion = new THREE.Quaternion(), identity = new THREE.Quaternion();
-  const startPoint = new THREE.Vector3(), endPoint = new THREE.Vector3(), direction = new THREE.Vector3();
-  function place(mesh: THREE.InstancedMesh, index: number, p: [number, number, number], dimensions: [number, number, number]) {
-    localMatrix.compose(position.set(...p), identity, size.set(...dimensions)); worldMatrix.multiplyMatrices(actorMatrix, localMatrix); mesh.setMatrixAt(index, worldMatrix);
-  }
-  function limb(mesh: THREE.InstancedMesh, index: number, a: [number, number, number], b: [number, number, number], diameter: number) {
-    startPoint.set(...a); endPoint.set(...b); direction.copy(endPoint).sub(startPoint);
-    const length = direction.length(); quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, direction.normalize());
-    localMatrix.compose(position.copy(startPoint).add(endPoint).multiplyScalar(.5), quaternion, size.set(diameter, length, diameter));
-    worldMatrix.multiplyMatrices(actorMatrix, localMatrix); mesh.setMatrixAt(index, worldMatrix);
-  }
   let elapsed = 0,relocationTime=0,relocations=0;
   function population(observer:{x:number;z:number}){
     const profile=activity(observer.x,observer.z);
@@ -357,48 +308,20 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       person.yaw = yaw;
       const x=lerp(route.start[0],route.end[0],along/route.length),z=lerp(route.start[1],route.end[1],along/route.length);
       person.position.set(x,sampleElevation(city,x,z)+.035,z);
-      const gait = (elapsed + person.phase) * person.speed * 6.1;
-      const bob = Math.cos(gait*2)*.012*walking;
-      quaternion.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
-      actorMatrix.compose(person.position, quaternion, size.set(person.width * person.height, person.height, person.height));
-      place(torso, i, [0, 1.13 + bob, 0], [.43, .54, .28]);
-      place(collar,i,[0,1.35+bob,.125],[.135,.17,.025]);
-      place(skirt,i,[0,.80+bob,0],i%5===1?[.44,.33,.33]:i%5===3?[.48,.28,.34]:[0,0,0]);
-      place(longHair,i,[0,1.49+bob,-.075],i%4===1?[.21,.28,.18]:[0,0,0]);
-      place(skin, i * 5, [0, 1.585 + bob, .007], [.195, .255, .195]);
-      place(skin, i * 5 + 1, [0, 1.425 + bob, 0], [.085, .10, .08]);
-      place(skin, i * 5 + 4, [0, 1.58 + bob, .109], [.032, .045, .035]);
-      place(hair, i, [0, 1.59 + bob, .002], [.206, .263, .207]);
-      place(bags, i, [0, 1.13 + bob, -.184], person.bag ? [.265, .33, .16] : [0, 0, 0]);
-      place(scarves, i, [0, 1.402 + bob, 0], person.scarf ? [.145, .065, .13] : [0, 0, 0]);
-      for (const [sideIndex, side] of [-1, 1].entries()) {
-        const phase=gait+sideIndex*Math.PI,swing=Math.sin(phase)*.27*walking;
-        const hip:[number,number,number]=[side*.092,.86+bob,0];
-        const ankle:[number,number,number]=[side*.099,.075+Math.max(0,Math.cos(phase))*.10*walking,swing];
-        // Solve a two-bone leg to the grounded foot, so the stance leg does not
-        // slide above the sidewalk as the opposite leg swings through.
-        const dy=ankle[1]-hip[1],dz=ankle[2],distance=Math.hypot(dy,dz),leg=.415,along=distance*.5,bend=Math.sqrt(Math.max(0,leg*leg-along*along));
-        const knee:[number,number,number]=[side*.096,hip[1]+dy*.5+dz/distance*bend,dz*.5-dy/distance*bend];
-        limb(legs, i * 4 + sideIndex * 2, hip, knee, .14); limb(legs, i * 4 + sideIndex * 2 + 1, knee, ankle, .112);
-        place(shoes, i * 2 + sideIndex, [ankle[0], ankle[1] - .035, ankle[2] + .056], [.118, .08, .245]);
-        place(soles,i*2+sideIndex,[ankle[0],ankle[1]-.066,ankle[2]+.056],[.123,.018,.25]);
-        place(ears,i*2+sideIndex,[side*.096,1.59+bob,.005],[.032,.06,.038]);
-        place(straps,i*2+sideIndex,[side*.12,1.20+bob,.14],person.bag?[.026,.36,.025]:[0,0,0]);
-        const armSwing = -swing * .82;
-        const shoulder: [number, number, number] = [side * .225, 1.34 + bob, 0];
-        const elbow: [number, number, number] = [side * .235, shoulder[1] - Math.cos(armSwing) * .27, Math.sin(armSwing) * .27];
-        const hand: [number, number, number] = [side * .235, elbow[1] - Math.cos(armSwing + .13) * .255, elbow[2] + Math.sin(armSwing + .13) * .255];
-        limb(arms, i * 4 + sideIndex * 2, shoulder, elbow, .122); limb(arms, i * 4 + sideIndex * 2 + 1, elbow, hand, .099);
-        place(skin, i * 5 + 2 + sideIndex, [hand[0], hand[1] - .02, hand[2]], [.061, .086, .063]);
-        place(eyes, i * 2 + sideIndex, [side * .036, 1.614 + bob, .098], [.011, .009, .011]);
-      }
+      // Unfold both route directions into continuous traveled distance; the
+      // animation holds its phase during endpoint turns and vehicle pauses.
+      const laps=Math.floor((elapsed+person.phase)/cycle);
+      const walked=clock<travel?clock*person.speed:clock<travel+turn?route.length:
+        clock<2*travel+turn?route.length+(clock-travel-turn)*person.speed:2*route.length;
+      pedestrianModel.pose(i,person,laps*route.length*2+walked,walking,dt,!observer||Math.hypot(x-observer.x,z-observer.z)<65);
     });
-    for (const child of peopleGroup.children) if (child instanceof THREE.InstancedMesh) child.instanceMatrix.needsUpdate = true;
+    pedestrianModel.flush();
   }
   update(0, 0);
   return {
     group, pedestrians, parked, count, parkedCount: parked.length, meterCount: meters.length, update,populateAt,population,get relocations(){return relocations;},
     dispose() {
+      pedestrianModel.dispose();
       if (physics) for (const collider of colliders) physics.world.removeCollider(collider, true);
       group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
       ownedMaterials.forEach(material => {if(material instanceof THREE.MeshStandardMaterial)material.map?.dispose();material.dispose();}); scene.remove(group);
