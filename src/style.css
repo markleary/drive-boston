@@ -92,3 +92,9 @@
 .riding .wheelie-touch{display:block;font-size:9px;width:66px}
 @media(pointer:coarse){.riding .touch-controls{gap:10px}.riding .touch-pad{gap:6px}}
 @media(max-width:700px){.travel-switch button{padding:8px 10px}.riding .hint{gap:7px 9px}}
+
+/* Context recovery stays above the title, map and hidden HUD on every viewport. */
+#graphics-modal{z-index:100;background:#142f2aeb;backdrop-filter:none}
+#graphics-status{font-size:14px;line-height:1.6}
+#graphics-report{width:100%;font:11px/1.5 monospace;resize:vertical;pointer-events:auto}
+#graphics-copy-status{font-size:12px;line-height:1.5}

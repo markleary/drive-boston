@@ -16,6 +16,7 @@ import { createWorld } from './render/world';
 import { addLandmarkDetails } from './render/landmarks';
 import { addStreetscape } from './render/streetscape';
 import { createGraphics, type QualityMode } from './render/graphics';
+import { releaseSceneContext } from './render/context-resources';
 import { addFacadeDetails } from './render/facade-details';
 import { addParkDetails } from './render/park-details';
 import { addCityParkDetails } from './render/city-parks';
@@ -101,7 +102,32 @@ async function boot(){
   renderer.setPixelRatio(mobile?1:Math.min(devicePixelRatio,1.65));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.outputColorSpace=THREE.SRGBColorSpace;
   renderer.info.autoReset=false;
   const container=document.querySelector('#scene')!;container.appendChild(renderer.domElement);renderer.domElement.setAttribute('aria-label','3D driving view');
-  renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();ui.setError('The graphics connection was interrupted. Reload to continue your drive.');});
+  let contextLost=false,contextLosses=0;
+  renderer.domElement.addEventListener('webglcontextlost',event=>{
+    event.preventDefault();contextLost=true;contextLosses++;keys.clear();audio.update(0,0,true);
+    const state=travelMode==='helicopter'?flight?.state:physics?.getState();
+    ui.setGraphicsInterrupted([
+      'Drive Boston graphics interruption',`Captured: ${new Date().toISOString()}`,
+      `Page: ${location.href}`,`Bundle: ${Array.from(document.scripts).find(script=>script.type==='module')?.src??'unknown'}`,
+      `Page age: ${Math.round(performance.now()/1000)} seconds`,
+      `Browser: ${navigator.userAgent}`,`Context losses this page: ${contextLosses}`,
+      `Vehicle: ${travelMode} / view: ${cameraMode} / lighting: ${lighting}`,
+      `Position: ${state?JSON.stringify({x:state.x,y:state.y,z:state.z,yaw:state.yaw}):'initializing'}`,
+      `Resources at loss: ${renderer.info.memory.geometries} geometries / ${renderer.info.memory.textures} textures`,
+      `Detailed tiles: ${JSON.stringify(world?.streamer?.stats().keys??[])}`,
+      `Physics colliders: ${physics?.world.colliders.len()??0}`,
+      `Mobile: ${mobile} / pixel ratio: ${renderer.getPixelRatio()}`,
+      'A graphics context loss does not identify its underlying cause.',
+    ].join('\n'));
+    graphics?.dispose();graphics=undefined;world?.releaseGraphicsTargets();releaseSceneContext(scene);
+  });
+  // Three.js restores its WebGL state first; retain the existing scene, physics
+  // and vehicle instead of booting a second world or resetting to the title.
+  renderer.domElement.addEventListener('webglcontextrestored',()=>{
+    // Render-target contents cannot be re-uploaded from a source image. Rebuild
+    // the sky environment and mark the desktop reflection probe dirty too.
+    world?.setLighting(lighting);if(world)graphics=createGraphics(renderer,scene,camera,quality,mobile);contextLost=false;cameraSnap=true;ui.setGraphicsRestored();
+  });
   try{
     // Validate storage before streaming so mobile loads only the arrival neighborhood.
     const saved=(()=>{
@@ -177,6 +203,7 @@ async function boot(){
     let previous=performance.now(),accumulator=0,elapsed=0,saveTimer=0,frameCount=0,fpsTimer=0,fps=0,distance=0,frameMs=0,averageFrameMs=0;
     const tick=(now:number)=>{
       const raw=(now-previous)/1000;previous=now;const dt=Math.min(.05,Math.max(0,raw));const paused=ui.isPaused()||document.hidden;
+      if(contextLost){accumulator=0;requestAnimationFrame(tick);return;}
       const flying=travelMode==='helicopter';
       const controls=paused||flying?{throttle:0,brake:flying?1:0,steer:0,handbrake:flying}:input();
       const flightControls=paused||!flying?{forward:0,strafe:0,turn:0,lift:0}:flightInput();
@@ -231,7 +258,7 @@ async function boot(){
       const observer=travelMode==='helicopter'?flight!.state:physics!.getState();
       return {traffic:traffic!.population(observer),pedestrians:streetLife.population(observer)};
     };
-    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,carBodyVisible:car.bodyVisible,cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city,
+    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,carBodyVisible:car.bodyVisible,cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city,
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
       travelTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>physics!.reset(x,z,yaw)),
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */

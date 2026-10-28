@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { registerContextTexture } from './context-resources.ts';
 import type { LightingMode } from '../types';
 
 /** Window grid of one six-unit facade tile, shared by the canvas painter and the
@@ -245,6 +246,7 @@ export function applyWindowInteriors(material:THREE.MeshStandardMaterial,grid:Wi
   };
   material.customProgramCacheKey=()=>'boston-window-interiors-3';
   material.userData.windowInteriors={head:grid.head,bars:grid.bars,bays:[minBays,maxBays],seed:uniforms.interiorRooms.value.x};
+  if(wallMap)registerContextTexture(material,wallMap);
   return material;
 }
 export const windowInteriorShader={pars:GLSL_PARS,vertex:GLSL_VERTEX,fragment:GLSL_FRAGMENT};
