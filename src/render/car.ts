@@ -351,9 +351,19 @@ export function createCar() {
     light.position.set(x, .075, 2.18); light.target.position.set(x, -.4, 24);
     group.add(light, light.target); lights.push(light);
   }
+  // A short chase boom can end inside the coupe when a wall/parked vehicle
+  // blocks it. Hide bodywork at that distance, keeping the headlight objects
+  // active so avoiding a beige near-plane flash does not change light counts.
+  const bodyParts=group.children.filter(object=>!(object instanceof THREE.Light)&&!lights.some(light=>light.target===object));
+  const bodyBounds=new THREE.Box3().setFromObject(group).expandByScalar(.25),localCamera=new THREE.Vector3();
+  let bodyVisible=true;
+  function setCameraPosition(position:THREE.Vector3){
+    const visible=!bodyBounds.containsPoint(group.worldToLocal(localCamera.copy(position)));
+    if(visible===bodyVisible)return;bodyVisible=visible;for(const part of bodyParts)part.visible=visible;
+  }
   let fallbackWheelAngle = 0;
   return {
-    group,
+    group,setCameraPosition,get bodyVisible(){return bodyVisible;},
     update(state: VehicleState, night: boolean, dt = 1 / 60) {
       const s = state as RenderState;
       group.position.set(s.x, s.y, s.z);

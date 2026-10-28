@@ -19,7 +19,7 @@ export interface TileStreamer {
 const LOAD_RADIUS = 1150, UNLOAD_RADIUS = 1650, SYNC_RADIUS = 170, MAX_FETCHES = 4;
 /** The build slice each frame is what the target frame time leaves after the
  * rest of the last frame (simulation, render, vsync wait), within these bounds. */
-const TARGET_FRAME_MS = 26, MIN_BUDGET_MS = 4, MAX_BUDGET_MS = 12;
+const TARGET_FRAME_MS = 1000 / 60, MIN_BUDGET_MS = .5, MAX_BUDGET_MS = 4;
 
 /** Streams 1 km tiles around the observer. Tiles download a few at a time,
  * nearest first; one tile builds at a time through its paced stage generator,
