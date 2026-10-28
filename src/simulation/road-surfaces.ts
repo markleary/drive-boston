@@ -102,13 +102,14 @@ export function roadSlabGeometry(city:CityData,road:Road){
 
 export function bridgeSupports(city:CityData,road:Road){
   if(!road.elevations||!road.bridge)return[];
-  const supports:{x:number;z:number;bottom:number;top:number}[]=[];let along=0,next=18;
+  if(road.name==='Longfellow Bridge')return[]; // Shared granite piers and arch ribs in charles-bridges.ts.
+  const supports:{x:number;z:number;bottom:number;top:number;yaw:number}[]=[];let along=0,next=18;
   for(let i=1;i<road.points.length;i++){
     const a=road.points[i-1],b=road.points[i],length=Math.hypot(b[0]-a[0],b[1]-a[1]);
-    if(along+length>=next){
+    while(along+length>=next){
       const t=(next-along)/length,x=a[0]+(b[0]-a[0])*t,z=a[1]+(b[1]-a[1])*t,top=road.elevations[i-1]+(road.elevations[i]-road.elevations[i-1])*t-road.bridge.thickness,bottom=sampleElevation(city,x,z);
       const blocksRoad=city.roads.some(r=>r!==road&&roadProjection(r,x,z).distance<r.width/2+2.1&&sampleRoadElevation(city,r,x,z)<top-1);
-      if(top-bottom>2.5&&!blocksRoad)supports.push({x,z,bottom,top});next+=34;
+      if(top-bottom>2.5&&!blocksRoad)supports.push({x,z,bottom:bottom-.5,top,yaw:Math.atan2(b[0]-a[0],b[1]-a[1])});next+=34;
     }
     along+=length;
   }

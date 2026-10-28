@@ -56,7 +56,7 @@ export function createDiagnostics(host:HTMLElement,read:()=>HUDDiagnosticData){
       put('debug-road-id',data.road.id);
       put('debug-heading',`${compassHeading(data.state.yaw).toFixed(1)}° · yaw ${data.state.yaw.toFixed(4)}`);
       put('debug-ground',`${data.groundHeight.toFixed(2)} / ${(data.state.y-data.groundHeight).toFixed(2)} m`);
-      put('debug-mode',`${data.travelMode==='helicopter'?'Helicopter':'Drive'} / ${data.camera==='hood'&&data.travelMode==='helicopter'?'cockpit':data.camera}`);
+      put('debug-mode',`${data.travelMode==='helicopter'?'Helicopter':data.travelMode==='bike'?'Ultra Bee':'Drive'} / ${data.camera==='hood'&&data.travelMode==='helicopter'?'cockpit':data.camera==='hood'&&data.travelMode==='bike'?'rider':data.camera}`);
       put('debug-rendering',`${data.lighting==='golden'?'Golden hour':data.lighting==='day'?'Daylight':'Night'} / ${data.quality==='high'?'Detailed':'Balanced'}`);
       put('debug-actors',`${p.traffic} / ${p.transit} / ${p.pedestrians}`);
       put('debug-resources',`${format.format(p.geometries)} / ${format.format(p.textures)}`);

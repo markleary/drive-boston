@@ -96,7 +96,19 @@ const GLSL_FRAGMENT=/* glsl */`
   // The painted night glow is filtered and bleeds past the analytic opening,
   // so up close it is cleared across the whole window rather than blended.
   float region=smoothstep(winW*0.5+0.05+aa,winW*0.5+0.05-aa,abs(du))*smoothstep(winH*0.5+0.05+aa,winH*0.5+0.05-aa,abs(dv))*near;
-  totalEmissiveRadiance*=1.0-region;
+  // Rooms span whole window bays so partitions always meet masonry piers.
+  float floorIdx=floor(tile.y/3.0);
+  float f1=interiorHash(vec2(floorIdx,interiorRooms.x)),f2=interiorHash(vec2(interiorRooms.x*1.7,floorIdx));
+  float bays=mix(interiorRooms.y,interiorRooms.z,step(0.5,f1));
+  float phase=floor(f2*bays);
+  float gridU=tile.x/spacing,roomU=(gridU+phase)/bays;
+  vec2 roomId=vec2(floor(roomU),floorIdx);
+  float lit=step(1.0-interiorLighting.y,interiorHash(roomId+vec2(63.2,interiorRooms.x*0.7)));
+  // Every painted window glows, so each is masked by its room's light switch,
+  // which keeps far windows in step with the rooms seen up close. Once a bay
+  // shrinks to a few pixels the mask settles to the lit share to avoid shimmer.
+  float litMask=mix(lit,interiorLighting.y,smoothstep(0.35,0.9,px/spacing));
+  totalEmissiveRadiance*=litMask*(1.0-region);
   // Below tile row zero a neighborhood profile raises the ground floor above
   // the surveyed base, so that band of wall is exposed foundation: footing
   // concrete with a shadow line under the first course and a small basement
@@ -127,13 +139,6 @@ const GLSL_FRAGMENT=/* glsl */`
     vec3 along=(dpx*duy.y-dpy*dux.y)*sign(det);
     vec3 tangent=length(along)>1e-7?normalize(along):normalize(cross(vec3(0.0,1.0,0.0),wallN));
     float dirX=dot(ray,tangent),dirY=ray.y,dirZ=max(abs(dot(ray,wallN)),0.05);
-    // Rooms span whole window bays so partitions always meet masonry piers.
-    float floorIdx=floor(tile.y/3.0);
-    float f1=interiorHash(vec2(floorIdx,interiorRooms.x)),f2=interiorHash(vec2(interiorRooms.x*1.7,floorIdx));
-    float bays=mix(interiorRooms.y,interiorRooms.z,step(0.5,f1));
-    float phase=floor(f2*bays);
-    float gridU=tile.x/spacing,roomU=(gridU+phase)/bays;
-    vec2 roomId=vec2(floor(roomU),floorIdx);
     float roomW=spacing*bays,roomH=2.9,depth=4.6,setback=0.1;
     float originX=(fract(roomU)-0.5)*roomW,originY=tile.y-floorIdx*3.0-0.05-roomH*0.5;
     float halfW=roomW*0.5-0.06,halfH=roomH*0.5;
@@ -146,8 +151,7 @@ const GLSL_FRAGMENT=/* glsl */`
     float onBack=step(tZ,tX)*step(tZ,tY);
     float onY=step(tY,tX)*step(tY,tZ);
     float onCeil=onY*step(0.0,dirY),onFloor=onY*(1.0-step(0.0,dirY));
-    float s1=interiorHash(roomId+vec2(interiorRooms.x,19.4)),s2=interiorHash(roomId+vec2(83.1,interiorRooms.x*1.9)),s3=interiorHash(roomId+vec2(63.2,interiorRooms.x*0.7));
-    float lit=step(1.0-interiorLighting.y,s3);
+    float s1=interiorHash(roomId+vec2(interiorRooms.x,19.4)),s2=interiorHash(roomId+vec2(83.1,interiorRooms.x*1.9));
     vec3 warm=mix(vec3(1.0,0.72,0.27),vec3(1.0,0.89,0.61),s1),cool=mix(vec3(0.87,0.91,1.0),vec3(0.62,0.71,1.0),s2);
     vec3 lightCol=mix(cool,warm,step(1.0-interiorRooms.w,s2));
     // Plaster walls with a dark skirting, boards and a rug, a lamp in the

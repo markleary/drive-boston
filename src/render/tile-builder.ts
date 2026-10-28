@@ -18,6 +18,7 @@ import { due, UNPACED, type Pace } from './pacing';
 import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
 import { addRoadStructures } from './bridges';
+import { addSurveyViaductSupports } from './viaducts';
 import { addSourceFooting } from './source-footings';
 import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
@@ -233,6 +234,10 @@ export function createTileBuilder(ctx: TileContext) {
         };
         if (meshBuildingIds.has(b.id)) {
           colliders.push(physics.addStaticMesh(data.positions, tileCollisionIndices(data))); stats.exactMeshes++;
+          if(b.landmark==='zakim-bridge'){
+            const viaduct=addSurveyViaductSupports(group,city,data);
+            for(const mesh of viaduct.collisions)colliders.push(physics.addStaticMesh(mesh.vertices,mesh.indices));
+          }
           const source = tileSourceGeometry(data);
           const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));
           source.dispose();
