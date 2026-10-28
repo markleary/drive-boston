@@ -203,7 +203,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       ? '<span><kbd>W</kbd><kbd>S</kbd> Forward / back</span><span><kbd>A</kbd><kbd>D</kbd> Strafe</span><span><kbd>Q</kbd><kbd>E</kbd> Turn</span><span><kbd>Space</kbd> Up</span><span><kbd>Shift</kbd> Down</span>'
       : '<span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Drive</span><span><kbd>Space</kbd> Handbrake</span><span><kbd>R</kbd> Reset</span>';
     el('controls-help').innerHTML = flying
-      ? '<span>Forward / backward</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Move left / right</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Turn left / right</span><span><kbd>Q</kbd> <kbd>E</kbd></span><span>Rise / descend</span><span><kbd>Space</kbd> <kbd>Shift</kbd></span><span>Drive / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Reset helicopter / mute</span><span><kbd>R</kbd> <kbd>N</kbd></span><span>Pause</span><kbd>Esc</kbd>'
+      ? '<span>Forward / backward</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Move left / right</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Turn left / right</span><span><kbd>Q</kbd> <kbd>E</kbd></span><span>Rise / descend</span><span><kbd>Space</kbd> <kbd>Shift</kbd></span><span>Drive / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Reset helicopter / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Mute sound</span><kbd>N</kbd><span>Pause</span><kbd>Esc</kbd>'
       : '<span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Drive / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd>';
     el('controls-help').insertAdjacentHTML('beforeend',statsHelp);
     const labels = flying ? { left:'Move helicopter left', right:'Move helicopter right', reverse:'Fly backward', accelerate:'Fly forward' } : { left:'Steer left', right:'Steer right', reverse:'Brake and reverse', accelerate:'Accelerate' };
@@ -211,11 +211,18 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     el('touch-controls').setAttribute('aria-label', flying ? 'Touch flight movement' : 'Touch driving controls');
     host.querySelectorAll<HTMLButtonElement>('[data-destination]').forEach(button => { const name = button.querySelector('strong')?.textContent; button.setAttribute('aria-label', `${flying ? 'Fly' : 'Start driving'} near ${name}`); });
     setCamera(camera);
-    if (notify && changed) { callbacks.onTravelMode?.(mode); toast(flying ? (matchMedia('(pointer: coarse)').matches ? 'Helicopter · Upper arrows control altitude' : 'Helicopter · Space to rise, Shift to descend') : 'Back behind the wheel.'); }
+    // A deliberate mode switch brings a hidden HUD back so the new mode's instruments show.
+    if (notify && changed) { setHudHidden(false); callbacks.onTravelMode?.(mode); toast(flying ? (matchMedia('(pointer: coarse)').matches ? 'Helicopter · Upper arrows control altitude' : 'Helicopter · Space to rise, Shift to descend') : 'Back behind the wheel.'); }
   }
   function toast(message: string) {
     el('toast').textContent = message; el('toast').classList.add('visible'); window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => el('toast').classList.remove('visible'), 2600);
+  }
+  // H hides the whole HUD. The toast sits outside .hud so it stays readable and says how to undo it.
+  function setHudHidden(hidden: boolean, notify = false) {
+    if (host.classList.contains('hud-off') === hidden) return;
+    host.classList.toggle('hud-off', hidden);
+    if (notify) toast(hidden ? 'Interface hidden · Press H to show it' : 'Interface shown');
   }
   function reset() { callbacks.onReset(); toast(travelMode === 'helicopter' ? 'Ready to lift off.' : 'Back on the road.'); }
   // Title screen progress. Boot reports a few coarse stages, so the shown value eases toward the
@@ -410,7 +417,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     else if(e.code==='Escape'){e.preventDefault();if(creditsOpen){el('close-credits').click();}else if(mapOpen)setMap(false);else setSettings(!settingsOpen);}
     else if(e.code==='KeyC'&&!isPaused()){e.preventDefault();cycleCamera();}
     else if(e.code==='KeyR'&&!isPaused()){e.preventDefault();reset();}
-    else if(e.code==='KeyH'&&!isPaused()){e.preventDefault();host.classList.toggle('hud-off');}
+    else if(e.code==='KeyH'&&!isPaused()){e.preventDefault();setHudHidden(!host.classList.contains('hud-off'),true);}
     else if(e.code==='KeyP'&&!isPaused()){e.preventDefault();diagnostics.togglePerformance();}
     else if(e.code==='Backquote'&&!isPaused()){e.preventDefault();diagnostics.toggleDebug();}
     else if(e.code==='KeyN'){e.preventDefault();setSound(!sound,true);}
