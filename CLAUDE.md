@@ -70,7 +70,7 @@ Copy a validated staging directory over `public/data/` (keep `transit.json` and 
 
 ## Deployment
 
-Hosted on GitHub Pages at https://markleary.github.io/drive-boston/ from the `gh-pages` branch. There is no CI: publish manually by building, replacing a separate `gh-pages` checkout's contents with `dist/` (keep `.nojekyll`), and pushing that branch. Pushing `main` does not update the site. `vite.config.ts` uses `base: './'` so the build works under a repository subpath.
+Hosted on GitHub Pages at https://markleary.github.io/drive-boston/, published by `.github/workflows/deploy.yml`: every push to `main` runs `npm ci` and `npm run build` on Node 24 and deploys `dist/` with `actions/deploy-pages` (the Pages source is GitHub Actions, not a branch; the old `gh-pages` branch is unused). The workflow does not run the test suites, so run them before merging. `vite.config.ts` uses `base: './'` so the build works under a repository subpath.
 
 ## Conventions
 
