@@ -282,7 +282,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     a.href = source.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = source.name;
     li.append(a, document.createTextNode(` — ${source.license}`)); el('source-list').append(li);
   }
-  for (const landmark of city.landmarks) {
+  for (const landmark of [...city.landmarks].sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }))) {
     const button = document.createElement('button'); button.className = 'map-destination'; button.dataset.destination = landmark.id;
     const name = document.createElement('strong'), action = document.createElement('span'); name.textContent = landmark.name; action.textContent = `${neighborhoodAt(...landmark.position)} · Start nearby ↗`; button.append(name, action);
     button.setAttribute('aria-label', `Explore ${landmark.name}`);
