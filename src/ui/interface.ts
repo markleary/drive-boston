@@ -44,6 +44,10 @@ const icons = {
 };
 const svg = (name: keyof typeof icons) => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name]}</svg>`;
 const cameraNames: Record<CameraMode, string> = { chase: 'Chase camera', hood: 'Hood camera', aerial: 'Aerial camera' };
+// Title screen copy. Status lines follow the displayed percentage; tips rotate while the screen is up.
+const LOAD_STEPS: [number, string][] = [[12,'Paving the Mass Pike'],[26,'Placing 4,000 orange cones'],[40,'Streaming Back Bay brownstones'],[54,'Timing the lights on Comm Ave'],[68,'Filling the Zakim with traffic'],[82,'Removing turn signals from local drivers'],[100,'Lighting up the Custom House clock']];
+const LOAD_TIPS = ['Storrow Drive overpasses are low. Box trucks get “Storrowed” every September.','Rotaries: traffic already in the circle has the right of way. In theory.','The Big Dig put I-93 underground. Follow the overhead signs in the tunnels.','Park in the Seaport and walk to the North End. There are no spots on Hanover Street.','The Harvard Bridge on Mass Ave is 364.4 smoots long, plus or minus one ear.'];
+const EMBLEM = '<svg class="welcome-emblem" viewBox="0 0 120 120" role="img" aria-label="Boston Free Drive emblem"><circle cx="60" cy="60" r="55" fill="none" stroke="currentColor" stroke-width="5"/><g stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M60 34 28 78M60 44 42 78M60 34l32 44M60 44l18 34"/></g><g stroke="#f3eee6" stroke-linecap="round" fill="none"><path d="M60 22v36M60 58 50 88M60 58l10 30" stroke-width="7"/><path d="M22 78h76" stroke-width="6"/></g></svg>';
 
 function distanceToSegment(point: Point2, a: Point2, b: Point2) {
   const dx = b[0] - a[0], dz = b[1] - a[1];
@@ -70,8 +74,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     <div class="hud hint" id="drive-hint"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Drive</span><span><kbd>Space</kbd> Handbrake</span><span><kbd>R</kbd> Reset</span></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <section class="welcome" id="welcome" aria-label="Welcome to Boston">
-      <div class="welcome-top">BOSTON &nbsp; / &nbsp; A CITY TO EXPLORE</div>
-      <div class="welcome-content"><div class="eyebrow">Take the long way through the city</div><h1>Boston.<br><em>An afternoon drive.</em></h1><p class="welcome-description">From Mission Hill to Fenway, across Back Bay and into the heart of Boston. Find your own route through real streets, hills, and parks.</p><div class="loading-track" id="loading-track"><div class="loading-progress" id="loading-progress"></div></div><div class="loading-copy" id="loading-copy" role="status">Preparing your drive…</div><button class="primary" id="start-drive" disabled data-testid="start-drive">Start driving ${svg('arrow')}</button><div class="welcome-foot">Single player &nbsp; · &nbsp; Keyboard, touch & gamepad</div></div><div class="welcome-coordinate">42.350° N &nbsp; 71.076° W</div>
+      <img class="welcome-scene" id="welcome-scene" src="${import.meta.env.BASE_URL}title-scene.jpg" alt="" aria-hidden="true"><div class="welcome-veil" id="welcome-veil" aria-hidden="true"></div><div class="welcome-shade" aria-hidden="true"></div>
+      <div class="welcome-top">${EMBLEM}<div class="welcome-wordmark"><span>BOSTON</span><span class="welcome-slash">/</span><span class="welcome-accent">FREE DRIVE</span></div></div>
+      <div class="welcome-content"><div class="welcome-eyebrow">NO MISSIONS. NO TIMER.</div><h1>Boston.</h1><p class="welcome-description">Just the city, from the Pike to the Tobin. Pick a direction and drive.</p>
+        <div class="welcome-loader"><div class="loading-row"><span class="loading-copy" id="loading-copy" role="status">${LOAD_STEPS[0][1]}</span><span class="loading-pct" id="loading-pct" aria-hidden="true">0%</span></div><div class="loading-track" id="loading-track" role="progressbar" aria-label="Loading Boston" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="loading-progress" id="loading-progress"></div></div>
+          <div class="ready-row"><span class="ready-copy">Your car is ready.</span><button class="welcome-start" id="start-drive" disabled data-testid="start-drive">Start driving ${svg('arrow')}</button></div></div>
+        <div class="welcome-foot">Single player / Keyboard, touch or gamepad</div></div>
+      <div class="welcome-tip"><span class="welcome-tip-count" id="welcome-tip-count">TIP 01 / 05</span><p id="welcome-tip">${LOAD_TIPS[0]}</p></div>
+      <div class="welcome-coordinate">42.3499° N &nbsp; 71.0773° W</div>
     </section>
     <section class="modal-scrim hidden" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="panel"><button class="close-btn" id="close-settings" aria-label="Resume driving">${svg('close')}</button><div class="eyebrow">Take a moment</div><h2 id="settings-title">Your afternoon.</h2>
@@ -208,8 +218,26 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     toastTimer = window.setTimeout(() => el('toast').classList.remove('visible'), 2600);
   }
   function reset() { callbacks.onReset(); toast(travelMode === 'helicopter' ? 'Ready to lift off.' : 'Back on the road.'); }
+  // Title screen progress. Boot reports a few coarse stages, so the shown value eases toward the
+  // latest stage, then creeps toward the next while a long step runs. The scene fades in with it.
+  let loadTarget=0,loadShown=0,loadSince=performance.now(),loadStep=0,loadFrame=0,loadFailed=false,tipIndex=Math.floor(Math.random()*LOAD_TIPS.length);
+  function showTip(){el('welcome-tip').textContent=LOAD_TIPS[tipIndex];el('welcome-tip-count').textContent=`TIP ${String(tipIndex+1).padStart(2,'0')} / ${String(LOAD_TIPS.length).padStart(2,'0')}`;}
+  const tipTimer=window.setInterval(()=>{tipIndex=(tipIndex+1)%LOAD_TIPS.length;showTip();},6000);showTip();
+  function drawLoading(){
+    const pct=Math.floor(loadShown*100),step=Math.max(0,LOAD_STEPS.findIndex(([limit])=>pct<limit));
+    el('loading-progress').style.width=`${(loadShown*100).toFixed(1)}%`;el('loading-pct').textContent=`${pct}%`;el('loading-track').setAttribute('aria-valuenow',String(pct));
+    el('welcome-veil').style.opacity=(.94-.54*loadShown).toFixed(3);
+    if(!loadFailed&&step!==loadStep){loadStep=step;el('loading-copy').textContent=LOAD_STEPS[step][1];}
+  }
+  function animateLoading(now:number){
+    if(ready||loadFailed)return;
+    const ceiling=loadTarget+(.97-loadTarget)*.75*(1-Math.exp(-(now-loadSince)/7000));
+    loadShown+=(Math.max(loadShown,ceiling)-loadShown)*.06;drawLoading();loadFrame=requestAnimationFrame(animateLoading);
+  }
+  loadFrame=requestAnimationFrame(animateLoading);
   function start() {
     if (!ready || started) return;
+    window.clearInterval(tipTimer);
     started = true; host.classList.remove('not-started'); el('welcome').classList.add('leaving');
     window.setTimeout(() => el('welcome').classList.add('hidden'), 700);
     callbacks.onStart?.(); updatePause();
@@ -417,9 +445,9 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     update,isPaused,isMapOpen:()=>mapOpen,
     getTouchInput:():DriveInput=>({throttle:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),brake:0,steer:isPaused()?0:Number(held.has('left'))-Number(held.has('right')),handbrake:!isPaused()&&held.has('handbrake')}),
     getFlightTouchInput:()=>({forward:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),strafe:isPaused()?0:Number(held.has('right'))-Number(held.has('left')),yaw:isPaused()?0:Number(held.has('yaw-right'))-Number(held.has('yaw-left')),lift:isPaused()?0:Number(held.has('ascend'))-Number(held.has('descend'))}),
-    setLoading(message:string,progress?:number){el('loading-copy').textContent=message;if(progress!==undefined)el('loading-progress').style.width=`${Math.max(3,Math.min(100,progress*100))}%`;},
-    setReady(){ready=true;el<HTMLButtonElement>('start-drive').disabled=false;el('loading-progress').style.width='100%';el('loading-copy').textContent='Your car is ready. The city is yours.';el('start-drive').focus();},
-    setError(message:string){el('loading-copy').textContent=message;el('loading-copy').style.color='#ffd1ad';el('welcome').classList.remove('hidden','leaving');host.classList.add('not-started');el<HTMLButtonElement>('start-drive').disabled=true;ready=false;started=false;updatePause();},
+    setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},
+    setReady(){ready=true;cancelAnimationFrame(loadFrame);loadShown=1;drawLoading();el('welcome').classList.add('ready');el<HTMLButtonElement>('start-drive').disabled=false;el('start-drive').focus();},
+    setError(message:string){loadFailed=true;cancelAnimationFrame(loadFrame);el('loading-copy').textContent=message;el('loading-copy').style.color='#ffd1ad';el('welcome').classList.remove('hidden','leaving','ready');host.classList.add('not-started');el<HTMLButtonElement>('start-drive').disabled=true;ready=false;started=false;updatePause();},
     setCamera:(mode:CameraMode)=>setCamera(mode),setLighting:(mode:LightingMode)=>setLighting(mode),setSound:(enabled:boolean)=>setSound(enabled),setQuality:(mode:QualityMode)=>setQuality(mode),setTravelMode:(mode:TravelMode)=>setTravelMode(mode),toast,
     destroy(){diagnostics.destroy();disposers.forEach(fn=>fn());window.clearTimeout(toastTimer);host.innerHTML='';},
   };

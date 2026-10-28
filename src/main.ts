@@ -1,3 +1,4 @@
+import '@fontsource/bebas-neue/latin-400.css';import '@fontsource/barlow/latin-400.css';import '@fontsource/barlow/latin-700.css';import '@fontsource/jetbrains-mono/latin-400.css';
 import './style.css';
 import * as THREE from 'three';
 import { Ray } from '@dimforge/rapier3d-compat';
