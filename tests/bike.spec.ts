@@ -1,5 +1,5 @@
 import {test,expect,type Page} from '@playwright/test';
-type State={x:number;y:number;z:number;speed:number;vehicle:string;wheelie:number;wheelieRemaining:number;wheelAngles:number[];rotation:{x:number;y:number;z:number;w:number}};
+type State={x:number;y:number;z:number;yaw:number;speed:number;steering:number;lean:number;vehicle:string;wheelie:number;wheelieRemaining:number;wheelAngles:number[];rotation:{x:number;y:number;z:number;w:number}};
 type Snapshot={state:State;travelMode:string;paused:boolean;camera:string;cameraPosition:{x:number;y:number;z:number};audio:{engineGain:number;electricGain:number;rotorGain:number}};
 const snapshot=(page:Page)=>page.evaluate(()=>(window as unknown as {__backbay:{snapshot():Snapshot}}).__backbay.snapshot());
 async function start(page:Page){await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:60000});await page.getByTestId('start-drive').click();await expect(page.locator('#welcome')).toBeHidden();}
@@ -10,6 +10,7 @@ test('Ultra Bee: switch, ride, wheelie, pause, camera, reset and return to car',
   await page.keyboard.press('2');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('bike');
   await expect(page.getByTestId('mode-bike')).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('#drive-hint')).toContainText('Wheelie');
+  await expect(page.locator('#drive-hint')).toContainText('Steer / lean');
   expect((await snapshot(page)).state.wheelAngles).toHaveLength(2);
   await page.screenshot({path:testInfo.outputPath('ultra-bee-chase.png')});
   await page.mouse.move(550,380);await page.mouse.down();await page.mouse.move(820,380,{steps:15});await page.mouse.up();
@@ -41,7 +42,11 @@ test('Ultra Bee: switch, ride, wheelie, pause, camera, reset and return to car',
   try{
     await expect.poll(async()=>(await snapshot(page)).state.speed).toBeGreaterThan(8);
     expect(eyeDistance(await snapshot(page))).toBeLessThan(1.2);
+    // Screenshots can take several seconds on a busy WebGL runner. Coast during
+    // the capture so held throttle cannot exceed the wheelie's 20 m/s entry cap.
+    await page.keyboard.up('w');
     await page.screenshot({path:testInfo.outputPath('ultra-bee-rider-moving.png')});
+    await page.keyboard.down('w');
     await page.keyboard.down('x');
     await expect.poll(async()=>(await snapshot(page)).state.wheelie).toBeGreaterThan(.35);
     expect(eyeDistance(await snapshot(page))).toBeLessThan(1.2);
@@ -56,6 +61,21 @@ test('Ultra Bee: switch, ride, wheelie, pause, camera, reset and return to car',
   await expect(page.locator('#drive-hint')).toContainText('Handbrake');
   await expect.poll(async()=>(await snapshot(page)).audio.electricGain).toBeLessThan(.001);
   expect(errors).toEqual([]);
+});
+
+test('Ultra Bee keyboard steering changes heading and banks in both directions',async({page})=>{
+  await start(page);await page.keyboard.press('2');const turns:number[]=[];
+  for(const key of ['a','d']){
+    await page.keyboard.press('r');const start=(await snapshot(page)).state;
+    const delta=(yaw:number)=>Math.atan2(Math.sin(yaw-start.yaw),Math.cos(yaw-start.yaw));
+    await page.keyboard.down('w');await page.keyboard.down(key);
+    try{
+      await expect.poll(async()=>Math.abs(delta((await snapshot(page)).state.yaw))).toBeGreaterThan(.15);
+      const turning=(await snapshot(page)).state,heading=delta(turning.yaw);turns.push(heading);
+      expect(Math.abs(turning.steering)).toBeGreaterThan(.05);expect(turning.lean*heading).toBeGreaterThan(0);
+    }finally{await page.keyboard.up(key);await page.keyboard.up('w');}
+  }
+  expect(turns[0]*turns[1]).toBeLessThan(0);
 });
 
 test.describe('phone bike controls',()=>{

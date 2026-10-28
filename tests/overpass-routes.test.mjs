@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {DrivingPhysics} from '../src/physics/vehicle.ts';
+import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {bridgeBarriers} from '../src/simulation/road-surfaces.ts';
 
 import {loadCentralCity} from './helpers/metro-city.mjs';
@@ -38,7 +38,7 @@ async function driveRoute(ids){
       const point=route[target],dx=point.x-state.x,dz=point.z-state.z;
       const angle=Math.atan2(Math.sin(Math.atan2(dx,dz)-state.yaw),Math.cos(Math.atan2(dx,dz)-state.yaw));
       const steeringAngle=Math.atan2(2*2.66*Math.sin(angle),Math.hypot(dx,dz));
-      const limit=Math.min(.48,Math.atan(7.8*2.66/(state.speed*state.speed+16)));
+      const limit=carSteeringLimit(state.speed);
       physics.step({...released,throttle:state.speed<8?.4:0,brake:state.speed>9?.15:0,steer:steeringAngle/limit},1/60);
     }
     assert.fail('did not complete the entire overpass route');

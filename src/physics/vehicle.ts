@@ -14,7 +14,11 @@ export const VEHICLE = {
   spawnHeight: 0.78,
   maxForwardSpeed: 27,
   maxReverseSpeed: 8,
+  maxSteering: .52,
+  maxLateralAcceleration: 8.5,
 };
+
+export const carSteeringLimit=(speed:number)=>Math.min(VEHICLE.maxSteering,Math.atan(VEHICLE.maxLateralAcceleration*VEHICLE.wheelbase/(speed*speed+16)));
 
 export interface PhysicsVehicleState extends VehicleState {
   rotation: { x: number; y: number; z: number; w: number };
@@ -205,8 +209,8 @@ export class DrivingPhysics {
     const pedalBrake = clamp(input.brake, 0, 1);
     const changeDirection = throttle * speed < -0.4;
     this.braking = pedalBrake > 0.05 || input.handbrake || changeDirection;
-    // Preserve parking lock but limit high-speed lateral demand to about .8g.
-    const steeringLimit = Math.min(.48,Math.atan(7.8*VEHICLE.wheelbase/(speed*speed+16)));
+    // Slightly tighter arcs at parking and road speeds; cap lateral demand near .87g.
+    const steeringLimit = carSteeringLimit(speed);
     const desiredSteer = clamp(input.steer, -1, 1) * steeringLimit;
     this.steering += (desiredSteer - this.steering) * (1 - Math.exp(-8 * timestep));
     const speedLimit = throttle >= 0 ? VEHICLE.maxForwardSpeed : VEHICLE.maxReverseSpeed;

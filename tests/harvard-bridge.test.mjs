@@ -5,7 +5,7 @@ import {resolveCity} from '../src/simulation/city-tiles.ts';
 import {roadDeckGeometry,deckEdge} from '../src/simulation/road-surfaces.ts';
 import {harvardBridgeSpine,HARVARD_BRIDGE_ROADS,smootMarkers,SMOOT_METRES,SMOOT_TOTAL} from '../src/simulation/harvard-bridge.ts';
 import {addHarvardBridgeDetails} from '../src/render/harvard-bridge.ts';
-import {DrivingPhysics} from '../src/physics/vehicle.ts';
+import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {read,readJson,windowCity} from './helpers/metro-city.mjs';
 const metro=await resolveCity(readJson('city.json'),read),city=windowCity(metro,{minX:-1650,maxX:-1100,minZ:-900,maxZ:0}),spine=harvardBridgeSpine(city);
 
@@ -46,7 +46,7 @@ for(const reverse of [false,true])test(`full Harvard Bridge ${reverse?'Cambridge
    if(cursor>before)lastProgress=frame;assert.ok(frame-lastProgress<420,`blocked near ${s.x},${s.z}`);
    if(cursor===points.length-1&&Math.hypot(s.x-points[cursor].x,s.z-points[cursor].z)<1.5)return;
    let target=cursor,look=0;while(target<points.length-1&&look<7){look+=Math.hypot(points[target+1].x-points[target].x,points[target+1].z-points[target].z);target++;}
-   const p=points[target],angle=Math.atan2(Math.sin(Math.atan2(p.x-s.x,p.z-s.z)-s.yaw),Math.cos(Math.atan2(p.x-s.x,p.z-s.z)-s.yaw)),steer=Math.atan2(2*2.66*Math.sin(angle),Math.max(4,Math.hypot(p.x-s.x,p.z-s.z))),limit=Math.min(.48,Math.atan(7.8*2.66/(s.speed*s.speed+16)));
+   const p=points[target],angle=Math.atan2(Math.sin(Math.atan2(p.x-s.x,p.z-s.z)-s.yaw),Math.cos(Math.atan2(p.x-s.x,p.z-s.z)-s.yaw)),steer=Math.atan2(2*2.66*Math.sin(angle),Math.max(4,Math.hypot(p.x-s.x,p.z-s.z))),limit=carSteeringLimit(s.speed);
    physics.step({...held,throttle:s.speed<8?.65:0,brake:s.speed>9?.1:0,steer:steer/limit},1/60);
   }
   assert.fail('did not finish the full bridge');

@@ -10,6 +10,7 @@ export const ULTRA_BEE = {
   maxSpeed:25, reverseSpeed:1.5, wheelbase:1.38, wheelRadius:.322,
   suspensionRest:.24, suspensionTravel:.24, spawnHeight:.64,
   wheelieDuration:3, wheelieAngle:.48,
+  maxSteering:.60, maxLateralAcceleration:6.8,
 };
 const clamp=(n:number,a:number,b:number)=>Math.max(a,Math.min(b,n));
 
@@ -50,9 +51,10 @@ export class BikeDynamics {
     if(this.braking||throttle<.1||speed<1||speed>22||!grounded)this.wheelieRemaining=0;
     const pitchTarget=ULTRA_BEE.wheelieAngle*Math.min(1,this.wheelieRemaining/.5);
     this.wheelie+=(pitchTarget-this.wheelie)*(1-Math.exp(-6*dt));
-    // Bar steering at walking pace; above that a rider leans into a bounded .7g turn.
+    // Bar steering at walking pace, tighter arcs at road speeds. Both the tire and
+    // rider use this same angle so banking cannot silently reduce steering again.
     // The lifted front tire cannot steer, so wheelies have very limited turn authority.
-    const lock=Math.min(.55,Math.atan(6.8*ULTRA_BEE.wheelbase/(v*v+5)));
+    const lock=Math.min(ULTRA_BEE.maxSteering,Math.atan(ULTRA_BEE.maxLateralAcceleration*ULTRA_BEE.wheelbase/(v*v+5)));
     const requested=clamp(input.steer,-1,1)*lock*(this.wheelieRemaining>0?.25:1);
     this.steering+=(requested-this.steering)*(1-Math.exp(-5*dt));
     const leanTarget=grounded?clamp(Math.atan(speed*speed*Math.tan(this.steering)/(ULTRA_BEE.wheelbase*9.81)),-.6,.6):0;
@@ -63,7 +65,7 @@ export class BikeDynamics {
     // Sport delivery/traction allowance accounts for drivetrain losses and SRTC;
     // calibrated with the 70 kg rider against the published 2.3-second sprint.
     const drive=brake>.1?0:this.pedal*Math.min(ULTRA_BEE.wheelTorque/ULTRA_BEE.wheelRadius,ULTRA_BEE.peakPower/Math.max(1,v))*.82*governor;
-    c.setWheelSteering(0,this.steering*Math.cos(this.lean)**2);c.setWheelSteering(1,0);
+    c.setWheelSteering(0,this.steering);c.setWheelSteering(1,0);
     c.setWheelEngineForce(0,0);c.setWheelEngineForce(1,drive);
     const regen=Math.abs(throttle)<.05?35:0;
     for(let i=0;i<2;i++)c.setWheelBrake(i,((brake*155*9)*(i===0?.65:.35)+regen)*dt);

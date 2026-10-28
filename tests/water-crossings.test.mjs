@@ -5,7 +5,7 @@ import {resolveCity,loadTile} from '../src/simulation/city-tiles.ts';
 import {bridgeSupports,sampleRoadElevation,roadProjection} from '../src/simulation/road-surfaces.ts';
 import {surveyViaductSupports} from '../src/simulation/viaduct-supports.ts';
 import {coverageTester} from '../src/simulation/coverage.ts';
-import {DrivingPhysics} from '../src/physics/vehicle.ts';
+import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {addCharlesBridgeDetails} from '../src/render/charles-bridges.ts';
 import {parkSurface,WATER_SURFACE_OFFSET} from '../src/render/area-surfaces.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
@@ -76,7 +76,7 @@ for(const [id,bounds]of [
   for(let frame=0;frame<50*60;frame++){
    const s=physics.getState();while(cursor<road.points.length-1&&Math.hypot(s.x-road.points[cursor][0],s.z-road.points[cursor][1])<8)cursor++;
    const p=road.points[cursor],angle=Math.atan2(Math.sin(Math.atan2(p[0]-s.x,p[1]-s.z)-s.yaw),Math.cos(Math.atan2(p[0]-s.x,p[1]-s.z)-s.yaw));
-   const steer=Math.atan2(2*2.66*Math.sin(angle),Math.max(4,Math.hypot(p[0]-s.x,p[1]-s.z))),limit=Math.min(.48,Math.atan(7.8*2.66/(s.speed*s.speed+16)));
+   const steer=Math.atan2(2*2.66*Math.sin(angle),Math.max(4,Math.hypot(p[0]-s.x,p[1]-s.z))),limit=carSteeringLimit(s.speed);
    physics.step({...released,throttle:s.speed<7?.35:0,brake:s.speed>8?.1:0,steer:steer/limit},1/60);
    assert.ok(s.y>Math.min(...road.elevations)-.3,'car fell through the former missing span');
    if(cursor===road.points.length-1&&Math.hypot(s.x-end[0],s.z-end[1])<1.5){
