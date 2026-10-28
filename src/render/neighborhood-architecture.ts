@@ -43,6 +43,7 @@ export function* neighborhoodDetailSteps(scene:THREE.Scene,city:CityData,options
         const u=1.5+column*3-center.u;
         for(let floor=0;floor<3;floor++){
           const y=profile.raisedBase+fh*(floor+.52),h=1.86*fh/3;
+          if(y+h/2+.22*fh/3>(building.eaveHeight??building.height))continue;
           const hits=[-.7,0,.7].map(offset=>sampler.sample(mx+tx*(u+offset),mz+tz*(u+offset),nx,nz,base+y));
           if(hits.some(hit=>!hit||Math.abs(hit.depth-center.depth)>.15)||wallTop(u,y,y+h/2+.3)<y+h/2+.15)continue;
           for(const side of [-1,1])draw(box(.11,h+.16,.15),trim,u+side*.68,y,.12);
@@ -51,7 +52,7 @@ export function* neighborhoodDetailSteps(scene:THREE.Scene,city:CityData,options
           draw(box(1.47,.06,.18),shadow,u,y-h/2-.16,.14);windows++;
         }
       }
-      const eave=wallTop(0,profile.raisedBase+3*fh-.4,profile.raisedBase+3*fh+.5),corniceY=Math.min(profile.raisedBase+3*fh+.18,eave-.22);
+      const eave=wallTop(0,profile.raisedBase+3*fh-.4,Math.min(profile.raisedBase+3*fh+.5,building.eaveHeight??building.height)),corniceY=Math.min(profile.raisedBase+3*fh+.18,eave-.22);
       if(eave>-Infinity){
         const solid=(u:number)=>wall(u,corniceY+.2)&&wall(u,corniceY-.3);
         let u0=-length/2+.3,u1=length/2-.3;

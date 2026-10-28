@@ -61,12 +61,16 @@ export function stabilizeFacadeUVs(geometry:THREE.BufferGeometry,building?:Build
   triangles.sort((a,b)=>b.area-a.area);
   const orientations:{nx:number;nz:number}[]=[],cosTolerance=Math.cos(Math.PI/36);
   const origin=building?.center??[0,0];
+  const profile=architectureFor(building),verticalScale=profile?profile.floorHeight*2:6;
+  const wallTop=((building?.eaveHeight??building?.height??1e6)-(profile?.raisedBase??0))/verticalScale*6;
+  // Carried per vertex so batched houses can share a material while retaining
+  // their own eaves. The shader omits a whole row if its head/trim cannot fit.
+  geometry.setAttribute('facadeTop',new THREE.BufferAttribute(new Float32Array(p.count).fill(wallTop),1));
   for(const t of triangles){
     let orientation=orientations.find(n=>n.nx*t.nx+n.nz*t.nz>cosTolerance);
     if(!orientation){orientation={nx:t.nx,nz:t.nz};orientations.push(orientation);}
     for(let j=0;j<3;j++){
       const i=t.i+j;
-      const profile=architectureFor(building);
       uv.setXY(i,((p.getX(i)-origin[0])*orientation.nz-(p.getZ(i)-origin[1])*orientation.nx)/6,(p.getY(i)-(building?.baseElevation??0)-(profile?.raisedBase??0))/(profile?profile.floorHeight*2:6));
     }
   }
@@ -169,6 +173,9 @@ function architecturalFacade(style:FacadeStyle,seed:number){
   if(style.detail==='terracotta')for(let col=0;col<style.columns;col++){
     const x=(col*spacing+.05)*S;c.fillStyle='#d9c2a06b';c.fillRect(x,0,9,512);c.fillStyle='#76614b55';c.fillRect(x+9,0,3,512);
   }
+  // Preserve the same wall finish before painting windows. Incomplete rows
+  // and gables use this map, including at night and beyond interior-map range.
+  const {canvas:wallCanvas,ctx:wallContext}=makeCanvas();wallContext.drawImage(canvas,0,0);
   for(let row=0;row<2;row++)for(let col=0;col<style.columns;col++){
     // The interior-mapping shader derives every opening from the same grid.
     const w=grid.width*S,h=grid.height*S,x=(spacing*(col+.5))*S-w/2,y=(6-grid.rows[row])*S-h/2;
@@ -227,7 +234,7 @@ function architecturalFacade(style:FacadeStyle,seed:number){
   material.name=style.id;material.userData.facadeStyle=style;
   // Rooms behind the glass up close; the painted glazing and night glow remain
   // the filtered far-distance look.
-  return applyWindowInteriors(material,grid,seed,style.kind==='panel'?.55:.8);
+  return applyWindowInteriors(material,grid,seed,style.kind==='panel'?.55:.8,canvasTexture(wallCanvas,true));
 }
 
 function curtainWall(){

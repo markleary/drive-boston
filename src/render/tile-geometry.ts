@@ -20,6 +20,9 @@ export function tileShellGeometry(data: TileBuildingGeometry, building: Building
   if (roof) for (let i = 0; i < uv.length / 2; i++) { uv[i * 2] = flat[i * 3] / 6; uv[i * 2 + 1] = flat[i * 3 + 2] / 6; }
   geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); geometry.computeVertexNormals();
   if (!roof) stabilizeFacadeUVs(geometry, building);
+  // Some landmark/park materials batch roofs and walls together. Keep their
+  // attribute layouts identical even though roof shaders do not read this.
+  else geometry.setAttribute('facadeTop',new THREE.BufferAttribute(new Float32Array(flat.length/3).fill(1e6),1));
   return geometry;
 }
 

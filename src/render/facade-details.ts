@@ -127,6 +127,7 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
         const key=`${Math.round((mx+tx*xx)*4)},${Math.round((mz+tz*xx)*4)}`;
         if(used.has(key))continue;used.add(key);
         for(let y=commercial?7.56:4.56;y<top-.4;y+=3){
+          if(y+hh+.22>(building.eaveHeight??building.height))break;
           const head=sampler.sample(mx+tx*xx,mz+tz*xx,nx,nz,base+y+hh+.3);if(!head||Math.abs(head.depth-depth)>.24)break;
           if(windows>=budget)break;windows++;
           styles[style.id]=(styles[style.id]??0)+1;
