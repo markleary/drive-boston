@@ -87,3 +87,8 @@
 @media(max-width:1100px){.welcome-tip{top:clamp(20px,4.4vh,48px);bottom:auto;max-width:min(340px,40vw)}.welcome-tip p{font-size:15px}}
 @media(max-width:700px){.welcome h1{font-size:clamp(80px,26vw,104px)}.welcome-wordmark{font-size:12px;gap:10px;letter-spacing:.26em}.welcome-emblem{width:36px;height:36px}.welcome-tip{top:84px;left:var(--side);right:var(--side);max-width:none;align-items:flex-start;text-align:left}.welcome-description{font-size:16px}.welcome-coordinate{display:none}}
 @media(max-height:500px){.welcome-top,.welcome-tip,.welcome-coordinate{display:none}.welcome h1{font-size:72px}.welcome-description{font-size:15px;margin-top:10px}.welcome-loader{margin-top:16px}.welcome-foot{margin-top:12px}.welcome-start{height:48px}}
+/* The stunt button appears only on the electric bike, beside the brake. */
+.wheelie-touch{display:none}
+.riding .wheelie-touch{display:block;font-size:9px;width:66px}
+@media(pointer:coarse){.riding .touch-controls{gap:10px}.riding .touch-pad{gap:6px}}
+@media(max-width:700px){.travel-switch button{padding:8px 10px}.riding .hint{gap:7px 9px}}

@@ -15,6 +15,7 @@ export class DriveAudio {
   private failed = new Set<SoundName>();
   private oneShots = new Set<AudioBufferSourceNode | OscillatorNode>();
   private fallback?: { oscillator: OscillatorNode; gain: GainNode; filter: BiquadFilterNode };
+  private electric?: {oscillator:OscillatorNode;gain:GainNode};
   private rotorFallback?: { oscillator: OscillatorNode; modulator: OscillatorNode; gain: GainNode };
   private mode: TravelMode = 'drive';
   private disposed = false;
@@ -39,10 +40,11 @@ export class DriveAudio {
     this.mode = mode; this.stopOneShots();
     if (!this.context) return;
     const now = this.context.currentTime;
-    const silent: SoundName[] = mode === 'helicopter' ? ['engine-idle', 'engine-drive', 'tire-road', 'tire-skid'] : ['helicopter-rotor'];
+    const silent: SoundName[] = mode === 'helicopter' ? ['engine-idle', 'engine-drive', 'tire-road', 'tire-skid'] : mode==='bike'?['engine-idle','engine-drive','helicopter-rotor','tire-skid']:['helicopter-rotor'];
+    this.electric?.gain.gain.setTargetAtTime(0,now,.1);
     for (const name of silent) this.loops.get(name)?.gain.gain.setTargetAtTime(0, now, 0.1);
-    if (mode === 'helicopter') this.fallback?.gain.gain.setTargetAtTime(0, now, 0.1);
-    else this.rotorFallback?.gain.gain.setTargetAtTime(0, now, 0.1);
+    if (mode !== 'drive') this.fallback?.gain.gain.setTargetAtTime(0, now, 0.1);
+    if(mode!=='helicopter')this.rotorFallback?.gain.gain.setTargetAtTime(0, now, 0.1);
   }
 
   /** A fresh, read-only snapshot for local diagnostics; never exposes audio nodes. */
@@ -53,9 +55,10 @@ export class DriveAudio {
       loadedCount: this.buffers.size, expectedCount: SOUNDS.length,
       loading: !this.disposed && Boolean(this.context) && this.buffers.size + this.failed.size < SOUNDS.length,
       failed: [...this.failed], activeLoops: this.loops.size,
-      activeOneShots: this.oneShots.size, fallback: Boolean(this.mode === 'drive' ? this.fallback : this.rotorFallback),
+      activeOneShots: this.oneShots.size, fallback: Boolean(this.mode === 'drive' ? this.fallback : this.mode==='helicopter'?this.rotorFallback:false),
       masterGain: this.master?.gain.value ?? 0, rpm: Math.round(this.rpm), gear: this.gear + 1,
       rotorGain: this.loops.get('helicopter-rotor')?.gain.gain.value ?? 0,
+      electricGain:this.electric?.gain.gain.value??0,
       engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0),
     };
   }
@@ -77,6 +80,7 @@ export class DriveAudio {
       window.addEventListener('pagehide', this.hidePage);
       window.addEventListener('pointerdown', this.resume, { capture: true });
       window.addEventListener('keydown', this.resume, { capture: true });
+      const oscillator=context.createOscillator(),gain=context.createGain();oscillator.type='sine';oscillator.frequency.value=160;gain.gain.value=0;oscillator.connect(gain);gain.connect(this.master);oscillator.start();this.electric={oscillator,gain};
       void this.loadSounds();
     }
     // Resume directly in the user gesture, even before the next simulation tick.
@@ -110,6 +114,15 @@ export class DriveAudio {
         this.rotorFallback.gain.gain.setTargetAtTime(0.07 + power * 0.04, now, 0.15);
         this.rotorFallback.modulator.frequency.setTargetAtTime(17 + power * 2, now, 0.2);
       }
+      return;
+    }
+    if(this.mode==='bike'){
+      this.rpm=0;this.gear=0;
+      this.electric?.oscillator.frequency.setTargetAtTime(150+velocity*27+load*70,now,.12);
+      this.electric?.gain.gain.setTargetAtTime((velocity>.3||load>.1)?(.008+load*.022):0,now,.10);
+      this.setLoop('city-ambience',.15,1,4200);
+      this.setLoop('tire-road',Math.pow(clamp(velocity/25),.8)*.22,.7+velocity/35,1700+velocity*80);
+      this.setLoop('tire-skid',controls?.handbrake&&velocity>4?.10:0,1,2700);
       return;
     }
     // Gentle automatic shifts keep the engine from becoming a rising siren.
@@ -162,7 +175,7 @@ export class DriveAudio {
     this.disposed = true;
     this.stopOneShots();
     for (const loop of this.loops.values()) { loop.source.stop(); loop.source.disconnect(); }
-    this.fallback?.oscillator.stop(); this.rotorFallback?.oscillator.stop(); this.rotorFallback?.modulator.stop(); this.loops.clear(); this.buffers.clear();
+    this.electric?.oscillator.stop();this.fallback?.oscillator.stop(); this.rotorFallback?.oscillator.stop(); this.rotorFallback?.modulator.stop(); this.loops.clear(); this.buffers.clear();
     document.removeEventListener('visibilitychange', this.visibilityChanged);
     window.removeEventListener('pagehide', this.hidePage);
     window.removeEventListener('pointerdown', this.resume, { capture: true });

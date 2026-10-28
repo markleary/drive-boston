@@ -29,6 +29,7 @@ export interface InterfaceStats {
   /** Height above the local ground, in meters. */
   altitude?: number;
   verticalSpeed?: number;
+  wheelieRemaining?:number;
   gear?:number;
   rpm?:number;
   performance?:HUDPerformanceData;
@@ -65,7 +66,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   host.innerHTML = `
     <div class="hud brand"><div class="brand-symbol" aria-hidden="true">B</div><div><div class="brand-name">BOSTON</div><div class="brand-subtitle" id="neighborhood-label">Back Bay, Massachusetts</div></div></div>
     <div class="hud location-pill"><span class="location-dot"></span><span id="location-label">Copley Square</span></div>
-    <nav class="hud travel-switch" aria-label="Travel mode"><button data-travel="drive" data-testid="mode-drive" class="active" aria-pressed="true" aria-label="Drive mode">Drive <kbd>1</kbd></button><button data-travel="helicopter" data-testid="mode-helicopter" aria-pressed="false" aria-label="Helicopter mode">Helicopter <kbd>2</kbd></button></nav>
+    <nav class="hud travel-switch" aria-label="Travel mode"><button data-travel="drive" data-testid="mode-drive" class="active" aria-pressed="true" aria-label="Drive mode">Drive <kbd>1</kbd></button><button data-travel="helicopter" data-testid="mode-helicopter" aria-pressed="false" aria-label="Helicopter mode">Helicopter <kbd>2</kbd></button><button data-travel="bike" data-testid="mode-bike" aria-pressed="false" aria-label="Ultra Bee bike mode">Ultra Bee <kbd>3</kbd></button></nav>
     <nav class="hud toolbar" aria-label="Drive controls">
       <button class="tool-btn wide" id="open-map" aria-label="Open map" title="Map · M">${svg('map')}<span>Map <span class="key">M</span></span></button>
       <button class="tool-btn" id="cycle-camera" aria-label="Change camera" title="Change camera · C">${svg('camera')}</button>
@@ -92,13 +93,13 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
         <span class="setting-label">City sound</span><div class="segments" aria-label="City sound"><button data-sound="on" class="active" aria-pressed="true">Sound on</button><button data-sound="off" aria-pressed="false">Muted</button></div>
         <span class="setting-label">Graphics</span><div class="segments" aria-label="Graphics quality"><button data-quality="high" class="active" aria-pressed="true">Detailed</button><button data-quality="balanced" aria-pressed="false">Balanced</button></div>
         <span class="setting-label">HUD diagnostics</span><div class="segments" aria-label="HUD diagnostics"><button data-hud="performance" aria-pressed="false">Performance <kbd>P</kbd></button><button data-hud="debug" aria-pressed="false">Debug <kbd>&#96;</kbd></button></div>
-        <div class="controls-grid" id="controls-help"><span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Drive / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd></div>
+        <div class="controls-grid" id="controls-help"><span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Car / helicopter / Ultra Bee</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd></div>
         <div class="panel-actions"><button class="primary" id="resume-drive">Keep driving ${svg('arrow')}</button><button class="text-btn" id="reset-drive">Reset car</button></div><div style="margin-top:20px"><button class="text-btn" id="open-credits">About this city</button></div>
       </div>
     </section>
     <section class="modal-scrim hidden" id="credits-modal" role="dialog" aria-modal="true" aria-labelledby="credits-title"><div class="panel"><button class="close-btn" id="close-credits" aria-label="Back to settings">${svg('close')}</button><div class="eyebrow">An independent prototype</div><h2 id="credits-title">A real place.</h2><div class="credits-copy"><p>Built around Boston’s real streets, building shapes, and hills. Façades and street details are artistic interpretations; this is an exploration game, not a navigation service.</p><ul id="source-list"></ul><p>Original game implementation with Three.js and Rapier.</p></div></div></section>
     <section class="map-modal hidden" id="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-header"><div><div class="eyebrow">The Boston atlas</div><h2 id="map-title">Find your next turn.</h2></div><button class="close-map" id="close-map">Back to driving <kbd>M</kbd></button></div><canvas id="fullmap" aria-label="Interactive map of Boston streets, buildings and landmarks"></canvas><div class="map-tools"><button id="map-zoom-in" aria-label="Zoom map in">+</button><button id="map-zoom-out" aria-label="Zoom map out">−</button><button id="map-center" aria-label="Center map on car">${svg('target')}</button><button id="map-overview" aria-label="Show all Boston destinations" title="Show all destinations">${svg('map')}</button></div><aside class="map-places" id="map-places"><div class="map-places-heading">Places to explore<span>Choose a place to start nearby</span></div><div class="map-destinations" id="map-destinations" role="navigation" aria-label="Landmark destinations"></div></aside><div class="map-note">Drag to explore · Scroll to zoom</div></section>
-    <div class="touch-controls suspended" id="touch-controls" aria-label="Touch driving controls"><div class="touch-pad"><button class="touch-btn" data-touch="left" aria-label="Steer left">←</button><button class="touch-btn" data-touch="right" aria-label="Steer right">→</button></div><button class="touch-btn brake" data-touch="handbrake" aria-label="Handbrake">BRAKE</button><div class="touch-pad"><button class="touch-btn" data-touch="reverse" aria-label="Brake and reverse">↓</button><button class="touch-btn" data-touch="accelerate" aria-label="Accelerate">↑</button></div></div>
+    <div class="touch-controls suspended" id="touch-controls" aria-label="Touch driving controls"><div class="touch-pad"><button class="touch-btn" data-touch="left" aria-label="Steer left">←</button><button class="touch-btn" data-touch="right" aria-label="Steer right">→</button></div><button class="touch-btn wheelie-touch" data-touch="wheelie" aria-label="Wheelie">WHEELIE</button><button class="touch-btn brake" data-touch="handbrake" aria-label="Handbrake">BRAKE</button><div class="touch-pad"><button class="touch-btn" data-touch="reverse" aria-label="Brake and reverse">↓</button><button class="touch-btn" data-touch="accelerate" aria-label="Accelerate">↑</button></div></div>
     <div class="flight-touch suspended" id="flight-touch" aria-label="Helicopter lift and rotation"><button class="touch-btn" data-touch="yaw-left" aria-label="Rotate helicopter left">↶</button><button class="touch-btn" data-touch="yaw-right" aria-label="Rotate helicopter right">↷</button><button class="touch-btn" data-touch="descend" aria-label="Descend">⇩</button><button class="touch-btn" data-touch="ascend" aria-label="Ascend">⇧</button></div>
   `;
   const el = <T extends HTMLElement = HTMLElement>(id: string) => host.querySelector<T>(`#${id}`)!;
@@ -132,7 +133,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const neighborhoodAt=(x:number,z:number)=>areaAt(neighborhoods,x,z)?.name??'Boston';
   let latestStats:InterfaceStats={};
   const diagnostics=createDiagnostics(host,()=>{
-    const road=(travelMode==='drive'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z).road;
+    const road=(travelMode!=='helicopter'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z).road;
     return{state:{...state},groundHeight:latestStats.groundHeight??0,road:{name:road.name,id:road.id},neighborhood:neighborhoodAt(state.x,state.z),camera,lighting,quality:latestStats.quality??'high',travelMode,
       performance:latestStats.performance??{fps:latestStats.fps??0,frameMs:0,drawCalls:0,triangles:0,geometries:0,textures:0,traffic:0,transit:0,pedestrians:0}};
   });
@@ -173,7 +174,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     updatePause();
   }
   function setCamera(mode: CameraMode, notify = false) {
-    camera = mode; const name = travelMode === 'helicopter' && mode === 'hood' ? 'Cockpit camera' : cameraNames[mode]; el('camera-label').textContent = name;
+    camera = mode; const name = travelMode === 'helicopter' && mode === 'hood' ? 'Cockpit camera' : travelMode==='bike'&&mode==='hood'?'Rider camera':cameraNames[mode]; el('camera-label').textContent = name;
     host.querySelectorAll<HTMLButtonElement>('[data-camera]').forEach(b => { const active = b.dataset.camera === mode; b.classList.toggle('active', active); b.setAttribute('aria-pressed', String(active)); });
     if (notify) { callbacks.onCamera(mode); toast(name); }
   }
@@ -195,33 +196,37 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   function setTravelMode(mode: TravelMode, notify = false) {
     const changed = travelMode !== mode;
     travelMode = mode;
-    const flying = mode === 'helicopter';
+    const flying = mode === 'helicopter',riding=mode==='bike';
+    host.classList.toggle('riding',riding);
     host.classList.toggle('flying', flying);
     held.clear(); host.querySelectorAll('.touch-btn').forEach(button => button.classList.remove('held'));
     host.querySelectorAll<HTMLButtonElement>('[data-travel]').forEach(button => { const active = button.dataset.travel === mode; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
     el('altitude-readout').classList.toggle('hidden', !flying);
-    el('journey-label').textContent = flying ? 'ABOVE BOSTON' : 'AFTERNOON DRIVE';
+    el('journey-label').textContent = flying ? 'ABOVE BOSTON' : riding ? 'ULTRA BEE · ELECTRIC' : 'AFTERNOON DRIVE';
     el('resume-drive').innerHTML = `${flying ? 'Keep flying' : 'Keep driving'} ${svg('arrow')}`;
-    el('reset-drive').textContent = flying ? 'Reset helicopter' : 'Reset car';
+    el('reset-drive').textContent = flying ? 'Reset helicopter' : riding ? 'Reset bike' : 'Reset car';
     el('close-settings').setAttribute('aria-label', flying ? 'Resume flying' : 'Resume driving');
     el('close-map').innerHTML = `Back to ${flying ? 'flying' : 'driving'} <kbd>M</kbd>`;
-    el('map-center').setAttribute('aria-label', flying ? 'Center map on helicopter' : 'Center map on car');
+    el('map-center').setAttribute('aria-label', flying ? 'Center map on helicopter' : riding ? 'Center map on bike' : 'Center map on car');
     host.querySelector('.toolbar')?.setAttribute('aria-label', flying ? 'Flight controls' : 'Drive controls');
-    host.querySelector<HTMLButtonElement>('[data-camera="hood"]')!.textContent = flying ? 'Cockpit' : 'Hood';
+    host.querySelector<HTMLButtonElement>('[data-camera="hood"]')!.textContent = flying ? 'Cockpit' : riding ? 'Rider' : 'Hood';
     el('drive-hint').innerHTML = flying
       ? '<span><kbd>W</kbd><kbd>S</kbd> Forward / back</span><span><kbd>A</kbd><kbd>D</kbd> Strafe</span><span><kbd>Q</kbd><kbd>E</kbd> Turn</span><span><kbd>Space</kbd> Up</span><span><kbd>Shift</kbd> Down</span>'
+      : riding ? '<span><kbd>W</kbd><kbd>S</kbd> Ride / brake</span><span><kbd>A</kbd><kbd>D</kbd> Lean</span><span><kbd>Space</kbd> Brake</span><span><kbd>X</kbd> Wheelie · 3s</span>'
       : '<span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Drive</span><span><kbd>Space</kbd> Handbrake</span><span><kbd>R</kbd> Reset</span>';
     el('controls-help').innerHTML = flying
-      ? '<span>Forward / backward</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Move left / right</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Turn left / right</span><span><kbd>Q</kbd> <kbd>E</kbd></span><span>Rise / descend</span><span><kbd>Space</kbd> <kbd>Shift</kbd></span><span>Drive / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Reset helicopter / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Mute sound</span><kbd>N</kbd><span>Pause</span><kbd>Esc</kbd>'
-      : '<span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Drive / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd>';
+      ? '<span>Forward / backward</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Move left / right</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Turn left / right</span><span><kbd>Q</kbd> <kbd>E</kbd></span><span>Rise / descend</span><span><kbd>Space</kbd> <kbd>Shift</kbd></span><span>Car / helicopter / Ultra Bee</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Reset helicopter / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Mute sound</span><kbd>N</kbd><span>Pause</span><kbd>Esc</kbd>'
+      : '<span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Car / helicopter / Ultra Bee</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd>';
+    if(riding)el('controls-help').innerHTML='<span>Throttle / brake & reverse assist</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Lean / steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Both brakes</span><kbd>Space</kbd><span>Wheelie · up to 3 seconds while accelerating</span><kbd>X</kbd><span>Gamepad wheelie</span><span>X / Square</span><span>Car / helicopter / Ultra Bee</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / camera / reset</span><span><kbd>M</kbd> <kbd>C</kbd> <kbd>R</kbd></span><span>Hide interface / mute / pause</span><span><kbd>H</kbd> <kbd>N</kbd> <kbd>Esc</kbd></span>';
     el('controls-help').insertAdjacentHTML('beforeend',statsHelp);
+    host.querySelector('[data-touch=handbrake]')?.setAttribute('aria-label',riding?'Brake bike':'Handbrake');
     const labels = flying ? { left:'Move helicopter left', right:'Move helicopter right', reverse:'Fly backward', accelerate:'Fly forward' } : { left:'Steer left', right:'Steer right', reverse:'Brake and reverse', accelerate:'Accelerate' };
     for (const [touch, label] of Object.entries(labels)) host.querySelector(`[data-touch="${touch}"]`)?.setAttribute('aria-label', label);
     el('touch-controls').setAttribute('aria-label', flying ? 'Touch flight movement' : 'Touch driving controls');
     host.querySelectorAll<HTMLButtonElement>('[data-destination]').forEach(button => { const name = button.querySelector('strong')?.textContent; button.setAttribute('aria-label', `${flying ? 'Fly' : 'Start driving'} near ${name}`); });
     setCamera(camera);
     // A deliberate mode switch brings a hidden HUD back so the new mode's instruments show.
-    if (notify && changed) { setHudHidden(false); callbacks.onTravelMode?.(mode); toast(flying ? (matchMedia('(pointer: coarse)').matches ? 'Helicopter · Upper arrows control altitude' : 'Helicopter · Space to rise, Shift to descend') : 'Back behind the wheel.'); }
+    if (notify && changed) { setHudHidden(false); callbacks.onTravelMode?.(mode); toast(flying ? (matchMedia('(pointer: coarse)').matches ? 'Helicopter · Upper arrows control altitude' : 'Helicopter · Space to rise, Shift to descend') : riding ? (matchMedia('(pointer: coarse)').matches?'Ultra Bee · Accelerate, then tap Wheelie':'Ultra Bee · Accelerate, then X for a 3-second wheelie') : 'Back behind the wheel.'); }
   }
   function toast(message: string) {
     el('toast').textContent = message; el('toast').classList.add('visible'); window.clearTimeout(toastTimer);
@@ -432,15 +437,16 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     else if(e.code==='KeyP'&&!isPaused()){e.preventDefault();diagnostics.togglePerformance();}
     else if(e.code==='Backquote'&&!isPaused()){e.preventDefault();diagnostics.toggleDebug();}
     else if(e.code==='KeyN'){e.preventDefault();setSound(!sound,true);}
-    else if((e.code==='Digit1'||e.code==='Digit2')&&!isPaused()){e.preventDefault();setTravelMode(e.code==='Digit1'?'drive':'helicopter',true);}
+    else if((e.code==='Digit1'||e.code==='Digit2'||e.code==='Digit3')&&!isPaused()){e.preventDefault();setTravelMode(e.code==='Digit1'?'drive':e.code==='Digit2'?'helicopter':'bike',true);}
   });
 
   function update(next: VehicleState, stats?: InterfaceStats) {
     if(stats?.travelMode && stats.travelMode!==travelMode)setTravelMode(stats.travelMode);
     state=next;latestStats=stats??{};const speed=Math.abs(state.speed)*2.236936;
-    const speedScale=travelMode==='helicopter'?HELICOPTER.cruiseSpeed*2.236936:65;
-    el('speed-value').textContent=String(Math.round(speed));el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;el('gear').textContent=travelMode==='helicopter'?'H':state.speed<-.3?'R':`D${stats?.gear&&stats.gear>0?stats.gear:''}`;
+    const speedScale=travelMode==='helicopter'?HELICOPTER.cruiseSpeed*2.236936:travelMode==='bike'?56:65;
+    el('speed-value').textContent=String(Math.round(speed));el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;el('gear').textContent=travelMode==='helicopter'?'H':state.speed<-.3?'R':travelMode==='bike'?'E':`D${stats?.gear&&stats.gear>0?stats.gear:''}`;
     el('gear').title=travelMode==='drive'&&stats?.rpm?`Automatic transmission · ${Math.round(stats.rpm)} rpm`:'';
+    if(travelMode==='bike')el('journey-label').textContent=(stats?.wheelieRemaining??0)>0?`WHEELIE · ${Math.ceil(stats!.wheelieRemaining!)}s`:'ULTRA BEE · ELECTRIC';
     if(travelMode==='helicopter'){
       altitude=Math.max(0,stats?.altitude??state.y);el('altitude-value').textContent=String(Math.round(altitude*3.28084));
       const climb=stats?.verticalSpeed??0;el('vertical-speed').textContent=Math.abs(climb)<.25?'LEVEL':`${climb>0?'↑':'↓'} ${Math.round(Math.abs(climb)*3.28084)} FT/S`;
@@ -460,7 +466,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   resize();updatePause();
   return {
     update,isPaused,isMapOpen:()=>mapOpen,
-    getTouchInput:():DriveInput=>({throttle:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),brake:0,steer:isPaused()?0:Number(held.has('left'))-Number(held.has('right')),handbrake:!isPaused()&&held.has('handbrake')}),
+    getTouchInput:():DriveInput=>({throttle:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),brake:0,steer:isPaused()?0:Number(held.has('left'))-Number(held.has('right')),handbrake:!isPaused()&&held.has('handbrake'),wheelie:!isPaused()&&held.has('wheelie')}),
     getFlightTouchInput:()=>({forward:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),strafe:isPaused()?0:Number(held.has('right'))-Number(held.has('left')),yaw:isPaused()?0:Number(held.has('yaw-right'))-Number(held.has('yaw-left')),lift:isPaused()?0:Number(held.has('ascend'))-Number(held.has('descend'))}),
     setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},
     setReady(){ready=true;cancelAnimationFrame(loadFrame);loadShown=1;drawLoading();el('welcome').classList.add('ready');el<HTMLButtonElement>('start-drive').disabled=false;el('start-drive').focus();},

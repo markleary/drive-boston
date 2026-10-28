@@ -1,4 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
+import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
 import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface } from '../simulation/road-surfaces.ts';
@@ -21,6 +22,10 @@ export interface PhysicsVehicleState extends VehicleState {
   braking: boolean;
   gear: number;
   rpm: number;
+  vehicle: 'car' | 'ultrabee';
+  lean: number;
+  wheelie: number;
+  wheelieRemaining: number;
 }
 
 let initialization: Promise<void> | undefined;
@@ -30,7 +35,9 @@ const clamp = (value: number, low: number, high: number) => Math.max(low, Math.m
 export class DrivingPhysics {
   readonly world: RAPIER.World;
   readonly body: RAPIER.RigidBody;
-  readonly controller: RAPIER.DynamicRayCastVehicleController;
+  controller!: RAPIER.DynamicRayCastVehicleController;
+  private bike?: BikeDynamics;
+  get vehicleType(): 'car' | 'ultrabee' { return this.bike ? 'ultrabee' : 'car'; }
   readonly chassisCollider: RAPIER.Collider;
   /** Additional mesh/structure geometry used by flight's continuous sweeps. */
   readonly detailedColliders = new Set<number>();
@@ -88,6 +95,16 @@ export class DrivingPhysics {
       .setMassProperties(VEHICLE.mass, { x: 0, y: -0.17, z: 0 }, { x: 2150, y: 2250, z: 720 }, { x: 0, y: 0, z: 0, w: 1 })
       .setFriction(0.3).setRestitution(0.05), this.body);
 
+    this.configureCar();
+    this.reset(city.spawn.x, city.spawn.z, city.spawn.yaw);
+    // Initialize broad-phase queries before the first wheel raycast.
+    this.world.step();
+  }
+
+  private configureCar() {
+    this.chassisCollider.setShape(new RAPIER.Cuboid(.85, .23, 2.02));
+    this.chassisCollider.setMassProperties(VEHICLE.mass, {x:0,y:-.17,z:0}, {x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
+    this.body.setLinearDamping(.13); this.body.setAngularDamping(1.6);
     this.controller = this.world.createVehicleController(this.body);
     this.controller.indexUpAxis = 1;
     this.controller.setIndexForwardAxis = 2;
@@ -105,9 +122,16 @@ export class DrivingPhysics {
         this.controller.setWheelSideFrictionStiffness(i, 1.05);
       }
     }
-    this.reset(city.spawn.x, city.spawn.z, city.spawn.yaw);
-    // Initialize broad-phase queries before the first wheel raycast.
-    this.world.step();
+  }
+
+  setVehicleType(kind: 'car' | 'ultrabee') {
+    if (kind === this.vehicleType) return;
+    const state = this.getState();
+    this.world.removeVehicleController(this.controller);
+    this.bike = kind === 'ultrabee' ? new BikeDynamics(this.world, this.body, this.chassisCollider) : undefined;
+    if (this.bike) this.controller = this.bike.controller; else this.configureCar();
+    this.body.recomputeMassPropertiesFromColliders();
+    this.reset(state.x, state.z, state.yaw, sampleDriveSurface(this.city,state.x,state.z,state.y).road?.id);
   }
 
   addStaticMesh(vertices: Float32Array, indices: Uint32Array) {
@@ -171,6 +195,10 @@ export class DrivingPhysics {
     const timestep = Math.min(dt, 1 / 30);
     this.world.timestep = timestep;
     const state = this.getState();
+    if (this.bike) {
+      this.bike.step(input, timestep, state.speed, state.yaw);
+      this.steering=this.bike.steering;this.braking=this.bike.braking;this.gear=state.speed<-.3?-1:1;this.rpm=0;
+    } else {
     const speed = state.speed;
     const throttle = clamp(input.throttle, -1, 1);
     const pedalBrake = clamp(input.brake, 0, 1);
@@ -222,6 +250,7 @@ export class DrivingPhysics {
         this.body.applyImpulse({x:impulse.x*scale,y:impulse.y*scale,z:impulse.z*scale},true);
       }
     }
+    }
     this.world.step();
 
     const p = this.body.translation();
@@ -244,11 +273,11 @@ export class DrivingPhysics {
     const fy = 2 * (q.y * q.z - q.w * q.x);
     return {
       x: p.x, y: p.y, z: p.z,
-      yaw: Math.atan2(fx, fz), speed: velocity.x * fx + velocity.y * fy + velocity.z * fz,
+      yaw: Math.atan2(fx, fz), speed: this.bike ? (velocity.x*fx+velocity.z*fz)/(Math.hypot(fx,fz)||1) : velocity.x * fx + velocity.y * fy + velocity.z * fz,
       steering: this.steering, rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
-      wheelAngles: [0, 1, 2, 3].map(i => this.controller.wheelRotation(i) ?? 0),
-      suspension: [0, 1, 2, 3].map(i => this.controller.wheelSuspensionLength(i) ?? VEHICLE.suspensionRest),
-      braking: this.braking,gear:this.gear,rpm:this.rpm,
+      wheelAngles: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelRotation(i) ?? 0),
+      suspension: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelSuspensionLength(i) ?? VEHICLE.suspensionRest),
+      braking: this.braking,gear:this.gear,rpm:this.rpm,vehicle:this.vehicleType,lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
     };
   }
 
@@ -256,14 +285,14 @@ export class DrivingPhysics {
     if (![x, z, yaw].every(Number.isFinite)) return;
     this.rescue = { x, z, yaw,roadId };
     const surface=sampleDriveSurface(this.city,x,z,undefined,roadId),normal=surface.normal;
-    this.body.setTranslation({ x, y: surface.height + VEHICLE.spawnHeight / Math.max(.5, normal.y), z }, true);
+    this.body.setTranslation({ x, y: surface.height + (this.bike?ULTRA_BEE.spawnHeight:VEHICLE.spawnHeight) / Math.max(.5, normal.y), z }, true);
     this.body.setRotation(rotationFromNormal(normal,yaw), true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.body.resetForces(true);
     this.body.resetTorques(true);
     this.steering = 0;this.pedal=0;this.gear=1;this.rpm=850;
-    this.overturnedTime = 0;
+    this.overturnedTime = 0;this.braking=false;this.bike?.reset();
     for (let i = 0; i < this.controller.numWheels(); i++) {
       this.controller.setWheelEngineForce(i, 0);
       this.controller.setWheelBrake(i, 0);
