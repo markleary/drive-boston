@@ -69,3 +69,15 @@ export function planPorchStairs(site:PorchStairSite,ground:(x:number,z:number)=>
   // squeezed onto the sidewalk or through a neighboring surveyed building.
   return undefined;
 }
+
+/** A raised masonry door platform and flight share the same terrain
+ * solver as wood porches. Every block, including the upper platform, extends
+ * into the ground underneath its complete footprint. */
+export function planMasonryStoop(site:PorchStairSite,ground:(x:number,z:number)=>number,clear:(p:Point2)=>boolean=()=>true){
+  const stairs=planPorchStairs(site,ground,clear);if(!stairs)return undefined;
+  const center:Point2=[site.origin[0]+site.normal[0]*(site.frontDepth+site.depth/2),site.origin[1]+site.normal[1]*(site.frontDepth+site.depth/2)];
+  const corners=stairFootprint(center,site.normal,site.width,site.depth),samples=footprintSamples(center,corners),heights=samples.map(p=>ground(...p));
+  if(site.landingY<Math.max(...heights)+.025||!samples.every(clear))return undefined;
+  const platform:StairBlock={center,corners,width:site.width,depth:site.depth,top:site.landingY,bottom:Math.min(...heights)-.12};
+  return{...stairs,platform};
+}

@@ -7,7 +7,7 @@ import { drain, due } from './pacing';
 import { architectureFor, prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { planPorchStairs, stairFootprint } from './porch-stairs.ts';
 import { pointInside } from '../simulation/roads.ts';
-import { isMetroCity } from '../simulation/city-tiles.ts';
+import { otherBuildingHulls } from '../simulation/city-tiles.ts';
 export { architectureFor, prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 let porchMaterials:{trim:THREE.Material;shadow:THREE.Material;deck:THREE.Material;door:THREE.Material}|undefined;
 
@@ -74,7 +74,7 @@ export function* neighborhoodDetailSteps(scene:THREE.Scene,city:CityData,options
     const probes=[-.9,0,.9].flatMap(offset=>[.8,fh+1,2*fh+1].map(y=>sampler.sample(x+tx*offset,z+tz*offset,nx,nz,base+profile.raisedBase+y)));
     if(probes.some(hit=>!hit||Math.abs(hit.depth)>.35))continue;
     const frontDepth=probes[1]!.depth;
-    const neighbors=(isMetroCity(city)?city.index.near(x,z,35):city.buildings).filter(other=>(other as typeof building).id!==building.id&&Math.hypot(other.center[0]-x,other.center[1]-z)<35);
+    const neighbors=otherBuildingHulls(city,building,x,z,35);
     const stairs=planPorchStairs({origin:[x,z],tangent:[tx,tz],normal:[nx,nz],frontDepth,width,depth,frontage:length,along:u,setback,landingY:base+profile.raisedBase+.085},
       (x,z)=>sampleElevation(city,x,z),p=>!neighbors.some(other=>pointInside(p,other.footprint)));
     if(!stairs)continue;

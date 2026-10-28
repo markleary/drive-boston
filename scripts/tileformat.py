@@ -13,12 +13,13 @@ Layout (little-endian, whole file gzip-compressed):
 from __future__ import annotations
 import gzip, json, math, pathlib, struct
 import numpy as np
+from mesh_winding import orient_shells
 
 MAGIC=b'DBT2'
 SCALE=.01
 SCALES=(.01,.02,.05,.1)
 
-def mesh_record(vertices,faces,anchor,base):
+def mesh_record(vertices,faces,anchor,base,repair_winding=True):
  """Quantize a building mesh: drop degenerate or buried triangles, split facade
  and roof by face normal, deduplicate vertices. Returns (positions int16 Nx3,
  facade uint32 Mx3, roof uint32 Kx3, scale) or None when nothing visible
@@ -40,6 +41,10 @@ def mesh_record(vertices,faces,anchor,base):
  ok=(f[:,0]!=f[:,1])&(f[:,1]!=f[:,2])&(f[:,0]!=f[:,2]);f=f[ok];roof=roof[ok]
  if len(f)==0:return None
  used,remap=np.unique(f,return_inverse=True);f=remap.reshape(-1,3)
+ # Imported surveys are authored independently and can contain an inverted
+ # shell beside correctly oriented parts. Repair at the final packaged scale;
+ # positions, topology and the facade/roof split remain unchanged.
+ if repair_winding:f=orient_shells(unique[used]*scale+np.asarray(anchor),f)[0]
  return unique[used].astype(np.int16),f[~roof].astype(np.uint32),f[roof].astype(np.uint32),scale
 
 def write_tile(path,header,geometry):

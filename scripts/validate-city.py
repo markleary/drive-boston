@@ -14,6 +14,7 @@ from shapely.geometry import Polygon, Point
 from shapely.ops import unary_union
 from shapely.prepared import prep
 ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scripts'));import tileformat
+from mesh_winding import orient_shells
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
 data_dir=args.data_dir;city=json.loads((data_dir/'city.json').read_text());provenance=json.loads((data_dir/'provenance.json').read_text())
 assert provenance.get('region')=='metro','validate-city.py checks metro packages written by scripts/build-metro.py'
@@ -86,6 +87,8 @@ for key in keys:
   assert covered.covers(Point(x,z)),f"building outside coverage: {b['id']}"
   assert len(b['footprint'])>=3 and b['height']>0 and b['district'] in names and b['norm']['policy'] in policies
   p=b['positions'];base=b['baseElevation'];assert len(p)==b['v']>0 and np.isfinite(p).all()
+  if not b.get('structure'):
+   assert not orient_shells(p,np.concatenate([b['facade'],b['roof']]))[1],f"{b['id']} contains an inverted occupied shell"
   assert b['facade'].max(initial=-1)<b['v'] and b['roof'].max(initial=-1)<b['v'] and b['facade'].size+b['roof'].size>0
   top=p[:,1].max();bottom=p[:,1].min();step=b.get('scale',tileformat.SCALE);triangles+=len(b['facade'])+len(b['roof'])
   if b.get('source')=='osm-extrusion':

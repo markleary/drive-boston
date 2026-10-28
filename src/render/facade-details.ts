@@ -8,6 +8,10 @@ import { architectureFor } from './neighborhood-profiles';
 import { isFenwayBuilding } from './fenway-park';
 import {isStateHouse} from './state-house';
 import { streetCharacter } from './street-character';
+import { sampleElevation } from '../simulation/terrain.ts';
+import { pointInside } from '../simulation/roads.ts';
+import { otherBuildingHulls } from '../simulation/city-tiles.ts';
+import { planMasonryStoop } from './porch-stairs.ts';
 
 interface WallTriangle { a: THREE.Vector3; b: THREE.Vector3; c: THREE.Vector3; normal: THREE.Vector3; minY: number; maxY: number; u:[number,number,number]; }
 interface WallHit { depth: number; normal: THREE.Vector3; u:number; }
@@ -193,20 +197,32 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
       if(residential&&!commercial&&!office&&!modern&&span>4.5&&building.height<30&&random()<.34&&road.distance>road.road.width/2+5.5){
         if(road.road.points.some((p,i)=>(i===0||i===road.road.points.length-1)&&Math.hypot(p[0]-mx,p[1]-mz)<14))continue;
         const lower=sampler.sample(mx,mz,nx,nz,base+1.7);if(!lower||Math.abs(lower.depth-depth)>.25)continue;
+        const ground=(x:number,z:number)=>sampleElevation(city,x,z);
+        const neighbors=otherBuildingHulls(city,building,mx,mz,35);
+        const stairs=planMasonryStoop({origin:[mx,mz],tangent:[tx,tz],normal:[nx,nz],frontDepth:depth,width:1.82,depth:1.5,frontage:length,along:length/2-along,setback:road.distance-road.road.width/2,landingY:base+1.12},ground,p=>!neighbors.some(other=>pointInside(p,other.footprint)));
+        if(!stairs)continue;
         stoops++;
         draw(box(1.48,2.75,.12),wood,0,2.48,.09);
         draw(new THREE.PlaneGeometry(1.15,.5),glass,0,3.46,.16);
         for(const side of [-1,1])draw(box(.19,2.94,.26),stone,side*.85,2.53,.22);
         draw(box(2.02,.25,.48),stone,0,4.09,.27);
-        for(let j=0;j<5;j++)draw(box(1.8,.2,.45*(5-j)),stone,0,.1+j*.2,.5+.225*(5-j));
-        draw(box(1.82,.16,1.0),stone,0,1.04,.57);
-        // Railings and slender balusters follow the stoop's descent into the setback.
-        for(const side of [-1,1]){
-          for(let j=0;j<6;j++){const d=.6+j*.36,y=1.15-j*.17;draw(box(.045,.85,.045),iron,side*.97,y+.38,d);}
-          draw(box(.06,.06,2.16),iron,side*.97,1.53,1.52,Math.atan(.17/.36));
+        const stairYaw=Math.atan2(stairs.direction[0],stairs.direction[1]);
+        for(const block of [stairs.platform,...stairs.steps,stairs.landing]){
+          add(box(block.width,block.top-block.bottom,block.depth),stone,block.center[0],(block.top+block.bottom)/2,block.center[1],block===stairs.platform?yaw:stairYaw);
         }
-        for(let xx=-half+.3;xx<half;xx+=.28){if(Math.abs(xx)<1.2)continue;draw(box(.035,.8,.035),iron,xx,.46,1.05);}
-        for(const side of [-1,1])if(half>1.5)draw(box(half-1.3,.045,.045),iron,side*(half+1.3)/2,.88,1.05);
+        // Posts and handrails follow the solved flight, rather than a fixed
+        // five-step ornament suspended at the survey's raised base elevation.
+        const run=stairs.run+stairs.landing.depth/2,drop=base+1.12-stairs.landing.top;
+        for(const side of [-1,1]){
+          const acrossX=stairs.direction[1]*side*(stairs.width/2+.025),acrossZ=-stairs.direction[0]*side*(stairs.width/2+.025);
+          add(box(.045,.88,.045),iron,stairs.start[0]+acrossX,base+1.56,stairs.start[1]+acrossZ,stairYaw);
+          for(const block of [...stairs.steps,stairs.landing]){
+            add(box(.045,.88,.045),iron,block.center[0]+acrossX,block.top+.44,block.center[1]+acrossZ,stairYaw);
+          }
+          add(box(.06,.06,Math.hypot(run,drop)),iron,stairs.start[0]+stairs.direction[0]*run/2+acrossX,base+1.12-drop/2+.88,stairs.start[1]+stairs.direction[1]*run/2+acrossZ,stairYaw,Math.atan2(drop,run));
+        }
+        // Low frontage fences are seated on the local yard as well.
+        for(let xx=-half+.3;xx<half;xx+=.28){if(Math.abs(xx)<1.2)continue;const y=ground(mx+tx*xx+nx*(depth+1.05),mz+tz*xx+nz*(depth+1.05))-base;draw(box(.035,.8,.035),iron,xx,y+.4,1.05);}
       }
     }
   }
