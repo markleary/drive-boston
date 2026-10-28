@@ -1,4 +1,5 @@
 import type { CityData, Point2, Road } from '../types';
+import {sampleRoadElevation} from './road-surfaces.ts';
 type Segment={road:Road;a:Point2;dx:number;dz:number;len2:number};
 const roadIndexes=new WeakMap<CityData,{cells:Map<string,Segment[]>;minX:number;maxX:number;minZ:number;maxZ:number}>();
 function roadIndex(city:CityData){
@@ -12,8 +13,12 @@ function roadIndex(city:CityData){
   }
   const index={cells,minX,maxX,minZ,maxZ};roadIndexes.set(city,index);return index;
 }
-export function closestRoad(city: CityData, x: number, z: number, majorOnly = false) {
+type RoadPosition={x:number;z:number;yaw:number;distance:number;road:Road};
+/** Optional height/clearance constraints are used for crash recovery; ordinary
+ * map/traffic lookups retain their horizontal nearest-road behavior. */
+export function closestRoad(city: CityData, x: number, z: number, majorOnly = false, options:{height?:number;maxDistance?:number;accept?:(position:RoadPosition)=>boolean}={}) {
   let best = { x:city.spawn.x, z:city.spawn.z, yaw:city.spawn.yaw, distance:Infinity, road:city.roads[0] };
+  let bestScore=Infinity;
   const index=roadIndex(city),cx=Math.floor(x/128),cz=Math.floor(z/128),seen=new Set<Segment>();
   if(!index.cells.size)return best;
   const limit=Math.max(Math.abs(cx-index.minX),Math.abs(cx-index.maxX),Math.abs(cz-index.minZ),Math.abs(cz-index.maxZ));
@@ -26,11 +31,15 @@ export function closestRoad(city: CityData, x: number, z: number, majorOnly = fa
       if(majorOnly && (road.width<7 || /alley|public|unnamed/i.test(road.name)))continue;
       const t=Math.max(.05,Math.min(.95,((x-a[0])*dx+(z-a[1])*dz)/len2));
       const px=a[0]+t*dx,pz=a[1]+t*dz,d=Math.hypot(px-x,pz-z);
-      if(d<best.distance){ const dir=road.oneway===-1?-1:1;best={x:px,z:pz,yaw:Math.atan2(dx*dir,dz*dir),distance:d,road}; }
+      if(d>(options.maxDistance??Infinity))continue;
+      const score=options.height===undefined?d:Math.hypot(d,sampleRoadElevation(city,road,px,pz)-options.height);
+      if(score<bestScore){const dir=road.oneway===-1?-1:1,position={x:px,z:pz,yaw:Math.atan2(dx*dir,dz*dir),distance:d,road};
+        if(!options.accept||options.accept(position)){best=position;bestScore=score;}
+      }
       }
     }
     const unseenDistance=Math.min(x-(cx-radius)*128,(cx+radius+1)*128-x,z-(cz-radius)*128,(cz+radius+1)*128-z);
-    if(best.distance<unseenDistance)break;
+    if(Math.min(bestScore,options.maxDistance??Infinity)<unseenDistance)break;
   }
   return best;
 }
