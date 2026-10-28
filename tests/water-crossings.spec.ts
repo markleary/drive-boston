@@ -33,7 +33,7 @@ for(const route of routes)test(`Longfellow full approach drive: ${route.name}`,a
  await page.keyboard.down('Space');await expect.poll(async()=>Math.abs((await snapshot()).state.speed)).toBeLessThan(.3);await page.keyboard.up('Space');
  await page.screenshot({path:testInfo.outputPath('longfellow-complete-crossing.png')});
  expect((await snapshot()).bridges.longfellow.towers).toBe(4);
- await page.keyboard.press('2');const launch=(await snapshot()).flight;
+ await page.keyboard.press('3');const launch=(await snapshot()).flight;
  await page.keyboard.down('Space');try{await expect.poll(async()=>(await snapshot()).flight.y,{timeout:20000}).toBeGreaterThan(launch.y+30);}finally{await page.keyboard.up('Space');}
  await page.keyboard.press('c');await page.keyboard.press('c');await page.waitForTimeout(1200);
  await page.screenshot({path:testInfo.outputPath('longfellow-approach-water-and-towers.png')});

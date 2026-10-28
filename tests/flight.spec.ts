@@ -122,7 +122,7 @@ test('helicopter: lift, fly, turn, descend, inspect, pause and return to the car
   await expect.poll(async () => (await snapshot(page)).audio.engineGain).toBeGreaterThan(.1);
   const returned = (await snapshot(page)).state;
   expect(Math.hypot(returned.x - parkedCar.x, returned.z - parkedCar.z)).toBeLessThan(1);
-  await page.keyboard.press('2');
+  await page.keyboard.press('3');
   await expect.poll(async () => (await snapshot(page)).travelMode).toBe('helicopter');
   await page.keyboard.press('1');
   await expect.poll(async () => (await snapshot(page)).travelMode).toBe('drive');
@@ -173,7 +173,7 @@ test('hidden HUD: H explains how to undo it and switching travel mode brings it 
   await expect(speed).toHaveCSS('opacity', '0');
   await expect(toast).toHaveClass(/visible/);
   await expect(toast).toContainText('Press H to show it');
-  await page.keyboard.press('2');
+  await page.keyboard.press('3');
   await expect.poll(async () => (await snapshot(page)).travelMode).toBe('helicopter');
   await expect(host).not.toHaveClass(/hud-off/);
   await expect(speed).toHaveCSS('opacity', '1');

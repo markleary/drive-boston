@@ -22,7 +22,7 @@ test('larger minimap labels nearby roads in drive and helicopter views',async({p
   await expect(map).toHaveAttribute('aria-label',/Nearby roads:.*Hillside Street/);
   await page.screenshot({path:testInfo.outputPath('mission-hill-labeled-minimap.png')});
 
-  await page.keyboard.press('2');
+  await page.keyboard.press('3');
   await expect(page.getByTestId('mode-helicopter')).toHaveAttribute('aria-pressed','true');
   await expect(map).toHaveAttribute('aria-label',/Nearby roads:/);
   const flightMap=await button.boundingBox(),hint=await page.locator('#drive-hint').boundingBox();

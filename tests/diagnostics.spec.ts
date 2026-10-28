@@ -20,7 +20,7 @@ test('diagnostic shortcuts, live counters, clipboard and helicopter location lea
   expect(Math.abs(Number(copied[1])-position.x)).toBeLessThan(.1);expect(Math.abs(Number(copied[3])-position.z)).toBeLessThan(.1);
   await page.screenshot({path:testInfo.outputPath('diagnostics-desktop.png')});
   await page.keyboard.press('p');await expect(page.locator('#performance-hud')).toBeHidden();await expect(page.locator('#debug-hud')).toBeVisible();
-  await page.keyboard.press('2');await expect(page.locator('#debug-mode')).toContainText('Helicopter');
+  await page.keyboard.press('3');await expect(page.locator('#debug-mode')).toContainText('Helicopter');
   await page.keyboard.down('Space');await page.waitForTimeout(800);await page.keyboard.up('Space');
   await expect.poll(async()=>{const s=await snapshot(page);return Math.abs(Number(await page.locator('#debug-y').textContent())-s.flight.y);}).toBeLessThan(2);
   await page.getByRole('button',{name:'Copy debug report',exact:true}).click();expect(await page.evaluate(()=>navigator.clipboard.readText())).toContain('Active vehicle: helicopter');

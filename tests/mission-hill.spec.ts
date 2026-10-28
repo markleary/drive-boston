@@ -50,7 +50,7 @@ test('Mission Hill: travel by map, drive a real grade, inspect above ground, and
   expect(Math.abs(returned.groundHeight-start.groundHeight)).toBeLessThan(Math.abs(forward.groundHeight-start.groundHeight)+.2);
   await page.keyboard.press('c');
   await expect.poll(async()=>(await snapshot(page)).camera).toBe('hood');
-  await page.keyboard.press('2');
+  await page.keyboard.press('3');
   await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
   await expect.poll(async()=>{const current=await snapshot(page);const displayed=Number(await page.locator('#altitude-value').textContent());return Math.abs(displayed-(current.flight.y-current.flightGroundHeight)*3.28084);}).toBeLessThan(2);
   const airborne=await snapshot(page);

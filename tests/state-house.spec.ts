@@ -14,7 +14,7 @@ test('State House has its own brick and columned facade beneath the existing dom
   expect(details.columns).toBe(10);expect(details.arcades).toBe(7);expect(details.palladianGroups).toBe(2);
   expect(details.triangles).toBeGreaterThan(1000);expect(details.triangles).toBeLessThan(60000);
   await page.screenshot({path:testInfo.outputPath('state-house-from-beacon-street.png')});
-  await page.keyboard.press('2');
+  await page.keyboard.press('3');
   await expect(page.getByTestId('mode-helicopter')).toHaveAttribute('aria-pressed','true');
   await page.keyboard.down('Space');await page.keyboard.down('s');
   try {await page.waitForTimeout(2200);}finally{await page.keyboard.up('Space');await page.keyboard.up('s');}
