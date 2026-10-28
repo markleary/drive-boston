@@ -1,0 +1,81 @@
+{
+  "provider": "ElevenLabs",
+  "endpoint": "https://api.elevenlabs.io/v1/sound-generation",
+  "documentation": "https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert",
+  "model": "eleven_text_to_sound_v2",
+  "format": "mp3_44100_128",
+  "promptInfluence": 0.5,
+  "description": "Synthetic sound effects generated for this prototype, not field recordings of Boston.",
+  "clips": [
+    {
+      "id": "engine-idle",
+      "seconds": 8,
+      "loop": true,
+      "prompt": "A realistic small four-cylinder gasoline car engine idling steadily at 850 RPM, close perspective beside the car, warm low mechanical rumble and subtle even combustion pulses. Exactly constant idle speed throughout, continuous seamless loop. Dry natural recording, no revving, no starting or stopping, no voices, no music, no horns, no passing traffic.",
+      "file": "engine-idle.mp3",
+      "generatedAt": "2026-10-26T20:55:20.959Z",
+      "bytes": 129192,
+      "sha256": "a08719ea4661c9b35caaad4b9717123b9a0d7c108c89f2012f96f09b48b1fac3"
+    },
+    {
+      "id": "engine-drive",
+      "seconds": 8,
+      "loop": true,
+      "prompt": "A realistic compact four-cylinder gasoline car engine held at a constant moderate 2600 RPM under light driving load. Warm rounded engine growl, fine mechanical vibration, evenly spaced combustion pulses. Steady speed from beginning to end, continuous seamless loop, close dry perspective. No acceleration or gear changes, no race car, no horns, no voices, no music, no other vehicles.",
+      "file": "engine-drive.mp3",
+      "generatedAt": "2026-10-26T20:55:24.584Z",
+      "bytes": 129192,
+      "sha256": "e36d1f3c4a7d8fba2ceba4d9019d2ee94ff19167a7f245a4959237a04c484af4"
+    },
+    {
+      "id": "city-ambience",
+      "seconds": 10,
+      "loop": true,
+      "prompt": "Quiet late afternoon ambience on a leafy residential Boston Back Bay street: a soft distant wash of urban traffic, very faint wind moving tree leaves, an occasional distant small bird. Calm open-air city atmosphere with no close pass-bys. Continuous subtle seamless loop, no intelligible speech, no music, no horns, no sirens, no construction, no engine in the foreground.",
+      "file": "city-ambience.mp3",
+      "generatedAt": "2026-10-26T20:55:28.707Z",
+      "bytes": 160957,
+      "sha256": "84238bd0860ad5cde25db509161593e1b11835a1352592c4d12303e4c2a05262"
+    },
+    {
+      "id": "tire-road",
+      "seconds": 8,
+      "loop": true,
+      "prompt": "The soft steady rolling sound of car rubber tires on dry smooth urban asphalt at a constant moderate speed. Broad low road rumble mixed with a fine continuous airy tire hiss, natural close recording from inside the vehicle. Seamless continuous loop at exactly constant level, no engine, no impacts, no squealing, no rain, no voices, no music.",
+      "file": "tire-road.mp3",
+      "generatedAt": "2026-10-26T20:55:32.154Z",
+      "bytes": 129192,
+      "sha256": "01ad10a430eb8896c01e99b3ea90d7a499c108677f151cbbb11ac2aa7dec80bf"
+    },
+    {
+      "id": "horn",
+      "seconds": 2,
+      "loop": false,
+      "prompt": "One short friendly realistic two-tone electric car horn honk, from a normal compact passenger car on a quiet open street. The honk starts immediately, lasts about half a second then naturally decays into silence. Clean close natural recording, no repeated honking, no truck horn, no cartoon sound, no voices, no music, no other vehicles.",
+      "file": "horn.mp3",
+      "generatedAt": "2026-10-26T20:55:33.974Z",
+      "bytes": 33061,
+      "sha256": "e9f0582a362547cc7de1d748ed4de4e1d7ab41126619379d285e3f855dcd43fd"
+    },
+    {
+      "id": "tire-skid",
+      "seconds": 3,
+      "loop": true,
+      "prompt": "A steady restrained rubber tire scrub and squeal on dry asphalt during a tight car turn, with a gritty rolling undertone. Natural everyday car sound, medium intensity and constant texture, continuous seamless loop. No collision, no crash, no explosion, no engine, no racing crowd, no voices, no music.",
+      "file": "tire-skid.mp3",
+      "generatedAt": "2026-10-26T20:55:37.150Z",
+      "bytes": 48944,
+      "sha256": "42d79c2567c30c62b894f3c503a039a4ce0d122f1cb796f41df9fb55b50bcf72"
+    },
+    {
+      "id": "helicopter-rotor",
+      "seconds": 8,
+      "loop": true,
+      "prompt": "A small civilian sightseeing helicopter hovering steadily, heard from a close chase-camera perspective just behind the aircraft. Continuous warm rhythmic rotor blade chopping and a restrained turbine hum, natural realistic recording. Exactly constant operating speed and level throughout, seamless loop. No start-up, no shutdown, no flyby, no Doppler pitch change, no speech, no radio, no weapons, no music, no sirens.",
+      "file": "helicopter-rotor.mp3",
+      "generatedAt": "2026-10-26T21:18:00.512Z",
+      "bytes": 129192,
+      "sha256": "9e3811cb8cda4d93abecf3062f2273ec6fbb3ba4ef5097051b5b2aa3ba368741"
+    }
+  ]
+}

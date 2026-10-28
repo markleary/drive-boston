@@ -1,0 +1,54 @@
+import type { Building, CityData, Point2 } from '../types';
+import { closestRoad, pointInside } from '../simulation/roads.ts';
+
+export interface TripleDeckerProfile {
+  kind:'triple-decker'; palette:number; floorHeight:number; raisedBase:number;
+  front:{a:Point2;b:Point2;nx:number;nz:number;setback:number;road:string};
+}
+const profiles=new WeakMap<Building,TripleDeckerProfile>();
+const prepared=new WeakMap<CityData,{tripleDeckers:number;ids:string[]}>();
+const distance=(p:Point2,a:Point2,b:Point2)=>{
+  const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/(dx*dx+dz*dz||1)));
+  return Math.hypot(p[0]-a[0]-dx*t,p[1]-a[1]-dz*t);
+};
+const hash=(text:string)=>{let n=0;for(const c of text)n=Math.imul(n,31)+c.charCodeAt(0)|0;return Math.abs(n);};
+
+/** Conservative typology inference, not an address-level architectural survey.
+ * Mission Hill's small, detached, three-story source masses on residential
+ * streets receive wood-clad details. Attached brick rows and large blocks stay
+ * in their original material family. Nothing changes the surveyed footprint. */
+export function prepareNeighborhoodArchitecture(city:CityData){
+  const existing=prepared.get(city);if(existing)return existing;
+  const hill=city.neighborhoods?.find(n=>n.name==='Mission Hill'),ids:string[]=[];
+  if(!hill){const result={tripleDeckers:0,ids};prepared.set(city,result);return result;}
+  for(const b of city.buildings){
+    if(b.landmark||b.height<8.3||b.height>14.4||/church|chapel|school|hospital|college/i.test(b.name)||!pointInside(b.center,hill.rings[0]))continue;
+    const p=b.footprint,area=Math.abs(p.reduce((s,a,i)=>{const c=p[(i+1)%p.length];return s+a[0]*c[1]-c[0]*a[1];},0))/2;
+    if(area<65||area>245)continue;
+    let best:TripleDeckerProfile['front']|undefined,score=-Infinity;
+    for(let i=0;i<p.length;i++){
+      const a=p[i],c=p[(i+1)%p.length],dx=c[0]-a[0],dz=c[1]-a[1],length=Math.hypot(dx,dz);if(length<5.5||length>15)continue;
+      const x=(a[0]+c[0])/2,z=(a[1]+c[1])/2,nx=dz/length,nz=-dx/length,road=closestRoad(city,x,z,true);
+      if(!/Parker Hill|Calumet|Hillside|Iroquois|Oswald|Sachem|Pontiac|Harleston|Alleghany|Carmel|Burney|Wensley|Fisher|Delle|Wait|Pequot|Cherokee|Wigglesworth|Worthington|Parker Street/i.test(road.road.name))continue;
+      const facing=((road.x-x)*nx+(road.z-z)*nz)/Math.max(.01,road.distance),setback=road.distance-road.road.width/2;
+      if(facing<.78||setback<1.4||setback>20)continue;
+      const value=facing*10-Math.abs(length-9)*.15-setback*.05;
+      if(value>score){score=value;best={a,b:c,nx,nz,setback,road:road.road.name};}
+    }
+    if(!best)continue;
+    // Reject adjoining row-house masses. Separate roof parts of the same house
+    // are ignored; the city data already preserves their supported elevation.
+    const attached=city.buildings.some(other=>{
+      if(other===b||other.height<6||Math.hypot(other.center[0]-b.center[0],other.center[1]-b.center[1])>34)return false;
+      if(pointInside(other.center,p)||pointInside(b.center,other.footprint))return false;
+      let close=0;for(const vertex of p)if(other.footprint.some((a,i)=>distance(vertex,a,other.footprint[(i+1)%other.footprint.length])<.55))close++;
+      return close>=2;
+    });
+    if(attached)continue;
+    const raisedBase=.65,floorHeight=Math.max(2.65,Math.min(3.35,(b.height-1.25-raisedBase)/3));
+    profiles.set(b,{kind:'triple-decker',palette:hash(b.id)%5,floorHeight,raisedBase,front:best});ids.push(b.id);
+  }
+  const result={tripleDeckers:ids.length,ids};prepared.set(city,result);return result;
+}
+export const architectureFor=(building?:Building)=>building?profiles.get(building):undefined;
+

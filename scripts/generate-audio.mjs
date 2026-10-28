@@ -1,0 +1,117 @@
+/**
+ * Optional, billable, local asset generation. Never imported into the game.
+ * Preview: node scripts/generate-audio.mjs
+ * Generate missing clips: node scripts/generate-audio.mjs --generate
+ * Requires ELEVENLABS_API_KEY in the shell or root .env (never VITE_*).
+ */
+import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { resolve, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const output = resolve(root, 'public/audio');
+const model = 'eleven_text_to_sound_v2';
+const format = 'mp3_44100_128';
+const clips = [
+  {
+    id: 'engine-idle', seconds: 8, loop: true,
+    prompt: 'A realistic small four-cylinder gasoline car engine idling steadily at 850 RPM, close perspective beside the car, warm low mechanical rumble and subtle even combustion pulses. Exactly constant idle speed throughout, continuous seamless loop. Dry natural recording, no revving, no starting or stopping, no voices, no music, no horns, no passing traffic.'
+  },
+  {
+    id: 'engine-drive', seconds: 8, loop: true,
+    prompt: 'A realistic compact four-cylinder gasoline car engine held at a constant moderate 2600 RPM under light driving load. Warm rounded engine growl, fine mechanical vibration, evenly spaced combustion pulses. Steady speed from beginning to end, continuous seamless loop, close dry perspective. No acceleration or gear changes, no race car, no horns, no voices, no music, no other vehicles.'
+  },
+  {
+    id: 'city-ambience', seconds: 10, loop: true,
+    prompt: 'Quiet late afternoon ambience on a leafy residential Boston Back Bay street: a soft distant wash of urban traffic, very faint wind moving tree leaves, an occasional distant small bird. Calm open-air city atmosphere with no close pass-bys. Continuous subtle seamless loop, no intelligible speech, no music, no horns, no sirens, no construction, no engine in the foreground.'
+  },
+  {
+    id: 'tire-road', seconds: 8, loop: true,
+    prompt: 'The soft steady rolling sound of car rubber tires on dry smooth urban asphalt at a constant moderate speed. Broad low road rumble mixed with a fine continuous airy tire hiss, natural close recording from inside the vehicle. Seamless continuous loop at exactly constant level, no engine, no impacts, no squealing, no rain, no voices, no music.'
+  },
+  {
+    id: 'horn', seconds: 2, loop: false,
+    prompt: 'One short friendly realistic two-tone electric car horn honk, from a normal compact passenger car on a quiet open street. The honk starts immediately, lasts about half a second then naturally decays into silence. Clean close natural recording, no repeated honking, no truck horn, no cartoon sound, no voices, no music, no other vehicles.'
+  },
+  {
+    id: 'tire-skid', seconds: 3, loop: true,
+    prompt: 'A steady restrained rubber tire scrub and squeal on dry asphalt during a tight car turn, with a gritty rolling undertone. Natural everyday car sound, medium intensity and constant texture, continuous seamless loop. No collision, no crash, no explosion, no engine, no racing crowd, no voices, no music.'
+  },
+  {
+    id: 'helicopter-rotor', seconds: 8, loop: true,
+    prompt: 'A small civilian sightseeing helicopter hovering steadily, heard from a close chase-camera perspective just behind the aircraft. Continuous warm rhythmic rotor blade chopping and a restrained turbine hum, natural realistic recording. Exactly constant operating speed and level throughout, seamless loop. No start-up, no shutdown, no flyby, no Doppler pitch change, no speech, no radio, no weapons, no music, no sirens.'
+  },
+];
+
+async function exists(path) { try { await access(path); return true; } catch { return false; } }
+async function localKey() {
+  if (process.env.ELEVENLABS_API_KEY?.trim()) return process.env.ELEVENLABS_API_KEY.trim();
+  let source;
+  try { source = await readFile(resolve(root, '.env'), 'utf8'); }
+  catch { throw new Error('Add ELEVENLABS_API_KEY to the local .env file before generating.'); }
+  const match = source.match(/^\s*(?:export\s+)?ELEVENLABS_API_KEY\s*=\s*(.*?)\s*$/m);
+  let key = match?.[1] ?? '';
+  if (key.startsWith('"') || key.startsWith("'")) key = key.slice(1, key.lastIndexOf(key[0]));
+  else key = key.replace(/\s+#.*$/, '').trim();
+  if (!key) throw new Error('ELEVENLABS_API_KEY is empty or missing.');
+  return key;
+}
+
+async function main() {
+  const total = clips.reduce((sum, clip) => sum + clip.seconds, 0);
+  if (total > 50) throw new Error('Generation duration exceeds the 50-second task budget.');
+  const pending = [];
+  for (const clip of clips) if (!await exists(resolve(output, `${clip.id}.mp3`))) pending.push(clip);
+  console.log(`Audio plan: ${clips.length} clips / ${total}s total; ${pending.length} missing / ${pending.reduce((sum, clip) => sum + clip.seconds, 0)}s to generate.`);
+  if (!process.argv.includes('--generate')) {
+    for (const clip of pending) console.log(`  ${clip.id}: ${clip.seconds}s${clip.loop ? ' loop' : ''}`);
+    console.log('Preview only. Add --generate to make billable ElevenLabs requests. Existing files are never overwritten.');
+    return;
+  }
+  if (!pending.length) return;
+  const key = await localKey();
+  await mkdir(output, { recursive: true });
+  const provenancePath = resolve(output, 'provenance.json');
+  let completed = [];
+  if (await exists(provenancePath)) completed = JSON.parse(await readFile(provenancePath, 'utf8')).clips ?? [];
+  for (const clip of pending) {
+    console.log(`Generating ${clip.id} (${clip.seconds}s)...`);
+    let response;
+    try {
+      response = await fetch(`https://api.elevenlabs.io/v1/sound-generation?output_format=${format}`, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(180_000),
+        headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: clip.prompt, duration_seconds: clip.seconds, loop: clip.loop, model_id: model, prompt_influence: 0.5 }),
+      });
+    } catch {
+      throw new Error(`Network request failed for ${clip.id}. No automatic retry was made; check connectivity before running again.`);
+    }
+    if (!response.ok) {
+      let code = '';
+      try {
+        const detail = (await response.json()).detail;
+        if (typeof detail?.status === 'string' && /^[a-z_]{1,80}$/.test(detail.status)) code = ` (${detail.status})`;
+      } catch { /* Do not print provider response bodies or request headers. */ }
+      throw new Error(`ElevenLabs returned HTTP ${response.status}${code} for ${clip.id}. Generation stopped without retrying.`);
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length < 1000 || !(bytes.subarray(0, 3).toString() === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0))) {
+      throw new Error(`The response for ${clip.id} was not a valid MP3. No audio file was saved.`);
+    }
+    const file = `${clip.id}.mp3`;
+    await writeFile(resolve(output, file), bytes, { flag: 'wx' });
+    completed = completed.filter(item => item.id !== clip.id);
+    completed.push({ ...clip, file, generatedAt: new Date().toISOString(), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+    await writeFile(provenancePath, JSON.stringify({
+      provider: 'ElevenLabs', endpoint: 'https://api.elevenlabs.io/v1/sound-generation',
+      documentation: 'https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert',
+      model, format, promptInfluence: 0.5,
+      description: 'Synthetic sound effects generated for this prototype, not field recordings of Boston.',
+      clips: completed,
+    }, null, 2) + '\n');
+    console.log(`Saved ${file} (${bytes.length} bytes).`);
+  }
+}
+
+main().catch(error => { console.error(error.message); process.exitCode = 1; });
