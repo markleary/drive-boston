@@ -27,6 +27,7 @@ import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import { createFarCity } from './far-city';
 import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import { addCharlesBridgeDetails } from './charles-bridges';
+import { addHarvardBridgeDetails } from './harvard-bridge';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; }
 
@@ -84,6 +85,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
 
   const charlesBridges=addCharlesBridgeDetails(scene,city);buildingCollisions.push(...charlesBridges.collisions);
   roadStructures.userData.longfellow=charlesBridges.group.userData;
+  const harvardBridge=addHarvardBridgeDetails(scene,city);buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
 
   /** The original single-survey build: every road, curb, building and prop at once. */
   async function buildWholeCity(){

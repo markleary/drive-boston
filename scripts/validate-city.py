@@ -131,6 +131,8 @@ cells=defaultdict(list)
 for r in city['roads']:
  assert len(r['points'])>=2 and r['oneway'] in (-1,0,1) and 3<=r['width']<=20,r['id']
  if r.get('elevations'):assert len(r['elevations'])==len(r['points']) and all(math.isfinite(v) for v in r['elevations']),'invalid deck profile'
+ if r.get('deckWidths'):assert r.get('elevations') and len(r['deckWidths'])==len(r['points']) and all(math.isfinite(v) and 3<=v<=r['width'] for v in r['deckWidths']),'invalid per-section deck width'
+ if r.get('deckTangents'):assert set(r['deckTangents'])=={'start','end'} and all(len(v)==2 and all(math.isfinite(n) for n in v) and math.hypot(*v)>.001 for v in r['deckTangents'].values()),'invalid shared deck tangent'
  for x,z in r['points']:
   assert bounds['minX']-.01<=x<=bounds['maxX']+.01 and bounds['minZ']-.01<=z<=bounds['maxZ']+.01
   assert covered.covers(Point(x,z)),f"road escapes curated coverage: {r['name']} {r['id']}"
