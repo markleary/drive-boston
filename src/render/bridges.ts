@@ -6,7 +6,7 @@ import {mergeSpatialGeometries} from './spatial-batches';
 
 /** The source-defined upper road is independent from the streets beneath it. */
 export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:THREE.Material,structures=city.roads.filter(r=>r.elevations)){
-  const group=new THREE.Group();group.name='Bowker elevated roads';
+  const group=new THREE.Group();group.name='Elevated roads and water crossings';
   const concrete=new THREE.MeshStandardMaterial({color:'#9b9a8e',roughness:.92});
   const steel=new THREE.MeshStandardMaterial({color:'#525f58',roughness:.7,metalness:.45});
   const paint=new THREE.MeshStandardMaterial({color:'#dbd9bc',roughness:.87});
@@ -32,8 +32,8 @@ export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:TH
       const g=new THREE.BoxGeometry(.27,.76,p.length).rotateX(-p.slope).rotateY(p.yaw).translate(p.x,p.y,p.z);rails.push(g);
     }
     for(const p of bridgeSupports(city,road)){
-      piers.push(new THREE.BoxGeometry(1.4,p.top-p.bottom,2.1).translate(p.x,(p.top+p.bottom)/2,p.z));
-      piers.push(new THREE.BoxGeometry(road.width-.5,.35,2.6).translate(p.x,p.top-.18,p.z));
+      piers.push(new THREE.BoxGeometry(1.8,p.top-p.bottom,2.4).rotateY(p.yaw).translate(p.x,(p.top+p.bottom)/2,p.z));
+      piers.push(new THREE.BoxGeometry(road.width-.5,.55,2.8).rotateY(p.yaw).translate(p.x,p.top-.28,p.z));
     }
   }
   for(const [geometries,material]of [[decks,asphalt],[slabs,steel],[markings,paint],[rails,concrete],[piers,concrete]]as const){
