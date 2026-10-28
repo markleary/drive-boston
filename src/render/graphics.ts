@@ -8,7 +8,29 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 export type QualityMode = 'high' | 'balanced';
 
 /** Desktop lighting finish, with an inexpensive mode for integrated/mobile GPUs. */
-export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, initial: QualityMode) {
+export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, initial: QualityMode, mobile = false) {
+  // Render straight to the canvas on touch devices: no HDR/MSAA composer,
+  // ambient-occlusion buffers, or bloom targets, even if Detailed is selected.
+  if (mobile) {
+    // Alpha-to-coverage needs MSAA. Without samples, leaf-edge pixels must
+    // use the material's alpha-test cutout instead of an opaque fringe. The
+    // tree fields keep these shared materials when their instance pools grow.
+    scene.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+        if (material.alphaToCoverage) { material.alphaToCoverage = false; material.needsUpdate = true; }
+      }
+    });
+    let quality = initial;
+    const resize = () => { renderer.setPixelRatio(1); renderer.setSize(innerWidth, innerHeight); };
+    resize();
+    return {
+      setQuality(mode: QualityMode) { quality = mode; resize(); }, resize,
+      render(_dt: number) { renderer.render(scene, camera); },
+      get quality() { return quality; },
+      dispose() {},
+    };
+  }
   const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, target);
   const beauty = new RenderPass(scene, camera);

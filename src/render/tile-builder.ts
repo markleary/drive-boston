@@ -39,7 +39,7 @@ export interface TileContext {
   trees: TreeField; parkTrees: TreeField;
   /** Live id lookup of the detailed buildings currently in the scene. */
   buildingMap: Map<string, Building>;
-  ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material;
+  ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material; mobile?: boolean;
 }
 export interface TileStats {
   buildings: number; exactMeshes: number; triangles: number; roads: number; structures: number; trees: number; lamps: number; signs: number; signals: number; parkTrees: number; storefronts: number; facades: number; rooftops: number; porches: number; colliders: number;
@@ -180,8 +180,9 @@ export function createTileBuilder(ctx: TileContext) {
     }
     yield 'roads';
 
-    // Surveyed curb paths follow terrain; their raised faces remain visual detail.
-    {
+    // Raised curb boxes are decorative and dominate retained neighborhood
+    // buffers. Mobile keeps the sidewalk surface and shared terrain/collisions.
+    if (!ctx.mobile) {
       const batches = new PartBatches(500), matrix = new THREE.Matrix4();
       for (const points of tile.curbs) {
         if (due(pace)) yield 'curbs';

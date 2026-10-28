@@ -29,7 +29,7 @@ import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 
-export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; }
+export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; }
 
 export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData,options:WorldOptions={}) {
   const metro=isMetroCity(city)?city:undefined;
@@ -39,7 +39,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   scene.background=null;scene.fog=new THREE.Fog('#aeb9bc',250,1050);
   const hemi=new THREE.HemisphereLight(0xb8d9f1,0x625343,.6);scene.add(hemi);
   const sun=new THREE.DirectionalLight(0xffdfad,3.8);sun.position.set(-270,255,330);sun.castShadow=true;
-  sun.shadow.mapSize.set(4096,4096);sun.shadow.camera.left=-105;sun.shadow.camera.right=105;sun.shadow.camera.top=105;sun.shadow.camera.bottom=-105;sun.shadow.camera.near=1;sun.shadow.camera.far=1100;sun.shadow.normalBias=.055;sun.shadow.bias=-.000045;
+  sun.shadow.mapSize.set(options.mobile?1024:4096,options.mobile?1024:4096);sun.shadow.camera.left=-105;sun.shadow.camera.right=105;sun.shadow.camera.top=105;sun.shadow.camera.bottom=-105;sun.shadow.camera.near=1;sun.shadow.camera.far=1100;sun.shadow.normalBias=.055;sun.shadow.bias=-.000045;
   scene.add(sun,sun.target);
   const sky=new Sky();sky.scale.setScalar(1800);sky.userData.noAO=true;scene.add(sky);
   // Keep the analytic sun's extreme radiance out of the bloom buffer: otherwise
@@ -48,8 +48,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const skyUniforms=sky.material.uniforms;skyUniforms.turbidity.value=3;skyUniforms.rayleigh.value=1.5;skyUniforms.mieCoefficient.value=.004;skyUniforms.mieDirectionalG.value=.82;
   const environmentScene=new THREE.Scene(),environmentSky=sky.clone();environmentScene.add(environmentSky);
   const pmrem=new THREE.PMREMGenerator(renderer);let skyEnvironment:THREE.WebGLRenderTarget|undefined,reflectionEnvironment:THREE.WebGLRenderTarget|undefined;
-  const probeTarget=new THREE.WebGLCubeRenderTarget(256,{type:THREE.HalfFloatType,generateMipmaps:true,minFilter:THREE.LinearMipmapLinearFilter});
-  const probe=new THREE.CubeCamera(.4,900,probeTarget);scene.add(probe);
+  const probeTarget=options.mobile?undefined:new THREE.WebGLCubeRenderTarget(256,{type:THREE.HalfFloatType,generateMipmaps:true,minFilter:THREE.LinearMipmapLinearFilter});
+  const probe=probeTarget?new THREE.CubeCamera(.4,900,probeTarget):undefined;if(probe)scene.add(probe);
   const probePosition=new THREE.Vector3(Infinity,Infinity,Infinity);let reflectionDirty=true,lastProbeTime=-100,probeFace=-1;
   let highQuality=true;
   const groundMaterial=createGrassMaterial('#c6cbb2');groundMaterial.polygonOffset=true;groundMaterial.polygonOffsetFactor=1;groundMaterial.polygonOffsetUnits=4;
@@ -71,10 +71,10 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     // never reveals the edge of the tiled area from the air.
     const range=terrainRange(city),surround=new THREE.Mesh(new THREE.PlaneGeometry(60000,60000).rotateX(-Math.PI/2),new THREE.MeshLambertMaterial({color:'#b9bea8'}));
     surround.position.set((city.bounds.minX+city.bounds.maxX)/2,range.min-2,(city.bounds.minZ+city.bounds.maxZ)/2);surround.name='Metro surround';surround.userData.noAO=true;scene.add(surround);
-    far=createFarCity(scene,city);
+    far=createFarCity(scene,city,!!options.mobile);
     const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
     const parkTrees=createTreeField({scale:1.65,grates:false});parkTrees.group.name='Park specimen trees';scene.add(parkTrees.group);
-    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat},options.read,far);
+    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile},options.read,far,!!options.mobile);
     buildingChunks=streamer.buildingChunks;lampPositions=streamer.lampPositions;signalPlacements=streamer.signals;
     roadStructures=new THREE.Group();roadStructures.name='Streamed road structures';
     const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);
@@ -283,14 +283,14 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     reflectionDirty=true;probeFace=-1;
   }
   setLighting('golden');
-  function update(position:THREE.Vector3,time:number){
+  function update(position:THREE.Vector3,time:number,stream=true){
     // Keep the shadow focus on the ground as the helicopter climbs. Widen the
     // coverage from street detail to the district without moving the world datum.
     const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);
     sun.target.position.set(position.x,groundY,position.z);sun.position.copy(sun.target.position).add(direction);sky.position.copy(position);
     const shadowExtent=Math.max(105,Math.min(330,105+altitude*.72));
     if(Math.abs(sun.shadow.camera.right-shadowExtent)>2){sun.shadow.camera.left=-shadowExtent;sun.shadow.camera.right=shadowExtent;sun.shadow.camera.top=shadowExtent;sun.shadow.camera.bottom=-shadowExtent;sun.shadow.camera.updateProjectionMatrix();}
-    streamer?.update(position,altitude);far?.update(position,altitude);
+    if(stream)streamer?.update(position,altitude);far?.update(position,altitude);
     for(const mesh of buildingChunks){const sphere=mesh.geometry.boundingSphere!;mesh.visible=Math.hypot(sphere.center.x-position.x,sphere.center.z-position.z)<1100+altitude*2+sphere.radius;}
     const night=mode==='night';
     if(night){
@@ -309,6 +309,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   }
   // One face of CubeCamera.update: mipmaps are generated only after face 5.
   function renderProbeFace(face:number,player:THREE.Object3D){
+    if(!probe||!probeTarget)return;
     const visible=player.visible,autoShadow=renderer.shadowMap.autoUpdate,environment=scene.environment,mipmaps=probeTarget.texture.generateMipmaps;
     const target=renderer.getRenderTarget(),cubeFace=renderer.getActiveCubeFace(),mipLevel=renderer.getActiveMipmapLevel(),xr=renderer.xr.enabled;
     player.visible=false;renderer.shadowMap.autoUpdate=false;scene.environment=skyEnvironment!.texture;skyUniforms.showSunDisc.value=false;
@@ -324,7 +325,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   function updateReflections(position:THREE.Vector3,time:number,player:THREE.Object3D){
     // Let the main view allocate the depth-comparison shadow texture before a
     // probe capture; a shadow sampler cannot use an uninitialized color texture.
-    if(!sun.shadow.map)return;
+    if(!probe||!probeTarget||!sun.shadow.map)return;
     if(probeFace<0){
       if(!reflectionDirty&&(!highQuality||time-lastProbeTime<2.5||probePosition.distanceToSquared(position)<144))return;
       probe.position.copy(position);probe.position.y=Math.max(height(position.x,position.z)+2.1,position.y);
@@ -340,8 +341,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     reflectionEnvironment=pmrem.fromCubemap(probeTarget.texture,reflectionEnvironment);scene.environment=reflectionEnvironment.texture;
   }
   function setQuality(high:boolean){
-    highQuality=high;const size=high?4096:2048;
+    highQuality=high;const size=options.mobile?1024:high?4096:2048;
     if(sun.shadow.mapSize.x!==size){sun.shadow.mapSize.set(size,size);sun.shadow.map?.dispose();sun.shadow.map=null;sun.shadow.needsUpdate=true;}
   }
-  return {setLighting,update,updateReflections,setQuality,materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
+  return {setLighting,update,updateReflections,setQuality,get shadowMapSize(){return sun.shadow.mapSize.x;},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
 }

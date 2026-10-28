@@ -44,7 +44,8 @@ async function boot(){
   let cameraMode:CameraMode='chase',lighting:LightingMode='golden';
   let travelMode:TravelMode='drive';
   let flight:ReturnType<typeof createHelicopterFlight>|undefined;
-  let quality:QualityMode=matchMedia('(pointer: coarse)').matches?'balanced':'high';
+  const mobile=matchMedia('(pointer: coarse)').matches;
+  let quality:QualityMode=mobile?'balanced':'high';
   let graphics:ReturnType<typeof createGraphics>|undefined;
   let physics:DrivingPhysics|undefined;let world:Awaited<ReturnType<typeof createWorld>>|undefined;let traffic:ReturnType<typeof createTraffic>|undefined;
   let transit:ReturnType<typeof createTransit>|undefined;
@@ -95,16 +96,16 @@ async function boot(){
   // Metro builds ship the roadbed already graded (scripts/grade-terrain.mjs).
   const roadGrading:RoadGradingStats&{offline?:boolean}=city.elevation?.graded?{roads:0,changedVertices:0,maxCut:0,maxFill:0,elapsedMs:0,...(city.elevation.grading as Partial<RoadGradingStats>),offline:true}:prepareRoadTerrain(city);
   ui.setLoading('Preparing the neighborhood',.12);
-  const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
-  renderer.setPixelRatio(Math.min(devicePixelRatio,1.65));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.outputColorSpace=THREE.SRGBColorSpace;
+  const renderer=new THREE.WebGLRenderer({antialias:!mobile,powerPreference:mobile?'default':'high-performance'});
+  renderer.setPixelRatio(mobile?1:Math.min(devicePixelRatio,1.65));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.outputColorSpace=THREE.SRGBColorSpace;
   renderer.info.autoReset=false;
   const container=document.querySelector('#scene')!;container.appendChild(renderer.domElement);renderer.domElement.setAttribute('aria-label','3D driving view');
   renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();ui.setError('The graphics connection was interrupted. Reload to continue your drive.');});
   try{
     const transitResponse=await fetch(`${import.meta.env.BASE_URL}data/transit.json`);if(!transitResponse.ok)throw new Error('Transit data could not be loaded. Please reload.');
     const transitData:TransitData=await transitResponse.json();reserveTransitCorridors(city,transitData.routes);
-    if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});world=await createWorld(renderer,scene,city,{physics,read});}
-    else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city)]);physics=results[0];world=results[1];}
+    if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});world=await createWorld(renderer,scene,city,{physics,read,mobile});}
+    else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile})]);physics=results[0];world=results[1];}
     const streamer=world.streamer;
     if(streamer){ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(city.spawn.x,city.spawn.z);physics.reset(city.spawn.x,city.spawn.z,city.spawn.yaw);}
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
@@ -119,7 +120,7 @@ async function boot(){
     transit=createTransit(scene,city,physics,transitData);
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     const streetLife=createStreetLife(scene,city,physics);
-    graphics=createGraphics(renderer,scene,camera,quality);world.setQuality(quality==='high');
+    graphics=createGraphics(renderer,scene,camera,quality,mobile);world.setQuality(quality==='high');
     // Saved locations are restored only when still near a drivable road and outside a building.
     try{const saved=JSON.parse(localStorage.getItem('backbay-drive-v1')??'null');const occupant=saved&&buildingAt(city,saved.x,saved.z);if(saved&&[saved.x,saved.z,saved.yaw].every(Number.isFinite)&&saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&closestRoad(city,saved.x,saved.z).distance<10&&!(occupant&&!meshBuildingIds.has(occupant.id))){if(streamer)await streamer.ensureAround(saved.x,saved.z);physics.reset(saved.x,saved.z,saved.yaw,typeof saved.roadId==='string'?saved.roadId:undefined);}}catch{/* Storage is optional. */}
     populateNeighborhood=()=>{
@@ -205,7 +206,7 @@ async function boot(){
       // A meter-scale near plane preserves ground-layer depth precision from
       // above; the close driving view retains its dashboard-friendly near plane.
       camera.near=flying?1:.15;camera.lookAt(look);camera.updateProjectionMatrix();cameraSnap=false;
-      world!.update(target,elapsed);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,carState);updateFoliage(scene,target,elapsed,quality==='high');groundCover.update(target,elapsed,quality==='high');
+      world!.update(target,elapsed,!mobile||!paused);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,carState);updateFoliage(scene,target,elapsed,quality==='high');groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
       renderer.info.reset();world!.updateReflections(target,elapsed,flying?helicopter.group:riding?bike.group:car.group);
       if(warmNightPasses){const shown=switchedLights.map(light=>light.visible);for(const lampsOnly of [false,true]){switchedLights.forEach(light=>{light.visible=!lampsOnly||light instanceof THREE.PointLight;});graphics!.render(0);}switchedLights.forEach((light,i)=>{light.visible=shown[i];});warmNightPasses();warmNightPasses=undefined;}
@@ -218,7 +219,7 @@ async function boot(){
       const observer=travelMode==='helicopter'?flight!.state:physics!.getState();
       return {traffic:traffic!.population(observer),pedestrians:streetLife.population(observer)};
     };
-    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city,
+    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city,
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
       travelTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>physics!.reset(x,z,yaw))};
     Object.assign(window,{__backbay:diagnostic});
@@ -227,21 +228,28 @@ async function boot(){
     // the car hidden (hood camera, reflection probe) and daytime variants now so
     // the lighting toggle never waits on shader compilation. An offscreen target
     // selects the same tone-mapping and color-space variants as the passes use.
-    const switchedLights:THREE.Light[]=[];scene.traverse(object=>{if(object instanceof THREE.PointLight||object instanceof THREE.SpotLight)switchedLights.push(object);});
-    // compileAsync waits on each material's current program, so run the variants one at a time.
-    const warmTarget=new THREE.WebGLRenderTarget(1,1,{type:THREE.HalfFloatType});
-    for(const shown of [(_:THREE.Light)=>true,(light:THREE.Light)=>light instanceof THREE.PointLight,()=>false]){
-      switchedLights.forEach(light=>{light.visible=shown(light);});
-      const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(warmTarget);
-      let compiled:Promise<unknown>;try{compiled=renderer.compileAsync(scene,camera);}finally{renderer.setRenderTarget(previousTarget);}
-      await compiled;
+    const switchedLights:THREE.Light[]=[];
+    if(!mobile){
+      scene.traverse(object=>{if(object instanceof THREE.PointLight||object instanceof THREE.SpotLight)switchedLights.push(object);});
+      // compileAsync waits on each material's current program, so run the variants one at a time.
+      const warmTarget=new THREE.WebGLRenderTarget(1,1,{type:THREE.HalfFloatType});
+      for(const shown of [(_:THREE.Light)=>true,(light:THREE.Light)=>light instanceof THREE.PointLight,()=>false]){
+        switchedLights.forEach(light=>{light.visible=shown(light);});
+        const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(warmTarget);
+        let compiled:Promise<unknown>;try{compiled=renderer.compileAsync(scene,camera);}finally{renderer.setRenderTarget(previousTarget);}
+        await compiled;
+      }
+      warmTarget.dispose();
+      // The shadow and ambient-occlusion passes draw with their own depth and
+      // normal materials, which compile() does not see, and three.js keys those
+      // programs by the scene's light count as well. Render the first frame once
+      // in each night light state too, still under the loading screen.
+      await new Promise<void>(resolve=>{warmNightPasses=resolve;requestAnimationFrame(tick);});
+    }else{
+      // Compile only the active lighting as it first renders. Night variants
+      // are prepared on demand when a mobile player actually selects Night.
+      await new Promise<void>(resolve=>requestAnimationFrame(now=>{tick(now);resolve();}));
     }
-    warmTarget.dispose();
-    // The shadow and ambient-occlusion passes draw with their own depth and
-    // normal materials, which compile() does not see, and three.js keys those
-    // programs by the scene's light count as well. Render the first frame once
-    // in each night light state too, still under the loading screen.
-    await new Promise<void>(resolve=>{warmNightPasses=resolve;requestAnimationFrame(tick);});
     ui.setReady();
   }catch(error){console.error(error);ui.setError(error instanceof Error?error.message:'Unable to prepare the drive. Reload to try again.');}
 }
