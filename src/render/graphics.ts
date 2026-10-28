@@ -11,6 +11,10 @@ export type QualityMode = 'high' | 'balanced';
 export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, initial: QualityMode) {
   const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, target);
+  // Only the geometry pass needs MSAA/depth. AO composition and bloom operate
+  // on already anti-aliased pixels; multisampling those buffers repeats the
+  // resolve and attachment bandwidth without improving an edge.
+  composer.renderTarget2.samples = 0; composer.renderTarget2.depthBuffer = false;
   const beauty = new RenderPass(scene, camera);
   const ao = new GTAOPass(scene, camera, 1, 1);
   ao.blendIntensity = .9;
@@ -46,7 +50,12 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   setQuality(initial);
   return {
     setQuality, resize,
-    render(dt: number) { composer.render(dt); },
+    render(dt: number) {
+      // GTAO swaps the buffers. Start each frame with the same MSAA beauty
+      // target, then compose into the single-sample buffer.
+      composer.readBuffer = composer.renderTarget1; composer.writeBuffer = composer.renderTarget2;
+      composer.render(dt);
+    },
     get quality() { return quality; },
     dispose() { ao.dispose(); bloom.dispose(); composer.dispose(); },
   };

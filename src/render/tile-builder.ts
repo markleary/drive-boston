@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { staticDetailBatchSteps } from './static-batches.ts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
@@ -342,8 +343,9 @@ export function createTileBuilder(ctx: TileContext) {
       const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: tile.buildings, meshes, budget: 90, target: group, pace })); stats.rooftops = roofs.userData.units ?? 0;
       const porches = yield* stage('details', neighborhoodDetailSteps(scene, subCity, { buildings: tile.buildings, sampler, budget: 60, target: group, pace })); stats.porches = porches.userData.porches ?? 0;
     }
+    group.userData.batching = yield* stage('details', staticDetailBatchSteps(group, pace));
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
-    group.userData = { tile: key, ...stats };
+    group.userData = { ...group.userData, tile: key, ...stats };
     const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps, signals: placements, stats, dispose: () => dispose(built, owned) };
     return built;
   }
@@ -352,7 +354,7 @@ export function createTileBuilder(ctx: TileContext) {
     physics.removeColliders(built.colliders); built.colliders.length = 0;
     removeTileBuildings(city, built.tile); for (const b of built.tile.buildings) ctx.buildingMap.delete(b.id);
     ctx.trees.remove(built.key); ctx.parkTrees.remove(built.key);
-    built.group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+    built.group.traverse(object => { if (object instanceof THREE.Mesh) { if(object instanceof THREE.BatchedMesh)object.dispose();else object.geometry.dispose(); } });
     for (const material of owned) { const m = material as THREE.MeshStandardMaterial; m.map?.dispose(); m.emissiveMap?.dispose(); m.dispose(); }
     built.group.removeFromParent();
   }
@@ -362,7 +364,7 @@ export function createTileBuilder(ctx: TileContext) {
     physics.removeColliders(partial.colliders);
     removeTileBuildings(city, partial.tile); for (const b of partial.tile.buildings) ctx.buildingMap.delete(b.id);
     ctx.trees.remove(partial.key); ctx.parkTrees.remove(partial.key);
-    partial.group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+    partial.group.traverse(object => { if (object instanceof THREE.Mesh) { if(object instanceof THREE.BatchedMesh)object.dispose();else object.geometry.dispose(); } });
     partial.group.removeFromParent();
   }
 
