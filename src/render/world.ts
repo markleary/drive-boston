@@ -19,6 +19,7 @@ import { meshBuildingIds } from '../simulation/building-collisions';
 import { inTransitCorridor } from '../simulation/transit-corridors';
 import { addSourceFooting } from './source-footings';
 import {isStateHouse,createStateHouseShellMaterials,splitStateHouseShell} from './state-house';
+import {createPrudentialPenthouseMaterial,isPrudential,prudentialCrownCollider,splitPrudentialShell} from './prudential';
 
 export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData) {
   prepareNeighborhoodArchitecture(city);
@@ -97,6 +98,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const buildingMap=new Map(city.buildings.map(b=>[b.id,b]));
   const fenwayMaterials=createFenwayShellMaterials();
   const stateHouseMaterials=createStateHouseShellMaterials();
+  const prudentialPenthouse=createPrudentialPenthouseMaterial();
   // Source tiles include park monuments, shelters and utility structures among
   // the building meshes. Keep their measured forms without residential windows.
   const principalParks=(city.parks??[]).filter(p=>/^(Boston Common|Public Garden)$/.test(p.name));
@@ -134,9 +136,15 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
       }
       normalized.dispose();if(normalized!==geometry)geometry.dispose();return;
     }
-    const key=`${material.uuid}:${Math.floor((b?.center[0]??0)/240)}:${Math.floor((b?.center[1]??0)/240)}`;
-    const bucket=buckets.get(key)??{material,geometries:[]};bucket.geometries.push(normalized);buckets.set(key,bucket);
+    const parts=!isRoof&&b&&isPrudential(b)?splitPrudentialShell(normalized,b):[{kind:'facade',geometry:normalized}];
+    for(const part of parts){
+      const partMaterial=part.kind==='penthouse'?prudentialPenthouse:material;
+      const key=`${partMaterial.uuid}:${Math.floor((b?.center[0]??0)/240)}:${Math.floor((b?.center[1]??0)/240)}`;
+      const bucket=buckets.get(key)??{material:partMaterial,geometries:[]};bucket.geometries.push(part.geometry);buckets.set(key,bucket);
+    }
+    if(parts[0].geometry!==normalized){normalized.dispose();if(normalized!==geometry)geometry.dispose();}
   });
+  const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);
   for(const {material,geometries} of buckets.values()){
     const geometry=mergeGeometries(geometries,false);if(!geometry)continue;
     const mesh=new THREE.Mesh(geometry,material);mesh.castShadow=true;mesh.receiveShadow=true;mesh.name='Boston surveyed buildings';geometry.computeBoundingSphere();buildingChunks.push(mesh);scene.add(mesh);

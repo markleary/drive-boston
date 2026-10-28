@@ -16,6 +16,7 @@ import { addFacadeDetails } from './render/facade-details';
 import { addParkDetails } from './render/park-details';
 import { addCityParkDetails } from './render/city-parks';
 import { addCityLandmarkDetails } from './render/city-landmarks';
+import { addPrudentialCrown } from './render/prudential';
 import { addNeighborhoodDetails } from './render/neighborhood-architecture';
 import { updateFoliage } from './render/foliage';
 import { createGroundCover } from './render/ground-cover';
@@ -40,6 +41,7 @@ async function boot(){
   let graphics:ReturnType<typeof createGraphics>|undefined;
   let physics:DrivingPhysics|undefined;let world:Awaited<ReturnType<typeof createWorld>>|undefined;let traffic:ReturnType<typeof createTraffic>|undefined;
   let transit:ReturnType<typeof createTransit>|undefined;
+  let prudential:ReturnType<typeof addPrudentialCrown>|undefined;
   let populateNeighborhood=()=>{};
   const keys=new Set<string>(),audio=new DriveAudio();let cameraSnap=true,lookOffset=0,orbitPitch=.3,zoom=1;
   const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,.15,2200);
@@ -52,7 +54,7 @@ async function boot(){
       if(mode==='helicopter'){const car=physics.getState();flight.reset({x:car.x,y:Math.max(20,car.y+18),z:car.z},car.yaw);}
       travelMode=mode;keys.clear();audio.setMode(mode);cameraMode='chase';ui.setCamera(cameraMode);cameraSnap=true;lookOffset=0;orbitPitch=.3;zoom=1;
     },
-    onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');transit?.setNight(mode==='night');},
+    onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');transit?.setNight(mode==='night');prudential?.setNight(mode==='night');},
     onPause(){keys.clear();},
     onStart(){audio.start();},
     onSound(enabled){audio.enabled=enabled;},
@@ -89,7 +91,7 @@ async function boot(){
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
     // Populate Rapier's query structures before aircraft spawn/clearance checks.
     physics.world.step();
-    ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);const streetscape=addStreetscape(scene,city);const facadeDetails=addFacadeDetails(scene,city);const neighborhoodDetails=addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=addCityParkDetails(scene,city);const groundCover=createGroundCover(scene,city);const rooftops=addRooftopDetails(scene,city);
+    ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);const streetscape=addStreetscape(scene,city);const facadeDetails=addFacadeDetails(scene,city);const neighborhoodDetails=addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=addCityParkDetails(scene,city);const groundCover=createGroundCover(scene,city);const rooftops=addRooftopDetails(scene,city);
     const car=createCar();scene.add(car.group);traffic=createTraffic(scene,city,physics);
     transit=createTransit(scene,city,physics,transitData);
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
@@ -183,7 +185,7 @@ async function boot(){
       const observer=travelMode==='helicopter'?flight!.state:physics!.getState();
       return {traffic:traffic!.population(observer),pedestrians:streetLife.population(observer)};
     };
-    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,lighting,quality,fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape.userData.storefrontCount,facades:facadeDetails.userData,rooftops:rooftops.userData,park:park.group.userData,cityParks:cityParks.userData,cityLandmarks:cityLandmarks.userData,neighborhoodArchitecture:neighborhoodDetails.userData,groundCover:groundCover.group.userData,signalCount:world!.signals.length,bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length,pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city};
+    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,lighting,quality,fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape.userData.storefrontCount,facades:facadeDetails.userData,rooftops:rooftops.userData,park:park.group.userData,cityParks:cityParks.userData,cityLandmarks:cityLandmarks.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails.userData,groundCover:groundCover.group.userData,signalCount:world!.signals.length,bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length,pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city};
     Object.assign(window,{__backbay:diagnostic});
     ui.setReady();requestAnimationFrame(tick);
   }catch(error){console.error(error);ui.setError(error instanceof Error?error.message:'Unable to prepare the drive. Reload to try again.');}
