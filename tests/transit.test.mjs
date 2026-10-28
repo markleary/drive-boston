@@ -6,6 +6,7 @@ import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {createTransit,transitPoint} from '../src/simulation/transit.ts';
 import {signalAxis,signalPhase} from '../src/simulation/signals.ts';
 import {pointInside} from '../src/simulation/roads.ts';
+import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
 
 import {loadCentralCity} from './helpers/metro-city.mjs';
 test('perpendicular signal approaches never receive green together and include clearance time',()=>{
@@ -21,10 +22,10 @@ test('perpendicular signal approaches never receive green together and include c
 test('mapped Green Line uses separate surface tracks and full route39 stays within coverage',async()=>{
  const city=await loadCentralCity();
  const data=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8'));
- // These two concave source complexes span public streets in their convex
- // footprint proxies. Runtime uses exact source mesh collision instead; the
- // road-structure physics regression checks the open street corridors.
- const exactMeshBuildings=new Set(['BOS-KBIA4-2XA04-WNETP','BOS-Q6TUK-T7ZG3-2SJKK']);
+ // Concave source complexes whose convex footprint proxies span public streets
+ // collide as exact source meshes at runtime (the Prudential and 145 Dartmouth
+ // here); tests/street-corridors.test.mjs drives the open street corridors.
+ const exactMeshBuildings=meshBuildingIds;
  assert.equal(data.routes.filter(r=>r.kind==='tram').length,2);assert.equal(data.routes.filter(r=>r.kind==='bus').length,2);
  for(const route of data.routes){
   assert.ok(route.points.length>80);assert.ok(route.stops.length>=8);
