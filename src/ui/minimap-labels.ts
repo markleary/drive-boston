@@ -73,9 +73,21 @@ export function createMinimapLabeler(roads:Road[]){
       }
     }
   }
+  // Layout keeps state between frames. Re-ranking every anchor by distance on
+  // each redraw made names hop along their streets as the car moved, so a label
+  // stays on the anchor it was drawn at for as long as that anchor still fits.
+  let shown:Anchor[]=[],last:Point2|undefined,heading:Point2=[0,0];
   return ({center,scale,width,height,measureText,fontSize=11,maxLabels=width<160?4:6,reserved=[]}:MinimapLabelView):MinimapRoadLabel[]=>{
-    if(scale<=0||Math.min(width,height)<60)return[];
+    if(scale<=0||Math.min(width,height)<60){shown=[];last=undefined;return[];}
     const cx=width/2,cy=height/2,radius=Math.min(cx,cy)-6,worldRadius=(radius+10)/scale;
+    // Smoothed travel direction from view movement. A jump beyond the view is a
+    // teleport that resets the layout; a stopped view gradually forgets heading.
+    const mx=last?center[0]-last[0]:0,mz=last?center[1]-last[1]:0,moved=last?Math.hypot(mx,mz):Infinity;
+    if(moved>worldRadius){shown=[];heading=[0,0];}
+    else if(moved>.05)heading=[heading[0]*.6+mx/moved*.4,heading[1]*.6+mz/moved*.4];
+    else heading=[heading[0]*.8,heading[1]*.8];
+    last=[center[0],center[1]];
+    const pace=Math.hypot(...heading),drift:Point2|undefined=pace>.3?[-heading[0]/pace,-heading[1]/pace]:undefined,travel=radius*.25;
     const candidates:{anchor:Anchor;x:number;y:number;distance:number}[]=[];
     for(let x=Math.floor((center[0]-worldRadius)/cell);x<=Math.floor((center[0]+worldRadius)/cell);x++)
       for(let z=Math.floor((center[1]-worldRadius)/cell);z<=Math.floor((center[1]+worldRadius)/cell);z++)
@@ -83,11 +95,13 @@ export function createMinimapLabeler(roads:Road[]){
           const px=(anchor.point[0]-center[0])*scale+cx,py=(anchor.point[1]-center[1])*scale+cy,distance=Math.hypot(px-cx,py-cy);
           if(distance<radius)candidates.push({anchor,x:px,y:py,distance});
         }
-    candidates.sort((a,b)=>(b.anchor.priority-b.distance*.04)-(a.anchor.priority-a.distance*.04)||a.anchor.name.localeCompare(b.anchor.name)||a.anchor.station-b.anchor.station);
-    const labels:MinimapRoadLabel[]=[],names=new Set<string>(),measurements=new Map<string,number>();
-    const exclusions=[{x:cx,y:cy,radius:width<160?16:20},{x:cx,y:14,radius:12},...reserved];
-    for(const candidate of candidates){
-      const {anchor,x,y}=candidate;if(names.has(anchor.name))continue;
+    // Fit every candidate first. Labels drawn last frame then go first, in
+    // their previous order, so they keep their places; remaining slots go to
+    // the best nearby anchors.
+    const previous=new Map(shown.map((anchor,i)=>[anchor,i])),measurements=new Map<string,number>();
+    const markers=[{x:cx,y:cy,radius:width<160?16:20},{x:cx,y:14,radius:12}],exclusions=[...markers,...reserved];
+    const fitted:{anchor:Anchor;x:number;y:number;angle:number;bounds:MapLabelBounds;rank:number;score:number}[]=[];
+    for(const {anchor,x,y,distance} of candidates){
       const textWidth=measurements.get(anchor.text)??measureText(anchor.text);measurements.set(anchor.text,textWidth);
       const half=textWidth/2+3,high=fontSize/2+3,reach=half/scale;
       if(anchor.station<reach||anchor.path.length-anchor.station<reach)continue;
@@ -98,13 +112,31 @@ export function createMinimapLabeler(roads:Road[]){
       // on the mapped street throughout its length.
       if(Math.hypot(b[0]-a[0],b[1]-a[1])*scale<half*1.8)continue;
       if([-.5,0,.5].some(t=>{const p=at(anchor.path,anchor.station+reach*t);return Math.abs(-(p[0]-anchor.point[0])*sin+(p[1]-anchor.point[1])*cos)*scale>4;}))continue;
+      // Text centered at (px,py) stays inside the circular crop and clear of markers.
+      const fits=(px:number,py:number,avoid:typeof exclusions)=>[-1,1].every(u=>[-1,1].every(v=>Math.hypot(px+cos*half*u-sin*high*v-cx,py+sin*half*u+cos*high*v-cy)<=radius))
+        &&!avoid.some(p=>{const dx=p.x-px,dy=p.y-py,rx=Math.abs(dx*cos+dy*sin),ry=Math.abs(-dx*sin+dy*cos);return Math.hypot(Math.max(0,rx-half),Math.max(0,ry-high))<p.radius;});
+      if(!fits(x,y,exclusions))continue;
+      // While moving, measure how far new text could drift before leaving the
+      // crop or sliding under the car or north marker. Short-lived spots (often
+      // the street being driven, just ahead of the car) would only flicker, and
+      // longer-lived ones are preferred.
+      const rank=previous.get(anchor)??previous.size;let survival=0;
+      if(drift&&rank===previous.size){
+        const step=travel/4;while(survival<radius*2&&fits(x+drift[0]*(survival+step),y+drift[1]*(survival+step),markers))survival+=step;
+        if(survival<travel)continue;
+      }
       const corners=[-1,1].flatMap(u=>[-1,1].map(v=>[x+cos*half*u-sin*high*v,y+sin*half*u+cos*high*v] as Point2));
-      if(corners.some(p=>Math.hypot(p[0]-cx,p[1]-cy)>radius))continue;
-      if(exclusions.some(p=>{const dx=p.x-x,dy=p.y-y,rx=Math.abs(dx*cos+dy*sin),ry=Math.abs(-dx*sin+dy*cos);return Math.hypot(Math.max(0,rx-half),Math.max(0,ry-high))<p.radius;}))continue;
       const bounds={left:Math.min(...corners.map(p=>p[0])),right:Math.max(...corners.map(p=>p[0])),top:Math.min(...corners.map(p=>p[1])),bottom:Math.max(...corners.map(p=>p[1]))};
-      if(labels.some(label=>bounds.left<label.bounds.right+3&&bounds.right>label.bounds.left-3&&bounds.top<label.bounds.bottom+3&&bounds.bottom>label.bounds.top-3))continue;
-      labels.push({name:anchor.name,text:anchor.text,x,y,angle,bounds});names.add(anchor.name);if(labels.length>=maxLabels)break;
+      fitted.push({anchor,x,y,angle,bounds,rank,score:anchor.priority+(survival-distance)*.04});
     }
+    fitted.sort((a,b)=>a.rank-b.rank||b.score-a.score||a.anchor.name.localeCompare(b.anchor.name)||a.anchor.station-b.anchor.station);
+    const labels:MinimapRoadLabel[]=[],placed:Anchor[]=[],names=new Set<string>();
+    for(const {anchor,x,y,angle,bounds} of fitted){
+      if(names.has(anchor.name))continue;
+      if(labels.some(label=>bounds.left<label.bounds.right+3&&bounds.right>label.bounds.left-3&&bounds.top<label.bounds.bottom+3&&bounds.bottom>label.bounds.top-3))continue;
+      labels.push({name:anchor.name,text:anchor.text,x,y,angle,bounds});placed.push(anchor);names.add(anchor.name);if(labels.length>=maxLabels)break;
+    }
+    shown=placed;
     return labels;
   };
 }

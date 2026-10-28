@@ -63,3 +63,30 @@ test('small viewpoint changes retain world-space text anchors instead of sliding
     assert.ok(Math.abs(next.x-label.x+scale)<.001&&Math.abs(next.y-label.y)<.001,'the same name should track a fixed mapped position');
   }
 });
+
+test('driving keeps street names pinned instead of hopping along their streets',()=>{
+  // Street centerlines sampled every 1.5 m, about 60 km/h at the 90 ms minimap redraw.
+  const routes=[
+    [[845,-255],[601,-269],[340,-199],[-887,254]], // Boylston Street
+    [[1225,-973],[1180,-882],[943,-567],[876,-391],[854,-302],[765,162],[675,145],[560,233]], // Tremont Street
+  ];
+  const width=216,scale=width/460;let frames=0,shown=0,hops=0;
+  for(const route of routes){
+    const drive=createMinimapLabeler(city.roads),seen=new Map();
+    for(let i=1;i<route.length;i++){
+      const a=route[i-1],b=route[i],length=Math.hypot(b[0]-a[0],b[1]-a[1]);
+      for(let d=0;d<length;d+=1.5){
+        const center=[a[0]+(b[0]-a[0])*d/length,a[1]+(b[1]-a[1])*d/length],labels=drive({center,scale,width,height:width,measureText});
+        frames++;shown+=labels.length;
+        for(const label of labels){
+          const world=[(label.x-width/2)/scale+center[0],(label.y-width/2)/scale+center[1]],last=seen.get(label.name);
+          // A name seen within the last second at another mapped position has hopped.
+          if(last&&frames-last.frame<=11&&Math.hypot(world[0]-last.world[0],world[1]-last.world[1])>.5)hops++;
+          seen.set(label.name,{world,frame:frames});
+        }
+      }
+    }
+  }
+  assert.ok(shown/frames>1.5,`streets must stay labeled while driving (${(shown/frames).toFixed(2)} per redraw)`);
+  assert.ok(hops/frames<.03,`labels hopped ${hops} times in ${frames} redraws`);
+});
