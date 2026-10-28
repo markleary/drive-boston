@@ -16,6 +16,18 @@ export function buildingAt(city: CityData, x: number, z: number): Building | Far
   return city.buildings.find(b => pointInPolygon(x, z, b.footprint));
 }
 
+/** Neighbour clearance must exclude the owner's coarse hull too: DBF2 hulls
+ * have no survey IDs. Match their ordered decimetre footprint and envelope
+ * instead of comparing an absent `id` with the detailed building's ID. */
+export function otherBuildingHulls(city:CityData,building:Building,x:number,z:number,radius:number):(Building|FarBuilding)[]{
+  if(!isMetroCity(city))return city.buildings.filter(b=>b.id!==building.id&&Math.hypot(b.center[0]-x,b.center[1]-z)<radius);
+  return city.index.near(x,z,radius).filter(b=>!(
+    !b.fragment&&Math.abs(b.base-(building.baseElevation??0))<.011&&Math.abs(b.height-building.height)<.011&&
+    b.footprint.length===Math.min(60,building.footprint.length)&&
+    b.footprint.every((p,i)=>Math.hypot(p[0]-building.footprint[i][0],p[1]-building.footprint[i][1])<.08)
+  ));
+}
+
 export type Reader = (name: string) => Promise<ArrayBuffer>;
 
 /** Resolve the sidecar files a metro city.json refers to. The elevation grid

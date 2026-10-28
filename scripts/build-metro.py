@@ -507,7 +507,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
    # which keeps every vertex inside the int16 range regardless of catalog centroids.
    xs=[v[0] for v in vertices];zs=[v[2] for v in vertices];ax=round((min(xs)+max(xs))/2,3);az=round((min(zs)+max(zs))/2,3)
    if max(max(xs)-ax,max(zs)-az)>3200:stats['oversized-skipped']+=1;log('Skipping oversized model',c['id'],round(max(xs)-min(xs)),'x',round(max(zs)-min(zs)),'m');continue
-   record=tileformat.mesh_record(vertices,c['faces'],[ax,base,az],base)
+   record=tileformat.mesh_record(vertices,c['faces'],[ax,base,az],base,repair_winding=c['id'] not in STRUCTURE_IDS)
    if record is None:continue
    offset=round(min(v[1] for v in vertices)-base,6)
    entry={'id':c['id'],'name':c['name'] or c['district']+' building','center':c['center'],'height':height,'footprint':c['footprint'],'baseElevation':base,'district':c['district'],'anchor':[ax,base,az],'source':source_key}
