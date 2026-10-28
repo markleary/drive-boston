@@ -40,7 +40,7 @@ export function sourceFootingGeometry(city:CityData,building:Building,source:THR
 
 let material:THREE.MeshStandardMaterial|undefined;
 /** One generated buffer supplies both the visible footing and static collision. */
-export function addSourceFooting(scene:THREE.Scene,city:CityData,building:Building,source:THREE.BufferGeometry){
+export function addSourceFooting(scene:THREE.Object3D,city:CityData,building:Building,source:THREE.BufferGeometry){
   const geometry=sourceFootingGeometry(city,building,source),position=geometry.attributes.position;
   if(!position.count){geometry.dispose();return undefined;}
   material??=new THREE.MeshStandardMaterial({color:'#827c6d',roughness:.95,side:THREE.DoubleSide});

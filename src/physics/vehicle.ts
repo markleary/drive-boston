@@ -45,21 +45,24 @@ export class DrivingPhysics {
   private readonly bounds: CityData['bounds'];
   private readonly city: CityData;
 
-  static async create(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string> } = {}) {
+  static async create(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string>; streaming?: boolean } = {}) {
     initialization ??= RAPIER.init();
     await initialization;
     return new DrivingPhysics(city, options);
   }
 
-  private constructor(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string> }) {
+  /** Streaming mode: terrain, decks and building hulls arrive per tile. */
+  readonly streaming: boolean;
+  private constructor(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string>; streaming?: boolean }) {
     this.bounds = city.bounds;
     this.city = city;
     this.meshBuildingIds = new Set(options.meshBuildingIds);
+    this.streaming = !!options.streaming;
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
     this.world.integrationParameters.numSolverIterations = 8;
     const { minX, maxX, minZ, maxZ } = city.bounds;
-    if (terrainGrid(city)) {
+    if (this.streaming) { /* tiles supply the ground */ } else if (terrainGrid(city)) {
       const { vertices, indices } = buildTerrainGeometryData(city);
       this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES)
         .setFriction(1).setRestitution(0));
@@ -71,45 +74,11 @@ export class DrivingPhysics {
 
     // Upper decks are closed solids, separate from the original terrain. Wheel
     // rays can support either level while underpass cars retain their own ground.
-    for(const road of city.roads??[]){
-      if(!road.elevations)continue;
-      const slab=roadSlabGeometry(city,road);
-      this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(slab.vertices,slab.indices,RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
-      for(const p of bridgeBarriers(city,road)){
-        // Same yaw/pitch transform as the visible parapet.
-        const sx=Math.sin(-p.slope/2),cx=Math.cos(-p.slope/2),sy=Math.sin(p.yaw/2),cy=Math.cos(p.yaw/2);
-        this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.135,.38,p.length/2).setTranslation(p.x,p.y,p.z).setRotation({x:cy*sx,y:sy*cx,z:-sy*sx,w:cy*cx}).setFriction(.4));
-      }
-      for(const p of bridgeSupports(city,road)){
-        this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.7,(p.top-p.bottom)/2,1.05).setTranslation(p.x,(p.top+p.bottom)/2,p.z).setFriction(.5));
-        this.addDetailedCollider(RAPIER.ColliderDesc.cuboid((road.width-.5)/2,.175,1.3).setTranslation(p.x,p.top-.18,p.z).setFriction(.5));
-      }
-    }
+    if(!this.streaming)for(const road of city.roads??[])this.addRoadDeck(city,road);
 
     // Convex footprints are deliberately conservative collision proxies. Exact
     // static meshes can instead be supplied by the renderer with addStaticMesh.
-    if (options.buildingColliders !== false) {
-      for (const building of city.buildings) {
-        if (building.footprint.length < 3 || building.height < 0.5 || options.meshBuildingIds?.has(building.id)) continue;
-        const vertices: number[] = [];
-        const base = buildingBaseElevation(city, building);
-        // Imported buildings have a level base. Extend their solid foundations
-        // down to the lowest terrain along the footprint so hillside entries
-        // cannot pass through the visible wall underneath that base.
-        let bottom = Math.min(base, sampleElevation(city, building.center[0], building.center[1])) - .5;
-        for (let i = 0; i < building.footprint.length; i++) {
-          const a = building.footprint[i], b = building.footprint[(i + 1) % building.footprint.length];
-          const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 4));
-          for (let j = 0; j <= steps; j++) bottom = Math.min(bottom,
-            sampleElevation(city, a[0] + (b[0] - a[0]) * j / steps, a[1] + (b[1] - a[1]) * j / steps) - .5);
-        }
-        for (const [x, z] of building.footprint) {
-          vertices.push(x, bottom, z, x, base + Math.min(400, Math.max(2, building.height)), z);
-        }
-        const descriptor = RAPIER.ColliderDesc.convexHull(new Float32Array(vertices));
-        if (descriptor) this.world.createCollider(descriptor.setFriction(0.45).setRestitution(0.05));
-      }
-    }
+    if (options.buildingColliders !== false && !this.streaming) for (const building of city.buildings) this.addBuildingHull(building);
 
     this.body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(city.spawn.x, sampleElevation(city, city.spawn.x, city.spawn.z) + VEHICLE.spawnHeight, city.spawn.z)
@@ -144,6 +113,52 @@ export class DrivingPhysics {
   addStaticMesh(vertices: Float32Array, indices: Uint32Array) {
     return this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES)
       .setFriction(0.5).setRestitution(0.04));
+  }
+
+  /** Ground for one streamed tile: the same trimesh flags as the whole-city collider. */
+  addTerrainTile(vertices: Float32Array, indices: Uint32Array) {
+    return this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
+  }
+
+  /** Upper decks are closed solids, separate from the original terrain. Wheel
+   * rays can support either level while underpass cars retain their own ground.
+   * `city` may be a tile-local view so edge and support queries stay bounded. */
+  addRoadDeck(city: CityData, road: CityData['roads'][number]) {
+    const colliders: RAPIER.Collider[] = [];
+    if (!road.elevations) return colliders;
+    const slab = roadSlabGeometry(city, road);
+    colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(slab.vertices, slab.indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0)));
+    for (const p of bridgeBarriers(city, road)) {
+      // Same yaw/pitch transform as the visible parapet.
+      const sx = Math.sin(-p.slope / 2), cx = Math.cos(-p.slope / 2), sy = Math.sin(p.yaw / 2), cy = Math.cos(p.yaw / 2);
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.135, .38, p.length / 2).setTranslation(p.x, p.y, p.z).setRotation({ x: cy * sx, y: sy * cx, z: -sy * sx, w: cy * cx }).setFriction(.4)));
+    }
+    for (const p of bridgeSupports(city, road)) {
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.7, (p.top - p.bottom) / 2, 1.05).setTranslation(p.x, (p.top + p.bottom) / 2, p.z).setFriction(.5)));
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid((road.width - .5) / 2, .175, 1.3).setTranslation(p.x, p.top - .18, p.z).setFriction(.5)));
+    }
+    return colliders;
+  }
+
+  /** Convex footprint proxy, extended below the lowest terrain along the footprint
+   * so hillside entries cannot pass through the visible wall under a level base. */
+  addBuildingHull(building: CityData['buildings'][number]) {
+    if (building.footprint.length < 3 || building.height < 0.5 || this.meshBuildingIds.has(building.id)) return undefined;
+    const city = this.city, vertices: number[] = [], base = buildingBaseElevation(city, building);
+    let bottom = Math.min(base, sampleElevation(city, building.center[0], building.center[1])) - .5;
+    for (let i = 0; i < building.footprint.length; i++) {
+      const a = building.footprint[i], b = building.footprint[(i + 1) % building.footprint.length];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 4));
+      for (let j = 0; j <= steps; j++) bottom = Math.min(bottom, sampleElevation(city, a[0] + (b[0] - a[0]) * j / steps, a[1] + (b[1] - a[1]) * j / steps) - .5);
+    }
+    for (const [x, z] of building.footprint) vertices.push(x, bottom, z, x, base + Math.min(400, Math.max(2, building.height)), z);
+    const descriptor = RAPIER.ColliderDesc.convexHull(new Float32Array(vertices));
+    return descriptor ? this.world.createCollider(descriptor.setFriction(0.45).setRestitution(0.05)) : undefined;
+  }
+
+  /** Drop a streamed tile's colliders. Waking bodies lets a parked car settle on whatever replaces them. */
+  removeColliders(colliders: Iterable<RAPIER.Collider>) {
+    for (const collider of colliders) { this.detailedColliders.delete(collider.handle); this.world.removeCollider(collider, true); }
   }
 
   private addDetailedCollider(descriptor:RAPIER.ColliderDesc){

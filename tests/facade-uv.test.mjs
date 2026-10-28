@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import test from 'node:test';
-import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import * as THREE from 'three';
 import {facadeStyleFor,stabilizeFacadeUVs} from '../src/render/materials.ts';
+import {expandTriangles} from '../src/render/tile-geometry.ts';
+import {loadCentralCity} from './helpers/metro-city.mjs';
 
 test('named church spires keep masonry instead of inheriting office-tower materials',async()=>{
-  const city=JSON.parse(await fs.readFile(new URL('../public/data/city.json',import.meta.url),'utf8'));
+  const city=await loadCentralCity();
   for(const name of ['Old South Church','Arlington Street Church']){
     const building=city.buildings.find(b=>b.name===name);assert.ok(building,`missing source church: ${name}`);
     const style=facadeStyleFor(building);assert.equal(style.kind,'stone');assert.equal(style.detail,'gothic');
@@ -33,27 +34,34 @@ function sharedEdgeJumps(geometry){
   return {checked,jumps};
 }
 
+/** Each survey facet projected along its own normal: the per-face mapping the
+ * original GLB carried, whose phase breaks the stabilization removes. */
+function naiveFacadeGeometry(data){
+  const flat=expandTriangles(data.positions,data.facade),geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.BufferAttribute(flat,3));geometry.computeVertexNormals();
+  const n=geometry.attributes.normal,uv=new Float32Array(flat.length/3*2);
+  for(let i=0;i<flat.length/3;i++){const nx=n.getX(i),nz=n.getZ(i),h=Math.hypot(nx,nz)||1;uv[i*2]=(flat[i*3]*nz/h-flat[i*3+2]*nx/h)/6;uv[i*2+1]=flat[i*3+1]/6;}
+  geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+  return geometry;
+}
+
 test('survey-wall UV stabilization removes texture phase breaks without changing geometry',async t=>{
-  const city=JSON.parse(await fs.readFile(new URL('../public/data/city.json',import.meta.url),'utf8'));
-  const buildings=new Map(city.buildings.map(b=>[b.id,b]));
-  const bytes=await fs.readFile(new URL('../public/data/city.glb',import.meta.url));
-  const gltf=await new Promise((resolve,reject)=>new GLTFLoader().parse(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'',resolve,reject));
-  let before=0,after=0,checked=0;
-  gltf.scene.traverse(object=>{
-    if(!object.isMesh||object.material.name==='roof')return;
-    let owner=object;while(owner&&!owner.userData.buildingId)owner=owner.parent;
-    const geometry=object.geometry.index?object.geometry.toNonIndexed():object.geometry.clone();
+  const city=await loadCentralCity();
+  let before=0,after=0,checked=0,buildings=0;
+  for(const building of city.buildings){
+    const data=city.geometry.get(building.id);if(!data||!data.facade.length)continue;
+    const geometry=naiveFacadeGeometry(data);buildings++;
     const positions=geometry.attributes.position.array.slice(),normals=geometry.attributes.normal.array.slice();
     const original=sharedEdgeJumps(geometry);before+=original.jumps;checked+=original.checked;
-    stabilizeFacadeUVs(geometry,buildings.get(owner?.userData.buildingId));
+    stabilizeFacadeUVs(geometry,building);
     after+=sharedEdgeJumps(geometry).jumps;
     assert.deepEqual(geometry.attributes.position.array,positions,'measured building vertices changed');
     assert.deepEqual(geometry.attributes.normal.array,normals,'measured surface normals changed');
     assert.ok(geometry.attributes.uv.array.every(Number.isFinite),'UV projection produced nonfinite coordinates');
     geometry.dispose();
-  });
-  assert.ok(checked>10000,'test must inspect the real district asset');
+  }
+  assert.ok(buildings>3000&&checked>10000,'test must inspect the real district asset');
   assert.ok(before>500,'source fixture no longer reproduces the phase discontinuities');
-  assert.ok(after<before*.1,`expected at least 90% fewer nearly planar texture breaks; got ${before} → ${after}`);
-  t.diagnostic(`${checked} shared edges checked: ${before} → ${after} texture phase breaks over 2cm; source positions/normals unchanged.`);
+  assert.ok(after<before*.1,`expected at least 90% fewer nearly planar texture breaks; got ${before} -> ${after}`);
+  t.diagnostic(`${buildings} buildings, ${checked} shared edges checked: ${before} -> ${after} texture phase breaks over 2cm; source positions/normals unchanged.`);
 });

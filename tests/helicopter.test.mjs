@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { DrivingPhysics } from '../src/physics/vehicle.ts';
 import { createHelicopterFlight, HELICOPTER } from '../src/simulation/helicopter.ts';
 import { sampleElevation } from '../src/simulation/terrain.ts';
 
+import {loadCentralCity} from './helpers/metro-city.mjs';
 const released = { forward: 0, strafe: 0, turn: 0, lift: 0 };
 const emptyCity = {
   bounds: { minX: -500, maxX: 500, minZ: -500, maxZ: 500 },
@@ -82,7 +82,7 @@ test('roofs, the hover floor, map bounds and the ceiling remain solid', async ()
 });
 
 test('real Back Bay launch is clear and 60/120 Hz flight produces the same path', async () => {
-  const city = JSON.parse(readFileSync(new URL('../public/data/city.json', import.meta.url), 'utf8'));
+  const city = await loadCentralCity();
   const setup = await fixture(city);
   try {
     const { flight } = setup;
@@ -146,7 +146,7 @@ test('continuous terrain sweeps cannot skip a narrow ridge between low endpoints
 });
 
 test('flight over the imported Parker Hill summit preserves its terrain clearance', async () => {
-  const city = JSON.parse(readFileSync(new URL('../public/data/city.json', import.meta.url), 'utf8'));
+  const city = await loadCentralCity();
   const setup = await fixture(city);
   try {
     const x = -2529.88, z = 2264.24, ground = sampleElevation(city, x, z);

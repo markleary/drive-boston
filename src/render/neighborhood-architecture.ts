@@ -1,27 +1,27 @@
 import * as THREE from 'three';
 import type { CityData, Point2 } from '../types';
 import { sampleElevation } from '../simulation/terrain';
-import { sourceWallSampler } from './facade-details';
+import { sourceWallSampler, type DetailOptions } from './facade-details';
 import { mergeSpatialGeometries } from './spatial-batches';
 import { architectureFor, prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { planPorchStairs, stairFootprint } from './porch-stairs.ts';
 import { pointInside } from '../simulation/roads.ts';
+import { isMetroCity } from '../simulation/city-tiles.ts';
 export { architectureFor, prepareNeighborhoodArchitecture } from './neighborhood-profiles';
+let porchMaterials:{trim:THREE.Material;shadow:THREE.Material;deck:THREE.Material;door:THREE.Material}|undefined;
 
 /** Three-floor architectural details attached to eligible measured house walls.
  * Porches occupy verified setbacks; existing source bay projections are retained. */
-export function addNeighborhoodDetails(scene:THREE.Scene,city:CityData){
-  const stats=prepareNeighborhoodArchitecture(city),sampler=sourceWallSampler(scene);
+export function addNeighborhoodDetails(scene:THREE.Scene,city:CityData,options:DetailOptions={}){
+  const buildings=options.buildings??city.buildings,stats=prepareNeighborhoodArchitecture(city,options.buildings),sampler=options.sampler??sourceWallSampler(scene),budget=options.budget??150;
   const group=new THREE.Group();group.name='Mission Hill triple-decker architecture';
-  const trim=new THREE.MeshStandardMaterial({color:'#dedfd2',roughness:.78});
-  const shadow=new THREE.MeshStandardMaterial({color:'#75837a',roughness:.91});
-  const deck=new THREE.MeshStandardMaterial({color:'#9d9e8f',roughness:.95});
-  const door=new THREE.MeshStandardMaterial({color:'#354a43',roughness:.72});
+  porchMaterials??={trim:new THREE.MeshStandardMaterial({color:'#dedfd2',roughness:.78}),shadow:new THREE.MeshStandardMaterial({color:'#75837a',roughness:.91}),deck:new THREE.MeshStandardMaterial({color:'#9d9e8f',roughness:.95}),door:new THREE.MeshStandardMaterial({color:'#354a43',roughness:.72})};
+  const {trim,shadow,deck,door}=porchMaterials;
   const batches=new Map<THREE.Material,THREE.BufferGeometry[]>();let porches=0,windows=0,cornices=0,sideStairs=0,porchSupports=0;
   const add=(g:THREE.BufferGeometry,m:THREE.Material,x:number,y:number,z:number,yaw:number)=>{
     g.rotateY(yaw).translate(x,y,z);const list=batches.get(m)??[];list.push(g);batches.set(m,list);
   };
-  for(const building of city.buildings){
+  for(const building of buildings){
     const profile=architectureFor(building);if(!profile)continue;
     const base=building.baseElevation??0,fh=profile.floorHeight;
     for(let e=0;e<building.footprint.length;e++){
@@ -54,14 +54,14 @@ export function addNeighborhoodDetails(scene:THREE.Scene,city:CityData){
       }
     }
     const {a,b,nx,nz,setback}=profile.front,length=Math.hypot(b[0]-a[0],b[1]-a[1]);
-    if(setback<3.25||length<7||porches>=150)continue;
+    if(setback<3.25||length<7||porches>=budget)continue;
     const tx=(b[0]-a[0])/length,tz=(b[1]-a[1])/length,yaw=Math.atan2(nx,nz);
     const width=Math.min(3.15,length*.38),u=length*.23;
     const x=(a[0]+b[0])/2+tx*u,z=(a[1]+b[1])/2+tz*u,depth=Math.min(1.72,setback-1.65);
     const probes=[-.9,0,.9].flatMap(offset=>[.8,fh+1,2*fh+1].map(y=>sampler.sample(x+tx*offset,z+tz*offset,nx,nz,base+profile.raisedBase+y)));
     if(probes.some(hit=>!hit||Math.abs(hit.depth)>.35))continue;
     const frontDepth=probes[1]!.depth;
-    const neighbors=city.buildings.filter(other=>other!==building&&Math.hypot(other.center[0]-x,other.center[1]-z)<35);
+    const neighbors=(isMetroCity(city)?city.index.near(x,z,35):city.buildings).filter(other=>(other as typeof building).id!==building.id&&Math.hypot(other.center[0]-x,other.center[1]-z)<35);
     const stairs=planPorchStairs({origin:[x,z],tangent:[tx,tz],normal:[nx,nz],frontDepth,width,depth,frontage:length,along:u,setback,landingY:base+profile.raisedBase+.085},
       (x,z)=>sampleElevation(city,x,z),p=>!neighbors.some(other=>pointInside(p,other.footprint)));
     if(!stairs)continue;
@@ -118,5 +118,5 @@ export function addNeighborhoodDetails(scene:THREE.Scene,city:CityData){
   }
   for(const [material,geometry]of batches)for(const mesh of mergeSpatialGeometries(geometry,material)){mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);}
   group.userData={...stats,porches,windows,cornices,sideStairs,porchSupports,accuracy:'Inferred three-story wood typology on measured detached Mission Hill houses; decorative details are interpretive'};
-  scene.add(group);return group;
+  (options.target??scene).add(group);return group;
 }

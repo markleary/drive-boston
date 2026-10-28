@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { canvasTexture, seeded } from './materials';
+import { canvasTexture, hash, seeded } from './materials';
 
 const windTime={value:0};
 const SPECIES=[
@@ -64,38 +64,74 @@ function assets(){
   resources={bark,leaves,depth,geometries:SPECIES.map((_,i)=>[0,1,2].map(lod=>geometryFor(i,lod)))};return resources;
 }
 
+export interface TreeField { group:THREE.Group; add(owner:string,positions:THREE.Vector3[]):void; remove(owner:string):void; readonly count:number; }
+type Site={p:THREE.Vector3;species:number;scale:number;yaw:number;owner:string};
+let grateMaterial:THREE.Material|undefined,grateGeometry:THREE.BufferGeometry|undefined;
+
 /** Species silhouettes and three distance levels share geometry/materials.
- * A bounded active field keeps city-wide foliage out of distant shadow passes. */
-export function createStreetTrees(positions:THREE.Vector3[],options:{scale?:number;grates?:boolean}={}){
-  const group=new THREE.Group();group.name='Boston varied trees';const shared=assets(),scale=options.scale??1,random=seeded(9311);
-  const sites=positions.map(p=>({p,species:options.grates===false?Math.floor(random()*4):Math.floor(random()*3),scale:scale*(.82+random()*.30),yaw:random()*Math.PI*2}));
-  const batches=SPECIES.map((_,species)=>[0,1,2].map(lod=>{
-    const capacity=sites.filter(s=>s.species===species).length;
+ * A bounded active field keeps city-wide foliage out of distant shadow passes.
+ * Owners (streamed tiles) add and remove their sites; the instanced batches
+ * grow to fit and shrink only on disposal. */
+export function createTreeField(options:{scale?:number;grates?:boolean}={}):TreeField{
+  const group=new THREE.Group();group.name='Boston varied trees';const shared=assets(),scale=options.scale??1;
+  let sites:Site[]=[];
+  const make=(species:number,lod:number,capacity:number)=>{
     const wood=new THREE.InstancedMesh(shared.geometries[species][lod].wood,shared.bark,capacity),leaf=new THREE.InstancedMesh(shared.geometries[species][lod].leaves,shared.leaves[species],capacity);
     wood.name=`${SPECIES[species].name} branches LOD${lod}`;leaf.name=`${SPECIES[species].name} foliage LOD${lod}`;
     leaf.customDepthMaterial=shared.depth[species];leaf.userData.noAO=true;
     for(const mesh of [wood,leaf]){mesh.castShadow=lod<2;mesh.receiveShadow=true;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);mesh.frustumCulled=false;mesh.count=0;group.add(mesh);}
-    return{wood,leaf,count:0};
-  }));
-  const dummy=new THREE.Object3D();let last=-Infinity,lastX=Infinity,lastZ=Infinity;
+    return{wood,leaf,count:0,capacity};
+  };
+  const batches=SPECIES.map((_,species)=>[0,1,2].map(lod=>make(species,lod,8)));
+  const ensure=(species:number,lod:number,needed:number)=>{
+    const b=batches[species][lod];if(needed<=b.capacity)return b;
+    group.remove(b.wood,b.leaf);b.wood.dispose();b.leaf.dispose();
+    return batches[species][lod]=make(species,lod,Math.max(needed,Math.ceil(b.capacity*1.6)));
+  };
+  const dummy=new THREE.Object3D();let last=-Infinity,lastX=Infinity,lastZ=Infinity,dirty=true;
+  const pending:Site[][][]=SPECIES.map(()=>[[],[],[]]);
   group.userData.updateFoliage=(observer:THREE.Vector3,time:number,high=true)=>{
-    if(time-last<.25&&Math.hypot(observer.x-lastX,observer.z-lastZ)<25)return;last=time;lastX=observer.x;lastZ=observer.z;
-    for(const row of batches)for(const b of row)b.count=0;
+    if(!dirty&&time-last<.25&&Math.hypot(observer.x-lastX,observer.z-lastZ)<25)return;last=time;lastX=observer.x;lastZ=observer.z;dirty=false;
+    for(const row of pending)for(const list of row)list.length=0;
     for(const site of sites){
       const d=Math.hypot(site.p.x-observer.x,site.p.z-observer.z),near=high?100:60,mid=high?320:210;if(d>900)continue;
-      const lod=d<near?0:d<mid?1:2,b=batches[site.species][lod];dummy.position.copy(site.p);dummy.rotation.set(0,site.yaw,0);dummy.scale.setScalar(site.scale);dummy.updateMatrix();
-      b.wood.setMatrixAt(b.count,dummy.matrix);b.leaf.setMatrixAt(b.count,dummy.matrix);b.count++;
+      pending[site.species][d<near?0:d<mid?1:2].push(site);
     }
-    for(const row of batches)for(const b of row)for(const mesh of [b.wood,b.leaf]){mesh.count=b.count;mesh.visible=b.count>0;mesh.instanceMatrix.needsUpdate=true;}
+    pending.forEach((row,species)=>row.forEach((list,lod)=>{
+      const b=ensure(species,lod,list.length);
+      list.forEach((site,i)=>{dummy.position.copy(site.p);dummy.rotation.set(0,site.yaw,0);dummy.scale.setScalar(site.scale);dummy.updateMatrix();b.wood.setMatrixAt(i,dummy.matrix);b.leaf.setMatrixAt(i,dummy.matrix);});
+      b.count=list.length;for(const mesh of [b.wood,b.leaf]){mesh.count=b.count;mesh.visible=b.count>0;mesh.instanceMatrix.needsUpdate=true;}
+    }));
   };
-  if(options.grates!==false&&positions.length){
-    const grates=new THREE.InstancedMesh(new THREE.BoxGeometry(1.7,.035,1.7),new THREE.MeshStandardMaterial({color:'#45483c',roughness:.9}),positions.length);
-    positions.forEach((p,i)=>{dummy.position.copy(p);dummy.position.y+=.035;dummy.rotation.set(0,.3,0);dummy.scale.setScalar(1);dummy.updateMatrix();grates.setMatrixAt(i,dummy.matrix);});grates.receiveShadow=true;group.add(grates);
-  }
-  group.userData.treeCount=positions.length;group.userData.species=SPECIES.map(s=>s.name);return group;
+  let grates:THREE.InstancedMesh|undefined;
+  const refreshGrates=()=>{
+    if(options.grates===false)return;
+    if(!grates||grates.instanceMatrix.count<sites.length){
+      if(grates){group.remove(grates);grates.dispose();}
+      grateGeometry??=new THREE.BoxGeometry(1.7,.035,1.7);grateMaterial??=new THREE.MeshStandardMaterial({color:'#45483c',roughness:.9});
+      grates=new THREE.InstancedMesh(grateGeometry,grateMaterial,Math.max(8,Math.ceil(sites.length*1.5)));grates.name='Tree grates';grates.receiveShadow=true;grates.frustumCulled=false;group.add(grates);
+    }
+    sites.forEach((site,i)=>{dummy.position.copy(site.p);dummy.position.y+=.035;dummy.rotation.set(0,.3,0);dummy.scale.setScalar(1);dummy.updateMatrix();grates!.setMatrixAt(i,dummy.matrix);});
+    grates.count=sites.length;grates.visible=sites.length>0;grates.instanceMatrix.needsUpdate=true;
+  };
+  const field:TreeField={group,
+    add(owner,positions){
+      const random=seeded(owner==='all'?9311:9311+hash(owner)%100000);
+      for(const p of positions)sites.push({p,species:options.grates===false?Math.floor(random()*4):Math.floor(random()*3),scale:scale*(.82+random()*.30),yaw:random()*Math.PI*2,owner});
+      dirty=true;refreshGrates();group.userData.treeCount=sites.length;
+    },
+    remove(owner){sites=sites.filter(s=>s.owner!==owner);dirty=true;refreshGrates();group.userData.treeCount=sites.length;},
+    get count(){return sites.length;},
+  };
+  group.userData.treeCount=0;group.userData.species=SPECIES.map(s=>s.name);return field;
 }
-const fields=new WeakMap<THREE.Scene,THREE.Group[]>();
+export function createStreetTrees(positions:THREE.Vector3[],options:{scale?:number;grates?:boolean}={}){
+  const field=createTreeField(options);field.add('all',positions);return field.group;
+}
+const fields=new WeakMap<THREE.Scene,{list:THREE.Group[];version:unknown}>();
+/** Fields are found by one scene scan, repeated whenever `scene.userData.version` changes (streamed tiles). */
 export function updateFoliage(scene:THREE.Scene,observer:THREE.Vector3,time:number,high=true){
-  windTime.value=time;let list=fields.get(scene);if(!list){list=[];scene.traverse(o=>{if(o instanceof THREE.Group&&o.userData.updateFoliage)list!.push(o);});fields.set(scene,list);}
-  for(const field of list)field.userData.updateFoliage(observer,time,high);
+  windTime.value=time;let cached=fields.get(scene);
+  if(!cached||cached.version!==scene.userData.version){const list:THREE.Group[]=[];scene.traverse(o=>{if(o instanceof THREE.Group&&o.userData.updateFoliage)list.push(o);});cached={list,version:scene.userData.version};fields.set(scene,cached);}
+  for(const field of cached.list)field.userData.updateFoliage(observer,time,high);
 }

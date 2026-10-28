@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Free-roaming browser driving/flying prototype of central Boston (Mission Hill through Chinatown) built with Three.js, TypeScript, Vite, and Rapier (`@dimforge/rapier3d-compat`). All geographic data ships as static files in `public/data/`; there are no runtime map services or API keys. README.md describes gameplay and scope; DATA_SOURCES.md documents data sources, licenses, coordinate conversion, and how to regenerate assets.
+Free-roaming browser driving/flying prototype of Greater Boston (every Boston neighborhood except Roslindale, West Roxbury, Hyde Park and the Harbor Islands, plus Cambridge, Somerville and Brookline) built with Three.js, TypeScript, Vite, and Rapier (`@dimforge/rapier3d-compat`). All geographic data ships as static files in `public/data/` and streams in 1 km tiles; there are no runtime map services or API keys. README.md describes gameplay and scope; DATA_SOURCES.md documents data sources, licenses, coordinate conversion, and how to regenerate assets.
 
 ## Commands
 
@@ -18,7 +18,7 @@ npm run preview          # serve dist/
 
 npm run test:physics     # node --test tests/*.test.mjs (unit/physics/geometry)
 npm test                 # Playwright browser tests (tests/*.spec.ts)
-npm run validate:data    # python3 scripts/validate-city.py on public/data
+npm run validate:data    # .venv-data/bin/python scripts/validate-city.py on public/data
 ```
 
 Single tests:
@@ -34,11 +34,12 @@ Playwright uses the installed Google Chrome channel, runs serially (1 worker, 90
 
 ## Architecture
 
-- `src/main.ts` is the single orchestrator: `boot()` fetches `city.json`, wires UI callbacks, prepares road terrain, builds the world, physics, traffic, transit, pedestrians, helicopter, and audio, then runs the render loop. Simulation advances on a fixed 60 Hz step independent of the Three.js view.
-- **Shared terrain is the foundation.** `prepareRoadTerrain()` (`src/simulation/road-grading.ts`) modifies the elevation grid in place to level roads across their width. It must run before the world mesh or Rapier collision caches the ground. Rendering, Rapier collision, traffic, pedestrians, sidewalks, and helicopter clearance all query the same grid via `sampleElevation()` / `sampleDriveSurface()` (`src/simulation/terrain.ts`, `road-surfaces.ts`), so any terrain or road-surface change affects all of them.
+- `src/main.ts` is the single orchestrator: `boot()` fetches `city.json`, resolves its sidecars (`resolveCity()` in `src/simulation/city-tiles.ts` decodes the gzip int16 elevation grid, the DBF2 far-building hulls and the building index), wires UI callbacks, builds the world, physics, traffic, transit, pedestrians, helicopter, and audio, then runs the render loop. Simulation advances on a fixed 60 Hz step independent of the Three.js view.
+- **Shared terrain is the foundation.** `prepareRoadTerrain()` (`src/simulation/road-grading.ts`) levels roads across their width while protecting surveyed building bases. The metro package ships that result precomputed by `scripts/grade-terrain.mjs` (`city.elevation.graded`, raw grid kept in `elevation-source.bin`); `main.ts` only grades in-process for a legacy whole-city `city.json`. Rendering, Rapier collision, traffic, pedestrians, sidewalks, and helicopter clearance all query the same grid via `sampleElevation()` / `sampleDriveSurface()` (`src/simulation/terrain.ts`, `road-surfaces.ts`), so any terrain or road-surface change affects all of them. Never run `buildTerrainGeometryData()` or `prepareRoadTerrain()` on the full 2774 x 3039 metro grid in a test; use `windowCity()` from `tests/helpers/metro-city.mjs`.
+- **Streaming.** `city.buildings` holds only the buildings of loaded tiles. `src/render/tile-streaming.ts` loads 1 km DBT2 tiles (`src/simulation/tile-format.ts`) within about 1.1 km of the player and runs `src/render/tile-builder.ts` as a generator (buildings and colliders, street furniture, curbs, park paths, signals) spread across frames; `src/render/far-city.ts` draws every hull from `far.bin` (`src/simulation/far-format.ts`: flags landmark, exact-mesh, hidden, fragment) as boxes plus a coarse terrain sheet, hidden per chunk while its detailed tile is built. Landmark modules address buildings through `city.landmarkBuildings` before their tiles stream in; `buildingAt()` answers from the far index whether or not a tile is loaded.
 - `src/physics/vehicle.ts` (`DrivingPhysics`) owns the Rapier world: raycast car, terrain trimesh, building colliders, bridge decks/barriers. Traffic and transit add bodies to this same world; the helicopter (`src/simulation/helicopter.ts`) uses it for clearance queries.
 - `src/render/window-interiors.ts` injects the parallax window-interior shader into the façade materials through `onBeforeCompile`; its `windowGrid()` also drives the canvas painter in `materials.ts`, so the two stay aligned by construction. Near windows show rooms, far windows fall back to the painted texture and emissive map.
-- `src/render/world.ts` loads `city.glb` (nodes keyed by `buildingId` matching `city.json` footprints), assigns procedural façade materials, and batches geometry into spatial chunks. Landmark-specific modules (`prudential.ts`, `state-house.ts`, `fenway-park.ts`, etc.) select a building by its source ID, split its shell for custom materials, and may add extra colliders. Fenway, the Prudential complex, and 145 Dartmouth use exact mesh collision (`src/simulation/building-collisions.ts`); other buildings use convex footprints.
+- `src/render/world.ts` builds the static world (terrain, roads, parks, water, far city) and, for a metro package, starts the tile streamer; `src/render/tile-geometry.ts` turns a tile's quantized shell into the same non-indexed, UV-stabilized geometry the old GLB path produced. Landmark-specific modules (`prudential.ts`, `state-house.ts`, `fenway-park.ts`, `metro-landmarks.ts`, etc.) select a building by its source ID or `landmark` tag, split its shell for custom materials, and may add extra colliders. Fenway, the Prudential complex, 145 Dartmouth, the Logan terminals and the Zakim Bridge use exact mesh collision (`src/simulation/building-collisions.ts`); other buildings use convex footprints. A tile building flagged `structure` (the Zakim) gets no foundation skirt and carries a token footprint.
 - `src/simulation/` is non-visual logic (roads, signals, traffic, transit, activity density, audio); `src/render/` builds meshes; `src/ui/` is DOM interface plus Canvas minimap/atlas.
 - World coordinates are meters: X increases east, Z increases south, Y is height above a local datum (not sea level). Conversion from State Plane feet is documented in DATA_SOURCES.md.
 
@@ -53,17 +54,19 @@ Playwright uses the installed Google Chrome channel, runs serially (1 worker, 90
 
 ## Data pipeline
 
-`public/data/city.glb`, `city.json`, `provenance.json`, `transit.json`, and `src/data/fenway-detail.json` are generated by Python scripts in `scripts/` and checked in. Raw downloads go to the ignored `data-source-cache/`.
+`public/data/city.json`, `elevation.bin`, `elevation-source.bin`, `far.bin`, `tiles/*.bin`, `provenance.json`, `transit.json`, and `src/data/fenway-detail.json` are generated by scripts in `scripts/` and checked in. Raw downloads go to the ignored `data-source-cache/`. `scripts/tileformat.py` and `src/simulation/tile-format.ts` must stay in sync (DBT2 tiles; `scale` per building when the 1 cm step overflows int16).
 
 ```sh
 python3 -m venv .venv-data
 .venv-data/bin/pip install -r scripts/requirements.txt
-.venv-data/bin/python scripts/build-city.py --download --region central
-.venv-data/bin/python scripts/build-city.py --output-dir /tmp/boston-staging   # reuse cache, write to staging
-python3 scripts/validate-city.py --data-dir /tmp/boston-staging
+.venv-data/bin/python scripts/fetch-metro-sources.py --source-dir data-source-cache   # once
+.venv-data/bin/python scripts/build-metro.py --output-dir /tmp/boston-staging
+node scripts/grade-terrain.mjs --data-dir /tmp/boston-staging        # offline road grading (about a minute, 10 workers)
+.venv-data/bin/python scripts/build-road-structures.py --data-dir /tmp/boston-staging
+.venv-data/bin/python scripts/validate-city.py --data-dir /tmp/boston-staging
 ```
 
-After a city rebuild, also rerun `scripts/build-fenway-detail.py` and `scripts/build-transit.py` (see DATA_SOURCES.md). Audio clips in `public/audio/` come from `node scripts/generate-audio.mjs --generate` (needs `ELEVENLABS_API_KEY` in `.env`; never overwrites existing clips).
+Copy a validated staging directory over `public/data/` (keep `transit.json` and `road-structures-source.json`), then rerun `scripts/build-fenway-detail.py` and `scripts/build-transit.py`, which read the installed package (see DATA_SOURCES.md). `build-city.py` still builds the legacy single-GLB central package for comparison; the runtime keeps that whole-city path working. Audio clips in `public/audio/` come from `node scripts/generate-audio.mjs --generate` (needs `ELEVENLABS_API_KEY` in `.env`; never overwrites existing clips).
 
 ## Deployment
 

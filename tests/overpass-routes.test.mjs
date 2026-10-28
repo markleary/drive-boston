@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
-import {prepareRoadTerrain} from '../src/simulation/road-grading.ts';
 import {bridgeBarriers} from '../src/simulation/road-surfaces.ts';
 
-const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
-prepareRoadTerrain(city);
+import {loadCentralCity} from './helpers/metro-city.mjs';
+const city=await loadCentralCity();
 const released={throttle:0,brake:0,steer:0,handbrake:false};
 
 // Follow surveyed centerlines using steering and pedals only. A point-height

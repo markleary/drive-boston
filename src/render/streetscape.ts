@@ -3,25 +3,14 @@ import { mergeSpatialGeometries } from './spatial-batches';
 import type { CityData } from '../types';
 import { closestRoad } from '../simulation/roads';
 import { hash, seeded } from './materials';
-import { sourceWallSampler } from './facade-details';
+import { sourceWallSampler, type DetailOptions } from './facade-details';
 import { architectureFor } from './neighborhood-profiles';
 import { isFenwayBuilding } from './fenway-park';
+import { storefrontStreet } from './street-character';
 
-/** Interpretive Back Bay storefronts. The shop names are fictional generic labels.
- * Candidate street-facing hull edges are checked against the actual loaded mesh;
- * recessed/gapped boundaries are skipped rather than covering them with a fake wall.
- */
-export function addStreetscape(scene: THREE.Scene, city: CityData): THREE.Group {
-  const group = new THREE.Group(); group.name = 'Boston storefronts';
-  const batches = new Map<THREE.Material, THREE.BufferGeometry[]>();
-  const trim = new THREE.MeshStandardMaterial({ color: '#cabd9f', roughness: .87 });
-  const sill = new THREE.MeshStandardMaterial({ color: '#91897a', roughness: .96 });
-  const frame = new THREE.MeshStandardMaterial({ color: '#263c34', roughness: .6, metalness: .15 });
-  const bronze = new THREE.MeshStandardMaterial({ color: '#988467', roughness: .52, metalness: .5 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: '#a9bec0', roughness: .17, metalness: .08, transparent: true, opacity: .21, depthWrite: false, clearcoat: .7, clearcoatRoughness: .15 });
-  const interiors = [0,1,2].map(style => shopInterior(style));
-  const warm = new THREE.MeshStandardMaterial({ color: '#b9a279', roughness: .8, emissive: '#b79455', emissiveIntensity: .12 });
-  const awnings = ['#25483b', '#303f50', '#743e3b'].map(color => new THREE.MeshStandardMaterial({ color, roughness: .98, side: THREE.DoubleSide }));
+let shopResources:{trim:THREE.Material;sill:THREE.Material;frame:THREE.Material;bronze:THREE.Material;glass:THREE.Material;interiors:THREE.Material[];warm:THREE.Material;awnings:THREE.Material[];labels:string[];signs:THREE.Material[]}|undefined;
+function shopMaterials(){
+  if(shopResources)return shopResources;
   const labels = ['BOOKS', 'CAFE', 'MARKET', 'ATELIER', 'RECORDS', 'FLOWERS'];
   const signs = labels.map((label, i) => {
     const c = document.createElement('canvas'); c.width = 512; c.height = 96;
@@ -34,6 +23,25 @@ export function addStreetscape(scene: THREE.Scene, city: CityData): THREE.Group 
     texture.anisotropy = 4;
     return new THREE.MeshStandardMaterial({ map: texture, roughness: .8 });
   });
+  shopResources={
+    trim:new THREE.MeshStandardMaterial({ color: '#cabd9f', roughness: .87 }),sill:new THREE.MeshStandardMaterial({ color: '#91897a', roughness: .96 }),
+    frame:new THREE.MeshStandardMaterial({ color: '#263c34', roughness: .6, metalness: .15 }),bronze:new THREE.MeshStandardMaterial({ color: '#988467', roughness: .52, metalness: .5 }),
+    glass:new THREE.MeshPhysicalMaterial({ color: '#a9bec0', roughness: .17, metalness: .08, transparent: true, opacity: .21, depthWrite: false, clearcoat: .7, clearcoatRoughness: .15 }),
+    interiors:[0,1,2].map(style => shopInterior(style)),warm:new THREE.MeshStandardMaterial({ color: '#b9a279', roughness: .8, emissive: '#b79455', emissiveIntensity: .12 }),
+    awnings:['#25483b', '#303f50', '#743e3b'].map(color => new THREE.MeshStandardMaterial({ color, roughness: .98, side: THREE.DoubleSide })),labels,signs,
+  };
+  return shopResources;
+}
+
+/** Interpretive Back Bay storefronts. The shop names are fictional generic labels.
+ * Candidate street-facing hull edges are checked against the actual loaded mesh;
+ * recessed/gapped boundaries are skipped rather than covering them with a fake wall.
+ */
+export function addStreetscape(scene: THREE.Scene, city: CityData, options: DetailOptions = {}): THREE.Group {
+  const group = new THREE.Group(); group.name = 'Boston storefronts';
+  const batches = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const {trim,sill,frame,bronze,glass,interiors,warm,awnings,labels,signs}=shopMaterials();
+  const budget=options.budget??650;
   const matrix = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const unit = new THREE.Vector3(1,1,1);
@@ -44,10 +52,10 @@ export function addStreetscape(scene: THREE.Scene, city: CityData): THREE.Group 
   }
 
   // Reuse the spatial wall index: probes touch only nearby triangles.
-  const sampler=sourceWallSampler(scene),startSamples=sampler.samples;
+  const sampler=options.sampler??sourceWallSampler(scene),startSamples=sampler.samples;
   const used = new Set<string>();
   let count=0;const areaCount=new Map<string,number>();
-  for (const building of [...city.buildings].sort((a,b)=>hash(a.id)-hash(b.id))) {
+  for (const building of [...(options.buildings??city.buildings)].sort((a,b)=>hash(a.id)-hash(b.id))) {
     if(architectureFor(building)||isFenwayBuilding(building))continue;
     if (building.landmark || building.height<7 || building.height>75) continue;
     const base=building.baseElevation??0,area=`${Math.floor(building.center[0]/320)},${Math.floor(building.center[1]/320)}`;
@@ -59,10 +67,10 @@ export function addStreetscape(scene: THREE.Scene, city: CityData): THREE.Group 
       if(length<8)continue;
       const nx=dz/length,nz=-dx/length,yaw=Math.atan2(nx,nz);
       for(let d=4.4;d<length-4.0;d+=7.4+random()*1.8) {
-        if(count>=650||(areaCount.get(area)??0)>=16)break;
+        if(count>=budget||(areaCount.get(area)??0)>=16)break;
         const x=a[0]+dx*d/length,z=a[1]+dz*d/length;
         const road=closestRoad(city,x,z,true);
-        if(!/Newbury|Boylston|Dartmouth|Clarendon|Berkeley|Exeter|Stuart|Saint James|Huntington|Tremont|Francis|Parker|Charles|Washington|Summer|Winter|Essex|Beach|Kneeland|Harrison|Brookline|Lansdowne/.test(road.road.name))continue;
+        if(!storefrontStreet(road.road.name,road.road.width))continue;
         // Respect setbacks, street orientation, and cross-street corners.
         if(road.distance<road.road.width/2+1.5 || road.distance>road.road.width/2+15)continue;
         if(((road.x-x)*nx+(road.z-z)*nz)/road.distance<.8)continue;
@@ -120,7 +128,7 @@ export function addStreetscape(scene: THREE.Scene, city: CityData): THREE.Group 
   group.userData.drawCalls=group.children.length;
   group.userData.wallProbes=sampler.samples-startSamples;
   group.userData.provenance='Original fictional shop art, located on road-facing source mesh walls';
-  scene.add(group);return group;
+  (options.target??scene).add(group);return group;
 }
 
 /** Perspective room artwork is original procedural drawing, not a real shop photo. */

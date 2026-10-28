@@ -5,6 +5,7 @@ import { closestRoad, pointInside } from '../simulation/roads';
 import { canvasTexture, seeded } from './materials';
 import { createStreetTrees } from './foliage';
 import { sampleElevation } from '../simulation/terrain';
+import { buildingAt } from '../simulation/city-tiles.ts';
 
 /** Original interpretation of the illustrative plan on Boston's current project
  * page: https://www.boston.gov/departments/parks-and-recreation/project/copley-square-park-improvements
@@ -20,7 +21,7 @@ export function addParkDetails(scene:THREE.Scene,city:CityData) {
   const world=(u:number,v:number,y=0)=>new THREE.Vector3(ox+ux*u+vx*v,y+sampleElevation(city,ox+ux*u+vx*v,oz+uz*u+vz*v),oz+uz*u+vz*v);
   const safe=(u:number,v:number,clearance=1.3)=>{
     const p=world(u,v),road=closestRoad(city,p.x,p.z,true);
-    return road.distance>road.road.width/2+clearance&&!city.buildings.some(b=>pointInside([p.x,p.z],b.footprint));
+    return road.distance>road.road.width/2+clearance&&!buildingAt(city,p.x,p.z);
   };
   const stone=new THREE.MeshStandardMaterial({color:'#bbb5a7',roughness:.92});
   const darkStone=new THREE.MeshStandardMaterial({color:'#777d76',roughness:.86});

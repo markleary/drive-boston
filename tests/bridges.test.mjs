@@ -1,40 +1,23 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {Ray} from '@dimforge/rapier3d-compat';
-import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
-import {prepareRoadTerrain} from '../src/simulation/road-grading.ts';
 import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
 import {createHelicopterFlight,HELICOPTER} from '../src/simulation/helicopter.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 import {sampleDriveSurface,sampleRoadElevation,roadDeckGeometry,roadSlabGeometry} from '../src/simulation/road-surfaces.ts';
-import {sourceFootingGeometry} from '../src/render/source-footings.ts';
-const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
-prepareRoadTerrain(city);
+import {loadCentralCity,installExactMeshes} from './helpers/metro-city.mjs';
+// The central window of the shipped package: its grid is already graded offline.
+const city=await loadCentralCity();
 const released={throttle:0,brake:0,steer:0,handbrake:false};
 function run(physics,seconds,input={}){for(let i=0;i<seconds*60;i++)physics.step({...released,...input},1/60);return physics.getState();}
 
 test('actual concave survey meshes leave Huntington and the Dartmouth bus corridor open',async()=>{
- const bytes=readFileSync(new URL('../public/data/city.glb',import.meta.url));
- const gltf=await new Promise((resolve,reject)=>new GLTFLoader().parse(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'',resolve,reject));
- gltf.scene.updateMatrixWorld(true);
- const physics=await DrivingPhysics.create(city,{meshBuildingIds}),installed=new Set();
+ const physics=await DrivingPhysics.create(city,{meshBuildingIds});
  try{
-  gltf.scene.traverse(object=>{
-   if(!object.isMesh)return;
-   let owner=object;while(owner&&!owner.userData.buildingId)owner=owner.parent;
-   const id=owner?.userData.buildingId??object.name;if(!meshBuildingIds.has(id))return;
-   const geometry=object.geometry.clone().applyMatrix4(object.matrixWorld),positions=geometry.attributes.position,vertices=new Float32Array(positions.count*3);
-   for(let i=0;i<positions.count;i++){vertices[i*3]=positions.getX(i);vertices[i*3+1]=positions.getY(i);vertices[i*3+2]=positions.getZ(i);}
-   physics.addStaticMesh(vertices,geometry.index?new Uint32Array(geometry.index.array):Uint32Array.from({length:positions.count},(_,i)=>i));installed.add(id);
-   if(object.material.name==='facade'){
-    const footing=sourceFootingGeometry(city,city.buildings.find(b=>b.id===id),geometry),p=footing.attributes.position;
-    if(p.count)physics.addStaticMesh(new Float32Array(p.array),Uint32Array.from({length:p.count},(_,i)=>i));footing.dispose();
-   }
-   geometry.dispose();
-  });
-  assert.deepEqual(installed,meshBuildingIds,'all selected source structures must retain their real walls');
+  const installed=installExactMeshes(physics,city),central=new Set([...meshBuildingIds].filter(id=>city.buildings.some(b=>b.id===id)));
+  assert.deepEqual(installed,central,'all selected source structures must retain their real walls');
+  assert.ok(['BOS-KBIA4-2XA04-WNETP','BOS-Q6TUK-T7ZG3-2SJKK','BOS-73AP7-T4BL0-O4QDM'].every(id=>installed.has(id)),'the Prudential, 145 Dartmouth and Fenway are in the central tiles');
   physics.world.step();
   for(const [x,z,yaw]of [[-400,340,Math.atan2(-.65,.76)],[67.477,283.182,-Math.PI/2]]){
    physics.reset(x,z,yaw);const start=run(physics,1,{brake:1}),end=run(physics,4,{throttle:1});
@@ -109,7 +92,8 @@ test('bridge ramp arrivals support the car above terrain and preserve the deck o
 });
 
 test('deck mesh normals face up and source ramp endpoints meet the terrain',()=>{
- const structures=city.roads.filter(r=>r.elevations);assert.equal(structures.length,32);
+ const structures=city.roads.filter(r=>r.elevations),bowker=structures.filter(r=>['bowker','muddy-river'].includes(r.bridge?.id));
+ assert.equal(bowker.length,32,'the Bowker Overpass and Muddy River crossings keep their 32 surveyed segments');assert.ok(structures.length>bowker.length,'the central window also holds generic metro decks');
  for(const road of structures){
   const mesh=roadDeckGeometry(city,road);
   for(let i=0;i<mesh.indices.length;i+=3){
@@ -124,8 +108,9 @@ test('deck mesh normals face up and source ramp endpoints meet the terrain',()=>
    edges.set(key,(edges.get(key)??0)+(a<b?1:-1));
   }
   assert.ok([...edges.values()].every(n=>n===0),'closed slab faces must share opposite edge directions');
-  if(road.startLevel===0)assert.ok(Math.abs(road.elevations[0]-sampleElevation(city,...road.points[0]))<.005);
-  if(road.endLevel===0)assert.ok(Math.abs(road.elevations.at(-1)-sampleElevation(city,...road.points.at(-1)))<.005);
+  const inWindow=p=>p[0]>=city.bounds.minX&&p[0]<=city.bounds.maxX&&p[1]>=city.bounds.minZ&&p[1]<=city.bounds.maxZ;
+  if(road.startLevel===0&&inWindow(road.points[0]))assert.ok(Math.abs(road.elevations[0]-sampleElevation(city,...road.points[0]))<.005,`${road.id} start meets the graded ground`);
+  if(road.endLevel===0&&inWindow(road.points.at(-1)))assert.ok(Math.abs(road.elevations.at(-1)-sampleElevation(city,...road.points.at(-1)))<.005,`${road.id} end meets the graded ground`);
  }
 });
 

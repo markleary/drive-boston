@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Building, CityData, Point2 } from '../types';
 import fenway from '../data/fenway-detail.json' with {type:'json'};
 import { fenwayDiamond, createFenwayRoofSampler } from './fenway-layout';
+import { landmarkBuildings } from '../simulation/city-tiles.ts';
 export { fenwayDiamond } from './fenway-layout';
 import { canvasTexture, seeded } from './materials';
 import { mergeSpatialGeometries } from './spatial-batches';
@@ -32,7 +33,7 @@ function planePolygon(points:Point2[],y:number){
 
 /** Detailed, source-aligned field over the measured open stadium shell. */
 export function addFenwayPark(scene:THREE.Scene,city:CityData){
-  const stadium=city.buildings.find(b=>b.id==='BOS-73AP7-T4BL0-O4QDM');
+  const stadium=landmarkBuildings(city).find(b=>b.id==='BOS-73AP7-T4BL0-O4QDM');
   const group=new THREE.Group();group.name='Fenway Park field and grandstands';if(!stadium)return group;
   const translation=(stadium.baseElevation??3.048)-3.048,fieldY=3.16+translation;
   const batches=new Map<THREE.Material,THREE.BufferGeometry[]>();

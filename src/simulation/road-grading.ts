@@ -96,7 +96,7 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
       for(let i=p.heights.length-2;i>0;i--){const limit=(p.stations[i+1]-p.stations[i])*.2;p.heights[i]=clamp(p.heights[i],p.heights[i+1]-limit,p.heights[i+1]+limit);}
     }
   }
-  const count=raw.length,heights=raw.slice(),best=new Float32Array(count);best.fill(Infinity);
+  const count=raw.length,heights=Array.from(raw),best=new Float32Array(count);best.fill(Infinity);
   const roadDistance=new Float32Array(count);roadDistance.fill(Infinity);
   const weighted=new Float64Array(count),weights=new Float64Array(count),influence=new Float32Array(count);
   // Grade only the pavement and a short blending shoulder. A wide flat apron

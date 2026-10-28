@@ -25,13 +25,36 @@ export function roadNormal(city:CityData,road:Road,x:number,z:number){
 }
 export function roadRotation(city:CityData,road:Road,x:number,z:number,yaw:number){return rotationFromNormal(roadNormal(city,road,x,z),yaw);}
 
+const elevatedIndexes=new WeakMap<CityData,Map<string,Road[]>>();
+const ELEVATED_CELL=128;
+/** Elevated roads near a point, from a per-city cell index: a metro has hundreds
+ * of structures, and the surface query runs for every reset, save and actor. */
+function elevatedNear(city:CityData,x:number,z:number){
+  let cells=elevatedIndexes.get(city);
+  if(!cells){
+    cells=new Map();const seen=new Set<string>();
+    for(const road of city.roads??[]){
+      if(!road.elevations)continue;const margin=road.width/2+1;
+      for(let i=1;i<road.points.length;i++){
+        const a=road.points[i-1],b=road.points[i];
+        for(let cx=Math.floor((Math.min(a[0],b[0])-margin)/ELEVATED_CELL);cx<=Math.floor((Math.max(a[0],b[0])+margin)/ELEVATED_CELL);cx++)for(let cz=Math.floor((Math.min(a[1],b[1])-margin)/ELEVATED_CELL);cz<=Math.floor((Math.max(a[1],b[1])+margin)/ELEVATED_CELL);cz++){
+          const key=`${cx},${cz}`;if(seen.has(`${key}|${road.id}`))continue;seen.add(`${key}|${road.id}`);
+          const list=cells.get(key)??[];list.push(road);cells.set(key,list);
+        }
+      }
+    }
+    elevatedIndexes.set(city,cells);
+  }
+  return cells.get(`${Math.floor(x/ELEVATED_CELL)},${Math.floor(z/ELEVATED_CELL)}`)??[];
+}
+
 /** Highest support no more than 0.4m above the supplied reference. A car below
  * an overpass stays below it; explicit road IDs make deck destination resets unambiguous. */
 export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
   const chosen=roadId?city.roads?.find(r=>r.id===roadId):undefined;
   if(chosen&&roadProjection(chosen,x,z).distance<=chosen.width/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
   let height=sampleElevation(city,x,z),normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
-  for(const candidate of city.roads??[]){
+  for(const candidate of elevatedNear(city,x,z)){
     if(!candidate.elevations)continue;
     const hit=roadProjection(candidate,x,z);if(hit.distance>candidate.width/2+.05)continue;
     const h=sampleRoadElevation(city,candidate,x,z);

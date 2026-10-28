@@ -7,6 +7,7 @@ import {createTransit,transitPoint} from '../src/simulation/transit.ts';
 import {signalAxis,signalPhase} from '../src/simulation/signals.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 
+import {loadCentralCity} from './helpers/metro-city.mjs';
 test('perpendicular signal approaches never receive green together and include clearance time',()=>{
  for(let time=0;time<64;time+=.05){
   const north=signalPhase(time,0),east=signalPhase(time,Math.PI/2);
@@ -17,8 +18,8 @@ test('perpendicular signal approaches never receive green together and include c
  assert.equal(signalAxis(0),0);assert.equal(signalAxis(Math.PI/2),1);
 });
 
-test('mapped Green Line uses separate surface tracks and full route39 stays within coverage',()=>{
- const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+test('mapped Green Line uses separate surface tracks and full route39 stays within coverage',async()=>{
+ const city=await loadCentralCity();
  const data=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8'));
  // These two concave source complexes span public streets in their convex
  // footprint proxies. Runtime uses exact source mesh collision instead; the

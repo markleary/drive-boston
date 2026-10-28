@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { DrivingPhysics } from '../src/physics/vehicle.ts';
 import { createTraffic } from '../src/simulation/traffic.ts';
 import { createStreetLife } from '../src/render/street-life.ts';
 import { sampleElevation } from '../src/simulation/terrain.ts';
 
+import {loadCentralCity} from './helpers/metro-city.mjs';
 const ground=(x,z)=>8+.06*x+.035*z;
 const expectedUp=new THREE.Vector3(-.06,1,-.035).normalize();
 function slopedDistrict(){
@@ -61,7 +61,7 @@ test('ambient actors and collision bodies share the measured road grade',async()
 });
 
 test('the fixed traffic fleet follows a distant neighborhood outside a protected nearby area',async()=>{
-  const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+  const city=await loadCentralCity();
   const destination=city.landmarks.find(landmark=>landmark.id==='mission-hill');
   assert.ok(destination,'the expanded map must include Mission Hill');
   const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);

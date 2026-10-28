@@ -6,6 +6,7 @@ import { createVehicleGeometry, createVehicleWheelsGeometry, createVehiclePlateG
 import type { VehicleSurface, VehicleStyle } from '../render/car.ts';
 import { sampleElevation } from './terrain.ts';
 import { pointInside } from './roads.ts';
+import { coverageTester } from './coverage.ts';
 import { sampleRoadElevation,roadNormal,roadRotation } from './road-surfaces.ts';
 import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
@@ -19,7 +20,7 @@ const LOCAL_RADIUS = 650;
 const distance = (a: Point2, b: Point2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
 
 function roadGraph(city: CityData) {
-  const activityAt=createActivityProfile(city);
+  const activityAt=createActivityProfile(city),covered=coverageTester(city);
   const nodes: Point2[] = [], heights:number[]=[], edges: Edge[] = [];
   const buckets = new Map<string, number[]>();
   const node = (p: Point2,height:number) => {
@@ -37,7 +38,7 @@ function roadGraph(city: CityData) {
       const lanes:(number|undefined)[]=road.oneway!==0&&road.width>=12?[-Math.min(3,road.width*.17),Math.min(3,road.width*.17)]:[undefined];
       for(const laneOffset of lanes){
         const edge={ id: edges.length, start: a, end: b, points: ps, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
-        if(city.coverage?.length&&!lane(edge).every(p=>city.coverage!.some(polygon=>pointInside(p,polygon))))continue;
+        if(city.coverage?.length&&!lane(edge).every(p=>covered(p[0],p[1])))continue;
         edges.push(edge);
       }
     };

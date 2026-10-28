@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import type {Building,CityData} from '../types';
 import {canvasTexture,seeded} from './materials.ts';
+import { landmarkBuildings } from '../simulation/city-tiles.ts';
 
 export const PRUDENTIAL_ID='BOS-KBIA4-2XA04-WNETP';
 
@@ -26,7 +27,7 @@ const C=PRUDENTIAL_CROWN,T=PRUDENTIAL_TOWER;
 
 /** Offset from the source datum, should the building's seated base move. */
 const buildingLift=(b:Building)=>(b.baseElevation??0)+b.height-SOURCE_TOP;
-const datumLift=(city:CityData)=>{const b=city.buildings.find(x=>x.id===PRUDENTIAL_ID);return b?buildingLift(b):undefined;};
+const datumLift=(city:CityData)=>{const b=landmarkBuildings(city).find(x=>x.id===PRUDENTIAL_ID);return b?buildingLift(b):undefined;};
 const placeOnTower=(g:THREE.BufferGeometry,lift:number)=>g.rotateY(T.yaw).translate(T.x,lift,T.z);
 
 /** The four crown faces in the tower frame: yaw turns +z onto the outward

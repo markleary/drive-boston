@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import * as THREE from 'three';
 import {createStreetLife} from '../src/render/street-life.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 
-const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+import {loadCentralCity} from './helpers/metro-city.mjs';
+const city=await loadCentralCity();
 const routeDistance=(person)=>{
   const {start,end}=person.route,dx=end[0]-start[0],dz=end[1]-start[1];
   const t=((person.position.x-start[0])*dx+(person.position.z-start[1])*dz)/(dx*dx+dz*dz);

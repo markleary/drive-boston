@@ -14,6 +14,8 @@ test('Prudential Tower carries its separated crown floors and PRUDENTIAL letteri
   await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});
   await page.getByTestId('start-drive').click();
   await expect(page.locator('#welcome')).toBeHidden();
+  // The exact source meshes stream in with the Back Bay tile; the crown envelope is there from the start.
+  await expect.poll(async()=>(await snapshot(page)).exactBuildingColliders,{timeout:60000}).toBeGreaterThanOrEqual(4);
   const initial=await snapshot(page);
   expect(initial.prudential).toMatchObject({buildingId:'BOS-KBIA4-2XA04-WNETP',word:'PRUDENTIAL',faces:4,letters:40});
   expect(initial.prudential.triangles).toBeGreaterThan(2000);expect(initial.prudential.triangles).toBeLessThan(20000);

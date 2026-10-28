@@ -9,7 +9,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "playwright test",
     "test:physics": "node --test tests/*.test.mjs",
-    "validate:data": "python3 scripts/validate-city.py"
+    "validate:data": ".venv-data/bin/python scripts/validate-city.py"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",

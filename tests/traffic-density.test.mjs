@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import * as THREE from 'three';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {createTraffic} from '../src/simulation/traffic.ts';
 
-const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url),'utf8'));
+import {loadCentralCity} from './helpers/metro-city.mjs';
+const city=await loadCentralCity();
 const gap=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 
 test('busy districts get a visible local fleet while explicit teleports preserve car spacing and the fixed pool',async()=>{

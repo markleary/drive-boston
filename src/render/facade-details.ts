@@ -6,18 +6,20 @@ import { facadeStyleFor, hash, seeded } from './materials';
 import { architectureFor } from './neighborhood-profiles';
 import { isFenwayBuilding } from './fenway-park';
 import {isStateHouse} from './state-house';
+import { streetCharacter } from './street-character';
 
 interface WallTriangle { a: THREE.Vector3; b: THREE.Vector3; c: THREE.Vector3; normal: THREE.Vector3; minY: number; maxY: number; u:[number,number,number]; }
 interface WallHit { depth: number; normal: THREE.Vector3; u:number; }
 export interface SourceWallSampler { sample: (x:number,z:number,nx:number,nz:number,y:number) => WallHit | undefined; triangleCount:number; samples:number; }
 const wallCache = new WeakMap<THREE.Scene,SourceWallSampler>();
-/** Index source wall triangles once. Local facade probes never scan the whole city. */
-export function sourceWallSampler(scene:THREE.Scene):SourceWallSampler {
-  const cached=wallCache.get(scene); if(cached)return cached;
+/** Index source wall triangles once. Local facade probes never scan the whole city.
+ * With `meshes` given (a streamed tile's shells) the index covers just those and is not cached. */
+export function sourceWallSampler(scene:THREE.Scene,meshes?:THREE.Mesh[]):SourceWallSampler {
+  const cached=meshes?undefined:wallCache.get(scene); if(cached)return cached;
   const cell=16,grid=new Map<string,WallTriangle[]>();let triangleCount=0;
   const a=new THREE.Vector3(),b=new THREE.Vector3(),c=new THREE.Vector3(),normal=new THREE.Vector3();
-  scene.updateMatrixWorld(true);
-  scene.traverse(object=>{
+  if(!meshes)scene.updateMatrixWorld(true);
+  const visit=(object:THREE.Object3D)=>{
     if(!(object instanceof THREE.Mesh)||object.name!=='Boston surveyed buildings')return;
     const p=object.geometry.getAttribute('position'),uv=object.geometry.getAttribute('uv'),index=object.geometry.index;
     const count=index?index.count:p.count;
@@ -33,7 +35,8 @@ export function sourceWallSampler(scene:THREE.Scene):SourceWallSampler {
         const key=`${x},${z}`,list=grid.get(key)??[];list.push(tri);grid.set(key,list);
       }
     }
-  });
+  };
+  if(meshes)meshes.forEach(visit);else scene.traverse(visit);
   const ray=new THREE.Ray(),target=new THREE.Vector3(),bary=new THREE.Vector3(),candidates=new Set<WallTriangle>();
   const sampler:SourceWallSampler={triangleCount,samples:0,sample(x,z,nx,nz,y){
     sampler.samples++;candidates.clear();
@@ -51,25 +54,22 @@ export function sourceWallSampler(scene:THREE.Scene):SourceWallSampler {
     }
     return result;
   }};
-  wallCache.set(scene,sampler);return sampler;
+  if(!meshes)wallCache.set(scene,sampler);return sampler;
 }
+
+export interface DetailOptions { buildings?:Building[]; sampler?:SourceWallSampler; budget?:number; target?:THREE.Object3D; }
+let facadeMaterials:Record<'limestone'|'brownstone'|'terracotta'|'shadowStone'|'iron'|'wood'|'glass'|'aluminum',THREE.MeshStandardMaterial>|undefined;
 
 /** Original three-dimensional architectural trim over authentic building geometry.
  * Window centers follow the current six-metre facade texture UV pattern.
  * Existing surveyed bay projections are detailed rather than replaced by box houses.
  */
-export function addFacadeDetails(scene:THREE.Scene,city:CityData):THREE.Group {
+export function addFacadeDetails(scene:THREE.Scene,city:CityData,options:DetailOptions={}):THREE.Group {
   const group=new THREE.Group();group.name='Boston facade depth';
-  const started=performance.now(),sampler=sourceWallSampler(scene),startSamples=sampler.samples;
+  const started=performance.now(),sampler=options.sampler??sourceWallSampler(scene),startSamples=sampler.samples,budget=options.budget??10000;
   const batches=new Map<THREE.Material,THREE.BufferGeometry[]>();
-  const limestone=new THREE.MeshStandardMaterial({color:'#c4b99e',roughness:.87});
-  const brownstone=new THREE.MeshStandardMaterial({color:'#92765f',roughness:.91});
-  const terracotta=new THREE.MeshStandardMaterial({color:'#b39a7c',roughness:.87});
-  const shadowStone=new THREE.MeshStandardMaterial({color:'#786e5e',roughness:.94});
-  const iron=new THREE.MeshStandardMaterial({color:'#252d2a',metalness:.4,roughness:.7});
-  const wood=new THREE.MeshStandardMaterial({color:'#3a3930',roughness:.68});
-  const glass=new THREE.MeshStandardMaterial({color:'#29414a',metalness:.35,roughness:.28});
-  const aluminum=new THREE.MeshStandardMaterial({color:'#7f8b89',roughness:.48,metalness:.55});
+  facadeMaterials??={limestone:new THREE.MeshStandardMaterial({color:'#c4b99e',roughness:.87}),brownstone:new THREE.MeshStandardMaterial({color:'#92765f',roughness:.91}),terracotta:new THREE.MeshStandardMaterial({color:'#b39a7c',roughness:.87}),shadowStone:new THREE.MeshStandardMaterial({color:'#786e5e',roughness:.94}),iron:new THREE.MeshStandardMaterial({color:'#252d2a',metalness:.4,roughness:.7}),wood:new THREE.MeshStandardMaterial({color:'#3a3930',roughness:.68}),glass:new THREE.MeshStandardMaterial({color:'#29414a',metalness:.35,roughness:.28}),aluminum:new THREE.MeshStandardMaterial({color:'#7f8b89',roughness:.48,metalness:.55})};
+  const {limestone,brownstone,terracotta,shadowStone,iron,wood,glass,aluminum}=facadeMaterials;
   const matrix=new THREE.Matrix4(),q=new THREE.Quaternion(),one=new THREE.Vector3(1,1,1),position=new THREE.Vector3();
   function add(g:THREE.BufferGeometry,m:THREE.Material,x:number,y:number,z:number,yaw:number,rx=0,rz=0){
     q.setFromEuler(new THREE.Euler(rx,yaw,rz,'YXZ'));matrix.compose(position.set(x,y,z),q,one);g.applyMatrix4(matrix);
@@ -95,8 +95,7 @@ export function addFacadeDetails(scene:THREE.Scene,city:CityData):THREE.Group {
     const road=closestRoad(city,x,z,true);
     if(road.distance<road.road.width/2+1.1||road.distance>road.road.width/2+22)return;
     if(((road.x-x)*nx+(road.z-z)*nz)/road.distance<.48)return;
-    const commercial=/Newbury|Boylston|Stuart|Saint James|Huntington|Tremont|Francis|Washington|Charles|Hanover|Summer|Winter|Essex|Beach|Kneeland|Harrison|Brookline|Lansdowne/.test(road.road.name);
-    const residential=/Commonwealth|Marlborough|Beacon|Dartmouth|Clarendon|Berkeley|Exeter|Parker|Calumet|Worthington|Wigglesworth|Smith|Hillside|Fisher|Alleghany|Chestnut|Mount Vernon|Pinckney|Revere|Joy|Temple|Louisburg/.test(road.road.name);
+    const character=streetCharacter(road.road.name,road.road.width),commercial=character==='commercial',residential=character==='residential';
     if(!commercial&&!residential)return;
     const style=facadeStyleFor(building),modern=style.detail==='modern',office=style.detail==='office';
     // Probe each 6m frontage bay once, then repeat its physical window trim vertically.
@@ -127,7 +126,7 @@ export function addFacadeDetails(scene:THREE.Scene,city:CityData):THREE.Group {
         const key=`${Math.round((mx+tx*xx)*4)},${Math.round((mz+tz*xx)*4)}`;
         if(used.has(key))continue;used.add(key);
         for(let y=commercial?7.56:4.56;y<top-.4;y+=3){
-          if(windows>=10000)break;windows++;
+          if(windows>=budget)break;windows++;
           styles[style.id]=(styles[style.id]??0)+1;
           // Recessed glazing remains the base texture. Jambs project far enough
           // to cast real shadows; the sill has a distinct dark underside and lip.
@@ -205,7 +204,7 @@ export function addFacadeDetails(scene:THREE.Scene,city:CityData):THREE.Group {
   // Share detail between the original district and Mission Hill, with a fixed
   // budget per 240m area so the first blocks cannot consume every window.
   const areaWindows=new Map<string,number>();
-  const buildings=[...city.buildings].sort((a,b)=>hash(a.id)-hash(b.id));
+  const buildings=[...(options.buildings??city.buildings)].sort((a,b)=>hash(a.id)-hash(b.id));
   for(const building of buildings){
     if(architectureFor(building)||isFenwayBuilding(building)||isStateHouse(building))continue;
     if(building.landmark||building.height<9||building.height>80)continue;
@@ -220,5 +219,5 @@ export function addFacadeDetails(scene:THREE.Scene,city:CityData):THREE.Group {
     geometries.forEach(g=>g.dispose());
   }
   group.userData={windows,cornices,stoops,bayFacets,facades,arches,pediments,loftWindows,pilasters,styles,drawCalls:group.children.length,wallProbes:sampler.samples-startSamples,buildMs:Math.round(performance.now()-started)};
-  scene.add(group);return group;
+  (options.target??scene).add(group);return group;
 }
