@@ -134,8 +134,9 @@ export class DrivingPhysics {
       colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.135, .38, p.length / 2).setTranslation(p.x, p.y, p.z).setRotation({ x: cy * sx, y: sy * cx, z: -sy * sx, w: cy * cx }).setFriction(.4)));
     }
     for (const p of bridgeSupports(city, road)) {
-      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.7, (p.top - p.bottom) / 2, 1.05).setTranslation(p.x, (p.top + p.bottom) / 2, p.z).setFriction(.5)));
-      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid((road.width - .5) / 2, .175, 1.3).setTranslation(p.x, p.top - .18, p.z).setFriction(.5)));
+      const rotation={x:0,y:Math.sin(p.yaw/2),z:0,w:Math.cos(p.yaw/2)};
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.9, (p.top - p.bottom) / 2, 1.2).setTranslation(p.x, (p.top + p.bottom) / 2, p.z).setRotation(rotation).setFriction(.5)));
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid((road.width - .5) / 2, .275, 1.4).setTranslation(p.x, p.top - .28, p.z).setRotation(rotation).setFriction(.5)));
     }
     return colliders;
   }

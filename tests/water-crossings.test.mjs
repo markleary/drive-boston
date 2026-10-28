@@ -1,0 +1,90 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import * as THREE from 'three';
+import {resolveCity,loadTile} from '../src/simulation/city-tiles.ts';
+import {bridgeSupports,sampleRoadElevation,roadProjection} from '../src/simulation/road-surfaces.ts';
+import {surveyViaductSupports} from '../src/simulation/viaduct-supports.ts';
+import {coverageTester} from '../src/simulation/coverage.ts';
+import {DrivingPhysics} from '../src/physics/vehicle.ts';
+import {addCharlesBridgeDetails} from '../src/render/charles-bridges.ts';
+import {parkSurface} from '../src/render/area-surfaces.ts';
+import {sampleElevation} from '../src/simulation/terrain.ts';
+import {read,readJson,windowCity} from './helpers/metro-city.mjs';
+const metro=await resolveCity(readJson('city.json'),read);
+
+test('Charles River water covers the detailed terrain at the two reported grass locations',()=>{
+ const water=metro.water.find(w=>w.id==='water-merged-55');
+ for(const [x,z]of [[-1184,-575],[-40,-1455]]){
+  const bounds={minX:x-18,maxX:x+18,minZ:z-18,maxZ:z+18},g=parkSurface(metro,water.rings,.095,-3.63,bounds,true),p=g.getAttribute('position');
+  assert.ok(p.count>30);
+  for(let i=0;i<p.count;i+=3){
+   const x=(p.getX(i)+p.getX(i+1)+p.getX(i+2))/3,z=(p.getZ(i)+p.getZ(i+1)+p.getZ(i+2))/3,y=(p.getY(i)+p.getY(i+1)+p.getY(i+2))/3;
+   assert.ok(y>sampleElevation(metro,x,z)+.09,'grass must stay below the water inside each detailed DEM triangle');
+  }
+  g.dispose();
+ }
+});
+
+test('every restored source span joins retained decks at exactly the same height and stays in traffic coverage',()=>{
+ const spans=metro.roads.filter(r=>r.id.startsWith('water-link-')),covered=coverageTester(metro);
+ assert.equal(spans.length,18);
+ for(const span of spans){
+  for(const i of [0,span.points.length-1]){
+   const p=span.points[i],neighbors=metro.roads.filter(r=>r!==span&&[r.points[0],r.points.at(-1)].some(q=>Math.hypot(q[0]-p[0],q[1]-p[1])<.002));
+   assert.ok(neighbors.length,`${span.id} has a dangling end`);
+   assert.ok(neighbors.some(r=>Math.abs(sampleRoadElevation(metro,r,...p)-span.elevations[i])<.0002),`${span.id} has a height step at its join`);
+  }
+  for(const p of span.points)assert.ok(covered(...p),`${span.id} is excluded from traffic coverage`);
+ }
+ for(const id of ['water-link-14557-0-0','water-link-14614-0-0','water-link-14615-0-0','water-link-14902-0-0','water-link-16428-0-0'])assert.ok(spans.find(r=>r.id===id));
+});
+
+test('long unsplit source segments receive repeated supports and keep lower streets clear',()=>{
+ const road={id:'upper',name:'Upper',points:[[0,0],[0,220]],width:10,elevations:[10,10],bridge:{thickness:.75}},lower={id:'lower',name:'Lower',points:[[-20,86],[20,86]],width:9};
+ const supports=bridgeSupports({roads:[road,lower]},road);
+ assert.ok(supports.length>=5,'the old single if could place only one support on a long source segment');
+ assert.ok(supports.every(p=>roadProjection(lower,p.x,p.z).distance>lower.width/2+2.1));
+ assert.ok(supports.some(p=>p.z>180));
+});
+
+test('the surveyed Nashua viaducts have ground-reaching piers while the Zakim water span and tunnel end stay untouched',async()=>{
+ const tile=await loadTile(metro,0,-3,read),b=tile.buildings.find(b=>b.landmark==='zakim-bridge'),data=tile.geometry.get(b.id),before=new Float32Array(data.positions);
+ const supports=surveyViaductSupports(metro,data);
+ assert.ok(supports.length>100);assert.ok(supports.filter(p=>p.x>600&&p.x<1200&&p.z>-2100).length>20,'supports must reach the floating ramps in the screenshots');
+ assert.ok(supports.every(p=>p.z<=-1580&&p.top-p.bottom>=4));assert.deepEqual(data.positions,before,'the original cable bridge mesh must remain unchanged');
+});
+
+test('Longfellow has four collidable towers, dedicated carriageways, and eleven arch spans',()=>{
+ const scene=new THREE.Scene(),{group,collisions}=addCharlesBridgeDetails(scene,metro);
+ assert.equal(group.userData.towers,4);assert.equal(group.userData.archSpans,11);assert.ok(collisions.length>25);
+ for(const r of metro.roads.filter(r=>r.name==='Longfellow Bridge'))assert.equal(r.width,7,'whole-bridge width cannot be applied to a single carriageway');
+ for(const mesh of group.children){assert.ok(mesh.geometry.boundingSphere===null||Number.isFinite(mesh.geometry.boundingSphere.radius));mesh.geometry.dispose();}
+});
+
+for(const [id,bounds]of [
+ ['water-link-14557-0-0',{minX:-1550,maxX:-1100,minZ:-820,maxZ:0}],
+ ['water-link-14614-0-0',{minX:-450,maxX:260,minZ:-1400,maxZ:-1100}],
+ ['water-link-14615-0-0',{minX:-450,maxX:260,minZ:-1400,maxZ:-1100}],
+ ['water-link-16428-0-0',{minX:1700,maxX:2150,minZ:-400,maxZ:0}],
+])test(`car drives across the restored ${id} and both physical joins`,async()=>{
+ const city=windowCity(metro,bounds),road=city.roads.find(r=>r.id===id),a=road.points[0],b=road.points[1],end=road.points.at(-1),physics=await DrivingPhysics.create(city);
+ const released={throttle:0,brake:0,steer:0,handbrake:false};
+ try{
+  physics.reset(a[0],a[1],Math.atan2(b[0]-a[0],b[1]-a[1]),road.id);
+  for(let i=0;i<60;i++)physics.step({...released,brake:1},1/60);
+  let cursor=1,finished=false;
+  for(let frame=0;frame<50*60;frame++){
+   const s=physics.getState();while(cursor<road.points.length-1&&Math.hypot(s.x-road.points[cursor][0],s.z-road.points[cursor][1])<8)cursor++;
+   const p=road.points[cursor],angle=Math.atan2(Math.sin(Math.atan2(p[0]-s.x,p[1]-s.z)-s.yaw),Math.cos(Math.atan2(p[0]-s.x,p[1]-s.z)-s.yaw));
+   const steer=Math.atan2(2*2.66*Math.sin(angle),Math.max(4,Math.hypot(p[0]-s.x,p[1]-s.z))),limit=Math.min(.48,Math.atan(7.8*2.66/(s.speed*s.speed+16)));
+   physics.step({...released,throttle:s.speed<7?.35:0,brake:s.speed>8?.1:0,steer:steer/limit},1/60);
+   assert.ok(s.y>Math.min(...road.elevations)-.3,'car fell through the former missing span');
+   if(cursor===road.points.length-1&&Math.hypot(s.x-end[0],s.z-end[1])<1.5){
+    // Cross the far seam under power as well.
+    for(let i=0;i<45;i++)physics.step({...released,throttle:.3},1/60);
+    assert.ok(physics.getState().y>road.elevations.at(-1)-.3);finished=true;break;
+   }
+  }
+  assert.ok(finished,`car stopped before far bank: ${JSON.stringify(physics.getState())}`);
+ }finally{physics.dispose();}
+});
