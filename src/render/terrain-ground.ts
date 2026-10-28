@@ -1,39 +1,50 @@
 import * as THREE from 'three';
 import type { CityData, Point2 } from '../types';
 import { buildTerrainGeometryData, sampleElevation, terrainGrid } from '../simulation/terrain.ts';
+import { TriangleWriter } from './geometry-writer.ts';
 
 /** Subdivide across and along roads so hill crests and cross slopes remain
- * attached to the same surface used by the suspension raycasts. */
-export function drapedRibbon(city:CityData,points:Point2[],width:number,offset:number,surface=(x:number,z:number)=>sampleElevation(city,x,z)){
-  const positions:number[]=[],uv:number[]=[];let distance=0;
-  type Vertex={p:number[];uv:number[]};
-  const middle=(a:Vertex,b:Vertex):Vertex=>{const x=(a.p[0]+b.p[0])/2,z=(a.p[2]+b.p[2])/2;return{p:[x,surface(x,z)+offset,z],uv:[(a.uv[0]+b.uv[0])/2,(a.uv[1]+b.uv[1])/2]};};
-  const emit=(a:Vertex,b:Vertex,c:Vertex,depth=0)=>{
-    const ab=middle(a,b),bc=middle(b,c),ca=middle(c,a);
-    const error=Math.max(Math.abs(ab.p[1]-(a.p[1]+b.p[1])/2),Math.abs(bc.p[1]-(b.p[1]+c.p[1])/2),Math.abs(ca.p[1]-(c.p[1]+a.p[1])/2));
-    if(depth<3&&error>.007){emit(a,ab,ca,depth+1);emit(ab,b,bc,depth+1);emit(ca,bc,c,depth+1);emit(ab,bc,ca,depth+1);return;}
-    for(const v of [a,b,c]){positions.push(...v.p);uv.push(...v.uv);}
+ * attached to the same surface used by the suspension raycasts. The flat-shaded
+ * triangles go straight into `sink`, so a tile's roads, dashes and crossings
+ * accumulate into a few buffers instead of thousands of geometries. */
+export function drapedRibbonInto(sink:TriangleWriter,city:CityData,points:Point2[],width:number,offset:number,surface=(x:number,z:number)=>sampleElevation(city,x,z)){
+  let distance=0;
+  // Vertices travel as plain numbers (x, y, z, u, v): no objects per vertex or midpoint.
+  const emit=(ax:number,ay:number,az:number,au:number,av:number,bx:number,by:number,bz:number,bu:number,bv:number,cx:number,cy:number,cz:number,cu:number,cv:number,depth:number)=>{
+    const abx=(ax+bx)/2,abz=(az+bz)/2,aby=surface(abx,abz)+offset,abu=(au+bu)/2,abv=(av+bv)/2;
+    const bcx=(bx+cx)/2,bcz=(bz+cz)/2,bcy=surface(bcx,bcz)+offset,bcu=(bu+cu)/2,bcv=(bv+cv)/2;
+    const cax=(cx+ax)/2,caz=(cz+az)/2,cay=surface(cax,caz)+offset,cau=(cu+au)/2,cav=(cv+av)/2;
+    const error=Math.max(Math.abs(aby-(ay+by)/2),Math.abs(bcy-(by+cy)/2),Math.abs(cay-(cy+ay)/2));
+    if(depth<3&&error>.007){
+      emit(ax,ay,az,au,av,abx,aby,abz,abu,abv,cax,cay,caz,cau,cav,depth+1);emit(abx,aby,abz,abu,abv,bx,by,bz,bu,bv,bcx,bcy,bcz,bcu,bcv,depth+1);
+      emit(cax,cay,caz,cau,cav,bcx,bcy,bcz,bcu,bcv,cx,cy,cz,cu,cv,depth+1);emit(abx,aby,abz,abu,abv,bcx,bcy,bcz,bcu,bcv,cax,cay,caz,cau,cav,depth+1);return;
+    }
+    sink.triangle(ax,ay,az,bx,by,bz,cx,cy,cz,au,av,bu,bv,cu,cv);
   };
   const section=(i:number)=>{
     const p=points[i],before=points[Math.max(0,i-1)],after=points[Math.min(points.length-1,i+1)];
     const dx=after[0]-before[0],dz=after[1]-before[1],length=Math.hypot(dx,dz)||1;
     return[-dz/length,dx/length];
   };
+  const q=new Float64Array(20);
   for(let i=1;i<points.length;i++){
     const a=points[i-1],b=points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.01)continue;
     const na=section(i-1),nb=section(i),along=Math.max(1,Math.ceil(length/2)),across=Math.max(1,Math.ceil(width/2));
-    const vertex=(t:number,v:number)=>{
+    const vertex=(slot:number,t:number,v:number)=>{
       const nx=na[0]+(nb[0]-na[0])*t,nz=na[1]+(nb[1]-na[1])*t;
       const x=a[0]+dx*t+nx*width*(v-.5),z=a[1]+dz*t+nz*width*(v-.5);
-      return {p:[x,surface(x,z)+offset,z],uv:[v*width/5,(distance+t*length)/5]};
+      q[slot]=x;q[slot+1]=surface(x,z)+offset;q[slot+2]=z;q[slot+3]=v*width/5;q[slot+4]=(distance+t*length)/5;
     };
     for(let j=0;j<along;j++)for(let k=0;k<across;k++){
-      const q=[vertex(j/along,k/across),vertex((j+1)/along,k/across),vertex(j/along,(k+1)/across),vertex((j+1)/along,(k+1)/across)];
-      emit(q[0],q[2],q[1]);emit(q[2],q[3],q[1]);
+      vertex(0,j/along,k/across);vertex(5,(j+1)/along,k/across);vertex(10,j/along,(k+1)/across);vertex(15,(j+1)/along,(k+1)/across);
+      emit(q[0],q[1],q[2],q[3],q[4],q[10],q[11],q[12],q[13],q[14],q[5],q[6],q[7],q[8],q[9],0);
+      emit(q[10],q[11],q[12],q[13],q[14],q[15],q[16],q[17],q[18],q[19],q[5],q[6],q[7],q[8],q[9],0);
     }
     distance+=length;
   }
-  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.computeVertexNormals();return g;
+}
+export function drapedRibbon(city:CityData,points:Point2[],width:number,offset:number,surface?:(x:number,z:number)=>number){
+  const sink=new TriangleWriter();drapedRibbonInto(sink,city,points,width,offset,surface);return sink.geometry();
 }
 
 export function terrainGeometry(city:CityData){

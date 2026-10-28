@@ -5,7 +5,9 @@ import { pointInside } from '../simulation/roads';
 import { sampleElevation } from '../simulation/terrain';
 import { canvasTexture, seeded } from './materials';
 import { createStreetTrees, type TreeField } from './foliage';
-import { drapedRibbon } from './terrain-ground';
+import { drapedRibbonInto } from './terrain-ground';
+import { PartBatches, box, type Part } from './geometry-writer';
+import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
 import { insideEmbracePlaza } from './the-embrace';
 
@@ -97,12 +99,14 @@ export interface ParkOptions {
   /** Streamed tile: surfaces are clipped to this box and only paths/ponds owned by it are built. */
   bounds?:Bounds; owner?:string; pathOwned?:(path:ParkPath)=>boolean; treeField?:TreeField; target?:THREE.Object3D;
   budgets?:{trees?:number;benches?:number};
+  /** Frame pacing: the generator form pauses between areas, paths and parks once the deadline has passed. */ pace?:Pace;
 }
 type ParkPath=NonNullable<CityData['parkPaths']>[number];
 /** Real Boston park boundaries, hydrography and mapped pedestrian alignments.
  * Planting, furnishings and bridge details are original procedural interpretations. */
-export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkOptions={}){
-  const group=new THREE.Group();group.name='Boston parks and waterways';
+export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkOptions={}){ return drain(cityParkDetailSteps(scene,city,options)); }
+export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:ParkOptions={}):Generator<void,THREE.Group>{
+  const group=new THREE.Group();group.name='Boston parks and waterways';const pace=options.pace;
   const bounds=options.bounds,owned=(p:Point2)=>!bounds||(p[0]>=bounds.minX&&p[0]<bounds.maxX&&p[1]>=bounds.minZ&&p[1]<bounds.maxZ);
   const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3);
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
@@ -113,24 +117,23 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
     lampGlass:new THREE.MeshStandardMaterial({color:'#f4e9ca',emissive:'#ffdba1',emissiveIntensity:.25,roughness:.35})};
   const {lawn,gardenLawn,pathMaterial,waterMaterial,bankMaterial,iron,wood,stone,lampGlass}=parkMaterials;
   const treeBudget=options.budgets?.trees??760,benchBudget=options.budgets?.benches??140;
-  const batches=new Map<string,{material:THREE.Material;geometries:THREE.BufferGeometry[]}>();
-  const add=(g:THREE.BufferGeometry,m:THREE.Material,x:number,z:number)=>{
-    const key=`${m.uuid}:${Math.floor(x/240)}:${Math.floor(z/240)}`;let batch=batches.get(key);if(!batch){batch={material:m,geometries:[]};batches.set(key,batch);}batch.geometries.push(g);
-  };
-  const part=(g:THREE.BufferGeometry,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{g.rotateY(yaw);g.translate(x,y,z);add(g,m,x,z);};
+  const batches=new PartBatches(240),matrix=new THREE.Matrix4();
+  const part=(g:Part,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{batches.part(g,m,matrix.makeRotationY(yaw).setPosition(x,y,z));};
   const lawns:THREE.BufferGeometry[]=[],gardens:THREE.BufferGeometry[]=[],plazas:THREE.BufferGeometry[]=[],waterSheets:THREE.BufferGeometry[]=[];
   for(const park of parks){
+    if(due(pace))yield;
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
     const list=/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
     const geometry=parkSurface(city,park.rings,.024,undefined,bounds);if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
   }
   for(const water of waters){
+    if(due(pace))yield;
     const geometry=parkSurface(city,water.rings,.095,waterHeight(city,water),bounds);if(geometry.attributes.position.count)waterSheets.push(geometry);else geometry.dispose();
     // Small pond edges get a narrow ground-following border; river shorelines
     // retain the source's natural geometry without an invented concrete wall.
     const extent=areaBounds(water);
     if(Math.max(extent.maxX-extent.minX,extent.maxZ-extent.minZ)<350&&owned(water.rings[0][0])){
-      for(const ring of water.rings)add(drapedRibbon(city,[...ring,ring[0]],.65,.085),bankMaterial,ring[0][0],ring[0][1]);
+      for(const ring of water.rings)drapedRibbonInto(batches.at(bankMaterial,ring[0][0],ring[0][1]),city,[...ring,ring[0]],.65,.085);
     }
   }
   for(const [list,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[plazas,pathMaterial,'Plazas'],[waterSheets,waterMaterial,'Water']] as const){
@@ -141,6 +144,7 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
   let bridges=0,benches=0,lamps=0;
   for(const path of paths){
     if(path.points.length<2)continue;
+    if(due(pace))yield;
     const bridge='bridge' in path&&path.bridge;
     if(bridge){
       bridges++;
@@ -157,13 +161,13 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
         part(deck,stone,centerX,(y0+y1)/2-.11,centerZ,Math.atan2(dx,dz));
         for(const side of [-1,1]){
           const x=centerX+nx*side*(path.width*.5-.12),z=centerZ+nz*side*(path.width*.5-.12);
-          part(new THREE.BoxGeometry(.065,1.05,.065),iron,x,py(m)+.5,z);
+          part(box(.065,1.05,.065),iron,x,py(m)+.5,z);
           const rail=new THREE.BoxGeometry(.085,.075,Math.hypot(seg,y1-y0)+.05);rail.rotateX(-Math.atan2(y1-y0,seg));
           part(rail,iron,x,(y0+y1)/2+1.04,z,Math.atan2(dx,dz));
         }
       }
     }else{
-      const p=path.points[0];add(drapedRibbon(city,path.points,path.width,.052),pathMaterial,...p);
+      const p=path.points[0];drapedRibbonInto(batches.at(pathMaterial,p[0],p[1]),city,path.points,path.width,.052);
     }
   }
   // Spatially index roads, buildings and paths so landscape preparation stays
@@ -191,8 +195,9 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
   const clipped=(p:CityArea):Bounds=>{const b=areaBounds(p);return bounds?{minX:Math.max(b.minX,bounds.minX),maxX:Math.min(b.maxX,bounds.maxX),minZ:Math.max(b.minZ,bounds.minZ),maxZ:Math.min(b.maxZ,bounds.maxZ)}:b;};
   const limits=selected.map(p=>{const b=clipped(p),area=Math.max(0,b.maxX-b.minX)*Math.max(0,b.maxZ-b.minZ);return /public garden/i.test(p.name)?190:/boston common/i.test(p.name)?260:/fens/i.test(p.name)?190:Math.min(bounds?60:35,Math.round(area/1300));});
-  selected.forEach((park,index)=>{
-    const b=clipped(park),limit=limits[index];let count=0;if(b.maxX<=b.minX||b.maxZ<=b.minZ)return;
+  for(const [index,park] of selected.entries()){
+    if(due(pace))yield;
+    const b=clipped(park),limit=limits[index];let count=0;if(b.maxX<=b.minX||b.maxZ<=b.minZ)continue;
     for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length<treeBudget;attempt++){
       const p:Point2=[b.minX+random()*(b.maxX-b.minX),b.minZ+random()*(b.maxZ-b.minZ)];if(!insideArea(p,park)||!safe(p))continue;
       const cx=Math.floor(p[0]/10),cz=Math.floor(p[1]/10);let near=false;
@@ -200,12 +205,13 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
       if(near)continue;const k=`${cx},${cz}`,list=treeCells.get(k)??[];list.push(p);treeCells.set(k,list);
       treePoints.push(new THREE.Vector3(p[0],sampleElevation(city,...p)+.025,p[1]));count++;
     }
-  });
+  }
   if(treePoints.length){if(options.treeField)options.treeField.add(options.owner??'parks',treePoints);else{const trees=createStreetTrees(treePoints,{scale:1.65,grates:false});trees.name='Park specimen trees';group.add(trees);}}
   // Benches and restrained lamps sit beside real paths. Count is fixed per
   // length rather than per OSM segment, preventing dense clusters at junctions.
   for(const path of paths){
     if('bridge' in path&&path.bridge)continue;
+    if(due(pace))yield;
     let next=22+random()*25,distance=0;
     for(let i=1;i<path.points.length&&benches<benchBudget;i++){
       const a=path.points[i-1],b=path.points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.1)continue;
@@ -214,10 +220,10 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
         const p:Point2=[a[0]+dx*t-dz/length*offset*side,a[1]+dz*t+dx/length*offset*side];next+=58;
         if(!selected.some(park=>insideArea(p,park))||!safe(p))continue;
         const ground=sampleElevation(city,...p),yaw=Math.atan2(-dz,dx);
-        part(new THREE.BoxGeometry(2,.08,.48),wood,p[0],ground+.48,p[1],yaw);
+        part(box(2,.08,.48),wood,p[0],ground+.48,p[1],yaw);
         const backX=p[0]-dz/length*.27*side,backZ=p[1]+dx/length*.27*side;
-        part(new THREE.BoxGeometry(2,.38,.08),wood,backX,ground+.78,backZ,yaw);
-        for(const s of [-1,1])part(new THREE.BoxGeometry(.07,.45,.46),iron,p[0]+dx/length*.72*s,ground+.23,p[1]+dz/length*.72*s,yaw);
+        part(box(2,.38,.08),wood,backX,ground+.78,backZ,yaw);
+        for(const s of [-1,1])part(box(.07,.45,.46),iron,p[0]+dx/length*.72*s,ground+.23,p[1]+dz/length*.72*s,yaw);
         benches++;
         if(benches%3===0){
           const lx=p[0]+dx/length*3.8,lz=p[1]+dz/length*3.8,lp:Point2=[lx,lz];
@@ -227,11 +233,7 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
       distance+=length;
     }
   }
-  for(const {material,geometries} of batches.values()){
-    const normalized=geometries.map(g=>g.index?g.toNonIndexed():g),geometry=mergeGeometries(normalized,false);
-    if(geometry){geometry.computeBoundingSphere();const mesh=new THREE.Mesh(geometry,material);mesh.castShadow=material!==pathMaterial&&material!==bankMaterial;mesh.receiveShadow=true;group.add(mesh);}
-    new Set([...geometries,...normalized]).forEach(g=>g.dispose());
-  }
+  for(const mesh of batches.meshes()){mesh.castShadow=mesh.material!==pathMaterial&&mesh.material!==bankMaterial;mesh.receiveShadow=true;group.add(mesh);}
   group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length,benches,lamps,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting and furnishings are procedural'};
   (options.target??scene).add(group);return group;
 }
