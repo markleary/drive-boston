@@ -172,12 +172,16 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   };
   const group = new THREE.Group(); group.name = 'AmbientTraffic'; scene.add(group);
   const styles: VehicleStyle[] = ['sedan', 'crossover', 'van', 'hatchback'];
-  const meshes: { mesh: THREE.InstancedMesh; model: number | null }[] = [];
+  const meshes: { mesh: THREE.BatchedMesh; model: number | null }[] = [];
   function batch(surface: VehicleSurface, geometry: THREE.BufferGeometry, model: number | null, material = materials[surface]) {
     geometry.translate(0, .66, 0);
-    const mesh = new THREE.InstancedMesh(geometry, material, model === null ? COUNT : Math.ceil(COUNT / styles.length));
+    const capacity=model===null?COUNT:Math.ceil(COUNT/styles.length);
+    const mesh=new THREE.BatchedMesh(capacity,geometry.attributes.position.count,geometry.index?.count??0,material);
+    const shape=mesh.addGeometry(geometry);for(let i=0;i<capacity;i++)mesh.addInstance(shape);geometry.dispose();
+    // Each car/wheel set gets its own view and shadow frustum test. A fleet
+    // spread across the metro must not draw every detailed wheel in every pass.
     mesh.name = model === null ? `Traffic wheels ${surface}` : `Traffic ${styles[model]} ${surface}`;
-    mesh.castShadow = true; mesh.receiveShadow = true; mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.castShadow = true; mesh.receiveShadow = true;
     if (surface === 'paint') mesh.userData.paint = true;
     group.add(mesh); meshes.push({ mesh, model });
   }
@@ -277,7 +281,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     const collider = physics.world.createCollider(RAPIER.ColliderDesc.cuboid(.85, .45, 1.95).setFriction(.5).setRestitution(.04), body);
     actors.push({ body, collider, path, distance: d, speed: 0, cruise: 5.5 + random() * 3.5, x: p[0], z: p[1], yaw, color: new THREE.Color(palette[i % palette.length]) });
   }
-  for (const { mesh, model } of meshes) mesh.count = model === null ? actors.length : Math.max(0, Math.ceil((actors.length - model) / styles.length));
+  for(const {mesh,model} of meshes){const count=model===null?actors.length:Math.max(0,Math.ceil((actors.length-model)/styles.length));for(let i=0;i<mesh.instanceCount;i++)mesh.setVisibleAt(i,i<count);}
   const matrix = new THREE.Matrix4();
   const rotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3(1, 1, 1);
   function relocate(actor:Actor,path:Path,d=5){
@@ -404,8 +408,6 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         }
       }
       for (const { mesh } of meshes) {
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
         mesh.computeBoundingSphere();
       }
     },
@@ -416,7 +418,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     },
     dispose() {
       for (const actor of actors) physics.world.removeRigidBody(actor.body);
-      for (const { mesh } of meshes) mesh.geometry.dispose();
+      for (const { mesh } of meshes) mesh.dispose();
       Object.values(materials).forEach(material => material.dispose());
       plateMaterials.forEach(material => { material.map?.dispose(); material.dispose(); });
       scene.remove(group);
