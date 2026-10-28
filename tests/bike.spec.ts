@@ -1,6 +1,6 @@
 import {test,expect,type Page} from '@playwright/test';
 type State={x:number;y:number;z:number;speed:number;vehicle:string;wheelie:number;wheelieRemaining:number;wheelAngles:number[];rotation:{x:number;y:number;z:number;w:number}};
-type Snapshot={state:State;travelMode:string;paused:boolean;camera:string;audio:{engineGain:number;electricGain:number;rotorGain:number}};
+type Snapshot={state:State;travelMode:string;paused:boolean;camera:string;cameraPosition:{x:number;y:number;z:number};audio:{engineGain:number;electricGain:number;rotorGain:number}};
 const snapshot=(page:Page)=>page.evaluate(()=>(window as unknown as {__backbay:{snapshot():Snapshot}}).__backbay.snapshot());
 async function start(page:Page){await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:60000});await page.getByTestId('start-drive').click();await expect(page.locator('#welcome')).toBeHidden();}
 
@@ -34,6 +34,20 @@ test('Ultra Bee: switch, ride, wheelie, pause, camera, reset and return to car',
   await expect.poll(async()=>Math.abs((await snapshot(page)).state.speed)).toBeLessThan(.2);
   await page.keyboard.press('c');await expect(page.locator('#camera-label')).toHaveText('Rider camera');
   await page.screenshot({path:testInfo.outputPath('ultra-bee-rider.png')});
+  // A first-person viewpoint must remain on the moving rider rather than trail
+  // several meters behind the bike like the chase camera.
+  const eyeDistance=(s:Snapshot)=>Math.hypot(s.cameraPosition.x-s.state.x,s.cameraPosition.y-s.state.y,s.cameraPosition.z-s.state.z);
+  await page.keyboard.down('w');
+  try{
+    await expect.poll(async()=>(await snapshot(page)).state.speed).toBeGreaterThan(8);
+    expect(eyeDistance(await snapshot(page))).toBeLessThan(1.2);
+    await page.screenshot({path:testInfo.outputPath('ultra-bee-rider-moving.png')});
+    await page.keyboard.down('x');
+    await expect.poll(async()=>(await snapshot(page)).state.wheelie).toBeGreaterThan(.35);
+    expect(eyeDistance(await snapshot(page))).toBeLessThan(1.2);
+    await page.screenshot({path:testInfo.outputPath('ultra-bee-rider-wheelie.png')});
+  }finally{await page.keyboard.up('x');await page.keyboard.up('w');}
+
   await page.keyboard.press('2');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
   await expect(page.locator('#drive-hint')).not.toContainText('Wheelie');
   await page.keyboard.press('3');await expect.poll(async()=>(await snapshot(page)).state.vehicle).toBe('ultrabee');
