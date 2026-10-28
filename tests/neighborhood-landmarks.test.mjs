@@ -3,7 +3,7 @@ import test from 'node:test';
 import {fenwayDiamond,createFenwayRoofSampler} from '../src/render/fenway-layout.ts';
 import {prepareNeighborhoodArchitecture,architectureFor} from '../src/render/neighborhood-profiles.ts';
 
-import {loadCentralCity} from './helpers/metro-city.mjs';
+import {loadCentralCity,loadMetroCity} from './helpers/metro-city.mjs';
 test('Fenway diamond is a regulation square aligned to both mapped foul poles',()=>{
   const f=fenwayDiamond(),length=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
   for(const[a,b]of[[f.home,f.first],[f.first,f.second],[f.second,f.third],[f.third,f.home]])assert.ok(Math.abs(length(a,b)-27.432)<1e-6);
@@ -21,11 +21,29 @@ test('Mission Hill typology selects detached houses without replacing every low 
   assert.equal(JSON.stringify(city.buildings),before,'classification must preserve all source geometry/data');
   for(const building of city.buildings){
     const style=architectureFor(building);
-    if(style){assert.equal(building.district,'Mission Hill');assert.ok(style.floorHeight>=2.65&&style.floorHeight<=3.35);assert.ok(style.front.setback>1.4);}
+    if(style){assert.equal(building.district,'Mission Hill');assert.ok(style.floorHeight>=2.65&&style.floorHeight<=3.35);if(style.kind==='triple-decker')assert.ok(style.front.setback>1.4);}
     if(building.landmark||/church|chapel|hospital/i.test(building.name))assert.equal(style,undefined);
   }
   assert.equal(architectureFor(city.buildings.find(b=>b.id==='BOS-73AP7-T4BL0-O4QDM')),undefined);
-  assert.ok(architectureFor(city.buildings.find(b=>b.id==='BOS-VE1SK-58PCI-OUILE')),'the source Hillside Street house receives a three-story wood profile');
+  assert.equal(architectureFor(city.buildings.find(b=>b.id==='BOS-VE1SK-58PCI-OUILE'))?.kind,'triple-decker','the source Hillside Street house receives a three-story wood profile');
+});
+
+test('Somerville house streets receive the wood-frame typology whatever their width or name',async()=>{
+  // Summer Street climbs Spring Hill between wood-frame two- and three-family
+  // houses. Its OpenStreetMap width (13.7 m) and its downtown namesake must not
+  // turn the street into a brick shopping street.
+  const metro=await loadMetroCity({bounds:{minX:-3300,maxX:-2800,minZ:-4550,maxZ:-4050}});
+  const summer=metro.roads.filter(road=>road.name==='Summer Street'&&road.kind);
+  assert.ok(summer.length>=2&&summer.every(road=>road.kind==='secondary'||road.kind==='tertiary'),'the town street carries its OpenStreetMap class');
+  const near=metro.buildings.filter(b=>Math.hypot(b.center[0]+3044.4,b.center[1]+4306.67)<120&&!b.landmark);
+  const houses=near.filter(b=>{const p=b.footprint,area=Math.abs(p.reduce((s,a,i)=>{const c=p[(i+1)%p.length];return s+a[0]*c[1]-c[0]*a[1];},0))/2;return b.height>=8.3&&b.height<=14.4&&area>=65&&area<=245;});
+  assert.ok(houses.length>=20,`the block holds detached-scale houses: ${houses.length}`);
+  const result=prepareNeighborhoodArchitecture(metro,near),profiled=houses.filter(b=>architectureFor(b));
+  assert.ok(profiled.length>=houses.length*.75,`most houses beside Summer Street are wood-frame: ${profiled.length} of ${houses.length}`);
+  assert.ok(profiled.filter(b=>architectureFor(b).kind==='triple-decker').length>=houses.length*.4,'a verified residential front gives porches, not just clapboard');
+  assert.ok(result.tripleDeckers+result.woodFrames>=profiled.length);
+  for(const id of ['osm-way-29683342','osm-way-29516216','osm-way-29629741'])assert.ok(architectureFor(near.find(b=>b.id===id)),`${id} on Summer Street is a wood-frame house`);
+  for(const b of near)if(/retail|apartments/.test(b.kind??'')&&b.height>14.4)assert.equal(architectureFor(b),undefined);
 });
 
 test('Fenway seat supports include the separate lower-bowl slab without covering the field',()=>{

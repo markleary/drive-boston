@@ -33,10 +33,14 @@ export function planPorchStairs(site:PorchStairSite,ground:(x:number,z:number)=>
     site.origin[0]+site.tangent[0]*u+site.normal[0]*(site.frontDepth+d),
     site.origin[1]+site.tangent[1]*u+site.normal[1]*(site.frontDepth+d),
   ];
+  // A hillside house above a levelled sidewalk can need more flight than its
+  // frontage holds. The shortest feasible flight is taken first; a side flight
+  // may then continue past the house corner by this much, still on clear ground.
+  const overrun=1.5;
   const candidates=[
     {entry:'front' as const,start:at(0,site.depth),direction:site.normal,available:site.setback-site.frontDepth-site.depth-1.4,width:1.25},
-    {entry:'left' as const,start:at(-site.width/2,site.depth/2),direction:site.tangent.map(v=>-v) as Point2,available:site.frontage/2+site.along-site.width/2-.15,width:Math.min(1.25,site.depth-.12)},
-    {entry:'right' as const,start:at(site.width/2,site.depth/2),direction:site.tangent,available:site.frontage/2-site.along-site.width/2-.15,width:Math.min(1.25,site.depth-.12)},
+    {entry:'left' as const,start:at(-site.width/2,site.depth/2),direction:site.tangent.map(v=>-v) as Point2,available:site.frontage/2+site.along-site.width/2-.15+overrun,width:Math.min(1.25,site.depth-.12)},
+    {entry:'right' as const,start:at(site.width/2,site.depth/2),direction:site.tangent,available:site.frontage/2-site.along-site.width/2-.15+overrun,width:Math.min(1.25,site.depth-.12)},
   ];
   const tread=.28,landingDepth=.4;
   for(const candidate of candidates){

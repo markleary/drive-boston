@@ -22,7 +22,7 @@ test('Prudential Tower carries its separated crown floors and PRUDENTIAL letteri
   expect(initial.prudential.crownTop).toBeCloseTo(230.55,1);
   // The three exact source meshes plus the solid crown envelope.
   expect(initial.exactBuildingColliders).toBeGreaterThanOrEqual(4);
-  await page.keyboard.press('2');
+  await page.keyboard.press('3');
   await expect(page.getByTestId('mode-helicopter')).toHaveAttribute('aria-pressed','true');
   await page.keyboard.down('Space');
   try {await expect.poll(async()=>(await snapshot(page)).flight.y,{timeout:60000}).toBeGreaterThan(224);}

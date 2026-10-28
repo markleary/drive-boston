@@ -20,7 +20,7 @@ from shapely.strtree import STRtree
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 import tileformat
-from building_semantics import apply_building_identity,facade_style
+from building_semantics import apply_building_identity,facade_style,index_footprints
 spec=importlib.util.spec_from_file_location('city_compiler',ROOT/'scripts/build-city.py');central=importlib.util.module_from_spec(spec);spec.loader.exec_module(central)
 xy,rounded,hull,load_layer,feature_polygons,polygon_rings,polygon_parts,context_polygons,visible_floor,geographic_polygon=central.xy,central.rounded,central.hull,central.load_layer,central.feature_polygons,central.polygon_rings,central.polygon_parts,central.context_polygons,central.visible_floor,central.geographic_polygon
 FT=central.FT;ORIGIN=central.ORIGIN;TO_GEO=central.TO_GEO
@@ -401,7 +401,7 @@ def build_roads(cache,coverage,districts,grid,wet,deep,water_union,osm_roads):
     if moved is not coords[index]:coords[index]=rounded(moved);snapped+=1
    coords=clean_points(coords)
    if coords is None:dropped+=1;continue
-   road={'id':f"osm-{e['id']}-{k}",'name':label,'points':coords,'width':round(width,2),'oneway':oneway}
+   road={'id':f"osm-{e['id']}-{k}",'name':label,'points':coords,'width':round(width,2),'oneway':oneway,'kind':kind}
    deck=(coords,0,0,[water_node(coords[0]),water_node(coords[-1])],crossing(LineString(coords)),bridge_tag);profile=deck_profile(deck[0],grid,*deck[1:],road['id'])
    if profile:road['points'],road['elevations'],road['bridge']=profile;road['_deck']=deck;road['startLevel']=1 if deck[3][0] else 0;road['endLevel']=1 if deck[3][1] else 0
    roads.append(road)
@@ -805,7 +805,7 @@ def write_far(out,buildings):
  small file (DBF2). Flags: bit 0 landmark, bit 1 exact-mesh complex, bit 2 no
  far box (structures and complexes drawn by their fragments), bit 3 massing
  fragment of a complex (not a building of its own: tile counts exclude them)."""
- by_tile=defaultdict(list)
+ by_tile=defaultdict(list);index_footprints(buildings)
  for b in buildings:by_tile[tileformat.tile_of(b['center'][0],b['center'][1],TILE)].append(b)
  body=bytearray();directory=[]
  for (tx,tz),entries in sorted(by_tile.items()):

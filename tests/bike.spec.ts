@@ -7,7 +7,7 @@ async function start(page:Page){await page.goto('/');await expect(page.getByTest
 test('Ultra Bee: switch, ride, wheelie, pause, camera, reset and return to car',async({page},testInfo)=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)/i.test(m.text()))errors.push(m.text());});
   await start(page);await expect(page.getByRole('button',{name:'Wheelie',exact:true})).toBeHidden();
-  await page.keyboard.press('3');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('bike');
+  await page.keyboard.press('2');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('bike');
   await expect(page.getByTestId('mode-bike')).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('#drive-hint')).toContainText('Wheelie');
   expect((await snapshot(page)).state.wheelAngles).toHaveLength(2);
@@ -48,9 +48,9 @@ test('Ultra Bee: switch, ride, wheelie, pause, camera, reset and return to car',
     await page.screenshot({path:testInfo.outputPath('ultra-bee-rider-wheelie.png')});
   }finally{await page.keyboard.up('x');await page.keyboard.up('w');}
 
-  await page.keyboard.press('2');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
+  await page.keyboard.press('3');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
   await expect(page.locator('#drive-hint')).not.toContainText('Wheelie');
-  await page.keyboard.press('3');await expect.poll(async()=>(await snapshot(page)).state.vehicle).toBe('ultrabee');
+  await page.keyboard.press('2');await expect.poll(async()=>(await snapshot(page)).state.vehicle).toBe('ultrabee');
   await page.keyboard.press('1');await expect.poll(async()=>(await snapshot(page)).state.vehicle).toBe('car');
   expect((await snapshot(page)).state.wheelAngles).toHaveLength(4);
   await expect(page.locator('#drive-hint')).toContainText('Handbrake');

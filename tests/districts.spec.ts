@@ -54,7 +54,7 @@ test('connected Boston: visit the new districts and parks, drive, and inspect th
       await page.screenshot({path:testInfo.outputPath(`${id}-drive.png`)});
     }
   }
-  await page.keyboard.press('2');
+  await page.keyboard.press('3');
   await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
   await page.keyboard.press('m');
   await page.locator('[data-destination="boston-common"]').click();

@@ -72,7 +72,7 @@ export function* streetscapeSteps(scene: THREE.Scene, city: CityData, options: D
         if(count>=budget||(areaCount.get(area)??0)>=16)break;
         const x=a[0]+dx*d/length,z=a[1]+dz*d/length;
         const road=closestRoad(city,x,z,true);
-        if(!storefrontStreet(road.road.name,road.road.width))continue;
+        if(!storefrontStreet(road.road.name,road.road.width,road.road.kind))continue;
         // Respect setbacks, street orientation, and cross-street corners.
         if(road.distance<road.road.width/2+1.5 || road.distance>road.road.width/2+15)continue;
         if(((road.x-x)*nx+(road.z-z)*nz)/road.distance<.8)continue;

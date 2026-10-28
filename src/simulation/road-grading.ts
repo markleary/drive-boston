@@ -6,6 +6,8 @@ export interface RoadGradingStats {
 const prepared=new WeakMap<CityData,RoadGradingStats>();
 const clamp=(v:number,a:number,b:number)=>Math.max(a,Math.min(b,v));
 const smooth=(t:number)=>{t=clamp(t,0,1);return t*t*(3-2*t);};
+/** Sidewalk allowance beyond each pavement edge: the rendered sidewalk ribbon is road.width+5.8 wide. */
+export const WALK=2.9;
 type Profile={road:Road;points:Point2[];stations:number[];heights:number[];length:number;start:Node;end:Node};
 type Node={x:number;z:number;height:number;ends:{profile:Profile;reverse:boolean}[];pinned:boolean};
 
@@ -24,6 +26,17 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
     const a=raw[k],b=raw[k+1],c=raw[k+grid.width],d=raw[k+grid.width+1];
     return tx+tz<=1?a+(b-a)*tx+(c-a)*tz:d+(c-d)*(1-tx)+(b-d)*(1-tz);
   };
+  // A side-hill street is cut into the slope, not banked across it: its corridor
+  // datum sits toward the lower edge's natural ground, so downhill houses keep
+  // their exposed facades and uphill houses stand on foundation walls.
+  const datum=(points:Point2[],i:number,half:number)=>{
+    const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)],dx=b[0]-a[0],dz=b[1]-a[1],l=Math.hypot(dx,dz)||1,nx=-dz/l*half,nz=dx/l*half,[x,z]=points[i];
+    const c=sample(x,z),left=sample(x-nx,z-nz),right=sample(x+nx,z+nz);
+    // Down by the cross drop to the lower corridor edge, at most 1.5 m, and only
+    // where the cross-section is a slope: a street along a terrace edge, a cut or
+    // an embankment keeps its centerline datum.
+    return c-clamp(Math.abs(left-right)/2-Math.abs(c-(left+right)/2),0,1.5);
+  };
   const nodes=new Map<string,Node>(),profiles:Profile[]=[];
   const node=(point:Point2)=>{
     const key=`${Math.round(point[0]*10)},${Math.round(point[1]*10)}`;
@@ -38,7 +51,8 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
       for(let j=1;j<=count;j++){points.push([a[0]+(b[0]-a[0])*j/count,a[1]+(b[1]-a[1])*j/count]);stations.push(length+distance*j/count);}length+=distance;
     }
     if(length<1)continue;
-    const profile:Profile={road,points,stations,heights:points.map(p=>sample(...p)),length,start:node(points[0]),end:node(points.at(-1)!)};
+    const profile:Profile={road,points,stations,heights:points.map((_,i)=>datum(points,i,road.width/2+WALK)),length,start:node(points[0]),end:node(points.at(-1)!)};
+    if(!profile.start.ends.length)profile.start.height=profile.heights[0];if(!profile.end.ends.length)profile.end.height=profile.heights.at(-1)!;
     profile.start.ends.push({profile,reverse:false});profile.end.ends.push({profile,reverse:true});profiles.push(profile);
   }
   // A bridge endpoint at ground level is a hard datum, not a second ordinary
@@ -100,11 +114,13 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
   const count=raw.length,heights=Array.from(raw),best=new Float32Array(count);best.fill(Infinity);
   const roadDistance=new Float32Array(count);roadDistance.fill(Infinity);
   const weighted=new Float64Array(count),weights=new Float64Array(count),influence=new Float32Array(count);
-  // Grade only the pavement and a short blending shoulder. A wide flat apron
-  // would cut into sloping yards and raise ground through surveyed houses; the
-  // triangle constraints below handle cells straddling an oblique road edge.
-  for(const p of profiles){
-    const core=p.road.width/2+.5,shoulder=6,radius=core+shoulder;
+  const owner=new Int32Array(count).fill(-1),ownerHeight=new Float32Array(count);
+  // Grade the whole street corridor (pavement plus both sidewalks) and a short
+  // blending shoulder beyond it. The blend must not start under the sidewalk,
+  // or every sidewalk on a hillside tilts with the yard behind it; the
+  // triangle constraints below handle cells straddling an oblique corridor edge.
+  for(const [pi,p] of profiles.entries()){
+    const core=p.road.width/2+WALK+.5,shoulder=6,radius=core+shoulder;
     for(let i=1;i<p.points.length;i++){
       const a=p.points[i-1],b=p.points[i],dx=b[0]-a[0],dz=b[1]-a[1],length2=dx*dx+dz*dz;
       if(length2<.001)continue;
@@ -115,14 +131,14 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
         const index=j*grid.width+k;roadDistance[index]=Math.min(roadDistance[index],distance-p.road.width/2);const normalized=distance/(p.road.width/2+2.9);
         // Nearest centerline owns the roadbed. Blend only nearly tied profiles
         // at their shared junction rather than averaging across whole blocks.
-        if(normalized<best[index]-.03){best[index]=normalized;weighted[index]=0;weights[index]=0;influence[index]=0;}
+        if(normalized<best[index]-.03){best[index]=normalized;weighted[index]=0;weights[index]=0;influence[index]=0;owner[index]=pi;}
         if(normalized>best[index]+.03)continue;
         const h=p.heights[i-1]+(p.heights[i]-p.heights[i-1])*t,w=1/(.05+Math.abs(normalized-best[index]));
         weighted[index]+=h*w;weights[index]+=w;influence[index]=Math.max(influence[index],1-smooth((distance-core)/shoulder));
       }
     }
   }
-  for(let i=0;i<count;i++)if(weights[i])heights[i]=raw[i]+(weighted[i]/weights[i]-raw[i])*influence[i];
+  for(let i=0;i<count;i++)if(weights[i]){ownerHeight[i]=weighted[i]/weights[i];heights[i]=raw[i]+(ownerHeight[i]-raw[i])*influence[i];}
 
   type Constraint={indices:number[];weights:number[];limit:number;divisor:number;target?:number};
   const triangleWeights=(x:number,z:number)=>{
@@ -165,9 +181,12 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
   blendPins();
 
   // Preserve source ground under buildings without reseating their fixed models.
-  // Every footprint receives fill ceilings, while low-rise yards may be cut
-  // modestly to meet the road. Fixed building models keep their surveyed bases;
-  // foundation skirts bridge a cut instead of burying the facade with road fill.
+  // Every footprint outside the corridor receives fill ceilings, while low-rise
+  // yards may be cut modestly to meet the street; a deeper allowance lets the
+  // crossfall solver drag a whole street down a neighbouring cut. Fixed
+  // building models keep their surveyed bases; foundation skirts bridge a cut
+  // instead of burying the facade with road fill. Footprint edges inside the
+  // sidewalk belong to the corridor.
   const protections:{indices:number[];weights:number[];target:number;lower:number;upper:number;divisor:number}[]=[];
   for(const b of city.buildings??[]){
     const samples:Point2[]=[b.center];
@@ -181,25 +200,29 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
       }
     }
     for(const p of samples){
-      const q=triangleWeights(...p),distance=q.indices.reduce((s,id,j)=>s+Math.max(-10,Math.min(20,roadDistance[id]))*q.weights[j],0);if(distance<1)continue;
+      const q=triangleWeights(...p),distance=q.indices.reduce((s,id,j)=>s+Math.max(-10,Math.min(20,roadDistance[id]))*q.weights[j],0);if(distance<WALK+1)continue;
       const divisor=q.weights.reduce((s,w)=>s+w*w,0);protections.push({...q,target:sample(...p),lower:p===b.center?-Infinity:b.height<20&&area<1000?-.5:-Infinity,upper:p===b.center?.15:Math.max(.2,(b.baseElevation??sample(...p))+.25-sample(...p)),divisor});
     }
   }
   // Building protections are the only absolute anchor a hill street has against
   // its own grade and crossfall limits, which preserve the mean height of every
   // triangle they level and would otherwise lift a yard by metres, so they may
-  // lower pavement vertices too. A free vertex with a small weight, though, used
-  // to absorb a hopeless footprint sample a little every pass and sink into a pit
-  // (a shed in the Haul Road cut reached 8 m below its ground), and a foundation
-  // skirt bridges only a modest cut: no vertex is cut more than 3 m below the
-  // source ground, and beyond that the sample stays buried.
-  const lower=(id:number,amount:number)=>{heights[id]=Math.max(heights[id]-amount,Math.min(heights[id],raw[id]-3));};
+  // lower pavement vertices too. A protection keeps fill off a building base,
+  // though; it must not dig for one. A free vertex with a small weight used to
+  // absorb a hopeless footprint sample a little every pass and sink into a pit
+  // (a shed in the Haul Road cut reached 8 m below its ground), and a protected
+  // sample near the edge of a cell whose other corners the corridor holds level
+  // levered the cell's far corner metres down (the trench that opened beside
+  // 125 Centre Street). A foundation skirt bridges only a modest cut: no vertex
+  // is cut more than a metre below the source ground, and beyond that the
+  // sample stays buried.
+  const lower=(id:number,amount:number)=>{heights[id]=Math.max(heights[id]-amount,Math.min(heights[id],raw[id]-1));};
   const protect=()=>{for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=value-clamp(value,c.lower,c.upper);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>lower(id,error/c.divisor*c.weights[j]*.1));}};
   const crossfalls:Constraint[]=[],grades:Constraint[]=[],curves:Constraint[]=[];
   const gradientKeys=new Set<string>();
   // A line crosses grid rows, columns and the shared diagonal. Constrain the
   // actual plane in every crossed triangle, not an average between road edges.
-  const gradientLine=(a:Point2,b:Point2,limit:number,target:Constraint[])=>{
+  const gradientLine=(a:Point2,b:Point2,limit:number,target:Constraint[],skip?:(indices:number[],t:number)=>boolean)=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.001)return;
     let ux=dx/length,uz=dz/length;if(ux<0||ux===0&&uz<0){ux=-ux;uz=-uz;}
     const breaks=[0,1];
@@ -213,29 +236,42 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
       if(breaks[n]-breaks[n-1]<.00001)continue;
       const t=(breaks[n]+breaks[n-1])/2,fx=clamp((a[0]+dx*t-grid.originX)/grid.cellSize,0,grid.width-1),fz=clamp((a[1]+dz*t-grid.originZ)/grid.cellSize,0,grid.height-1);
       const i=Math.min(grid.width-2,Math.floor(fx)),j=Math.min(grid.height-2,Math.floor(fz)),k=j*grid.width+i,upper=fx-i+fz-j>1;
+      const indices=upper?[k+grid.width+1,k+grid.width,k+1]:[k,k+1,k+grid.width];if(skip?.(indices,t))continue;
       const key=`${k}:${upper?1:0}:${Math.round(ux*10000)}:${Math.round(uz*10000)}:${limit}`;if(gradientKeys.has(key))continue;gradientKeys.add(key);
-      const indices=upper?[k+grid.width+1,k+grid.width,k+1]:[k,k+1,k+grid.width];
       const coefficients=(upper?[ux+uz,-ux,-uz]:[-ux-uz,ux,uz]).map(v=>v/grid.cellSize),divisor=coefficients.reduce((s,v)=>s+v*v,0);
       target.push({indices,weights:coefficients,divisor,limit});
     }
   };
-  const crossfall=(center:Point2,dx:number,dz:number,width:number)=>{
+  const crossfall=(center:Point2,dx:number,dz:number,width:number,skip?:(indices:number[],offset:number)=>boolean)=>{
     const length=Math.hypot(dx,dz);if(length<.1)return;const nx=-dz/length*width/2,nz=dx/length*width/2;
-    gradientLine([center[0]-nx,center[1]-nz],[center[0]+nx,center[1]+nz],.003,crossfalls);
+    gradientLine([center[0]-nx,center[1]-nz],[center[0]+nx,center[1]+nz],.003,crossfalls,skip&&((indices,t)=>skip(indices,Math.abs(t-.5)*width)));
   };
-  for(const p of profiles){
+  // A pavement left at grade beside a much lower or higher street (the South
+  // Boston Haul Road in its cut, Fort Avenue on its terrace above Centre
+  // Street) meets it through a wall the 6 m grid cannot hold. Levelling a
+  // sidewalk across a cell that also carries the other roadbed would drag one
+  // street toward the other, so the sidewalk part of a corridor leaves those
+  // cells to the bank between them. The pavement itself is always levelled:
+  // a cell skipped under a travelled lane left a wall inside the lane (West
+  // Side Drive above its service road, the Haul Road under West Fourth Street),
+  // which is worse than a terrace settling a little toward the lower street.
+  const avoid=(pi:number,h0:number,half:number)=>(indices:number[],offset:number)=>offset>half&&indices.some(v=>owner[v]>=0&&owner[v]!==pi&&influence[v]>=.5&&Math.abs(ownerHeight[v]-h0)>2.5);
+  const heightAt=(p:Profile,s:number)=>{const ss=p.stations,hs=p.heights;let lo=0,hi=ss.length-1;while(hi-lo>1){const mid=(lo+hi)>>1;if(ss[mid]<=s)lo=mid;else hi=mid;}const span=ss[hi]-ss[lo]||1;return hs[lo]+(hs[hi]-hs[lo])*clamp((s-ss[lo])/span,0,1);};
+  for(const [pi,p] of profiles.entries()){
     for(let i=0;i<p.points.length;i++){
-      const center=p.points[i],a=p.points[Math.max(0,i-1)],b=p.points[Math.min(p.points.length-1,i+1)];crossfall(center,b[0]-a[0],b[1]-a[1],p.road.width);
+      const center=p.points[i],a=p.points[Math.max(0,i-1)],b=p.points[Math.min(p.points.length-1,i+1)];crossfall(center,b[0]-a[0],b[1]-a[1],p.road.width+2*WALK,avoid(pi,p.heights[i],p.road.width/2));
     }
     for(let i=1;i<p.points.length;i++){
       const a=p.points[i-1],b=p.points[i],dx=b[0]-a[0],dz=b[1]-a[1],parts=Math.max(1,Math.ceil(Math.hypot(dx,dz)/.5));
-      for(let j=0;j<=parts;j++)crossfall([a[0]+dx*j/parts,a[1]+dz*j/parts],dx,dz,p.road.width);
+      for(let j=0;j<=parts;j++)crossfall([a[0]+dx*j/parts,a[1]+dz*j/parts],dx,dz,p.road.width+2*WALK,avoid(pi,p.heights[i-1]+(p.heights[i]-p.heights[i-1])*j/parts,p.road.width/2));
     }
   }
-  for(const p of profiles){
+  for(const [pi,p] of profiles.entries()){
     const ps=p.road.points,normal=(i:number)=>{const a=ps[Math.max(0,i-1)],b=ps[Math.min(ps.length-1,i+1)],dx=b[0]-a[0],dz=b[1]-a[1],l=Math.hypot(dx,dz)||1;return [-dz/l,dx/l];};
-    for(let i=1;i<ps.length;i++){const a=ps[i-1],b=ps[i],dx=b[0]-a[0],dz=b[1]-a[1],parts=Math.max(1,Math.ceil(Math.hypot(dx,dz)/.5)),na=normal(i-1),nb=normal(i);
-      for(let j=0;j<=parts;j++){const t=j/parts,nx=na[0]+(nb[0]-na[0])*t,nz=na[1]+(nb[1]-na[1])*t;crossfall([a[0]+dx*t,a[1]+dz*t],nz,-nx,p.road.width);}
+    let station=0;
+    for(let i=1;i<ps.length;i++){const a=ps[i-1],b=ps[i],dx=b[0]-a[0],dz=b[1]-a[1],segment=Math.hypot(dx,dz),parts=Math.max(1,Math.ceil(segment/.5)),na=normal(i-1),nb=normal(i);
+      for(let j=0;j<=parts;j++){const t=j/parts,nx=na[0]+(nb[0]-na[0])*t,nz=na[1]+(nb[1]-na[1])*t;crossfall([a[0]+dx*t,a[1]+dz*t],nz,-nx,p.road.width+2*WALK,avoid(pi,heightAt(p,station+segment*t),p.road.width/2));}
+      station+=segment;
     }
   }
   for(const p of profiles)for(let i=1;i<p.points.length;i++)gradientLine(p.points[i-1],p.points[i],.18,grades);
@@ -266,14 +302,15 @@ export function prepareRoadTerrain(city:CityData):RoadGradingStats{
   // every nearby sloping yard retain its exact source elevation.
   for(let pass=0;pass<120;pass++){
     for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=Math.max(0,value-c.upper);if(error>.0001)c.indices.forEach((id,j)=>lower(id,error/c.divisor*c.weights[j]*.8));}
-    for(const set of [curves,crossfalls,grades])for(const c of set){const limit=set===crossfalls?.018:set===grades?.2:c.limit*1.5,value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-(c.target??0),error=value-clamp(value,-limit,limit);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*(set===curves?.3:.8));}
+    for(const set of [curves,crossfalls,grades])for(const c of set){const limit=set===crossfalls?.01:set===grades?.2:c.limit*1.5,value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-(c.target??0),error=value-clamp(value,-limit,limit);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*(set===curves?.3:.8));}
     pin();
   }
   // Safety bounds take precedence over soft profile matching at a tight hill
-  // junction. Only remaining outliers move during this final reconciliation.
+  // junction. Only remaining outliers move during this final reconciliation,
+  // and crossfall is released no further than standard 2 percent camber.
   for(let pass=0;pass<80;pass++){
     for(const c of protections){const value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0)-c.target,error=Math.max(0,value-c.upper);if(error>.0001)c.indices.forEach((id,j)=>lower(id,error/c.divisor*c.weights[j]*.8));}
-    for(const set of [crossfalls,grades])for(const c of set){const limit=set===crossfalls?.045:.21,value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0),error=value-clamp(value,-limit,limit);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*.8);}
+    for(const set of [crossfalls,grades])for(const c of set){const limit=set===crossfalls?.02:.21,value=c.indices.reduce((s,id,j)=>s+heights[id]*c.weights[j],0),error=value-clamp(value,-limit,limit);if(Math.abs(error)<.0001)continue;c.indices.forEach((id,j)=>heights[id]-=error/c.divisor*c.weights[j]*.8);}
     pin();
   }
   // The landings were exact at the end of every pass, so this final radial
