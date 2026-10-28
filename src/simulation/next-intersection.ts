@@ -1,12 +1,14 @@
 import type { CityData, Point2, Road } from '../types';
+import { sampleElevation } from './terrain.ts';
 /** Road vertices keyed on a half-meter grid. Centerlines are split where streets
  * meet, so a vertex shared by differently named roads marks an intersection. */
 type Stop={road:Road;index:number};
 const nodeIndexes=new WeakMap<CityData,Map<string,Stop[]>>();
 const key=(p:Point2)=>`${Math.round(p[0]*2)},${Math.round(p[1]*2)}`;
 const minor=(name:string)=>!name||/alley|unnamed|driveway|parking|private/i.test(name);
-// Deck segments carry their level at each end, so an overpass end never "meets" the street below.
-const levelAt=(road:Road,i:number)=>i===0?road.startLevel??0:i===road.points.length-1?road.endLevel??0:road.bridge?Math.max(road.startLevel??0,road.endLevel??0):0;
+// Surface height at a vertex: a deck's own profile, otherwise the graded terrain. Roads whose surfaces
+// differ by more than a meter there are grade-separated (the traffic graph joins junctions the same way).
+const heightAt=(city:CityData,road:Road,i:number)=>road.elevations?.[i]??sampleElevation(city,road.points[i][0],road.points[i][1]);
 function nodeIndex(city:CityData){
   const cached=nodeIndexes.get(city);if(cached)return cached;
   const nodes=new Map<string,Stop[]>();
@@ -29,10 +31,10 @@ export function nextIntersection(city:CityData,road:Road,x:number,z:number,headi
   const a=road.points[seg-1],b=road.points[seg];
   let current=road,dir=(b[0]-a[0])*fx+(b[1]-a[1])*fz>=0?1:-1,i=dir>0?seg:seg-1,prev:Point2=[x,z],travelled=0;
   const visited=new Set<Road>([road]);
-  while(travelled<maxDistance){
-    const p=current.points[i];travelled+=Math.hypot(p[0]-prev[0],p[1]-prev[1]);
-    const here=nodes.get(key(p))??[],level=levelAt(current,i);
-    const cross=[...new Set(here.filter(s=>s.road.name!==road.name&&!minor(s.road.name)&&levelAt(s.road,s.index)===level).map(s=>s.road.name))];
+  for(;;){
+    const p=current.points[i];travelled+=Math.hypot(p[0]-prev[0],p[1]-prev[1]);if(travelled>maxDistance)return null;
+    const here=nodes.get(key(p))??[],height=heightAt(city,current,i),level=(s:Stop)=>Math.abs(heightAt(city,s.road,s.index)-height)<1;
+    const cross=[...new Set(here.filter(s=>s.road.name!==road.name&&!minor(s.road.name)&&level(s)).map(s=>s.road.name))];
     if(cross.length)return {names:cross.slice(0,2),distance:travelled};
     const from=current.points[i-dir]??prev;prev=p;
     if(i!==(dir>0?current.points.length-1:0)){i+=dir;continue;}
@@ -40,7 +42,7 @@ export function nextIntersection(city:CityData,road:Road,x:number,z:number,headi
     const ix=p[0]-from[0],iz=p[1]-from[1],il=Math.hypot(ix,iz)||1;
     let next:{road:Road;index:number;dir:number}|undefined,score=-.3;
     for(const s of here){
-      if(visited.has(s.road)||s.road.name!==road.name||levelAt(s.road,s.index)!==level)continue;
+      if(visited.has(s.road)||s.road.name!==road.name||!level(s))continue;
       for(const d of [1,-1]){
         const q=s.road.points[s.index+d];if(!q)continue;
         const ox=q[0]-p[0],oz=q[1]-p[1],cos=(ox*ix+oz*iz)/((Math.hypot(ox,oz)||1)*il);
@@ -50,5 +52,4 @@ export function nextIntersection(city:CityData,road:Road,x:number,z:number,headi
     if(!next)return null;
     current=next.road;i=next.index;dir=next.dir;visited.add(current);
   }
-  return null;
 }
