@@ -29,7 +29,7 @@ import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 
-export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; }
+export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; }
 
 export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData,options:WorldOptions={}) {
   const metro=isMetroCity(city)?city:undefined;
@@ -282,7 +282,9 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     scene.environmentIntensity=night?.22:.16;renderer.toneMappingExposure=night?1.05:.93;
     reflectionDirty=true;probeFace=-1;
   }
-  setLighting('golden');
+  // Legacy scene downloads can finish during a lost context too. The first
+  // environment render must wait even though geometry preparation can proceed.
+  await options.waitForContext?.();setLighting('golden');
   function update(position:THREE.Vector3,time:number,stream=true){
     // Keep the shadow focus on the ground as the helicopter climbs. Widen the
     // coverage from street detail to the district without moving the world datum.

@@ -1,6 +1,6 @@
 import {test,expect,type Page} from '@playwright/test';
 
-type GameState={state:{x:number;y:number;z:number};travelMode:string;paused:boolean;graphicsContext:{lost:boolean;losses:number};audio:{activeLoops:number};tiles:{keys:string[]}};
+type GameState={state:{x:number;y:number;z:number};travelMode:string;paused:boolean;graphicsContext:{lost:boolean;losses:number;builds:number};audio:{activeLoops:number};tiles:{keys:string[]}};
 const snapshot=(page:Page)=>page.evaluate(()=>(window as unknown as {__backbay:{snapshot():GameState}}).__backbay.snapshot());
 const lose=async(page:Page)=>page.locator('#scene canvas').evaluate((canvas:HTMLCanvasElement)=>{
   const extension=canvas.getContext('webgl2')!.getExtension('WEBGL_lose_context');
@@ -22,6 +22,8 @@ for(const mobile of [true,false])test.describe(mobile?'phone graphics recovery':
     await lose(page);await expect(page.getByRole('heading',{name:'Graphics interrupted.'})).toBeVisible();
     await expect(page.locator('#resume-graphics')).toBeDisabled();
     await expect.poll(async()=>(await snapshot(page)).graphicsContext.lost).toBe(true);
+    // Phone rotation and desktop resize can arrive before restoration.
+    await page.setViewportSize(mobile?{width:852,height:393}:{width:1100,height:700});
     const stopped=await snapshot(page);await page.keyboard.press('2');await page.keyboard.down('w');
     await page.waitForTimeout(500);await page.keyboard.up('w');
     expect((await snapshot(page)).state).toEqual(stopped.state);expect(stopped.paused).toBe(true);
@@ -40,6 +42,8 @@ for(const mobile of [true,false])test.describe(mobile?'phone graphics recovery':
     await restore(page);await expect(page.getByRole('heading',{name:'Ready to resume.'})).toBeVisible({timeout:20000});
     await page.locator('#resume-graphics').click();await expect(page.locator('#graphics-modal')).toBeHidden();
     const resumed=await snapshot(page);expect(resumed.travelMode).toBe(before.travelMode);expect(resumed.paused).toBe(false);
+    expect(resumed.graphicsContext.builds).toBe(2);
+    await expect.poll(()=>page.locator('#scene canvas').evaluate((c:HTMLCanvasElement)=>[c.clientWidth,c.clientHeight])).toEqual(mobile?[852,393]:[1100,700]);
     expect(Math.hypot(resumed.state.x-stopped.state.x,resumed.state.z-stopped.state.z)).toBeLessThan(.1);
     expect(resumed.tiles.keys).toEqual(expect.arrayContaining(before.tiles.keys));
     await page.waitForTimeout(800);await page.screenshot({path:testInfo.outputPath('graphics-resumed.png')});
