@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { IndexedSurfaceWriter, SurfaceBatches } from './indexed-surfaces.ts';
 import { staticDetailBatchSteps } from './static-batches.ts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
@@ -113,7 +114,7 @@ export function createTileBuilder(ctx: TileContext) {
     const subCity: CityData = { ...city, roads, buildings: tile.buildings, signals: collect(signalCells, grow(bounds, 40), s => s[0] >= x0 - 40 && s[0] < x1 + 40 && s[1] >= z0 - 40 && s[1] < z1 + 40), curbs: tile.curbs, parkPaths: tile.parkPaths,
       parks: collect(parkCells, bounds, p => overlaps(areaBounds.get(p)!, bounds)), water: collect(waterCells, grow(bounds, 30), w => overlaps(areaBounds.get(w)!, grow(bounds, 30))) };
     shareTransitCorridors(subCity, city);
-    const addBatches = (batches: PartBatches) => {
+    const addBatches = (batches: Pick<PartBatches, 'meshes'>) => {
       for (const m of batches.meshes()) { m.receiveShadow = true; if (m.material === materials.asphalt) m.renderOrder = -1; else if (m.material === materials.sidewalk) m.renderOrder = -2; group.add(m); }
     };
 
@@ -148,8 +149,12 @@ export function createTileBuilder(ctx: TileContext) {
 
     // Roads owned by this tile (their midpoint lies inside it), exactly as the survey build drew them.
     {
-      const batches = new PartBatches(500), crossingKeys = new Set<string>();
-      const ribbon = (material: THREE.Material, points: Point2[], width: number, y: number) => drapedRibbonInto(batches.at(material, points[0][0], points[0][1]), city, points, width, y);
+      const batches = ctx.mobile ? new SurfaceBatches(500) : new PartBatches(500), crossingKeys = new Set<string>();
+      const ribbon = (material: THREE.Material, points: Point2[], width: number, y: number) => {
+        const sink = batches.at(material, points[0][0], points[0][1]);
+        drapedRibbonInto(sink, city, points, width, y);
+        if (sink instanceof IndexedSurfaceWriter) sink.clearLookup();
+      };
       for (const road of ownedRoads) {
         if (road.elevations) continue; stats.roads++;
         if (due(pace)) yield 'roads';
@@ -330,16 +335,19 @@ export function createTileBuilder(ctx: TileContext) {
       const sampler = sourceWallSampler(scene, meshes);
       yield 'details';
       const half = Math.ceil(tile.buildings.length / 2), subsets = [tile.buildings.slice(0, half), tile.buildings.slice(half)];
-      for (const subset of subsets) {
+      for (const subset of ctx.mobile ? [] : subsets) {
         if (!subset.length) continue;
         const facades = yield* stage('details', facadeDetailSteps(scene, subCity, { buildings: subset, sampler, budget: 1300, target: group, pace }));
         stats.facades += facades.userData.facades ?? 0;
       }
-      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: tile.buildings, sampler, budget: 100, target: group, pace })); stats.storefronts = shops.userData.storefrontCount ?? 0;
-      const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: tile.buildings, meshes, budget: 90, target: group, pace })); stats.rooftops = roofs.userData.units ?? 0;
-      const porches = yield* stage('details', neighborhoodDetailSteps(scene, subCity, { buildings: tile.buildings, sampler, budget: 60, target: group, pace })); stats.porches = porches.userData.porches ?? 0;
+      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: tile.buildings, sampler, budget: ctx.mobile ? 35 : 100, target: group, pace })); stats.storefronts = shops.userData.storefrontCount ?? 0;
+      if (!ctx.mobile) {
+        const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: tile.buildings, meshes, budget: 90, target: group, pace })); stats.rooftops = roofs.userData.units ?? 0;
+      }
+      const porches = yield* stage('details', neighborhoodDetailSteps(scene, subCity, { buildings: tile.buildings, sampler, budget: ctx.mobile ? 20 : 60, target: group, pace })); stats.porches = porches.userData.porches ?? 0;
     }
-    group.userData.batching = yield* stage('details', staticDetailBatchSteps(group, pace));
+    // Repacking an entire tile into BatchedMesh duplicates its vertex buffers. Mobile keeps its already grouped road/shell buffers.
+    group.userData.batching = ctx.mobile ? { sources: 0, batches: 0 } : yield* stage('details', staticDetailBatchSteps(group, pace));
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
     const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps, signals: placements, stats, dispose: () => dispose(built, owned) };
