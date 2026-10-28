@@ -1,10 +1,31 @@
 import {test,expect,type Page} from '@playwright/test';
 
-type Snapshot={mobile:boolean;quality:string;lighting:string;paused:boolean;rendering:{postprocessing:boolean;dynamicReflections:boolean;shadowMapSize:number;pixelRatio:number};farCity:{residentChunks:number;geometryBytes:number};tiles:{loaded:number;fetching:number;pending:number;loadRadius:number};travelMode:string;flight:{y:number};flightGroundHeight:number;state:{x:number;y:number;z:number;speed:number};groundHeight:number};
+type Snapshot={mobile:boolean;quality:string;lighting:string;paused:boolean;rendering:{postprocessing:boolean;dynamicReflections:boolean;shadowMapSize:number;pixelRatio:number};farCity:{residentChunks:number;geometryBytes:number};tiles:{loaded:number;fetching:number;pending:number;loadRadius:number;keys:string[]};travelMode:string;flight:{y:number};flightGroundHeight:number;state:{x:number;y:number;z:number;speed:number};groundHeight:number};
 const snapshot=(page:Page)=>page.evaluate(()=>(window as unknown as {__backbay:{snapshot():Snapshot}}).__backbay.snapshot());
 
 test.describe('mobile startup memory limits',()=>{
   test.use({viewport:{width:393,height:852},hasTouch:true,isMobile:true,deviceScaleFactor:3});
+  test('saved airport arrival loads road owners without building the default neighborhood',async({page},testInfo)=>{
+    const requested:string[]=[],errors:string[]=[];
+    page.on('request',request=>{if(request.url().includes('/data/tiles/'))requested.push(request.url());});
+    page.on('pageerror',error=>errors.push(error.message));
+    const saved={x:5476.109,z:283.192,yaw:0};
+    await page.addInitScript(position=>localStorage.setItem('backbay-drive-v1',JSON.stringify(position)),saved);
+    await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});
+    const initial=await snapshot(page);
+    expect(initial.paused).toBe(true);
+    expect(Math.hypot(initial.state.x-saved.x,initial.state.z-saved.z)).toBeLessThan(.1);
+    expect(initial.tiles.keys).toEqual(expect.arrayContaining(['5_0','6_-1','4_-1']));
+    expect(requested.some(url=>/t_-1_(0|-1)\.bin$/.test(url))).toBe(false);
+    // The two road owners must also survive normal streaming although their
+    // bounds lie beyond the mobile load radius at this junction.
+    await page.getByTestId('start-drive').tap();await expect(page.locator('#welcome')).toBeHidden();
+    await page.evaluate(()=>new Promise<void>(resolve=>{let frames=0;const frame=()=>++frames===30?resolve():requestAnimationFrame(frame);requestAnimationFrame(frame);}));
+    expect((await snapshot(page)).tiles.keys).toEqual(expect.arrayContaining(['6_-1','4_-1']));
+    await page.screenshot({path:testInfo.outputPath('perimeter-road-phone.png')});
+    expect(errors).toEqual([]);
+  });
+
   test('start, touch driving, quality, lighting, rotation and neighborhood travel remain usable',async({page},testInfo)=>{
     test.setTimeout(120000);
     const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});

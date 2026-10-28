@@ -102,12 +102,23 @@ async function boot(){
   const container=document.querySelector('#scene')!;container.appendChild(renderer.domElement);renderer.domElement.setAttribute('aria-label','3D driving view');
   renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();ui.setError('The graphics connection was interrupted. Reload to continue your drive.');});
   try{
+    // Validate storage before streaming so mobile loads only the arrival neighborhood.
+    const saved=(()=>{
+      try{
+        const saved=JSON.parse(localStorage.getItem('backbay-drive-v1')??'null');
+        if(!saved||![saved.x,saved.z,saved.yaw].every(Number.isFinite))return;
+        const occupant=buildingAt(city,saved.x,saved.z);
+        const blocked=occupant&&(!('id' in occupant)||!meshBuildingIds.has(occupant.id));
+        if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&closestRoad(city,saved.x,saved.z).distance<10&&!blocked)
+          return {x:saved.x as number,z:saved.z as number,yaw:saved.yaw as number,roadId:typeof saved.roadId==='string'?saved.roadId:undefined};
+      }catch{/* Storage is optional. */}
+    })();
     const transitResponse=await fetch(`${import.meta.env.BASE_URL}data/transit.json`);if(!transitResponse.ok)throw new Error('Transit data could not be loaded. Please reload.');
     const transitData:TransitData=await transitResponse.json();reserveTransitCorridors(city,transitData.routes);
     if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});world=await createWorld(renderer,scene,city,{physics,read,mobile});}
     else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile})]);physics=results[0];world=results[1];}
     const streamer=world.streamer;
-    if(streamer){ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(city.spawn.x,city.spawn.z);physics.reset(city.spawn.x,city.spawn.z,city.spawn.yaw);}
+    if(streamer){const arrival=mobile&&saved?saved:{...city.spawn,roadId:undefined};ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(arrival.x,arrival.z);physics.reset(arrival.x,arrival.z,arrival.yaw,arrival.roadId);}
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
     const embrace=addTheEmbrace(scene,city);physics.addStaticMesh(embrace.collision.vertices,embrace.collision.indices);
     metroLandmarks=metro?addMetroLandmarkDetails(scene,city):undefined;for(const mesh of metroLandmarks?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
@@ -121,8 +132,7 @@ async function boot(){
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     const streetLife=createStreetLife(scene,city,physics);
     graphics=createGraphics(renderer,scene,camera,quality,mobile);world.setQuality(quality==='high');
-    // Saved locations are restored only when still near a drivable road and outside a building.
-    try{const saved=JSON.parse(localStorage.getItem('backbay-drive-v1')??'null');const occupant=saved&&buildingAt(city,saved.x,saved.z);if(saved&&[saved.x,saved.z,saved.yaw].every(Number.isFinite)&&saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&closestRoad(city,saved.x,saved.z).distance<10&&!(occupant&&!meshBuildingIds.has(occupant.id))){if(streamer)await streamer.ensureAround(saved.x,saved.z);physics.reset(saved.x,saved.z,saved.yaw,typeof saved.roadId==='string'?saved.roadId:undefined);}}catch{/* Storage is optional. */}
+    if(saved&&(!mobile||!streamer)){if(streamer)await streamer.ensureAround(saved.x,saved.z);physics.reset(saved.x,saved.z,saved.yaw,saved.roadId);}
     populateNeighborhood=()=>{
       const player=physics!.getState(),observer=travelMode==='helicopter'?flight!.state:player;
       traffic!.populateAt(observer,player,transit!.obstacles());streetLife.populateAt(observer,player);
