@@ -23,6 +23,7 @@ import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
 import { isStateHouse, createStateHouseShellMaterials, splitStateHouseShell } from './state-house';
 import { createPrudentialPenthouseMaterial, isPrudential, splitPrudentialShell } from './prudential';
+import { createMissionChurchMaterials, isMissionChurch, splitMissionChurchShell } from './mission-church';
 import { landmarkShellMaterial } from './metro-landmarks';
 import { sourceWallSampler, facadeDetailSteps } from './facade-details';
 import { streetscapeSteps } from './streetscape';
@@ -64,6 +65,7 @@ function* stage<T>(name: TileStage, steps: Generator<void, T>): Generator<TileSt
 export function createTileBuilder(ctx: TileContext) {
   const { city, physics, materials, scene } = ctx;
   const fenwayMaterials = createFenwayShellMaterials(), stateHouseMaterials = createStateHouseShellMaterials(), prudentialPenthouse = createPrudentialPenthouseMaterial();
+  const missionChurchMaterials=createMissionChurchMaterials();
   const parkStone = new THREE.MeshStandardMaterial({ color: '#a5a397', roughness: .9 });
   const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
   const height = (x: number, z: number) => sampleElevation(city, x, z);
@@ -237,6 +239,7 @@ export function createTileBuilder(ctx: TileContext) {
         } else { const hull = physics.addBuildingHull(b); if (hull) colliders.push(hull); }
         for (const isRoof of [false, true]) {
           const geometry = tileShellGeometry(data, b, isRoof); if (!geometry) continue;
+          if (isMissionChurch(b)) { for (const part of splitMissionChurchShell(geometry,b,isRoof)) bucket(missionChurchMaterials[part.kind],part.geometry,b.center[0],b.center[1],'mission-church'); geometry.dispose(); continue; }
           if (isStateHouse(b)) { for (const part of splitStateHouseShell(geometry, isRoof)) bucket(stateHouseMaterials[part.kind], part.geometry, 0, 0, 'state-house'); geometry.dispose(); continue; }
           const material = choose(isRoof), parts = !isRoof && isPrudential(b) ? splitPrudentialShell(geometry, b) : [{ kind: 'facade', geometry }];
           for (const part of parts) bucket(part.kind === 'penthouse' ? prudentialPenthouse : material, part.geometry, b.center[0], b.center[1]);

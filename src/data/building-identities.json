@@ -1,0 +1,9 @@
+{
+  "religiousNamePattern": "\\b(church|chapel|cathedral|basilica|synagogue|mosque|temple)\\b",
+  "nonReligiousNamePattern": "\\b(condominium|housing|apartments)\\b|^\\d[\\d\\s-]*.*\\b(st|street|av|ave|avenue|rd|road|ln|lane|pl|place|ct|court|sq|square|ter|terrace|dr|drive|way|pkwy|parkway|blvd|boulevard|cir|circle|hwy|highway|aly|alley|path|walk|wharf|row|park)\\.?$",
+  "religiousKinds": ["church", "chapel", "cathedral", "basilica", "synagogue", "mosque", "temple", "religious"],
+  "overrides": {
+    "BOS-ADQVO-277LT-NQB6N": {"name": "Basilica of Our Lady of Perpetual Help", "kind": "church", "landmark": "mission-church"},
+    "BOS-U59XZ-OVMVF-D1IT5": {"name": "Basilica of Our Lady of Perpetual Help", "kind": "church", "landmark": "mission-church"}
+  }
+}

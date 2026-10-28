@@ -1,6 +1,6 @@
 export type Point2 = [number, number];
 export interface Road { id: string; name: string; points: Point2[]; width: number; oneway: number; elevations?:number[]; startLevel?:number; endLevel?:number; bridge?:{id:string;thickness:number;clearanceEstimated:boolean}; }
-export interface Building { id: string; name: string; center: Point2; height: number; footprint: Point2[]; landmark?: string; baseElevation?: number; }
+export interface Building { id: string; name: string; center: Point2; height: number; footprint: Point2[]; landmark?: string; baseElevation?: number; kind?: string; amenity?: string; sourceName?: string; }
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
 export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; }
 export interface ParkPath { id: string; points: Point2[]; width: number; bridge?: boolean; }

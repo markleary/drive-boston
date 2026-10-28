@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import type { Building, LightingMode } from '../types';
 import { architectureFor } from './neighborhood-profiles.ts';
 import { applyWindowInteriors, interiorLighting, setInteriorLighting, windowGrid } from './window-interiors.ts';
+import { isReligiousBuilding } from '../simulation/building-identities.ts';
 
 export interface FacadeStyle {
   id:string; base:string; kind:'brick'|'stone'|'panel'|'wood'; detail:'brick'|'arched'|'brownstone'|'classical'|'terracotta'|'loft'|'office'|'modern'|'gothic'|'clapboard';
   columns:number; windowWidth:number; windowHeight:number; trim:string; frame:string;
 }
-/** Interpreted material families, selected by massing rather than claiming an
- * address-specific facade survey. Every grid is six metres wide/high. */
+/** Interpreted material families: semantic identity first, then massing as a
+ * fallback, not an address-specific facade survey. Every grid is six metres wide/high. */
 export const FACADE_STYLES:FacadeStyle[]=[
   {id:'red-brick-sash',base:'#785044',kind:'brick',detail:'brick',columns:3,windowWidth:1.08,windowHeight:1.86,trim:'#b5a58b',frame:'#b8b4a4'},
   {id:'burgundy-arched-brick',base:'#65453f',kind:'brick',detail:'arched',columns:3,windowWidth:1.14,windowHeight:2.05,trim:'#a38166',frame:'#575447'},
@@ -25,9 +26,9 @@ export const FACADE_STYLES:FacadeStyle[]=[
 ];
 export function facadeStyleIndex(building?:Building):number {
   if(!building)return 0;
-  // Source names take precedence over height: a church spire is not an office
-  // tower. Landmark Trinity is separately assigned its authored masonry.
-  if(/\b(church|chapel|cathedral)\b/i.test(building.name))return 10;
+  // Reviewed identities, use tags and names take precedence over height.
+  // Landmark Trinity is separately assigned its authored masonry.
+  if(isReligiousBuilding(building))return 10;
   const profile=architectureFor(building);if(profile)return 11+profile.palette;
   const p=building.footprint,area=Math.abs(p.reduce((sum,a,i)=>{const b=p[(i+1)%p.length];return sum+a[0]*b[1]-b[0]*a[1];},0))/2;
   const n=hash(building.id);
