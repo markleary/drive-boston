@@ -33,3 +33,16 @@ test('bowed windshield remains in front of the painted shell across the full vie
     assert.ok(['windscreen','dark','rubber'].includes(hits[0]?.object.name),`front shell must not poke through the windshield at ${x}, ${y}`);
   }
 }));
+
+test('different routes share bus resources but keep independent vehicle transforms',()=>{
+  const harvard=createTransitBus('1 HARVARD'),mattapan=createTransitBus('28 MATTAPAN');
+  assert.match(harvard.name,/1 HARVARD/);assert.match(mattapan.name,/28 MATTAPAN/);
+  for(const mesh of harvard.children){
+    const other=mattapan.getObjectByName(mesh.name);
+    assert.notEqual(mesh,other,'each vehicle needs its own scene objects');
+    assert.equal(mesh.geometry,other.geometry,'fleet geometry must be shared across routes');
+    assert.equal(mesh.material,other.material,'fleet materials must be shared across routes');
+  }
+  harvard.position.x=100;harvard.children[0].visible=false;
+  assert.equal(mattapan.position.x,0);assert.equal(mattapan.children[0].visible,true);
+});

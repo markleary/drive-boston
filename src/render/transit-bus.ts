@@ -267,10 +267,13 @@ function fittings(p:Builder){
   }
 }
 
-// One atlas for fleet markings and one for emissive destination displays. All
-// labels are batched, so the extra detail does not add a draw per small decal.
-function markings(group:THREE.Group,destination:string){
-  if(typeof document==='undefined')return;
+// Fleet geometry, materials and the markings atlas are shared by every route.
+// Each headsign gets one shared display texture; only transforms are per bus.
+let busTemplate:THREE.Group|undefined;
+let fleetMarkingsTemplate:THREE.Mesh|undefined;
+let displayGeometry:THREE.BufferGeometry|undefined;
+const destinationDisplays=new Map<string,THREE.Mesh>();
+function createFleetMarkings(){
   const atlas=document.createElement('canvas');atlas.width=1024;atlas.height=512;const c=atlas.getContext('2d')!;
   c.textAlign='center';c.textBaseline='middle';
   c.fillStyle='#f5f5ee';c.beginPath();c.arc(128,128,119,0,Math.PI*2);c.fill();
@@ -296,25 +299,38 @@ function markings(group:THREE.Group,destination:string){
   decal([768,256,128,128],.15,.15,-1,4.02,1.29);
   const geometry=mergeGeometries(decals,false)!;decals.forEach(g=>g.dispose());
   const mesh=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({map:texture,transparent:true,alphaTest:.1,roughness:.55,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1}));
-  mesh.name='MBTA fleet markings';group.add(mesh);
+  mesh.name='MBTA fleet markings';return mesh;
+}
 
+function createDestinationDisplay(destination:string){
   const signs=document.createElement('canvas');signs.width=1024;signs.height=256;const s=signs.getContext('2d')!;
   s.fillStyle='#0a100e';s.fillRect(0,0,1024,256);s.fillStyle='#f4b540';s.textAlign='center';s.textBaseline='middle';
   const route=destination.split(' ')[0];s.font='bold 60px monospace';s.fillText(destination.toUpperCase(),512,65,985);
   s.font='bold 86px monospace';s.fillText(route,128,194,230);
   const signTexture=new THREE.CanvasTexture(signs);signTexture.colorSpace=THREE.SRGBColorSpace;
-  const labels:THREE.BufferGeometry[]=[];
-  const label=(w:number,h:number,face:Face,u:number,y:number,rear=false)=>{
-    const g=panel(w,h,.012,face,u,y,face==='front'?.033:.04),uv=g.getAttribute('uv');
-    for(let i=0;i<uv.count;i++)uv.setXY(i,uv.getX(i)*(rear?.25:1),uv.getY(i)*.5+(rear?0:.5));labels.push(g);
-  };
-  label(2.06,.265,'front',0,2.825);label(.52,.24,'rear',0,1.84,true);label(1.03,.18,-1,3.58,2.49);
-  const signGeometry=mergeGeometries(labels,false)!;labels.forEach(g=>g.dispose());
-  const display=new THREE.Mesh(signGeometry,new THREE.MeshStandardMaterial({map:signTexture,emissive:0xffffff,emissiveMap:signTexture,emissiveIntensity:.75,roughness:.6}));
-  display.name='Route destination displays';group.add(display);
+  if(!displayGeometry){
+    const labels:THREE.BufferGeometry[]=[];
+    const label=(w:number,h:number,face:Face,u:number,y:number,rear=false)=>{
+      const g=panel(w,h,.012,face,u,y,face==='front'?.033:.04),uv=g.getAttribute('uv');
+      for(let i=0;i<uv.count;i++)uv.setXY(i,uv.getX(i)*(rear?.25:1),uv.getY(i)*.5+(rear?0:.5));labels.push(g);
+    };
+    label(2.06,.265,'front',0,2.825);label(.52,.24,'rear',0,1.84,true);label(1.03,.18,-1,3.58,2.49);
+    displayGeometry=mergeGeometries(labels,false)!;labels.forEach(g=>g.dispose());
+  }
+  const display=new THREE.Mesh(displayGeometry,new THREE.MeshStandardMaterial({map:signTexture,emissive:0xffffff,emissiveMap:signTexture,emissiveIntensity:.75,roughness:.6}));
+  display.name='Route destination displays';return display;
 }
 
 export function createTransitBus(destination:string){
-  const p=builder();body(p);windowsAndDoors(p);wheels(p);fittings(p);
-  const group=p.finish();group.name='MBTA-style Route 39 bus';markings(group,destination);return group;
+  if(!busTemplate){
+    const p=builder();body(p);windowsAndDoors(p);wheels(p);fittings(p);busTemplate=p.finish();
+  }
+  const group=busTemplate.clone();group.name=`MBTA-style bus ${destination}`;
+  if(typeof document!=='undefined'){
+    fleetMarkingsTemplate??=createFleetMarkings();group.add(fleetMarkingsTemplate.clone());
+    let display=destinationDisplays.get(destination);
+    if(!display){display=createDestinationDisplay(destination);destinationDisplays.set(destination,display);}
+    group.add(display.clone());
+  }
+  return group;
 }

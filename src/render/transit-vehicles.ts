@@ -12,9 +12,13 @@ function builder(){
  const finish=()=>{const group=new THREE.Group();for(const[kind,geometries]of parts){const geometry=mergeGeometries(geometries,false);geometries.forEach(g=>g.dispose());if(!geometry)continue;const material=new THREE.MeshStandardMaterial({color:palette[kind],roughness:kind==='glass'?.16:kind==='metal'?.34:.55,metalness:kind==='glass'?.4:kind==='metal'?.75:.15,emissive:kind==='head'?0xf2dfb8:kind==='tail'?0xc92b21:0,emissiveIntensity:.3});const mesh=new THREE.Mesh(geometry,material);mesh.name=kind;mesh.castShadow=kind!=='glass';mesh.receiveShadow=true;group.add(mesh);}return group;};
  return{add,box,beam,finish};
 }
+/** Destination displays are painted once per headsign and shared by every vehicle showing it. */
+const signTextures=new Map<string,THREE.CanvasTexture>();
 function sign(text:string,w:number,h:number){
  if(typeof document==='undefined')return new THREE.Group();
- const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=128;const c=canvas.getContext('2d')!;c.fillStyle='#101512';c.fillRect(0,0,1024,128);c.fillStyle='#f5bf55';c.textAlign='center';c.textBaseline='middle';c.font='bold 64px monospace';c.fillText(text,512,65,970);const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:texture}));return mesh;
+ let texture=signTextures.get(text);
+ if(!texture){const canvas=document.createElement('canvas');canvas.width=512;canvas.height=64;const c=canvas.getContext('2d')!;c.fillStyle='#101512';c.fillRect(0,0,512,64);c.fillStyle='#f5bf55';c.textAlign='center';c.textBaseline='middle';c.font='bold 32px monospace';c.fillText(text,256,33,485);texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;signTextures.set(text,texture);}
+ return new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:texture}));
 }
 /** Original articulated Green Line vehicle inspired by the contemporary
  * silver/green fleet. Separate body sections follow the track's local tangent. */
