@@ -34,7 +34,7 @@ test('keyboard driving clears both Bowker merge obstructions',async({page},testI
   expect(car.y).toBeGreaterThan(6.8);
   await page.keyboard.down('Space');await expect.poll(async()=>Math.abs((await state()).speed)).toBeLessThan(.3);await page.keyboard.up('Space');
   await page.screenshot({path:testInfo.outputPath('bowker-clear-through-lanes.png')});
-  await page.keyboard.press('2');await page.keyboard.down('Space');await page.waitForTimeout(2500);await page.keyboard.up('Space');
+  await page.keyboard.press('3');await page.keyboard.down('Space');await page.waitForTimeout(2500);await page.keyboard.up('Space');
   await page.keyboard.press('c');await page.keyboard.press('c');await page.waitForTimeout(700);
   await page.screenshot({path:testInfo.outputPath('bowker-merge-aerial.png')});
   expect(errors).toEqual([]);

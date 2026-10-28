@@ -8,7 +8,7 @@ test('Mission Church keeps stone spires, round-arched belfries and a rose window
   await page.addInitScript(()=>localStorage.setItem('backbay-drive-v1',JSON.stringify({x:-2074.4015,z:2064.6631,yaw:2.9651})));
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});
   await page.getByTestId('start-drive').click();await expect(page.locator('#welcome')).toBeHidden();
-  await page.keyboard.press('2');await page.keyboard.press('c');
+  await page.keyboard.press('3');await page.keyboard.press('c');
   await expect(page.getByTestId('mode-helicopter')).toHaveAttribute('aria-pressed','true');
   await page.keyboard.down('Space');
   try{await page.waitForFunction(()=>((window as any).__backbay.snapshot().flight.y)>81,{timeout:20000});}

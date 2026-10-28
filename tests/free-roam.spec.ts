@@ -24,7 +24,7 @@ test('free roam has moving MBTA services, clear controls, and a drivable elevate
   state=await snapshot(page);expect(Math.hypot(state.state.x-start.x,state.state.z-start.z)).toBeGreaterThan(15);
   await page.keyboard.down('Space');await expect.poll(async()=>Math.abs((await snapshot(page)).state.speed)).toBeLessThan(.5);await page.keyboard.up('Space');
   await page.screenshot({path:testInfo.outputPath('bowker-upper-deck.png')});
-  await page.keyboard.press('2');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
+  await page.keyboard.press('3');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
   await page.keyboard.press('1');await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('drive');
   expect((await snapshot(page)).paused).toBe(false);expect(errors).toEqual([]);
 });
