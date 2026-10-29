@@ -108,8 +108,8 @@ export function createBike(){
     box('black',[.10,.13,.18],[side*.20,-.10,-.055],rider,.15);
     const arm=new THREE.Group();arm.name=side<0?'LeftArm':'RightArm';rider.add(arm);arms.push({group:arm,side});
   }
-  // Red Fox V1 Toxsyk-inspired motocross shell: full black face mask, long peaked
-  // visor, extended angular chin bar, black vents and white fox-head graphics.
+  // Red Fox V1 Toxsyk-inspired motocross shell: full black face mask,
+  // extended angular chin bar, black vents and white fox-head graphics.
   const shell=(key:M,phi:number,arc:number,theta:number,height:number,scale:P=[.137,.163,.157])=>{
     const g=new THREE.SphereGeometry(1,24,12,phi,arc,theta,height);g.scale(...scale);g.translate(0,1.035,-.065);add(key,g,helmet);
   };
@@ -139,14 +139,11 @@ export function createBike(){
     panel('white',[[side*.132,1.019,-.139],[side*.134,1.044,-.106],[side*.134,1.092,-.099],[side*.134,1.070,-.062],[side*.132,1.078,-.025],[side*.130,1.033,-.040],[side*.126,1.007,.006],[side*.122,.973,.030],[side*.122,.948,-.017],[side*.129,.974,-.049],[side*.131,.980,-.098]],helmet);
     panel('black',[[side*.135,1.030,-.080],[side*.135,1.035,-.050],[side*.135,1.013,-.033],[side*.135,1.018,-.058]],helmet); // Fox eye
     panel('black',[[side*.103,.965,.110],[side*.076,.954,.165],[side*.079,.939,.165],[side*.112,.947,.080]],helmet); // Chin side vent
-    panel('white',[[side*.113,1.151,.013],[side*.099,1.184,.260],[side*.070,1.181,.242],[side*.091,1.154,.024]],helmet);
     rod('black',crownPoint(side,1.123,side*.035),crownPoint(side,1.103,side*.021),.0025,helmet);
     rod('black',crownPoint(side,1.103,side*.021),crownPoint(side,1.126,-side*.007),.0025,helmet); // V
     rod('black',crownPoint(side,1.124,-side*.025),crownPoint(side,1.105,-side*.027),.0025,helmet); // 1
     panel('black',[[side*.035,1.114,.066],[side*.074,1.108,.060],[side*.069,1.095,.067],[side*.031,1.102,.074]],helmet);
   }
-  panel('helmetRed',[[-.13,1.157,-.037],[.13,1.157,-.037],[.10,1.184,.264],[-.10,1.184,.264]],helmet);
-  panel('black',[[-.10,1.180,.258],[.10,1.180,.258],[.115,1.144,.035],[-.115,1.144,.035]],helmet); // Dark peak underside
   panel('helmetRed',[[-.065,.984,.168],[.065,.984,.168],[.072,.925,.176],[-.072,.925,.176]],helmet);
   panel('black',[[-.043,.971,.171],[.043,.971,.171],[.034,.943,.178],[-.034,.943,.178]],helmet); // Mouth intake
   for(const x of [-.02,0,.02])rod('helmetRed',[x,.945,.179],[x,.970,.173],.003,helmet);
