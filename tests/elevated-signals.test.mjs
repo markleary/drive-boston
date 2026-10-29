@@ -28,9 +28,17 @@ test('elevated signals attach to their source road and keep the full mast clear 
  }finally{dispose(group);}
 });
 
-test('a narrow signal-controlled ramp remains eligible beside a nearby wider ground road',()=>{
- const c=city([road('Unnamed trunk ramp',[[-40,0],[40,0]],5,[3,3]),road('Memorial Drive',[[-40,8],[40,8]],7)],[[0,0]]);
+test('a repaired narrow signal-controlled ramp remains eligible beside a nearby wider ground road',()=>{
+ const ramp={...road('Unnamed trunk ramp',[[-40,0],[40,0]],5,[3,3]),bridge:{id:'harvard-memorial-approach',thickness:.45,clearanceEstimated:true}};
+ const c=city([ramp,road('Memorial Drive',[[-40,8],[40,8]],7)],[[0,0]]);
  const placements=planTrafficSignals(c);assert.equal(placements.length,1);assert.equal(placements[0].road.id,'Unnamed trunk ramp');
+});
+
+test('ordinary minor ways and unrelated elevated ramps cannot take a nearby major-road signal',()=>{
+ for(const minor of [road('Private Alley',[[-40,0],[40,0]],4.2),road('Unnamed road',[[-40,0],[40,0]],10),road('Unrelated ramp',[[-40,0],[40,0]],5,[3,3])]){
+  const c=city([minor,road('Main Avenue',[[-40,10],[40,10]],10)],[[0,0]]),placements=planTrafficSignals(c);
+  assert.equal(placements.length,1);assert.equal(placements[0].road.id,'Main Avenue',minor.name);
+ }
 });
 
 test('neighboring deck flares reserve their full pavement across signal index cell boundaries',()=>{
