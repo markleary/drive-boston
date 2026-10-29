@@ -74,6 +74,8 @@ export function createTileBuilder(ctx: TileContext) {
   const missionChurchMaterials=createMissionChurchMaterials();
   const parkStone = new THREE.MeshStandardMaterial({ color: '#a5a397', roughness: .9 });
   const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
+  const chelseaLiftSteel = new THREE.MeshStandardMaterial({ color: '#9ea7a3', roughness: .72, metalness: .3 });
+  const isChelseaLiftFrame = (building: Building) => building.id === 'osm-way-196751230';
   const height = (x: number, z: number) => sampleElevation(city, x, z);
   // Road, signal and area lookups by 250 m cell, built once for the metro.
   const CELL = 250, roadCells = new Map<string, Road[]>(), signalCells = new Map<string, Point2[]>(), parkCells = new Map<string, CityArea[]>(), waterCells = new Map<string, CityArea[]>();
@@ -234,6 +236,9 @@ export function createTileBuilder(ctx: TileContext) {
           else material = landmarkShellMaterial(b, isRoof, materials) ?? material;
           if (isStone) material = parkStone;
           if (fenway) material = isRoof ? fenwayMaterials.roof : fenwayMaterials.wall;
+          // This source footprint is bridge machinery spanning an open road,
+          // not occupied building massing with painted windows or interiors.
+          if (isChelseaLiftFrame(b)) material = chelseaLiftSteel;
           return material;
         };
         if (usesExactBuildingCollision(b)) {
@@ -339,17 +344,18 @@ export function createTileBuilder(ctx: TileContext) {
     {
       const sampler = sourceWallSampler(scene, meshes);
       yield 'details';
-      const half = Math.ceil(tile.buildings.length / 2), subsets = [tile.buildings.slice(0, half), tile.buildings.slice(half)];
+      const detailBuildings = tile.buildings.filter(b => !isChelseaLiftFrame(b));
+      const half = Math.ceil(detailBuildings.length / 2), subsets = [detailBuildings.slice(0, half), detailBuildings.slice(half)];
       for (const subset of ctx.mobile ? [] : subsets) {
         if (!subset.length) continue;
         const facades = yield* stage('details', facadeDetailSteps(scene, subCity, { buildings: subset, sampler, budget: 1300, target: group, pace }));
         stats.facades += facades.userData.facades ?? 0;
       }
-      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: tile.buildings, sampler, budget: ctx.mobile ? 35 : 100, target: group, pace })); stats.storefronts = shops.userData.storefrontCount ?? 0;
+      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 35 : 100, target: group, pace })); stats.storefronts = shops.userData.storefrontCount ?? 0;
       if (!ctx.mobile) {
-        const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: tile.buildings, meshes, budget: 90, target: group, pace })); stats.rooftops = roofs.userData.units ?? 0;
+        const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: detailBuildings, meshes, budget: 90, target: group, pace })); stats.rooftops = roofs.userData.units ?? 0;
       }
-      const porches = yield* stage('details', neighborhoodDetailSteps(scene, subCity, { buildings: tile.buildings, sampler, budget: ctx.mobile ? 20 : 60, target: group, pace })); stats.porches = porches.userData.porches ?? 0;
+      const porches = yield* stage('details', neighborhoodDetailSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 20 : 60, target: group, pace })); stats.porches = porches.userData.porches ?? 0;
     }
     // Repacking an entire tile into BatchedMesh duplicates its vertex buffers. Mobile keeps its already grouped road/shell buffers.
     group.userData.batching = ctx.mobile ? { sources: 0, batches: 0 } : yield* stage('details', staticDetailBatchSteps(group, pace));

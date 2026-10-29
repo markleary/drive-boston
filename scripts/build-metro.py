@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile the Greater Boston runtime data set: every Boston neighborhood except
 Roslindale, West Roxbury, Hyde Park and the Harbor Islands, plus Cambridge,
-Somerville and Brookline. Same methods as build-city.py (official centerlines
+Somerville, Brookline and Chelsea. Same methods as build-city.py (official centerlines
 with name and class based widths, surveyed OBJ building models seated on the
 USGS DEM), extended with Cambridge's OBJ models, OpenStreetMap buildings and
 streets for the towns without open 3D models, generic bridge decks derived from
@@ -30,12 +30,12 @@ FT=central.FT;ORIGIN=central.ORIGIN;TO_GEO=central.TO_GEO
 TILE=1000
 DECK=6.4
 EXCLUDED=['Roslindale','West Roxbury','Hyde Park','Harbor Islands']
-TOWNS={'CAMBRIDGE':'Cambridge','SOMERVILLE':'Somerville','BROOKLINE':'Brookline'}
+TOWNS={'CAMBRIDGE':'Cambridge','SOMERVILLE':'Somerville','BROOKLINE':'Brookline','CHELSEA':'Chelsea'}
 SOURCES=[
  *central.SOURCES,
  {'name':'City of Boston official surrounding town polygons','url':'https://gisportal.boston.gov/arcgis/rest/services/Basemaps/Boston_Basemap_Cached_WM/MapServer/17','license':'City of Boston open data; source attribution retained'},
  {'name':'Cambridge GIS 3D building models (OBJ), 2023 edition','url':'https://www.cambridgema.gov/GIS/3D/3ddata','license':'City of Cambridge open data; no textures used'},
- {'name':'OpenStreetMap streets, buildings, parks, water and paths for Cambridge, Somerville and Brookline','url':'https://www.openstreetmap.org/copyright','license':'© OpenStreetMap contributors; ODbL 1.0'},
+ {'name':'OpenStreetMap streets, buildings, parks, water and paths for Cambridge, Somerville, Brookline and Chelsea','url':'https://www.openstreetmap.org/copyright','license':'© OpenStreetMap contributors; ODbL 1.0'},
 ]
 NAME_WIDTHS={'Boylston':13,'Newbury':10,'Commonwealth':9,'Marlborough':9,'Beacon':12,'Dartmouth':11,'Clarendon':11,'Berkeley':12,'Exeter':10,'Huntington':15,'Saint James':12,'Stuart':13,'Arlington':14,'Columbus':12,'Tremont':12,'Parker':9,'Parker Hill':8,'Francis':12,'Longwood':12,'Calumet':8,'Fisher':8,'Hillside':8,'Saint Alphonsus':9}
 CLASS_WIDTHS={'A15':14,'A21':12,'A25':12,'A31':10,'A35':10,'A41':7,'A45':7,'A40':7,'A30':10}
@@ -125,6 +125,11 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--source-dir',type=pathlib.Path,default=ROOT/'data-source-cache');p.add_argument('--output-dir',type=pathlib.Path,default=ROOT/'public/data');p.add_argument('--limit-tiles',type=int,default=0,help='Debug: read only the first N Boston source tiles');args=p.parse_args()
  cache=args.source_dir;out=args.output_dir;began=time.time()
  bounds=json.loads((cache/'metro-boundaries.json').read_text());envelope=json.loads((cache/'metro-envelope.json').read_text())['bbox']
+ missing=set(TOWNS)-{f['properties']['TOWN'] for f in bounds['towns']['features']}
+ if missing:raise RuntimeError('Refresh metro source boundaries before building: missing '+', '.join(sorted(missing)))
+ for town in TOWNS:
+  for layer in ['roads','context']+([] if town=='CAMBRIDGE' else ['buildings']):
+   if not (cache/f'osm-{town.lower()}-{layer}.json').exists():raise RuntimeError(f'Missing source extract: osm-{town.lower()}-{layer}.json')
  districts=Districts(bounds)
  # City boundaries run along street centres; the 18 m margin retains whole
  # junctions and edge buildings exactly as the central build did.
@@ -197,13 +202,20 @@ def main():
  (out/'city.json').write_text(json.dumps(data,separators=(',',':'))+'\n')
  for stale in ['city.glb']:
   if (out/stale).exists():(out/stale).unlink()
- provenance={'bbox':envelope,'region':'metro','packagingDate':'2026-10-28','generatedFrom':'Boston and Cambridge public OBJ/GIS sources, OpenStreetMap for Somerville and Brookline, USGS 3DEP bare-earth DEM',
+ provenance={'bbox':envelope,'region':'metro','packagingDate':'2026-10-29','generatedFrom':'Boston and Cambridge public OBJ/GIS sources, OpenStreetMap for Somerville, Brookline and Chelsea, USGS 3DEP bare-earth DEM',
   'districts':list(dict.fromkeys(districts.names)),'excludedNeighborhoods':EXCLUDED,'coverageAreaSquareMeters':round(coverage.area),'coveragePolygons':len(outlines),
   'buildingPlacement':'Original Back Bay normalization retained. Boston catalogue ground values interpreted as metres and Cambridge ground values as feet; primary source floors seated to DEM; geometrically supported upper parts share parent translation. OpenStreetMap footprints extruded by tagged height or levels with type defaults. Per-building normalization audit stored in each tile header (norm field).',
   'buildingSources':manifest_stats,'tiles':{'size':TILE,'count':len(tile_keys),'format':'DBT2 gzip; int16 centimetre positions per building anchor'},'farLodBytes':far_bytes,
   'roads':road_sources,'widths':'Prototype assumptions by street name and functional class, not authoritative lane inventory','omittedGradeSeparatedRoadIds':omitted,
   'roadStructures':{'deckHeightMeters':DECK,'policy':'Generic: nodes with positive source level or inside mapped water sit 6.4 m per level above the DEM; ramps use smoothstep to ground ends; water crossings between ground ends keep a linear thin slab','heightAccuracy':'Estimated local-datum profiles, not surveyed bridge engineering'},
   'legacyCoreBounds':list(original.bounds),'terrain':terrain_provenance,'neighborhoodPolicy':'Union of official Boston basemap neighborhood polygons (minus the excluded southern neighborhoods and Harbor Islands) and official surrounding town polygons, 18 m exterior margin for boundary streets.'}
+ provenance['townSourceExtracts']={}
+ for town in TOWNS:
+  extracts=[]
+  for layer in ['roads','context']+([] if town=='CAMBRIDGE' else ['buildings']):
+   path=cache/f'osm-{town.lower()}-{layer}.json';raw=path.read_bytes();document=json.loads(raw)
+   extracts.append({'file':path.name,'sha256':hashlib.sha256(raw).hexdigest(),'elements':len(document['elements']),'osmTimestamp':document.get('osm3s',{}).get('timestamp_osm_base')})
+  provenance['townSourceExtracts'][TOWNS[town]]=extracts
  (out/'provenance.json').write_text(json.dumps(provenance,separators=(',',':'))+'\n')
  log('Running Bowker road structures')
  subprocess.run([sys.executable,str(ROOT/'scripts/build-road-structures.py'),'--data-dir',str(out)],check=True)
@@ -216,13 +228,15 @@ def osm_elements(cache,name):
  path=cache/f'osm-{name}.json'
  return json.loads(path.read_text())['elements'] if path.exists() else []
 
-def osm_polygons(element):
+def osm_polygons(element,require_complete=False):
  """Polygons for a closed way or an assembled multipolygon relation."""
  if element['type']=='way':
   pts=[xy(p['lon'],p['lat']) for p in element.get('geometry') or []]
   if len(pts)<4 or pts[0]!=pts[-1]:return []
   return polygon_parts(Polygon(pts).buffer(0))
  if element['type']=='relation':
+  if require_complete and (not element.get('members') or any(m['type']=='way' and not m.get('geometry') for m in element['members'])):
+   raise ValueError(f"OSM relation {element['id']} lacks member geometry; refresh the Chelsea extract with out body geom")
   outers=[];inners=[]
   for m in element.get('members',[]):
    if m['type']!='way' or not m.get('geometry'):continue
@@ -253,15 +267,22 @@ def parse_height(tags):
 def load_osm(cache,districts,coverage):
  """Context polygons, park paths, signals, building footprints and streets from
  the OSM extracts. Cambridge keeps its official OBJ models, so only its roads,
- context and paths are taken from OSM; Somerville and Brookline use OSM buildings."""
+ context and paths are taken from OSM; Somerville, Brookline and Chelsea use OSM buildings."""
  parks=[];water=[];paths=[];signals=[];buildings=[];roads=[]
  town_prepared={name:prep(poly) for name,poly in districts.town.items()}
  boston=prep(districts.boston)
- for key,name in [('cambridge','Cambridge'),('somerville','Somerville'),('brookline','Brookline')]:
+ for town,name in TOWNS.items():
+  key=town.lower()
   area=districts.town[name];inside=town_prepared[name]
-  for e in osm_elements(cache,key+'-context'):
+  context=osm_elements(cache,key+'-context')
+  # Keep the source-reviewed DCR park complete even with an older extract that
+  # used Overpass tags-only verbosity and omitted multipolygon member geometry.
+  if name=='Chelsea':
+   supplemental=json.loads((ROOT/'public/data/chelsea-places-source.json').read_text())['park']
+   context=[e for e in context if (e['type'],e['id'])!=(supplemental['type'],supplemental['id'])]+[supplemental]
+  for e in context:
    tags=e.get('tags',{})
-   for n,poly in enumerate(osm_polygons(e)):
+   for n,poly in enumerate(osm_polygons(e,require_complete=name=='Chelsea')):
     if not inside.intersects(poly):continue
     clipped=poly.intersection(area)
     for k,part in enumerate(polygon_parts(clipped)):
@@ -281,7 +302,7 @@ def load_osm(cache,districts,coverage):
   for e in osm_elements(cache,key+'-buildings'):
    tags=e.get('tags',{})
    if tags.get('building') in [None,'no'] or tags.get('location')=='underground':continue
-   for n,poly in enumerate(osm_polygons(e)):
+   for n,poly in enumerate(osm_polygons(e,require_complete=name=='Chelsea')):
     if poly.area<8:continue
     centroid=poly.representative_point()
     if not inside.covers(centroid) or boston.covers(centroid):continue
@@ -592,7 +613,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
    candidates.append({'id':r['Model_ID'],'row':r,'name':(r.get('Name') or '').strip(),'vertices':vertices,'faces':faces,'center':center,'footprint':footprint,'polygon':Polygon(footprint),'legacy':False,'district':district,'sourceMin':min(v[1] for v in vertices),'sourceMax':max(v[1] for v in vertices),'ground':ground,'group':r.get('Building_ID') or r.get('Name') or r['Model_ID']})
   process_catalog(candidates,'cambridge-obj','cambridge-catalog-feet-and-source-floor',True)
   log('Cambridge tile',path.name,'candidates',len(candidates),'total buildings',len(buildings))
- # OpenStreetMap extrusions for Somerville and Brookline
+ # OpenStreetMap extrusions for towns without surveyed building models
  for town,e,tags,poly,n in osm_buildings:
   identifier=f"osm-{e['type']}-{e['id']}"+(f'-{n}' if n else '')
   if identifier in seen_ids:continue
@@ -708,6 +729,9 @@ PLACES=[
  ('coolidge-corner','Coolidge Corner',-71.1212,42.3421,'Brookline · Beacon Street and Harvard Street'),
  ('brookline-village','Brookline Village',-71.1165,42.3325,'Brookline · Washington Street and Route 9'),
  ('larz-anderson-park','Larz Anderson Park',-71.1382,42.3178,'Brookline · hilltop lawns and the auto museum'),
+ ('chelsea-square','Chelsea Square',-71.038883558,42.389904366,'Chelsea · the historic square beside Broadway, Park Street and Winnisimmet Street'),
+ ('bellingham-square','Bellingham Square',-71.03414,42.39275,'Chelsea · Broadway, Washington Avenue and Hawthorn Street near City Hall'),
+ ('mary-omalley-park','Mary O’Malley Waterfront Park',-71.051014255,42.388567290,'Chelsea · Commandants Way and the Mystic River waterfront west of the Tobin Bridge'),
 ]
 DETACHED={'maverick-square':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport','logan-airport':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport'}
 

@@ -54,6 +54,22 @@ test('survey-only connector patches retain driving support without creating isol
  assert.equal(closestRoad(c,30,40).road,patch,'the patch remains available for player road lookup');
 });
 
+test('Tobin traffic occupies all three painted lane centers on each independent deck',()=>{
+ const width=10.97,core={width,oneway:1,bridge:{id:'tobin'},elevations:[41,41]};
+ const c=city([
+  road('lower',[0,0],[100,0],core),road('upper',[0,0],[100,0],{...core,oneway:-1,elevations:[47.8,47.8]}),
+  road('approach',[-60,0],[0,0],{width:5.8,oneway:1,bridge:{id:'tobin-approach'},elevations:[41,41]}),
+  road('ordinary',[0,40],[100,40],{width,oneway:1}),
+ ]),{edges}=roadGraph(c);
+ for(const id of ['lower','upper']){
+  const lanes=edges.filter(e=>e.road.id===id);assert.equal(lanes.length,3);
+  assert.deepEqual(lanes.map(e=>e.laneOffset),[-width/3,0,width/3]);
+  for(const lane of lanes){assert.ok(Math.abs(lane.laneOffset)+1<width/2,'car bodies stay within the narrow deck');assert.ok(Math.abs(Math.abs(lane.laneOffset)-width/6)>1,'cars do not straddle either dashed separator');}
+ }
+ for(const id of ['approach','ordinary']){const lanes=edges.filter(e=>e.road.id===id);assert.equal(lanes.length,1);assert.equal(lanes[0].laneOffset,undefined,'other road lane policy is unchanged');}
+ assert.notEqual(edges.find(e=>e.road.id==='lower').start,edges.find(e=>e.road.id==='upper').end,'stacked decks do not join through their matching XY');
+});
+
 test('real Cambridge traffic continues past the former Massachusetts Avenue terminal in both directions',async()=>{
  const {edges}=roadGraph(await loadCentralCity());
  const id=n=>`osm-${n}-0`;

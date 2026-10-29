@@ -34,3 +34,15 @@ test('road dependencies are local, deduplicated and released once the road leave
   assert.ok(!index.tilesNear(100,400,700).some(t=>t.key==='2_0'));
   assert.ok(index.tilesNear(950,587,180).some(t=>t.key==='2_0'),'pavement width reaches the query even if its centerline does not');
 });
+
+test('the desktop Tobin southbound arrival includes its distant supporting deck owner',()=>{
+  const arrival=city.landmarks.find(l=>l.id==='tobin-bridge-southbound')?.driveStart;
+  assert.ok(arrival,'the Chelsea bridge arrival is shipped');
+  const road=city.roads.find(r=>r.id===arrival.roadId),midpoint=roadMidpoint(road);
+  const key=`${Math.floor(midpoint[0]/city.tiles.size)}_${Math.floor(midpoint[1]/city.tiles.size)}`;
+  const local=new Set(tilesNear(city,arrival.x,arrival.z,350).map(t=>t.key));
+  assert.ok(!local.has(key),'the saved arrival exercises a deck owner outside the ordinary 350 m neighborhood');
+  const wanted=coverage.tilesNear(arrival.x,arrival.z,350);
+  assert.equal(wanted.filter(t=>t.key===key).length,1,'synchronous arrival loads its supporting road exactly once');
+  assert.equal(wanted.find(t=>t.key===key).distance,0,'the road crosses the arrival even though its owner is distant');
+});

@@ -2,7 +2,7 @@
 """Download the public sources for the Greater Boston build: official Boston
 neighborhood and surrounding-town polygons, Boston GIS streets/curbs/signals,
 regional hydro and park polygons, Boston and Cambridge OBJ model tiles, OSM
-extracts for Cambridge, Somerville and Brookline, and the USGS 3DEP terrain.
+extracts for Cambridge, Somerville, Brookline and Chelsea, and the USGS 3DEP terrain.
 Everything lands in the ignored source cache; nothing is fetched at runtime.
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ MODEL_BASE='https://maps.bostonplans.org/3d/Bos3d_BldgModels_20260624_OBJ/'
 BASEMAP='https://gisportal.boston.gov/arcgis/rest/services/Basemaps/Boston_Basemap_Cached_WM/MapServer'
 CAMBRIDGE_BASE='https://cambmagisdata.blob.core.windows.net/camb3d/'
 CAMBRIDGE_TILES=['C-1','C-2','C-3','D-1','D-2','D-3','E-1','E-2','E-3','E-4','F-2','F-3','F-4','G-3','G-4','H-3']
-OVERPASS=['https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass-api.de/api/interpreter']
-TOWNS=['CAMBRIDGE','SOMERVILLE','BROOKLINE']
+OVERPASS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter']
+TOWNS=['CAMBRIDGE','SOMERVILLE','BROOKLINE','CHELSEA']
 EXCLUDED_NEIGHBORHOODS=['Roslindale','West Roxbury','Hyde Park','Harbor Islands']
 UA={'User-Agent':'DriveBostonDataPreparation/0.3','Referer':'https://www.bostonplans.org/'}
 FT=1200/3937
@@ -35,7 +35,9 @@ def query(url,params):
 def boundaries(cache):
  """Official polygons: Boston neighborhoods (basemap 16) and towns (basemap 17)."""
  path=cache/'metro-boundaries.json'
- if path.exists():return json.loads(path.read_text())
+ if path.exists():
+  cached=json.loads(path.read_text())
+  if {f['properties']['TOWN'] for f in cached['towns']['features']}==set(TOWNS):return cached
  params={'f':'geojson','where':'1=1','outFields':'*','outSR':4326,'returnGeometry':'true'}
  neighborhoods=query(f'{BASEMAP}/16/query',params)
  towns=query(f'{BASEMAP}/17/query',{**params,'where':"TOWN IN ('"+"','".join(TOWNS)+"')"})
@@ -108,9 +110,13 @@ def cambridge_tiles(cache):
   temp=dest.with_suffix('.download');temp.write_bytes(payload);temp.replace(dest);print('Downloaded',dest.name,round(len(payload)/1e6,1),'MB',flush=True)
  with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:list(pool.map(download,CAMBRIDGE_TILES))
 
-def overpass_query(statements,bbox,timeout=600):
+def overpass_query(statements,bbox,timeout=600,relation_geometry=False):
  south,west,north,east=bbox[1],bbox[0],bbox[3],bbox[2]
- body=f'[out:json][timeout:{timeout}][maxsize:268435456];('+''.join(s.replace('{bbox}',f'{south},{west},{north},{east}') for s in statements)+');out tags geom;'
+ # `tags` verbosity omits relation members, silently losing multipolygon parks
+ # and buildings even with `geom`. New Chelsea extracts retain full topology;
+ # legacy towns retain their baseline extract semantics until separately rebuilt.
+ verbosity='body' if relation_geometry else 'tags'
+ body=f'[out:json][timeout:{timeout}][maxsize:268435456];('+''.join(s.replace('{bbox}',f'{south},{west},{north},{east}') for s in statements)+f');out {verbosity} geom;'
  last=None
  for endpoint in OVERPASS:
   for attempt in range(2):
@@ -126,16 +132,20 @@ def overpass(cache,name,statements,bbox):
  """Fetch one extract; public mirrors time out on broad regex queries, so fall
  back to one statement per request and then to bbox quadrants before giving up."""
  path=cache/f'osm-{name}.json'
- if path.exists():return
- try:data=overpass_query(statements,bbox)
+ if path.exists():
+  cached=json.loads(path.read_text())
+  incomplete=name.startswith('chelsea-') and any(e['type']=='relation' and (not e.get('members') or any(m['type']=='way' and not m.get('geometry') for m in e['members'])) for e in cached['elements'])
+  if not incomplete:return
+ relation_geometry=name.startswith('chelsea-')
+ try:data=overpass_query(statements,bbox,relation_geometry=relation_geometry)
  except RuntimeError:
   elements={};meta=None
   for statement in statements:
-   try:part=overpass_query([statement],bbox,300)
+   try:part=overpass_query([statement],bbox,300,relation_geometry=relation_geometry)
    except RuntimeError:
     midx=(bbox[0]+bbox[2])/2;midz=(bbox[1]+bbox[3])/2;part={'elements':[]}
     for quadrant in [[bbox[0],bbox[1],midx,midz],[midx,bbox[1],bbox[2],midz],[bbox[0],midz,midx,bbox[3]],[midx,midz,bbox[2],bbox[3]]]:
-     piece=overpass_query([statement],quadrant,300);part['elements'].extend(piece['elements']);meta=meta or piece
+     piece=overpass_query([statement],quadrant,300,relation_geometry=relation_geometry);part['elements'].extend(piece['elements']);meta=meta or piece
    meta=meta or part
    for element in part['elements']:elements[(element['type'],element['id'])]=element
   data={**{k:v for k,v in meta.items() if k!='elements'},'elements':list(elements.values()),'assembled':'per-statement fallback'}

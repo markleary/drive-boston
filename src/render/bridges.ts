@@ -24,7 +24,7 @@ export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:TH
       markings.push(drapedRibbon(city,[edge.a,edge.b],.13,.04,edgeHeight));
     }
     let distance=0;
-    if(road.width>8)for(let i=1;i<road.points.length;i++){
+    if(road.width>8&&road.id!==city.tobinBridge?.lowerRoadId&&road.id!==city.tobinBridge?.upperRoadId)for(let i=1;i<road.points.length;i++){
       const a=road.points[i-1],b=road.points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
       if(Math.floor(distance/5)%2===0)markings.push(drapedRibbon(city,[a,b],.12,.04,surface));distance+=length;
     }

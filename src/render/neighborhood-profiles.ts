@@ -15,7 +15,7 @@ const profiles=new WeakMap<Building,ArchitectureProfile>();
 const prepared=new WeakMap<CityData,{tripleDeckers:number;woodFrames:number;ids:string[]}>();
 const considered=new WeakSet<Building>();
 /** Dense wood-frame districts where detached three-story houses are the norm. */
-const DISTRICTS=/^(Mission Hill|Jamaica Plain|Roxbury|Dorchester|Mattapan|South Boston|Charlestown|East Boston|Allston|Brighton|Somerville|Cambridge|Brookline)$/;
+const DISTRICTS=/^(Mission Hill|Jamaica Plain|Roxbury|Dorchester|Mattapan|South Boston|Charlestown|East Boston|Allston|Brighton|Somerville|Cambridge|Brookline|Chelsea)$/;
 const HILL_STREETS=/Parker Hill|Calumet|Hillside|Iroquois|Oswald|Sachem|Pontiac|Harleston|Alleghany|Carmel|Burney|Wensley|Fisher|Delle|Wait|Pequot|Cherokee|Wigglesworth|Worthington|Parker Street/i;
 /** OpenStreetMap building tags that are never a wood-frame house, whatever their size. */
 const NOT_HOUSE=/^(retail|commercial|industrial|office|garages?|church|school|university|college|hospital|warehouse|public|civic|dormitory|hotel|shed|roof|carport|parking|service|train_station|transportation|kindergarten|religious|government|supermarket)$/;

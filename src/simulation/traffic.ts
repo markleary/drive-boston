@@ -11,6 +11,7 @@ import { sampleRoadElevation,roadNormal,roadRotation } from './road-surfaces.ts'
 import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
+import {createRouteSignalLookup} from './traffic-route-signals.ts';
 
 interface Edge { id: number; start: number; end: number; points: Point2[]; length:number; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; }
 interface Path { points: Point2[]; distances: number[]; length: number; stops: {distance:number;yaw:number}[]; roadAt:Road[]; component?: number; }
@@ -39,7 +40,8 @@ export function roadGraph(city: CityData) {
   for (const road of city.roads) {
     if(road.traffic===false)continue;
     const arterial=/^(primary|secondary)$/.test(road.kind??'')&&!/^unnamed\b/i.test(road.name);
-    if (road.points.length<2 || road.width < 7 || (road.width<8&&!arterial&&(activityAt(...road.points[0]).level!=='busy'||!/(street|avenue|road|boulevard|parkway)$/i.test(road.name))) || /alley|private|ring road|cahners|copley place/i.test(road.name)) continue;
+    const tobinRamp=road.bridge?.id==='tobin-approach'&&road.oneway!==0&&road.width>=5.5;
+    if (road.points.length<2 || (!tobinRamp&&(road.width < 7 || (road.width<8&&!arterial&&(activityAt(...road.points[0]).level!=='busy'||!/(street|avenue|road|boulevard|parkway)$/i.test(road.name))))) || /alley|private|ring road|cahners|copley place/i.test(road.name)) continue;
     const points = road.points.filter((p, i, a) => i === 0 || distance(p, a[i - 1]) > .5);
     if (points.length < 2) continue;
     const length=points.slice(1).reduce((sum,p,i)=>sum+distance(points[i],p),0);if(length<1)continue;
@@ -61,7 +63,7 @@ export function roadGraph(city: CityData) {
   for(const [index,{road,points,length,start,end}]of candidates.entries()){
     if(removed.has(index))continue;
     const add = (ps: Point2[], a: number, b: number) => {
-      const lanes:(number|undefined)[]=road.oneway!==0&&road.width>=12?[-Math.min(3,road.width*.17),Math.min(3,road.width*.17)]:[undefined];
+      const lanes:(number|undefined)[]=road.bridge?.id==='tobin'&&road.oneway!==0?[-road.width/3,0,road.width/3]:road.oneway!==0&&road.width>=12?[-Math.min(3,road.width*.17),Math.min(3,road.width*.17)]:[undefined];
       for(const laneOffset of lanes){
         const edge={ id: edges.length, start: a, end: b, points: ps, length, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
         if(city.coverage?.length&&!lane(edge).every(p=>covered(p[0],p[1])))continue;
@@ -138,6 +140,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     const branches = connections.get(index)??new Set<number>();
     return branches.size >= 3 && city.signals.some(signal => distance(signal, point) < 24);
   });
+  const routeSignalStops=createRouteSignalLookup(signalJunctions);
   let elapsed = 0, rehomeTimer=0;
   let seed = 43571;
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
@@ -164,27 +167,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     }
     const path = roundedPath(points,roads);
     path.component=components.get(edge.start);
-    for (const junction of signalJunctions) {
-      const nearby: { along: number; separation: number }[] = [];
-      for (let i = 1; i < path.points.length; i++) {
-        const a = path.points[i - 1], b = path.points[i];
-        const dx = b[0] - a[0], dz = b[1] - a[1], segment = distance(a, b);
-        const t = Math.max(0, Math.min(1, ((junction[0] - a[0]) * dx + (junction[1] - a[1]) * dz) / (segment * segment || 1)));
-        const separation = Math.hypot(a[0] + t * dx - junction[0], a[1] + t * dz - junction[1]);
-        if (separation < 9) nearby.push({ along: path.distances[i - 1] + segment * t, separation });
-      }
-      // A route may visit the same intersection more than once. Preserve each
-      // visit but combine the many short curve segments around that visit.
-      let best: typeof nearby[number] | undefined;
-      let previous = -Infinity;
-      for (const candidate of nearby) {
-        if (candidate.along - previous > 20 && best) { path.stops.push({distance:Math.max(0,best.along-8),yaw:pathYaw(path,best.along-8)}); best = undefined; }
-        if (!best || candidate.separation < best.separation) best = candidate;
-        previous = candidate.along;
-      }
-      if (best) path.stops.push({distance:Math.max(0,best.along-8),yaw:pathYaw(path,best.along-8)});
-    }
-    path.stops.sort((a, b) => a.distance - b.distance);
+    path.stops=routeSignalStops(path.points,path.distances).map(distance=>({distance,yaw:pathYaw(path,distance)}));
     return path;
   }
 

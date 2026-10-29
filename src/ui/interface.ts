@@ -521,7 +521,9 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(now-lastMapDraw>90){drawMiniMap();lastMapDraw=now;}
     if(now-lastLocation>500){
       const neighborhood=neighborhoodAt(state.x,state.z);
-      const near=closestRoad(city,state.x,state.z);
+      // Stacked carriageways share XY, so the driving HUD must follow the
+      // vehicle's actual level instead of naming the first road underneath it.
+      const near=closestRoad(city,state.x,state.z,false,travelMode==='helicopter'?{}:{height:state.y});
       const label=near.distance<=110&&near.road?.name?near.road.name:neighborhood;
       el('neighborhood-label').textContent=`${neighborhood}, Massachusetts`;
       if(travelMode==='helicopter')el('journey-label').textContent=`Above ${neighborhood}`;

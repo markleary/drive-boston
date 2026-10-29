@@ -36,7 +36,7 @@ bounds=city['bounds'];spawn=city['spawn'];sp=[spawn['x'],spawn['z']]
 coverage=unary_union([Polygon(p) for p in city['coverage']]);covered=prep(coverage.buffer(.05))
 assert len(city['coverage'])==provenance['coveragePolygons']>=1 and all(len(p)>3 for p in city['coverage'])
 assert abs(coverage.area-provenance['coverageAreaSquareMeters'])<coverage.area*.02,'coverage outlines (exteriors only) must match the compiled union'
-towns={'Cambridge','Somerville','Brookline'};excluded={'Roslindale','West Roxbury','Hyde Park','Harbor Islands'}
+towns={'Cambridge','Somerville','Brookline','Chelsea'};excluded={'Roslindale','West Roxbury','Hyde Park','Harbor Islands'}
 names={n['name'] for n in city['neighborhoods']}
 assert towns<=names and not names&excluded,'town and excluded-neighborhood policy'
 assert {'Back Bay','Beacon Hill','Downtown','Chinatown','Mission Hill','Fenway','Longwood','Dorchester','Roxbury','Jamaica Plain','South Boston','East Boston','Charlestown','Allston','Brighton','Mattapan','North End','West End','South End'}<=names

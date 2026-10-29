@@ -124,6 +124,7 @@ export function roadSlabGeometry(city:CityData,road:Road){
 export function bridgeSupports(city:CityData,road:Road){
   if(!road.elevations||!road.bridge)return[];
   if(road.name==='Longfellow Bridge')return[]; // Shared granite piers and arch ribs in charles-bridges.ts.
+  if(road.id===city.tobinBridge?.lowerRoadId||road.id===city.tobinBridge?.upperRoadId)return[]; // Shared river piers and approach bents in tobin-bridge.ts.
   const supports:{x:number;z:number;bottom:number;top:number;yaw:number;width:number}[]=[];let along=0,next=18;
   for(let i=1;i<road.points.length;i++){
     const a=road.points[i-1],b=road.points[i],length=Math.hypot(b[0]-a[0],b[1]-a[1]);

@@ -23,7 +23,7 @@ def js_hash(text):
  for c in text:n=(n*31+ord(c))&0xFFFFFFFF
  if n>=2**31:n-=2**32
  return abs(n)
-WOOD_DISTRICTS={'Mission Hill','Jamaica Plain','Roxbury','Dorchester','Mattapan','South Boston','Charlestown','East Boston','Allston','Brighton','Somerville','Cambridge','Brookline'}
+WOOD_DISTRICTS={'Mission Hill','Jamaica Plain','Roxbury','Dorchester','Mattapan','South Boston','Charlestown','East Boston','Allston','Brighton','Somerville','Cambridge','Brookline','Chelsea'}
 NOT_HOUSE_KINDS={'retail','commercial','industrial','office','garage','garages','church','school','university','college','hospital','warehouse','public','civic','dormitory','hotel','shed','roof','carport','parking','service','train_station','transportation','kindergarten','religious','government','supermarket'}
 _footprints=None
 def index_footprints(buildings):

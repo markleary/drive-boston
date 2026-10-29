@@ -1,7 +1,7 @@
 /** Street character for facade and storefront detailing. The original Back Bay
  * street lists keep their authored roles; elsewhere in Boston the classification
  * falls back to the surveyed carriageway width and the street-name suffix.
- * Town streets (Cambridge, Somerville, Brookline) carry their OpenStreetMap
+ * Town streets (Cambridge, Somerville, Brookline, Chelsea) carry their OpenStreetMap
  * class instead of a surveyed width, and the Boston name lists do not apply to
  * them: Somerville's Summer Street is a residential hill street, not the
  * downtown shopping street of the same name. */
