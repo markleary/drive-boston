@@ -102,6 +102,29 @@ test('real Back Bay launch is clear and 60/120 Hz flight produces the same path'
 });
 
 
+test('50–144 Hz and uneven render intervals preserve the flight path', async () => {
+  const setup = await fixture();
+  try {
+    const { flight } = setup;
+    const input = { forward: .8, strafe: .25, turn: .15, lift: .4 };
+    const fly = intervals => {
+      flight.reset();
+      let time = 0, frame = 0;
+      while (time < 4 - 1e-10) {
+        const dt = Math.min(intervals[frame++ % intervals.length], 4 - time);
+        flight.update(dt, input); time += dt;
+      }
+      return flight.state;
+    };
+    const reference = fly([1 / 120]);
+    for (const intervals of [[1 / 50], [1 / 144], [.012, .019, .015, .018]]) {
+      const actual = fly(intervals);
+      assert.ok(Math.hypot(actual.x - reference.x, actual.y - reference.y, actual.z - reference.z) < .03, 'four seconds of mixed flight must agree within 3 cm');
+      assert.ok(Math.abs(actual.yaw - reference.yaw) < .0002, 'turning must stay consistent across frame cadences');
+    }
+  } finally { setup.dispose(); }
+});
+
 test('helicopter launch, low flight and roof clearance follow elevated terrain', async () => {
   const heights = [];
   for (let z = -120; z <= 120; z += 10) for (let x = -120; x <= 120; x += 10) heights.push(100 + .1 * z);
