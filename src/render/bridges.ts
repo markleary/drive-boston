@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type {CityData} from '../types';
 import {roadDeckGeometry,roadSlabGeometry,sampleRoadElevation,bridgeSupports,bridgeBarriers,bridgeEdgeSections} from '../simulation/road-surfaces.ts';
 import {drapedRibbon} from './terrain-ground.ts';
-import {mergeSpatialGeometries} from './spatial-batches';
+import {mergeSpatialGeometries} from './spatial-batches.ts';
 
 /** The source-defined upper road is independent from the streets beneath it. */
 export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:THREE.Material,structures=city.roads.filter(r=>r.elevations)){

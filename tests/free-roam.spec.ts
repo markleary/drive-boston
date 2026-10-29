@@ -12,7 +12,7 @@ test('free roam has moving MBTA services, clear controls, and a drivable elevate
   // Signals and exact building colliders arrive with the streamed tiles around the spawn.
   await expect.poll(async()=>{const s=await snapshot(page);return s.signalCount>180&&s.exactBuildingColliders>=3;},{timeout:60000}).toBe(true);
   let state=await snapshot(page);
-  expect(state.transitCount).toBe(34);expect(state.transit.filter(a=>a.kind==='tram')).toHaveLength(2);expect(state.transit.filter(a=>a.kind==='bus')).toHaveLength(32);
+  expect(state.transitCount).toBe(42);expect(state.transit.filter(a=>a.kind==='tram')).toHaveLength(10);expect(state.transit.filter(a=>a.kind==='bus')).toHaveLength(32);
   expect(state.signalCount).toBeGreaterThan(180);expect(state.exactBuildingColliders).toBeGreaterThanOrEqual(3);expect(state.groundCover.puddles).toBeGreaterThan(15);
   await destination(page,'huntington-mfa');const initial=(await snapshot(page)).transit;
   // A trolley and a bus serve the Museum of Fine Arts stop; both must be under way (a bus elsewhere may be held at a signal or a terminal).
