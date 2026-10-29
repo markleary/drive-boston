@@ -9,6 +9,7 @@ import { closestRoad, pointInside } from '../simulation/roads';
 import { createMaterials, facadeStyleIndex, seeded, stabilizeFacadeUVs } from './materials';
 import { createStreetTrees, createTreeField } from './foliage';
 import { createStreetSign } from './signs';
+import { planStreetSigns, POLE_HEIGHT } from '../simulation/street-signs';
 import { sampleElevation, terrainRange } from '../simulation/terrain';
 import { drapedRibbon, terrainTiles, foundationGeometry, backBayPaving } from './terrain-ground';
 import { mergeSpatialGeometries, spatialInstances } from './spatial-batches';
@@ -203,7 +204,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
 
   const foundations=new THREE.Mesh(foundationGeometry({...city,buildings:city.buildings.filter(b=>!usesExactBuildingCollision(b))}),new THREE.MeshStandardMaterial({color:'#827c6d',roughness:.95,side:THREE.DoubleSide}));foundations.receiveShadow=true;scene.add(foundations);
 
-  const treePositions:THREE.Vector3[]=[];const lampPositions:THREE.Vector3[]=[];const signRecords:{position:THREE.Vector3,name:string,yaw:number}[]=[];
+  const treePositions:THREE.Vector3[]=[];const lampPositions:THREE.Vector3[]=[];
   const random=seeded(342);
   const buildingCells=new Map<string,CityData['buildings']>();
   for(const b of city.buildings){
@@ -224,10 +225,9 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     const dx=b[0]-a[0],dz=b[1]-a[1],t=THREE.MathUtils.clamp(((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1),0,1);
     return Math.hypot(x-a[0]-t*dx,z-a[1]-t*dz)<radius;
   });
-  const taken=new Set<string>(),signCells=new Map<string,number>();
+  const taken=new Set<string>();
   for(const road of city.roads){
     if(road.elevations||road.width<7||/alley|unnamed/i.test(road.name))continue;
-    let run=0;
     for(let i=1;i<road.points.length;i++){
       const a=road.points[i-1],b=road.points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.1)continue;
       const tx=dx/length,tz=dz/length;
@@ -239,8 +239,6 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
           if(side===1&&!inRoad(x-tx*5,z-tz*5)&&!occupied(x-tx*5,z-tz*5))lampPositions.push(new THREE.Vector3(x-tx*5,height(x-tx*5,z-tz*5),z-tz*5));
         }
       }
-      if(run===0&&length>15){const x=a[0]+tx*10-tz*(road.width/2+1.2),z=a[1]+tz*10+tx*(road.width/2+1.2),cell=`${Math.floor(x/320)},${Math.floor(z/320)}`;if((signCells.get(cell)??0)<3&&!occupied(x,z)&&!inRoad(x,z)){signRecords.push({position:new THREE.Vector3(x,height(x,z),z),name:road.name.replace('Street','ST').replace('Avenue','AVE').toUpperCase(),yaw:Math.atan2(tx,tz)});signCells.set(cell,(signCells.get(cell)??0)+1);}}
-      run+=length;
     }
   }
   const dummy=new THREE.Object3D();
@@ -249,10 +247,12 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const lamps=new THREE.InstancedMesh(new THREE.SphereGeometry(.27,8,6),lampMat,lampPositions.length);
   lampPositions.forEach((p,i)=>{dummy.position.copy(p).add(new THREE.Vector3(0,2.85,0));dummy.rotation.set(0,0,0);dummy.scale.set(1,1,1);dummy.updateMatrix();poles.setMatrixAt(i,dummy.matrix);dummy.position.y=p.y+5.85;dummy.updateMatrix();lamps.setMatrixAt(i,dummy.matrix);});poles.castShadow=true;scene.add(...spatialInstances(poles),...spatialInstances(lamps));
   const signHardware:THREE.BufferGeometry[]=[];
-  for(const sign of signRecords){
-    signHardware.push(new THREE.CylinderGeometry(.04,.04,3.2,6).translate(sign.position.x,sign.position.y+1.6,sign.position.z));
-    signHardware.push(new THREE.BoxGeometry(2.67,.5,.045).rotateY(sign.yaw).translate(sign.position.x,sign.position.y+3,sign.position.z));
-    const plate=createStreetSign(sign.name);plate.position.set(sign.position.x,sign.position.y+3,sign.position.z);plate.rotation.y=sign.yaw;scene.add(plate);
+  for(const {position:[x,z],blades} of planStreetSigns(city.roads,(x,z)=>!occupied(x,z)&&!inRoad(x,z))){
+    const y=height(x,z);signHardware.push(new THREE.CylinderGeometry(.04,.04,POLE_HEIGHT,6).translate(x,y+POLE_HEIGHT/2,z));
+    for(const blade of blades){
+      signHardware.push(new THREE.BoxGeometry(2.67,.5,.045).rotateY(blade.yaw).translate(x,y+blade.height,z));
+      const plate=createStreetSign(blade.name);plate.position.set(x,y+blade.height,z);plate.rotation.y=blade.yaw;scene.add(plate);
+    }
   }
   mergeAdd(signHardware,iron);
   const signals=createTrafficSignals(scene,city);
