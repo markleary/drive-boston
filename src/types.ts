@@ -2,7 +2,7 @@ export type Point2 = [number, number];
 /** `kind` is the OpenStreetMap highway class of a town street (Cambridge, Somerville, Brookline); Boston centerlines carry a surveyed width instead. */
 export interface Road { id: string; name: string; points: Point2[]; width: number; oneway: number; kind?: string; elevations?:number[]; deckWidths?:number[]; deckTangents?:{start:Point2;end:Point2}; startLevel?:number; endLevel?:number; bridge?:{id:string;thickness:number;clearanceEstimated:boolean}; }
 /** `kind` is the OpenStreetMap building tag of a town extrusion (house, apartments, retail...). */
-export interface Building { id: string; name: string; center: Point2; height: number; /** Generated wall height above base, excluding the pitched roof. */ eaveHeight?: number; footprint: Point2[]; landmark?: string; baseElevation?: number; kind?: string; amenity?: string; sourceName?: string; }
+export interface Building { id: string; name: string; center: Point2; height: number; /** Generated wall height above base, excluding the pitched roof. */ eaveHeight?: number; footprint: Point2[]; landmark?: string; baseElevation?: number; kind?: string; amenity?: string; sourceName?: string; /** Preserve surveyed openings where the convex footprint crosses a road. */ collision?: 'mesh'; }
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
 export interface WaterSurface { source:string; name:string; rings:Point2[][]; level:number; }
 export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; /** Constant-height source basins/reaches inside a merged hydro outline. */ surfaces?:WaterSurface[]; }

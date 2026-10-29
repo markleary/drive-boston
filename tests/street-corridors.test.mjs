@@ -10,8 +10,8 @@ import {loadMetroCity,windowCity,installExactMeshes} from './helpers/metro-city.
 
 // Survey complexes whose convex footprint proxies would wall off about 200 m of a
 // major street each. Like the Prudential across Huntington (tests/bridges.test.mjs)
-// they collide as their real source triangles instead: the BUMC ambulatory care
-// center links its wings 28 m above Massachusetts Avenue, and NEXUS is an L whose
+// they collide as detailed triangles instead: BUMC's corrected ground-floor
+// passage is covered end-to-end in building-passages.test.mjs; NEXUS is an L whose
 // hull closes Western Avenue although none of its triangles covers the roadway.
 // `launch` is a distance along the street, still inside the proxy, with open sky
 // above: a helicopter placed under the link settles on top of the real link.

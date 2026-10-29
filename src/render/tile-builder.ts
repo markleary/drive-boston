@@ -11,7 +11,7 @@ import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
 import { inTransitCorridor, shareTransitCorridors } from '../simulation/transit-corridors.ts';
 import { planTrafficSignals, type PlacedSignal } from '../simulation/signal-placement.ts';
-import { meshBuildingIds } from '../simulation/building-collisions.ts';
+import { usesExactBuildingCollision } from '../simulation/building-collisions.ts';
 import { pointInside } from '../simulation/roads.ts';
 import { type createMaterials, facadeStyleIndex, hash, seeded } from './materials';
 import { tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
@@ -235,7 +235,7 @@ export function createTileBuilder(ctx: TileContext) {
           if (fenway) material = isRoof ? fenwayMaterials.roof : fenwayMaterials.wall;
           return material;
         };
-        if (meshBuildingIds.has(b.id)) {
+        if (usesExactBuildingCollision(b)) {
           colliders.push(physics.addStaticMesh(data.positions, tileCollisionIndices(data))); stats.exactMeshes++;
           if(b.landmark==='zakim-bridge'){
             const viaduct=addSurveyViaductSupports(group,city,data);
@@ -259,7 +259,7 @@ export function createTileBuilder(ctx: TileContext) {
         const geometry = mergeGeometries(geometries, false); for (const g of geometries) g.dispose(); if (!geometry) continue;
         const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'Boston surveyed buildings'; geometry.computeBoundingSphere(); meshes.push(mesh); group.add(mesh);
       }
-      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !meshBuildingIds.has(b.id)) });
+      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b)) });
       if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; group.add(mesh); } else footings.dispose();
       addTileBuildings(city, tile);
     }

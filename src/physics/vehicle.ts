@@ -68,7 +68,7 @@ export class DrivingPhysics {
   private constructor(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string>; streaming?: boolean }) {
     this.bounds = city.bounds;
     this.city = city;
-    this.meshBuildingIds = new Set(options.meshBuildingIds);
+    this.meshBuildingIds = new Set([...(options.meshBuildingIds ?? []), ...city.buildings.filter(b => b.collision === 'mesh').map(b => b.id)]);
     this.streaming = !!options.streaming;
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
@@ -173,7 +173,7 @@ export class DrivingPhysics {
   /** Convex footprint proxy, extended below the lowest terrain along the footprint
    * so hillside entries cannot pass through the visible wall under a level base. */
   addBuildingHull(building: CityData['buildings'][number]) {
-    if (building.footprint.length < 3 || building.height < 0.5 || this.meshBuildingIds.has(building.id)) return undefined;
+    if (building.footprint.length < 3 || building.height < 0.5 || building.collision === 'mesh' || this.meshBuildingIds.has(building.id)) return undefined;
     const city = this.city, vertices: number[] = [], base = buildingBaseElevation(city, building);
     let bottom = Math.min(base, sampleElevation(city, building.center[0], building.center[1])) - .5;
     for (let i = 0; i < building.footprint.length; i++) {
@@ -308,12 +308,33 @@ export class DrivingPhysics {
     };
   }
 
+  private resetPose(x:number,z:number,yaw:number,roadId?:string){
+    const surface=sampleDriveSurface(this.city,x,z,undefined,roadId),normal=surface.normal;
+    return{normal,position:{x,y:surface.height+(this.bike?ULTRA_BEE.spawnHeight:VEHICLE.spawnHeight)/Math.max(.5,normal.y),z},rotation:rotationFromNormal(normal,yaw)};
+  }
+
+  /** Check a saved arrival against loaded static geometry before moving the car.
+   * Query each collider directly: newly streamed colliders are absent from
+   * Rapier's broad phase until world.step(), which must not run inside a wall. */
+  canResetAt(x:number,z:number,yaw:number,roadId?:string){
+    if(![x,z,yaw].every(Number.isFinite))return false;
+    const {position,rotation,normal}=this.resetPose(x,z,yaw,roadId),offset=this.chassisCollider.translationWrtParent()?.y??0;
+    const center={x:position.x+normal.x*offset,y:position.y+normal.y*offset,z:position.z+normal.z*offset};
+    let clear=true;
+    this.world.forEachCollider(collider=>{
+      if(!clear||collider.handle===this.chassisCollider.handle||collider.isSensor())return;
+      const parent=collider.parent();if(parent&&!parent.isFixed())return;
+      if(collider.intersectsShape(this.chassisCollider.shape,center,rotation))clear=false;
+    });
+    return clear;
+  }
+
   reset(x: number, z: number, yaw: number, roadId?:string) {
     if (![x, z, yaw].every(Number.isFinite)) return;
     this.rescue = { x, z, yaw,roadId };
-    const surface=sampleDriveSurface(this.city,x,z,undefined,roadId),normal=surface.normal;
-    this.body.setTranslation({ x, y: surface.height + (this.bike?ULTRA_BEE.spawnHeight:VEHICLE.spawnHeight) / Math.max(.5, normal.y), z }, true);
-    this.body.setRotation(rotationFromNormal(normal,yaw), true);
+    const {position,rotation}=this.resetPose(x,z,yaw,roadId);
+    this.body.setTranslation(position, true);
+    this.body.setRotation(rotation, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.body.resetForces(true);

@@ -13,7 +13,7 @@ import {gunzipSync} from 'node:zlib';
 import * as THREE from 'three';
 import {resolveCity,loadTile,isMetroCity} from '../../src/simulation/city-tiles.ts';
 import {decodeElevation,tileKey} from '../../src/simulation/tile-format.ts';
-import {meshBuildingIds} from '../../src/simulation/building-collisions.ts';
+import {usesExactBuildingCollision} from '../../src/simulation/building-collisions.ts';
 import {addSourceFooting} from '../../src/render/source-footings.ts';
 import {tileShellGeometry,tileSourceGeometry,tileCollisionIndices} from '../../src/render/tile-geometry.ts';
 
@@ -86,8 +86,9 @@ export function shellGeometry(city,id,roof=false){
 /** Exact-mesh landmark collision and footings, as the tile builder installs them. Returns the ids installed. */
 export function installExactMeshes(physics,city,scene=new THREE.Group()){
   const installed=new Set();
-  for(const id of meshBuildingIds){
-    const data=city.geometry?.get(id),building=city.buildings.find(b=>b.id===id);if(!data||!building)continue;
+  for(const building of city.buildings){
+    if(!usesExactBuildingCollision(building))continue;
+    const id=building.id,data=city.geometry?.get(id);if(!data)continue;
     physics.addStaticMesh(data.positions,tileCollisionIndices(data));
     const source=tileSourceGeometry(data),footing=building.structure?undefined:addSourceFooting(scene,city,building,source);
     if(footing)physics.addStaticMesh(footing.vertices,footing.indices);

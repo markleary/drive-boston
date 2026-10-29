@@ -11,8 +11,8 @@ export interface TileStreamer {
   /** Live arrays: the world's update loop iterates them every frame. */
   buildingChunks: THREE.Mesh[]; lampPositions: THREE.Vector3[]; signals: PlacedSignal[];
   update(position: THREE.Vector3, altitude: number): void;
-  /** Download and fully build every tile within `radius` of a point before resolving (teleports, boot). */
-  ensureAround(x: number, z: number, radius?: number): Promise<void>;
+  /** Build the neighborhood and its road owners; false if any required tile failed to load. */
+  ensureAround(x: number, z: number, radius?: number): Promise<boolean>;
   readonly loaded: ReadonlyMap<string, BuiltTile>;
   stats(): { exactMeshes: number } & Record<string, unknown>;
 }
@@ -122,6 +122,7 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
       runToCompletion(start(t.key, tile));
       if (mobile) await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
+    return wanted.every(t=>loaded.has(t.key));
   }
 
   function boundsOf(tile: CityTile) { return { minX: tile.tx * tile.size, maxX: (tile.tx + 1) * tile.size, minZ: tile.tz * tile.size, maxZ: (tile.tz + 1) * tile.size }; }
