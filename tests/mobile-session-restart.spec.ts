@@ -10,6 +10,12 @@ test('a renderer process crash leaves a copyable previous-session report on the 
   // Observe a real periodic snapshot after the vehicle switch, before killing
   // the renderer without pagehide or JavaScript error callbacks.
   await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('backbay-session-v1')??'null')?.report),{timeout:25000}).toContain('Vehicle: bike');
+  // Exercise the persisted lifecycle transition explicitly: Playwright's
+  // Chromium launch disables bfcache, so this is not a native cache restore.
+  await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})));
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('backbay-session-v1')!).exit)).toBe('pagehide');
+  await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('backbay-session-v1')!).exit)).toBe('active');
   const cdp=await context.newCDPSession(page),crashed=page.waitForEvent('crash');
   void cdp.send('Page.crash').catch(()=>{});await crashed;
   const reopened=await context.newPage();const errors:string[]=[];reopened.on('pageerror',e=>errors.push(e.message));

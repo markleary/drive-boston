@@ -15,6 +15,8 @@ test('normal exits are distinguished and starting again on a live page retains t
   const storage=store();let now=100;const session=createSessionJournal(storage,()=>now);
   session.start();session.capture('last drive');now=1000;session.start();assert.equal(session.startedAt,100);
   session.close();assert.match(createSessionJournal(storage).previousReport,/pagehide recorded/);
+  session.capture('restored from bfcache');assert.equal(session.startedAt,100);
+  assert.match(createSessionJournal(storage).previousReport,/no pagehide recorded/);
 });
 test('journal storage stays bounded and never embeds previous reports into the current snapshot',()=>{
   const storage=store();

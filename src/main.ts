@@ -187,6 +187,9 @@ async function boot(){
     populateNeighborhood();
     const save=()=>{if(!physics)return;const s=physics.getState();try{localStorage.setItem('backbay-drive-v1',JSON.stringify({x:s.x,z:s.z,yaw:s.yaw,roadId:sampleDriveSurface(city,s.x,s.z,s.y).road?.id}));}catch{/* Optional. */}};
     window.addEventListener('pagehide',()=>{save();captureSession();journal.close();});
+    // A bfcache restoration resumes this document and its existing journal.
+    // Persist the active state immediately, before a possible renderer exit.
+    window.addEventListener('pageshow',event=>{if(event.persisted)captureSession();});
     window.addEventListener('keydown',event=>{
       if(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement)return;
       if(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ShiftLeft','ShiftRight','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyF','KeyX'].includes(event.code)){
