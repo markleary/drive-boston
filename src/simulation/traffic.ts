@@ -12,14 +12,14 @@ import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
 
-interface Edge { id: number; start: number; end: number; points: Point2[]; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; }
+interface Edge { id: number; start: number; end: number; points: Point2[]; length:number; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; }
 interface Path { points: Point2[]; distances: number[]; length: number; stops: {distance:number;yaw:number}[]; roadAt:Road[]; component?: number; }
 interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; signalStop?: number; signalCommitted?: boolean; }
 const COUNT = 64;
 const LOCAL_RADIUS = 650;
 const distance = (a: Point2, b: Point2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
 
-function roadGraph(city: CityData) {
+export function roadGraph(city: CityData) {
   const activityAt=createActivityProfile(city),covered=coverageTester(city);
   const nodes: Point2[] = [], heights:number[]=[], edges: Edge[] = [];
   const buckets = new Map<string, number[]>();
@@ -29,15 +29,34 @@ function roadGraph(city: CityData) {
     const index=nodes.length,key=`${cx},${cz}`;nodes.push(p);heights.push(height);
     const bucket=buckets.get(key);if(bucket)bucket.push(index);else buckets.set(key,[index]);return index;
   };
+  const candidates:{road:Road;points:Point2[];length:number;start:number;end:number}[]=[],incident=new Map<number,Set<number>>();
   for (const road of city.roads) {
-    if (road.points.length<2 || road.width < 7 || (road.width<8&&(activityAt(...road.points[0]).level!=='busy'||!/(street|avenue|road|boulevard|parkway)$/i.test(road.name))) || /alley|private|ring road|cahners|copley place/i.test(road.name)) continue;
+    const arterial=/^(primary|secondary)$/.test(road.kind??'')&&!/^unnamed\b/i.test(road.name);
+    if (road.points.length<2 || road.width < 7 || (road.width<8&&!arterial&&(activityAt(...road.points[0]).level!=='busy'||!/(street|avenue|road|boulevard|parkway)$/i.test(road.name))) || /alley|private|ring road|cahners|copley place/i.test(road.name)) continue;
     const points = road.points.filter((p, i, a) => i === 0 || distance(p, a[i - 1]) > .5);
-    if (points.length < 2 || points.slice(1).reduce((sum, p, i) => sum + distance(points[i], p), 0) < 12) continue;
+    if (points.length < 2) continue;
+    const length=points.slice(1).reduce((sum,p,i)=>sum+distance(points[i],p),0);if(length<1)continue;
     const start = node(points[0],sampleRoadElevation(city,road,...points[0])), end = node(points[points.length - 1],sampleRoadElevation(city,road,...points[points.length-1]));
+    if(start===end&&length<12)continue;
+    const index=candidates.length;candidates.push({road,points,length,start,end});
+    for(const n of [start,end]){const list=incident.get(n)??new Set<number>();list.add(index);incident.set(n,list);}
+  }
+  // Source ways split at lane changes and bridge tags, sometimes only a few
+  // metres apart. Keep those connecting pieces without populating short
+  // isolated stubs; prune a dangling chain all the way back to its main road.
+  const removed=new Set<number>(),pending=candidates.map((_,i)=>i);
+  while(pending.length){
+    const index=pending.pop()!,c=candidates[index];if(removed.has(index)||c.length>=12)continue;
+    if((incident.get(c.start)?.size??0)>1&&(incident.get(c.end)?.size??0)>1)continue;
+    removed.add(index);
+    for(const n of [c.start,c.end]){const list=incident.get(n)!;list.delete(index);pending.push(...list);}
+  }
+  for(const [index,{road,points,length,start,end}]of candidates.entries()){
+    if(removed.has(index))continue;
     const add = (ps: Point2[], a: number, b: number) => {
       const lanes:(number|undefined)[]=road.oneway!==0&&road.width>=12?[-Math.min(3,road.width*.17),Math.min(3,road.width*.17)]:[undefined];
       for(const laneOffset of lanes){
-        const edge={ id: edges.length, start: a, end: b, points: ps, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
+        const edge={ id: edges.length, start: a, end: b, points: ps, length, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
         if(city.coverage?.length&&!lane(edge).every(p=>covered(p[0],p[1])))continue;
         edges.push(edge);
       }
@@ -92,6 +111,7 @@ function pathYaw(path:Path,distance:number){const a=at(path,distance),b=at(path,
 /** Lightweight local traffic; all routes follow the imported directed road graph. */
 export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics) {
   const { nodes, edges } = roadGraph(city);
+  const spawnEdges=edges.filter(edge=>edge.length>=12);
   const activityAt=createActivityProfile(city);
   const outgoing = new Map<number, Edge[]>(), connections = new Map<number, Set<number>>();
   for(const edge of edges){
@@ -116,9 +136,11 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
   const choose = <T,>(array: T[]) => array[Math.floor(random() * array.length)];
   function route(first?: Edge): Path {
-    let edge = first ?? choose(edges);
+    let edge = first ?? choose(spawnEdges);
     const points = lane(edge),roads=points.map(()=>edge.road);
-    for (let n = 0; n < 15; n++) {
+    // Connector fragments must not spend the normal 15-street route budget,
+    // or cars would still stop near the player after a densely split junction.
+    for (let n = 0,connectors=0; n < 15&&connectors<64;) {
       const before = edge.points[edge.points.length - 2], joint = edge.points[edge.points.length - 1];
       const dir = [joint[0] - before[0], joint[1] - before[1]];
       const options = (outgoing.get(edge.end)??[]).filter(next => {
@@ -130,6 +152,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       const sameStreet = options.filter(next => next.name === edge.name);
       const sameLane=sameStreet.filter(next=>next.laneOffset===edge.laneOffset);
       edge = choose(sameStreet.length && random() < .65 ? (sameLane.length?sameLane:sameStreet) : options);
+      if(edge.length>=12)n++;else connectors++;
       const next=lane(edge);points.push(...next);roads.push(...next.map(()=>edge.road));
     }
     const path = roundedPath(points,roads);
@@ -208,7 +231,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     return selected;
   }
   function nearbyEdges(observer:Pick<VehicleState,'x'|'z'>,radius:number){
-    return edges.filter(edge=>edge.points.some(point=>Math.hypot(point[0]-observer.x,point[1]-observer.z)<radius));
+    return spawnEdges.filter(edge=>edge.points.some(point=>Math.hypot(point[0]-observer.x,point[1]-observer.z)<radius));
   }
   function nearestStreet(observer:Pick<VehicleState,'x'|'z'>){
     let best=Infinity,name='';
@@ -264,14 +287,14 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   const initialEdges=nearbyEdges(spawnPlayer,650),nearEdges=nearbyEdges(spawnPlayer,240),street=nearestStreet(spawnPlayer);
   const streetEdges=nearEdges.filter(edge=>edge.name===street),forward=forwardPlacements(streetEdges,spawnPlayer);
   const target=activityAt(spawnPlayer.x,spawnPlayer.z).traffic,nearTarget=Math.round(target/3),streetTarget=Math.round(target/6);
-  for (let i = 0; i < COUNT && edges.length; i++) {
+  for (let i = 0; i < COUNT && spawnEdges.length; i++) {
     // Populate the street in view first, then adjacent blocks, then a reserve
     // fleet in the rest of the city. Every placement keeps its safe headway.
     let candidate=i<Math.min(6,streetTarget)?forwardPlacement(forward,spawnPlayer,spawnPlayer,i):undefined;
     if(!candidate&&i<streetTarget)candidate=placement(streetEdges,spawnPlayer,spawnPlayer,35,230);
     if(!candidate&&i<nearTarget)candidate=placement(nearEdges,spawnPlayer,spawnPlayer,35,240);
     if(!candidate&&i<target)candidate=placement(initialEdges,spawnPlayer,spawnPlayer,35,LOCAL_RADIUS);
-    if(!candidate)candidate=placement(edges,spawnPlayer,spawnPlayer,i<target?35:LOCAL_RADIUS+80,Infinity);
+    if(!candidate)candidate=placement(spawnEdges,spawnPlayer,spawnPlayer,i<target?35:LOCAL_RADIUS+80,Infinity);
     if (!candidate) continue;
     const { path, d, p } = candidate;
     const q = at(path, d + 2), yaw = Math.atan2(q[0] - p[0], q[1] - p[1]);
@@ -335,7 +358,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         const target=activityAt(observer.x,observer.z).traffic;
         let local=actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<localRadius).length;
         if(local<Math.min(target,actors.length)){
-          const approaches=edges.filter(edge=>{
+          const approaches=spawnEdges.filter(edge=>{
             const a=edge.points[0],b=edge.points[1],d=Math.hypot(a[0]-observer.x,a[1]-observer.z);
             if(d<recycleDistance+15||d>localRadius-30)return false;
             const dx=b[0]-a[0],dz=b[1]-a[1];
@@ -385,7 +408,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
           // Recycling occurs only well away from the player. Retain the old body
           // until an unoccupied distant replacement has been found.
           for (let attempt = 0; attempt < 12; attempt++) {
-            const connected=edges.filter(edge=>components.get(edge.start)===actor.path.component);if(!connected.length)break;
+            const connected=spawnEdges.filter(edge=>components.get(edge.start)===actor.path.component);if(!connected.length)break;
             const path = route(choose(connected)), start = at(path, 5);
             if (Math.hypot(start[0] - observer.x, start[1] - observer.z) < recycleDistance || !clearRelocation(start,actor)) continue;
             relocate(actor,path);

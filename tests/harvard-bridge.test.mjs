@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {spawnSync} from 'node:child_process';
 import * as THREE from 'three';
 import {resolveCity} from '../src/simulation/city-tiles.ts';
 import {roadDeckGeometry,deckEdge} from '../src/simulation/road-surfaces.ts';
@@ -8,6 +9,47 @@ import {addHarvardBridgeDetails} from '../src/render/harvard-bridge.ts';
 import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {read,readJson,windowCity} from './helpers/metro-city.mjs';
 const metro=await resolveCity(readJson('city.json'),read),city=windowCity(metro,{minX:-1650,maxX:-1100,minZ:-900,maxZ:0}),spine=harvardBridgeSpine(city);
+
+function assertBostonApproach(roads){
+ const bridge=harvardBridgeSpine({roads}),shore=roads.find(r=>r.id==='14557-0-1').points[0],end=bridge.road.points.findIndex(p=>Math.hypot(p[0]-shore[0],p[1]-shore[1])<.001);
+ const ys=bridge.road.elevations,distances=bridge.distances,rise=ys[end]-ys[0],grade=rise/distances[end];
+ assert.ok(end>20&&distances[end]>100,'the ramp must span all three Boston source pieces');
+ assert.ok(grade>0&&grade<.04,'one gentle climb reaches the existing basin deck');
+ for(let i=0;i<=end;i++){
+  assert.ok(Math.abs(ys[i]-(ys[0]+grade*distances[i]))<=.000051,`Boston ramp station ${i} must lie on one straight grade`);
+  if(i)assert.ok(ys[i]>ys[i-1],'the Boston approach must never dip or form a crest');
+ }
+ assert.equal(ys[end],ys[end+1],'the ramp joins the flat basin deck without an overshoot');
+}
+
+test('Boston Harvard approach has one straight grade from Massachusetts Avenue to the basin deck',()=>assertBostonApproach(city.roads));
+
+test('Harvard generation removes independent source crests and is idempotent',()=>{
+ const roads=structuredClone(city.roads.filter(r=>HARVARD_BRIDGE_ROADS.includes(r.id))),byId=new Map(roads.map(r=>[r.id,r]));
+ // Recorded source endpoint estimates before the fix: a 5.6966 m shore crest
+ // followed by 3.2516 m and 3.225 m basin sections. The intermediate samples
+ // deliberately need not match the old interpolation for the repair to work.
+ for(const [id,a,b]of [['15082-0-0',5.6966,-.2658],['11255-0-0',3.2516,5.6966],['14557-0-1',3.225,3.2516]]){
+  const r=byId.get(id);r.elevations=r.points.map((_,i)=>a+(b-a)*i/(r.points.length-1));
+ }
+ const result=spawnSync('python3',['-c',`import sys,json
+sys.path.insert(0,'scripts')
+from harvard_bridge import harmonize_harvard,validate_harvard_profile
+roads=json.load(sys.stdin)
+try:validate_harvard_profile(roads)
+except AssertionError:pass
+else:raise AssertionError('validator accepted the source crest')
+harmonize_harvard(roads)
+validate_harvard_profile(roads)
+first=json.dumps(roads,sort_keys=True)
+harmonize_harvard(roads)
+assert json.dumps(roads,sort_keys=True)==first,'Harvard postprocessing must be idempotent'
+print(json.dumps(roads))`],{cwd:new URL('..',import.meta.url),input:JSON.stringify(roads),encoding:'utf8'});
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+ const generated=JSON.parse(result.stdout);assertBostonApproach(generated);
+ assert.equal(generated.find(r=>r.id==='15082-0-0').elevations.at(-1),-.2658,'the graded Boston street landing stays pinned');
+ assert.deepEqual(generated.find(r=>r.id==='water-link-14557-0-0').elevations,byId.get('water-link-14557-0-0').elevations,'the established basin deck remains unchanged');
+});
 
 test('all Harvard Bridge source decks meet at identical full-width cross-sections',()=>{
  assert.ok(spine);const roads=HARVARD_BRIDGE_ROADS.map(id=>city.roads.find(r=>r.id===id));

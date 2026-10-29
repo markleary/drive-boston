@@ -23,6 +23,7 @@ import tileformat
 from building_semantics import apply_building_identity,facade_style,index_footprints
 from building_clearance_package import prepare_buildings,prepare_package
 from building_collision_policy import KEY_BUILDING_IDS,exact_far_collision
+from osm_road_tags import bridge_source_layer,road_width,source_layer
 spec=importlib.util.spec_from_file_location('city_compiler',ROOT/'scripts/build-city.py');central=importlib.util.module_from_spec(spec);spec.loader.exec_module(central)
 xy,rounded,hull,load_layer,feature_polygons,polygon_rings,polygon_parts,context_polygons,visible_floor,geographic_polygon=central.xy,central.rounded,central.hull,central.load_layer,central.feature_polygons,central.polygon_rings,central.polygon_parts,central.context_polygons,central.visible_floor,central.geographic_polygon
 FT=central.FT;ORIGIN=central.ORIGIN;TO_GEO=central.TO_GEO
@@ -385,20 +386,18 @@ def build_roads(cache,coverage,districts,grid,wet,deep,water_union,osm_roads):
   return list(best[1]) if best else pt
  snapped=0
  for town,e,tags in osm_roads:
-  if tags.get('tunnel') not in [None,'no'] or (tags.get('layer') or '0').lstrip('-').isdigit() and int(tags.get('layer') or 0)<0:continue
+  layer=source_layer(tags)
+  if tags.get('tunnel') not in [None,'no'] or layer<0:continue
   pts=[xy(p['lon'],p['lat']) for p in e.get('geometry') or []]
   if len(pts)<2:continue
   line=LineString(pts)
   if not areas[town].intersects(line):continue
   pieces=[line] if areas[town].contains(line) else [g for g in polygon_parts_lines(line.intersection(areas_raw[town])) if g.length>=3]
   kind=tags['highway']
-  try:width=max(5,min(16,float(re.match(r'[\d.]+',tags.get('width','')).group(0))))
-  except (ValueError,AttributeError):
-   try:width=max(5,min(16,float(re.match(r'[\d.]+',tags.get('lanes','')).group(0))*3.3+1))
-   except (ValueError,AttributeError):width=OSM_WIDTHS[kind]
+  width=road_width(tags,OSM_WIDTHS[kind])
   oneway=1 if tags.get('oneway') in ['yes','true','1'] else -1 if tags.get('oneway')=='-1' else 0
   label=tags.get('name') or ('Unnamed lane' if kind=='living_street' else f"Unnamed {kind.replace('_link',' ramp').replace('_',' ')}")
-  bridge_tag=tags.get('bridge') not in [None,'no'] or ((tags.get('layer') or '0').lstrip('-').isdigit() and int(tags.get('layer') or 0)>0)
+  bridge_layer=bridge_source_layer(tags);bridge_tag=bridge_layer is not None
   for k,piece in enumerate(pieces):
    coords=[rounded(p) for p in piece.coords]
    for index in (0,-1):
@@ -408,7 +407,11 @@ def build_roads(cache,coverage,districts,grid,wet,deep,water_union,osm_roads):
    if coords is None:dropped+=1;continue
    road={'id':f"osm-{e['id']}-{k}",'name':label,'points':coords,'width':round(width,2),'oneway':oneway,'kind':kind}
    deck=(coords,0,0,[water_node(coords[0]),water_node(coords[-1])],crossing(LineString(coords)),bridge_tag);profile=deck_profile(deck[0],grid,*deck[1:],road['id'])
-   if profile:road['points'],road['elevations'],road['bridge']=profile;road['_deck']=deck;road['startLevel']=1 if deck[3][0] else 0;road['endLevel']=1 if deck[3][1] else 0
+   if profile:
+    road['points'],road['elevations'],road['bridge']=profile;road['_deck']=deck;road['startLevel']=1 if deck[3][0] else 0;road['endLevel']=1 if deck[3][1] else 0
+    # OSM layer is relative crossing order, not an endpoint elevation. Keep it
+    # for clearance audits; adding DECK here would detach every shore landing.
+    if bridge_tag:road['bridge']['sourceLayer']=bridge_layer
    roads.append(road)
  log('OSM town roads',len(roads)-boston_count,'snapped ends',snapped)
  log('Deck ends lowered to reach island streets',rescue_islands(roads,grid,(-291.674,36.660)))
@@ -452,7 +455,9 @@ def rescue_islands(roads,grid,spawn):
     if i==0:start=0;water=[False,water[1]]
     else:end=0;water=[water[0],False]
     deck=(pts,start,end,water,crosses,tag);profile=deck_profile(deck[0],grid,*deck[1:],r['id']);r['_deck']=deck;changed+=1
-    if profile:r['points'],r['elevations'],r['bridge']=profile
+    if profile:
+     source_layer=r.get('bridge',{}).get('sourceLayer');r['points'],r['elevations'],r['bridge']=profile
+     if source_layer is not None:r['bridge']['sourceLayer']=source_layer
     else:r['points']=pts;r.pop('elevations',None);r.pop('bridge',None)
     r['startLevel']=1 if (start>0 or water[0]) else 0;r['endLevel']=1 if (end>0 or water[1]) else 0
   lowered+=changed
