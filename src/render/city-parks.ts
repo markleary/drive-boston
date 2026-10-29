@@ -11,10 +11,12 @@ import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
 import { insideEmbracePlaza } from './the-embrace';
 import {parkSurface,WATER_SURFACE_OFFSET} from './area-surfaces.ts';
+import {createWaterMaterial} from './water-material.ts';
 export {parkSurface} from './area-surfaces.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
 const waterLevels=new WeakMap<CityArea,number>();
+const areaExtents=new WeakMap<Pick<CityArea,'rings'>,Bounds>();
 
 export function insideArea(p:Point2,area:CityArea){
   return !!area.rings[0]&&pointInside(p,area.rings[0])&&!area.rings.slice(1).some(r=>pointInside(p,r));
@@ -39,8 +41,9 @@ export function waterHeight(city:CityData,area:CityArea){
 }
 export function areaBoundsOf(area:CityArea){return areaBounds(area);}
 
-function areaBounds(area:CityArea){
-  const p=area.rings[0];return {minX:Math.min(...p.map(p=>p[0])),maxX:Math.max(...p.map(p=>p[0])),minZ:Math.min(...p.map(p=>p[1])),maxZ:Math.max(...p.map(p=>p[1]))};
+function areaBounds(area:Pick<CityArea,'rings'>){
+  const cached=areaExtents.get(area);if(cached)return cached;
+  const p=area.rings[0],bounds={minX:Math.min(...p.map(p=>p[0])),maxX:Math.max(...p.map(p=>p[0])),minZ:Math.min(...p.map(p=>p[1])),maxZ:Math.max(...p.map(p=>p[1]))};areaExtents.set(area,bounds);return bounds;
 }
 function distanceToSegment(p:Point2,a:Point2,b:Point2){
   const dx=b[0]-a[0],dz=b[1]-a[1],d=dx*dx+dz*dz,t=d?THREE.MathUtils.clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dz)/d,0,1):0;
@@ -65,7 +68,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
   const paths=(city.parkPaths??[]).filter(p=>options.pathOwned?options.pathOwned(p):true);
   parkMaterials??={lawn:createGrassMaterial('#c7cfb0'),gardenLawn:createGrassMaterial('#ccd5b6'),pathMaterial:new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96}),
-    waterMaterial:new THREE.MeshPhysicalMaterial({color:'#507d7b',roughness:.21,metalness:.25,clearcoat:1,clearcoatRoughness:.2}),bankMaterial:new THREE.MeshStandardMaterial({color:'#8d9674',roughness:.96}),
+    waterMaterial:createWaterMaterial(),bankMaterial:new THREE.MeshStandardMaterial({color:'#8d9674',roughness:.96}),
     iron:new THREE.MeshStandardMaterial({color:'#303f36',metalness:.35,roughness:.65}),wood:new THREE.MeshStandardMaterial({color:'#876b45',roughness:.91}),stone:new THREE.MeshStandardMaterial({color:'#baaf96',roughness:.91}),
     lampGlass:new THREE.MeshStandardMaterial({color:'#f4e9ca',emissive:'#ffdba1',emissiveIntensity:.25,roughness:.35})};
   const {lawn,gardenLawn,pathMaterial,waterMaterial,bankMaterial,iron,wood,stone,lampGlass}=parkMaterials;
@@ -81,10 +84,13 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   for(const water of waters){
     if(due(pace))yield;
-    // Hydro unions join the tidal harbour to higher river DEM plateaus. Clip
-    // against the same DEM triangles and cover those plateaus rather than
-    // allowing detailed grass to occlude the water when its tile streams in.
-    const geometry=parkSurface(city,water.rings,WATER_SURFACE_OFFSET,waterHeight(city,water),bounds,true);if(geometry.attributes.position.count)waterSheets.push(geometry);else geometry.dispose();
+    // The hydro union joins rivers at different elevations to the tidal harbour. Its
+    // source basin/reach planes retain their own levels across streamed tiles.
+    for(const surface of water.surfaces??[{rings:water.rings,level:waterHeight(city,water)}]){
+      const extent=areaBounds(surface);
+      if(bounds&&(extent.maxX<bounds.minX||extent.minX>bounds.maxX||extent.maxZ<bounds.minZ||extent.minZ>bounds.maxZ))continue;
+      const geometry=parkSurface(city,surface.rings,WATER_SURFACE_OFFSET,surface.level,bounds,true);if(geometry.attributes.position.count)waterSheets.push(geometry);else geometry.dispose();
+    }
     // Small pond edges get a narrow ground-following border; river shorelines
     // retain the source's natural geometry without an invented concrete wall.
     const extent=areaBounds(water);

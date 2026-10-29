@@ -53,8 +53,13 @@ test('the rail reservation and both bridge approaches exclude tree trunks and ne
 });
 
 test('water stays below Memorial Drive pavement at the two underpass joins',()=>{
- const water=metro.water.find(w=>w.id==='water-merged-55'),g=parkSurface(city,water.rings,WATER_SURFACE_OFFSET,-3.63,{minX:-560,maxX:-275,minZ:-1435,maxZ:-1160},true);
- const reference=parkSurface({...city,roads:[]},water.rings,WATER_SURFACE_OFFSET,-3.63,{minX:-560,maxX:-275,minZ:-1435,maxZ:-1160},true);
+ const water=metro.water.find(w=>w.id==='water-merged-55'),surface=water.surfaces.find(s=>s.source==='water-14492-0-0');
+ assert.equal(surface.name,'Charles River');
+ const bounds={minX:-560,maxX:-275,minZ:-1435,maxZ:-1160},g=parkSurface(city,surface.rings,WATER_SURFACE_OFFSET,surface.level,bounds,true);
+ assert.ok(g.attributes.position.count>100,'river water must remain visible beside the approaches');
+ // Count the source hydro footprint even where the bank now emerges through
+ // the horizontal plane. Either terrain or pavement may keep that overlap dry.
+ const reference=parkSurface(city,surface.rings,WATER_SURFACE_OFFSET,surface.level,bounds);
  const material=new THREE.MeshBasicMaterial({side:THREE.DoubleSide}),sheet=new THREE.Mesh(g,material),original=new THREE.Mesh(reference,material),ray=new THREE.Raycaster();sheet.updateMatrixWorld();original.updateMatrixWorld();
  const height=(mesh,x,z)=>{ray.set(new THREE.Vector3(x,30,z),new THREE.Vector3(0,-1,0));return ray.intersectObject(mesh,false)[0]?.point.y;};let checked=0;
  for(const id of ['osm-8615862-0','osm-827504928-0','osm-822621173-0']){
@@ -80,7 +85,7 @@ test('pavement water cutouts keep adjacent river water and the water beneath ele
  const elevated={roads:[{...ground.roads[0],id:'upper',elevations:[6,6],startLevel:1,endLevel:1}]};
  const material=new THREE.MeshBasicMaterial({side:THREE.DoubleSide}),ray=new THREE.Raycaster();
  for(const [city,expected]of [[ground,false],[elevated,true],[{roads:[{...elevated.roads[0],startLevel:0,endLevel:0}]},true]]){
-  const g=parkSurface(city,water,WATER_SURFACE_OFFSET,-.1,undefined,true),mesh=new THREE.Mesh(g,material);mesh.updateMatrixWorld();
+  const g=parkSurface(city,water,WATER_SURFACE_OFFSET,0,undefined,true),mesh=new THREE.Mesh(g,material);mesh.updateMatrixWorld();
   const visible=x=>{ray.set(new THREE.Vector3(x,10,0),new THREE.Vector3(0,-1,0));return !!ray.intersectObject(mesh,false).length;};
   assert.equal(visible(0),expected);assert.equal(visible(-15),true);assert.equal(visible(15),true);g.dispose();
  }

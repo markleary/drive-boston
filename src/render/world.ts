@@ -28,6 +28,7 @@ import { createFarCity } from './far-city';
 import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
+import { updateWater } from './water-material';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; }
 
@@ -286,6 +287,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   // environment render must wait even though geometry preparation can proceed.
   await options.waitForContext?.();setLighting('golden');
   function update(position:THREE.Vector3,time:number,stream=true){
+    updateWater(time);
     // Keep the shadow focus on the ground as the helicopter climbs. Widen the
     // coverage from street detail to the district without moving the world datum.
     const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);

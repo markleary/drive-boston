@@ -12,14 +12,17 @@ import {sampleElevation} from '../src/simulation/terrain.ts';
 import {read,readJson,windowCity} from './helpers/metro-city.mjs';
 const metro=await resolveCity(readJson('city.json'),read);
 
-test('Charles River water covers the detailed terrain at the two reported grass locations',()=>{
+test('Charles River level is horizontal and still covers the two reported grass locations',()=>{
  const water=metro.water.find(w=>w.id==='water-merged-55');
  for(const [x,z]of [[-1184,-575],[-40,-1455]]){
-  const bounds={minX:x-18,maxX:x+18,minZ:z-18,maxZ:z+18},g=parkSurface(metro,water.rings,WATER_SURFACE_OFFSET,-3.63,bounds,true),p=g.getAttribute('position');
+  const surface=water.surfaces.find(s=>s.name==='Charles River'&&s.rings[0].some(p=>p[0]<x)&&s.rings[0].some(p=>p[0]>x)&&s.rings[0].some(p=>p[1]<z)&&s.rings[0].some(p=>p[1]>z));
+  assert.ok(surface,'Charles must retain its own level above the merged tidal harbour');
+  const bounds={minX:x-18,maxX:x+18,minZ:z-18,maxZ:z+18},g=parkSurface(metro,surface.rings,WATER_SURFACE_OFFSET,surface.level,bounds,true),p=g.getAttribute('position');
   assert.ok(p.count>30);
   for(let i=0;i<p.count;i+=3){
    const x=(p.getX(i)+p.getX(i+1)+p.getX(i+2))/3,z=(p.getZ(i)+p.getZ(i+1)+p.getZ(i+2))/3,y=(p.getY(i)+p.getY(i+1)+p.getY(i+2))/3;
    assert.ok(y>sampleElevation(metro,x,z)+.03,'grass must stay below the water inside each detailed DEM triangle');
+   for(let j=0;j<3;j++)assert.ok(Math.abs(p.getY(i+j)-surface.level-WATER_SURFACE_OFFSET)<1e-5,'all water vertices stay on one plane');
   }
   g.dispose();
  }
