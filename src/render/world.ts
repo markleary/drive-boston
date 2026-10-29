@@ -30,6 +30,7 @@ import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 import { updateWater } from './water-material';
+import { updateSunShadow } from './shadows';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; }
 
@@ -286,14 +287,10 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   // Legacy scene downloads can finish during a lost context too. The first
   // environment render must wait even though geometry preparation can proceed.
   await options.waitForContext?.();setLighting('golden');
-  function update(position:THREE.Vector3,time:number,stream=true){
+  function update(position:THREE.Vector3,time:number,stream=true,flightShadows=false){
     updateWater(time);
-    // Keep the shadow focus on the ground as the helicopter climbs. Widen the
-    // coverage from street detail to the district without moving the world datum.
     const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);
-    sun.target.position.set(position.x,groundY,position.z);sun.position.copy(sun.target.position).add(direction);sky.position.copy(position);
-    const shadowExtent=Math.max(105,Math.min(330,105+altitude*.72));
-    if(Math.abs(sun.shadow.camera.right-shadowExtent)>2){sun.shadow.camera.left=-shadowExtent;sun.shadow.camera.right=shadowExtent;sun.shadow.camera.top=shadowExtent;sun.shadow.camera.bottom=-shadowExtent;sun.shadow.camera.updateProjectionMatrix();}
+    updateSunShadow(sun,position,groundY,direction,flightShadows);sky.position.copy(position);
     if(stream)streamer?.update(position,altitude);far?.update(position,altitude);
     for(const mesh of buildingChunks){const sphere=mesh.geometry.boundingSphere!;mesh.visible=Math.hypot(sphere.center.x-position.x,sphere.center.z-position.z)<1100+altitude*2+sphere.radius;}
     const night=mode==='night';
@@ -356,5 +353,5 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     probeTarget?.dispose();sun.shadow.map?.dispose();sun.shadow.map=null;
     pmrem.dispose();pmrem=new THREE.PMREMGenerator(renderer);
   }
-  return {setLighting,update,updateReflections,setQuality,releaseGraphicsTargets,get shadowMapSize(){return sun.shadow.mapSize.x;},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
+  return {setLighting,update,updateReflections,setQuality,releaseGraphicsTargets,get shadowMapSize(){return sun.shadow.mapSize.x;},get shadowCoverage(){return {halfExtent:sun.shadow.camera.right,far:sun.shadow.camera.far};},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
 }

@@ -1,7 +1,7 @@
 import {inLongfellowCorridor} from '../simulation/longfellow.ts';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { canvasTexture, hash, seeded } from './materials';
+import { canvasTexture, hash, seeded } from './materials.ts';
 
 const windTime={value:0};
 const SPECIES=[
@@ -70,7 +70,8 @@ type Site={p:THREE.Vector3;species:number;scale:number;yaw:number;owner:string};
 let grateMaterial:THREE.Material|undefined,grateGeometry:THREE.BufferGeometry|undefined;
 
 /** Species silhouettes and three distance levels share geometry/materials.
- * A bounded active field keeps city-wide foliage out of distant shadow passes.
+ * A bounded active field keeps city-wide foliage out of distant shadow passes;
+ * high-quality flight also shadows the distant, low-detail silhouettes.
  * Owners (streamed tiles) add and remove their sites; the instanced batches
  * grow to fit and shrink only on disposal. */
 export function createTreeField(options:{scale?:number;grates?:boolean}={}):TreeField{
@@ -89,10 +90,11 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
     group.remove(b.wood,b.leaf);b.wood.dispose();b.leaf.dispose();
     return batches[species][lod]=make(species,lod,Math.max(needed,Math.ceil(b.capacity*1.6)));
   };
-  const dummy=new THREE.Object3D();let last=-Infinity,lastX=Infinity,lastZ=Infinity,dirty=true;
+  const dummy=new THREE.Object3D();let last=-Infinity,lastX=Infinity,lastZ=Infinity,lastHigh=true,lastFlightShadows=false,dirty=true;
   const pending:Site[][][]=SPECIES.map(()=>[[],[],[]]);
-  group.userData.updateFoliage=(observer:THREE.Vector3,time:number,high=true)=>{
-    if(!dirty&&time-last<.25&&Math.hypot(observer.x-lastX,observer.z-lastZ)<25)return;last=time;lastX=observer.x;lastZ=observer.z;dirty=false;
+  group.userData.updateFoliage=(observer:THREE.Vector3,time:number,high=true,flightShadows=false)=>{
+    if(!dirty&&high===lastHigh&&flightShadows===lastFlightShadows&&time-last<.25&&Math.hypot(observer.x-lastX,observer.z-lastZ)<25)return;
+    last=time;lastX=observer.x;lastZ=observer.z;lastHigh=high;lastFlightShadows=flightShadows;dirty=false;
     for(const row of pending)for(const list of row)list.length=0;
     for(const site of sites){
       const d=Math.hypot(site.p.x-observer.x,site.p.z-observer.z),near=high?100:60,mid=high?320:210;if(d>900)continue;
@@ -101,7 +103,7 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
     pending.forEach((row,species)=>row.forEach((list,lod)=>{
       const b=ensure(species,lod,list.length);
       list.forEach((site,i)=>{dummy.position.copy(site.p);dummy.rotation.set(0,site.yaw,0);dummy.scale.setScalar(site.scale);dummy.updateMatrix();b.wood.setMatrixAt(i,dummy.matrix);b.leaf.setMatrixAt(i,dummy.matrix);});
-      b.count=list.length;for(const mesh of [b.wood,b.leaf]){mesh.count=b.count;mesh.visible=b.count>0;mesh.instanceMatrix.needsUpdate=true;}
+      b.count=list.length;for(const mesh of [b.wood,b.leaf]){mesh.count=b.count;mesh.visible=b.count>0;mesh.castShadow=lod<2||(high&&flightShadows);mesh.instanceMatrix.needsUpdate=true;}
     }));
   };
   let grates:THREE.InstancedMesh|undefined;
@@ -131,8 +133,8 @@ export function createStreetTrees(positions:THREE.Vector3[],options:{scale?:numb
 }
 const fields=new WeakMap<THREE.Scene,{list:THREE.Group[];version:unknown}>();
 /** Fields are found by one scene scan, repeated whenever `scene.userData.version` changes (streamed tiles). */
-export function updateFoliage(scene:THREE.Scene,observer:THREE.Vector3,time:number,high=true){
+export function updateFoliage(scene:THREE.Scene,observer:THREE.Vector3,time:number,high=true,flightShadows=false){
   windTime.value=time;let cached=fields.get(scene);
   if(!cached||cached.version!==scene.userData.version){const list:THREE.Group[]=[];scene.traverse(o=>{if(o instanceof THREE.Group&&o.userData.updateFoliage)list.push(o);});cached={list,version:scene.userData.version};fields.set(scene,cached);}
-  for(const field of cached.list)field.userData.updateFoliage(observer,time,high);
+  for(const field of cached.list)field.userData.updateFoliage(observer,time,high,flightShadows);
 }
