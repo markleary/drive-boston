@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Restore source-road intervals accidentally clipped out with district water holes.
+"""Restore clipped water spans and source-verified bridge/underpass connections.
 
 The checked-in sidecar records original Boston GIS alignments. Existing road
-pieces and their graded landings are retained; only bounded wet gaps are added.
-Run after grading and build-road-structures.py. No freeway/tunnel is introduced.
+pieces and their graded landings are retained. The connection sidecar also
+retains the short Rutherford underpass, excluding the deep-tunnel network.
+Run after grading and build-road-structures.py.
 """
 import argparse, gzip, hashlib, importlib.util, json, math, pathlib, sys
 import numpy as np
@@ -15,9 +16,13 @@ sys.path.insert(0,str(ROOT/'scripts'))
 from harvard_bridge import harmonize_harvard
 from harvard_cambridge import repair_cambridge,UPPER_IDS,SLIP_IDS,CONNECTOR_ID
 from harvard_terrain import repair_memorial_terrain
+from road_connections import repair_source_connections
+from longfellow_connections import repair_longfellow_connections
+from rutherford_connections import repair_rutherford
+from leverett_connections import repair_leverett
 from tileformat import write_gzip
 
-def restore(city,source,heights):
+def restore(city,source,heights,connections=None):
  grid=city['elevation'];width=grid['width'];cell=grid['cellSize']
  def ground(p):
   fx=(p[0]-grid['originX'])/cell;fz=(p[1]-grid['originZ'])/cell;i=int(fx);j=int(fz);tx=fx-i;tz=fz-j
@@ -55,6 +60,9 @@ def restore(city,source,heights):
   if r['id'].startswith(('14614-','14615-','water-link-14614-','water-link-14615-')) or r['name']=='Longfellow Bridge':r['width']=7;r['name']='Longfellow Bridge'
  repair_cambridge(city['roads'],ground)
  harmonize_harvard(city['roads'])
+ source_joins=repair_source_connections(city['roads'],ground)
+ longfellow=repair_longfellow_connections(city['roads'],ground)
+ if connections is not None:connections.update({'sourceBoundaryJoins':source_joins,'longfellowUTurn':longfellow})
  # Traffic coverage includes each bridge ribbon; district and building bounds stay fixed.
  base=[Polygon(p) for p in city['coverage']]
  corridors=[LineString(r['points']).buffer(r['width']/2+3,cap_style=1) for r in added]
@@ -98,10 +106,23 @@ def main():
  if a.extract_source:a.source_file.write_text(json.dumps(extract(city,a.extract_source),separators=(',',':'))+'\n')
  source=json.loads(a.source_file.read_text());grid=city['elevation'];heights=np.frombuffer(gzip.decompress((a.data_dir/grid['file']).read_bytes()),dtype='<i2')*grid.get('scale',.01)
  terrain=repair_memorial_terrain(city,heights)
+ connection_source_path=ROOT/'public/data/road-connections-source.json';connection_source=json.loads(connection_source_path.read_text())
+ rutherford=repair_rutherford(city,connection_source,heights)
+ leverett_source_path=ROOT/'public/data/leverett-connections-source.json';leverett_source=json.loads(leverett_source_path.read_text())
+ leverett=repair_leverett(city,leverett_source,heights)
  write_gzip(a.data_dir/grid['file'],np.rint(heights/grid.get('scale',.01)).astype('<i2').tobytes())
- added=restore(city,source,heights);(a.data_dir/'city.json').write_text(json.dumps(city,separators=(',',':'))+'\n')
+ connections={};added=restore(city,source,heights,connections);(a.data_dir/'city.json').write_text(json.dumps(city,separators=(',',':'))+'\n')
  provenance=json.loads((a.data_dir/'provenance.json').read_text());provenance['coveragePolygons']=len(city['coverage']);provenance['roads']['boston']['count']=sum(not r['id'].startswith('osm-') for r in city['roads']);provenance['restoredWaterCrossings']={'source':source['source'],'method':source['method'],'sourceSHA256':hashlib.sha256(a.source_file.read_bytes()).hexdigest(),'roads':[r['id'] for r in added],'harvardDeck':'16 m basin pavement with a 10 m Boston street landing, per-point tapered widths, shared endpoint tangents; one linear Boston approach across the three shore pieces, retaining the graded street landing and basin deck','cambridgeApproach':{'roads':UPPER_IDS+SLIP_IDS+[CONNECTOR_ID],'method':'Retained OSM horizontal alignments; extend the basin deck above Memorial Drive and grade connected approaches to unchanged outer terrain landings. One-lane slips use 5 m pavement with flared junction mouths; divided Massachusetts Avenue forks widen through overlapping full-width junction mouths. Estimated game profile, not surveyed elevations.'}}
  provenance['restoredWaterCrossings']['cambridgeTerrain']={k:v for k,v in terrain.items() if k not in ('changedVertices','maxChangeMeters')}
+ provenance['roadConnections']=connections
+ rutherford['terrain']={k:v for k,v in rutherford['terrain'].items() if k not in ('changedVertices','maxChangeMeters')}
+ provenance['roadConnections']['rutherford']=rutherford
+ provenance['roadConnections']['sourceSHA256']=hashlib.sha256(connection_source_path.read_bytes()).hexdigest()
+ provenance['roadConnections']['leverett']={**leverett,'sourceSHA256':hashlib.sha256(leverett_source_path.read_bytes()).hexdigest()}
+ provenance['roads']['boston']['count']-=len(leverett['roads'])
+ provenance['roads']['surveyConnections']={'source':leverett_source['source'],'count':len(leverett['roads'])}
+ restored_ids={int(id.split('-')[0]) for id in rutherford['underpassRoads']}
+ provenance['omittedGradeSeparatedRoadIds']=[id for id in provenance.get('omittedGradeSeparatedRoadIds',[]) if id not in restored_ids]
  (a.data_dir/'provenance.json').write_text(json.dumps(provenance,separators=(',',':'))+'\n')
  print(f'Restored {len(added)} source water spans; {len(city["roads"])} total roads. Leveled {terrain["changedVertices"]} Memorial underpass terrain vertices.')
  for r in added:print(r['id'],r['name'],round(LineString(r['points']).length))

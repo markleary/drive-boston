@@ -129,8 +129,9 @@ export function bridgeSupports(city:CityData,road:Road){
     const a=road.points[i-1],b=road.points[i],length=Math.hypot(b[0]-a[0],b[1]-a[1]);
     while(along+length>=next){
       const t=(next-along)/length,x=a[0]+(b[0]-a[0])*t,z=a[1]+(b[1]-a[1])*t,top=road.elevations[i-1]+(road.elevations[i]-road.elevations[i-1])*t-road.bridge.thickness,bottom=sampleElevation(city,x,z);
+      const excluded=road.bridge.supportExclusions?.some(([start,end])=>next>=start&&next<=end);
       const blocksRoad=city.roads.some(r=>r!==road&&roadProjection(r,x,z).distance<r.width/2+2.1&&sampleRoadElevation(city,r,x,z)<top-1);
-      if(top-bottom>2.5&&!blocksRoad)supports.push({x,z,bottom:bottom-.5,top,yaw:Math.atan2(b[0]-a[0],b[1]-a[1]),width:roadWidthAt(road,x,z)});next+=34;
+      if(top-bottom>2.5&&!blocksRoad&&!excluded)supports.push({x,z,bottom:bottom-.5,top,yaw:Math.atan2(b[0]-a[0],b[1]-a[1]),width:roadWidthAt(road,x,z)});next+=34;
     }
     along+=length;
   }

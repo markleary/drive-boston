@@ -31,6 +31,7 @@ export function roadGraph(city: CityData) {
   };
   const candidates:{road:Road;points:Point2[];length:number;start:number;end:number}[]=[],incident=new Map<number,Set<number>>();
   for (const road of city.roads) {
+    if(road.traffic===false)continue;
     const arterial=/^(primary|secondary)$/.test(road.kind??'')&&!/^unnamed\b/i.test(road.name);
     if (road.points.length<2 || road.width < 7 || (road.width<8&&!arterial&&(activityAt(...road.points[0]).level!=='busy'||!/(street|avenue|road|boulevard|parkway)$/i.test(road.name))) || /alley|private|ring road|cahners|copley place/i.test(road.name)) continue;
     const points = road.points.filter((p, i, a) => i === 0 || distance(p, a[i - 1]) > .5);
