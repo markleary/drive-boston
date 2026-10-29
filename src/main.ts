@@ -157,7 +157,8 @@ async function boot(){
         if(!saved||![saved.x,saved.z,saved.yaw].every(Number.isFinite))return;
         const occupant=buildingAt(city,saved.x,saved.z);
         const blocked=occupant&&('id' in occupant?!usesExactBuildingCollision(occupant):!occupant.exactMesh);
-        if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&closestRoad(city,saved.x,saved.z).distance<10&&!blocked)
+        const footbridge=typeof saved.roadId==='string'&&saved.roadId.startsWith('footbridge:');
+        if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&(footbridge||closestRoad(city,saved.x,saved.z).distance<10)&&!blocked)
           return {x:saved.x as number,z:saved.z as number,yaw:saved.yaw as number,roadId:typeof saved.roadId==='string'?saved.roadId:undefined};
       }catch{/* Storage is optional. */}
     })();
@@ -192,7 +193,10 @@ async function boot(){
           loaded=await streamer.ensureAround(saved.x,saved.z)&&loaded;
         }
       }
-      if(loaded&&physics.canResetAt(saved.x,saved.z,saved.yaw,saved.roadId)){physics.reset(saved.x,saved.z,saved.yaw,saved.roadId);restored=true;}
+      // Footbridges are outside the road graph. Accept their saved layer only
+      // after its streamed physical deck registered a matching support here.
+      const bridgeValid=!saved.roadId?.startsWith('footbridge:')||sampleDriveSurface(city,saved.x,saved.z,undefined,saved.roadId).road?.id===saved.roadId;
+      if(loaded&&bridgeValid&&physics.canResetAt(saved.x,saved.z,saved.yaw,saved.roadId)){physics.reset(saved.x,saved.z,saved.yaw,saved.roadId);restored=true;}
     }
     if(!restored){
       if(streamer&&!await streamer.ensureAround(city.spawn.x,city.spawn.z))throw new Error('The starting neighborhood could not be loaded. Please reload.');
@@ -202,7 +206,7 @@ async function boot(){
     physics.world.step();
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
-    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city);const groundCover=createGroundCover(scene,city);const rooftops=metro?undefined:addRooftopDetails(scene,city);
+    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city);const rooftops=metro?undefined:addRooftopDetails(scene,city);
     const car=createCar();scene.add(car.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;traffic=createTraffic(scene,city,physics);
     transit=createTransit(scene,city,physics,transitData);
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;

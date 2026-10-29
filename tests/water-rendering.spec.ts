@@ -50,6 +50,32 @@ test('water renders at River Street, the Public Garden and the Charles through l
   expect(errors).toEqual([]);
 });
 
+test('Fens shoreline and calm water render from the reported Ultra Bee positions, with livelier Charles water',async({page},testInfo)=>{
+  test.setTimeout(180000);const errors=errorsFrom(page);
+  const views=[
+    {name:'fens-tree-bank',x:-1793.37,z:1124.84,yaw:-.024},
+    {name:'fens-rounded-shore',x:-1817.02,z:1156.53,yaw:2.5222},
+  ];
+  await page.addInitScript(position=>localStorage.setItem('backbay-drive-v1',JSON.stringify(position)),views[0]);
+  await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
+  await expect(page.locator('#welcome')).toBeHidden();await page.keyboard.press('2');
+  await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('bike');
+  await page.keyboard.press('Escape');await page.locator('[data-light="day"]').click();await page.locator('#resume-drive').click();
+  for(const view of views){
+    await page.evaluate(v=>(window as any).__backbay.travelTo(v.x,v.z,v.yaw),view);await settleView(page,view.x,view.z);
+    const state=await snapshot(page);expect(Math.hypot(state.state.x-view.x,state.state.z-view.z)).toBeLessThan(2);
+    expect(state.graphicsContext.lost).toBe(false);expect(state.paused).toBe(false);
+    await page.screenshot({path:testInfo.outputPath(`${view.name}.png`)});
+  }
+  // Keep two separated frames at the same viewpoint for visual motion review.
+  await frames(page,60);await page.screenshot({path:testInfo.outputPath('fens-calm-water-later.png')});
+  await page.keyboard.press('3');await page.keyboard.press('c');
+  await page.evaluate(()=>(window as any).__backbay.flyTo(-210,18,-1430,.9));await settleView(page,-210,-1430);
+  await page.screenshot({path:testInfo.outputPath('charles-open-water.png')});
+  await frames(page,60);await page.screenshot({path:testInfo.outputPath('charles-open-water-later.png')});
+  expect((await snapshot(page)).graphicsContext.lost).toBe(false);expect(errors).toEqual([]);
+});
+
 test.describe('mobile water',()=>{
   test.use({viewport:{width:852,height:393},hasTouch:true,isMobile:true,deviceScaleFactor:2});
   test('River Street stays visible using the sky reflection fallback',async({page},testInfo)=>{

@@ -3,7 +3,8 @@ import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
-import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface } from '../simulation/road-surfaces.ts';
+import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, registerDriveSurface } from '../simulation/road-surfaces.ts';
+import {footbridgeRoad} from '../simulation/footbridges.ts';
 
 export const VEHICLE = {
   mass: 1240,
@@ -46,6 +47,7 @@ export class DrivingPhysics {
   readonly chassisCollider: RAPIER.Collider;
   /** Additional mesh/structure geometry used by flight's continuous sweeps. */
   readonly detailedColliders = new Set<number>();
+  private readonly surfaceCleanup=new Map<number,()=>void>();
   readonly meshBuildingIds: ReadonlySet<string>;
   private steering = 0;
   private braking = false;
@@ -87,6 +89,7 @@ export class DrivingPhysics {
     // Upper decks are closed solids, separate from the original terrain. Wheel
     // rays can support either level while underpass cars retain their own ground.
     if(!this.streaming)for(const road of city.roads??[])this.addRoadDeck(city,road);
+    if(!this.streaming)for(const path of city.parkPaths??[])this.addFootbridge(city,path);
 
     // Convex footprints are deliberately conservative collision proxies. Exact
     // static meshes can instead be supplied by the renderer with addStaticMesh.
@@ -149,6 +152,15 @@ export class DrivingPhysics {
     return this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
   }
 
+  /** Same closed arched slab as the park renderer; tile disposal removes both
+   * collision and the support used by saved positions / vehicle switches. */
+  addFootbridge(city:CityData,path:NonNullable<CityData['parkPaths']>[number]){
+    const road=footbridgeRoad(city,path);if(!road)return[];
+    const slab=roadSlabGeometry(city,road),collider=this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(slab.vertices,slab.indices,RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
+    this.surfaceCleanup.set(collider.handle,registerDriveSurface(this.city,road));
+    return[collider];
+  }
+
   /** Upper decks are closed solids, separate from the original terrain. Wheel
    * rays can support either level while underpass cars retain their own ground.
    * `city` may be a tile-local view so edge and support queries stay bounded. */
@@ -188,7 +200,7 @@ export class DrivingPhysics {
 
   /** Drop a streamed tile's colliders. Waking bodies lets a parked car settle on whatever replaces them. */
   removeColliders(colliders: Iterable<RAPIER.Collider>) {
-    for (const collider of colliders) { this.detailedColliders.delete(collider.handle); this.world.removeCollider(collider, true); }
+    for (const collider of colliders) { this.surfaceCleanup.get(collider.handle)?.();this.surfaceCleanup.delete(collider.handle);this.detailedColliders.delete(collider.handle); this.world.removeCollider(collider, true); }
   }
 
   private addDetailedCollider(descriptor:RAPIER.ColliderDesc){
@@ -349,6 +361,7 @@ export class DrivingPhysics {
   }
 
   dispose() {
+    for(const cleanup of this.surfaceCleanup.values())cleanup();this.surfaceCleanup.clear();
     this.world.free();
   }
 }
