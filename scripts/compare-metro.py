@@ -53,8 +53,10 @@ def compare(a,b):
   if not (a/name).exists() or not (b/name).exists():lines.append(f'{name}: only in {"a" if (a/name).exists() else "b"}');differences+=1;continue
   ta,tb=(a/name).read_text(),(b/name).read_text()
   if ta==tb:lines.append(f'{name}: byte-identical');continue
-  differences+=1;ja,jb=json.loads(ta),json.loads(tb)
+  # Numbers compare by value: the chain's Python steps write 12.0 where Node's JSON writes 12.
+  differences+=1;ja,jb=json.loads(ta,parse_int=float),json.loads(tb,parse_int=float)
   keys=[k for k in sorted(set(ja)|set(jb)) if json.dumps(ja.get(k))!=json.dumps(jb.get(k))]
+  if not keys:lines.append(f'{name}: identical values behind different number formatting');continue
   detail=[]
   for k in keys:
    if isinstance(ja.get(k),dict) and isinstance(jb.get(k),dict):detail.append(k+'.{'+','.join(kk for kk in sorted(set(ja[k])|set(jb[k])) if json.dumps(ja[k].get(kk))!=json.dumps(jb[k].get(kk)))+'}')
