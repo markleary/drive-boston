@@ -53,6 +53,7 @@ export class DriveAudio {
       context: this.context?.state ?? 'not-started', mode: this.mode,
       enabled: this.enabled, paused: this.paused || document.hidden,
       loadedCount: this.buffers.size, expectedCount: SOUNDS.length,
+      decodedBytes:[...this.buffers.values()].reduce((bytes,b)=>bytes+b.length*b.numberOfChannels*4,0),
       loading: !this.disposed && Boolean(this.context) && this.buffers.size + this.failed.size < SOUNDS.length,
       failed: [...this.failed], activeLoops: this.loops.size,
       activeOneShots: this.oneShots.size, fallback: Boolean(this.mode === 'drive' ? this.fallback : this.mode==='helicopter'?this.rotorFallback:false),

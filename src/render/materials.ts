@@ -123,7 +123,7 @@ function landmarkMasonry(base:string,seed:number,course:number){
   return new THREE.MeshStandardMaterial({map:canvasTexture(canvas,true),bumpMap:reliefTexture(relief),bumpScale:.006,roughness:.92,metalness:0});
 }
 
-function architecturalFacade(style:FacadeStyle,seed:number){
+function architecturalFacade(style:FacadeStyle,seed:number,mobile=false){
   const {canvas,ctx:c}=makeCanvas(),{canvas:glow,ctx:e}=makeCanvas(),{canvas:relief,ctx:b}=makeCanvas(),{canvas:rough,ctx:r}=makeCanvas();
   const random=seeded(seed),S=512/6,grid=windowGrid(style),spacing=grid.spacing;
   c.fillStyle=style.base;c.fillRect(0,0,512,512);
@@ -230,6 +230,13 @@ function architecturalFacade(style:FacadeStyle,seed:number){
     for(const ctx of [c,e,r])ctx.restore();
     if(arched||pointed){c.strokeStyle=style.trim;c.lineWidth=8;opening(c);c.stroke();}
   }
+  // Paint every facade with the same grid, then keep smaller sources on mobile.
+  // Resizing the actual canvases saves both source pixels and GPU mip storage;
+  // limiting texture upload size alone would retain all the 512px CPU copies.
+  if(mobile)for(const source of [canvas,glow,relief,rough,wallCanvas]){
+    const reduced=makeCanvas(256);reduced.ctx.drawImage(source,0,0,256,256);
+    source.width=source.height=256;source.getContext('2d')!.drawImage(reduced.canvas,0,0);
+  }
   const material=new THREE.MeshStandardMaterial({map:canvasTexture(canvas,true),bumpMap:reliefTexture(relief),bumpScale:style.kind==='panel'?0:.006,roughnessMap:reliefTexture(rough),roughness:.94,metalness:0,envMapIntensity:1.5,emissiveMap:canvasTexture(glow,true),emissive:0xffffff,emissiveIntensity:.008});
   material.name=style.id;material.userData.facadeStyle=style;
   // Rooms behind the glass up close; the painted glazing and night glow remain
@@ -284,8 +291,8 @@ function roofFinish(){
   return new THREE.MeshStandardMaterial({map:canvasTexture(canvas,true),roughness:.96,bumpMap:reliefTexture(relief),bumpScale:.003});
 }
 
-export function createMaterials() {
-  const facades = FACADE_STYLES.map((style,i)=>architecturalFacade(style,139+i*73));
+export function createMaterials(mobile=false) {
+  const facades = FACADE_STYLES.map((style,i)=>architecturalFacade(style,139+i*73,mobile));
   const glass = curtainWall();
   const library = landmarkMasonry('#a99b83',25,32);
   const church = landmarkMasonry('#907258',22,24);

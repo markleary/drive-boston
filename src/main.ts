@@ -18,6 +18,8 @@ import { addStreetscape } from './render/streetscape';
 import { createGraphics, type QualityMode } from './render/graphics';
 import { releaseSceneContext } from './render/context-resources';
 import { createContextGate } from './render/context-gate';
+import { sceneAttributeBytes } from './render/scene-memory';
+import { createSessionJournal } from './simulation/session-journal';
 import { addFacadeDetails } from './render/facade-details';
 import { addParkDetails } from './render/park-details';
 import { addCityParkDetails } from './render/city-parks';
@@ -54,6 +56,8 @@ async function boot(){
   let prudential:ReturnType<typeof addPrudentialCrown>|undefined;let metroLandmarks:ReturnType<typeof addMetroLandmarkDetails>|undefined;
   let populateNeighborhood=()=>{};
   const keys=new Set<string>(),audio=new DriveAudio();let cameraSnap=true,lookOffset=0,orbitPitch=.3,zoom=1;
+  const journal=createSessionJournal((()=>{try{return localStorage;}catch{try{return sessionStorage;}catch{return undefined;}}})());
+  let captureSession=()=>{};
   const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,.15,2200);
   const scene=new THREE.Scene();
   // Streamed tiles around a destination must exist before the car lands there;
@@ -75,7 +79,7 @@ async function boot(){
     },
     onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');transit?.setNight(mode==='night');prudential?.setNight(mode==='night');metroLandmarks?.setNight(mode==='night');},
     onPause(){keys.clear();},
-    onStart(){audio.start();},
+    onStart(){audio.start();journal.start();captureSession();},
     onSound(enabled){audio.enabled=enabled;},
     onQuality(mode){quality=mode;graphics?.setQuality(mode);world?.setQuality(mode==='high');},
     onDestination(id){
@@ -90,6 +94,7 @@ async function boot(){
       else void travelTo(x,z,()=>physics!.reset(x,z,road.yaw,road.road.elevations?road.road.id:undefined));
     },
   });
+  ui.setPreviousSessionReport(journal.previousReport);
   ui.setQuality(quality);
   ui.setLoading('Preparing the streets',.06);
   // Paint the welcome screen before the one-time roadbed preparation. Complete
@@ -127,7 +132,7 @@ async function boot(){
       `Mobile: ${mobile} / pixel ratio: ${renderer.getPixelRatio()}`,
       'A graphics context loss does not identify its underlying cause.',
     ].join('\n'));
-    startupTarget?.dispose();startupTarget=undefined;
+    captureSession();startupTarget?.dispose();startupTarget=undefined;
     graphics?.dispose();graphics=undefined;world?.releaseGraphicsTargets();releaseSceneContext(scene);environmentDirty=true;
   });
   // Three.js restores its WebGL state first; retain the existing scene, physics
@@ -181,7 +186,7 @@ async function boot(){
     };
     populateNeighborhood();
     const save=()=>{if(!physics)return;const s=physics.getState();try{localStorage.setItem('backbay-drive-v1',JSON.stringify({x:s.x,z:s.z,yaw:s.yaw,roadId:sampleDriveSurface(city,s.x,s.z,s.y).road?.id}));}catch{/* Optional. */}};
-    window.addEventListener('pagehide',save);
+    window.addEventListener('pagehide',()=>{save();captureSession();journal.close();});
     window.addEventListener('keydown',event=>{
       if(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement)return;
       if(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ShiftLeft','ShiftRight','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyF','KeyX'].includes(event.code)){
@@ -216,6 +221,26 @@ async function boot(){
     const cameraRay=new Ray(target,cameraDirection);
     let warmNightPasses=false;
     let previous=performance.now(),accumulator=0,elapsed=0,saveTimer=0,frameCount=0,fpsTimer=0,fps=0,distance=0,frameMs=0,averageFrameMs=0;
+    let lastSessionCapture=-Infinity;
+    captureSession=()=>{
+      lastSessionCapture=performance.now();const active=travelMode==='helicopter'?flight!.state:physics!.getState();
+      const heap=(performance as Performance&{memory?:{usedJSHeapSize:number}}).memory;
+      const tiles=world!.streamer?.stats();
+      journal.capture([
+        'Drive Boston saved session snapshot',`Bundle: ${Array.from(document.scripts).find(s=>s.type==='module')?.src??'unknown'}`,
+        `Browser: ${navigator.userAgent}`,`Session seconds: ${journal.startedAt?Math.round((Date.now()-journal.startedAt)/1000):0}`,
+        `Simulation seconds: ${Math.round(elapsed)} / paused: ${ui.isPaused()} / hidden: ${document.hidden}`,
+        `Vehicle: ${travelMode} / camera: ${cameraMode} / lighting: ${lighting}`,
+        `Position: ${JSON.stringify({x:active.x,y:active.y,z:active.z,yaw:active.yaw})}`,
+        `FPS: ${fps} / geometries: ${renderer.info.memory.geometries} / textures: ${renderer.info.memory.textures}`,
+        `Resident scene attribute bytes: ${sceneAttributeBytes(scene)} (CPU arrays; not total process memory)`,
+        `Detailed tiles: ${JSON.stringify(tiles?.keys??[])}`,
+        `Resident tile groups: ${tiles?.residentGroups??0} / tracked tiles: ${tiles?.loaded??0} / building: ${tiles?.building??'none'}`,
+        `Physics colliders: ${physics!.world.colliders.len()} / context losses: ${contextLosses}`,
+        `Audio: ${JSON.stringify(audio.getStatus())}`,
+        `JavaScript heap estimate: ${heap?.usedJSHeapSize??'unavailable'} (not total process memory)`,
+      ].join('\n'));
+    };
     const tick=(now:number,scheduleNext=true)=>{
       const raw=(now-previous)/1000;previous=now;const dt=Math.min(.05,Math.max(0,raw));const paused=ui.isPaused()||document.hidden;
       if(contextLost||!graphics){accumulator=0;if(scheduleNext)requestAnimationFrame(tick);return;}
@@ -266,6 +291,7 @@ async function boot(){
       if(warmNightPasses){const shown=switchedLights.map(light=>light.visible);for(const lampsOnly of [false,true]){switchedLights.forEach(light=>{light.visible=!lampsOnly||light instanceof THREE.PointLight;});graphics!.render(0);}switchedLights.forEach((light,i)=>{light.visible=shown[i];});warmNightPasses=false;}
       graphics!.render(dt);frameCount++;fpsTimer+=raw;frameMs=raw*1000;if(fpsTimer>=.5){fps=Math.round(frameCount/fpsTimer);averageFrameMs=fpsTimer/frameCount*1000;frameCount=0;fpsTimer=0;}
       ui.update(state,{fps,distance,travelMode,quality,groundHeight:sampleElevation(city,state.x,state.z),performance:{fps,frameMs:averageFrameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,traffic:traffic!.count,transit:transit!.count,pedestrians:streetLife.count},gear:carState.gear,rpm:carState.rpm,wheelieRemaining:carState.wheelieRemaining,altitude:flying?state.y-sampleElevation(city,state.x,state.z):0,verticalSpeed:flying?flight!.state.verticalSpeed:0});saveTimer+=dt;if(saveTimer>5){saveTimer=0;save();}
+      if(journal.startedAt&&now-lastSessionCapture>=15000)captureSession();
       if(scheduleNext)requestAnimationFrame(tick);
     };
     window.addEventListener('resize',()=>{graphics?.resize();camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();});

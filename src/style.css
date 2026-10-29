@@ -102,3 +102,8 @@
 /* Touch controls replace keyboard hints in the HUD and settings. */
 @media(pointer:coarse){#drive-hint,#controls-help,#interface kbd,#interface .key{display:none}}
 @media(pointer:coarse) and (max-width:700px){.toast{top:172px}}
+
+.previous-session{margin-top:12px;max-width:440px;font-size:11px;line-height:1.5}
+.previous-session .text-btn{color:var(--paper);font-size:11px}
+#session-copy-status{display:block;margin-top:5px}
+#session-report{width:100%;font:10px/1.4 monospace;pointer-events:auto;resize:vertical}

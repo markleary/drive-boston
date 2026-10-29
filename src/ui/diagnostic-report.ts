@@ -30,6 +30,7 @@ export interface HUDDiagnosticData {
   timestamp?:string;
   /** Last context loss survives a reload, so a transient message is not the only evidence. */
   graphicsInterruption?:string;
+  previousSession?:string;
 }
 
 /** The game uses east +X and south +Z. Compass bearings run clockwise from north. */
@@ -60,5 +61,6 @@ export function formatLocationReport(data:HUDDiagnosticData){
     `Resources: ${count(p.geometries)} geometries / ${count(p.textures)} textures`,
     `Population: ${count(p.traffic)} traffic cars / ${count(p.transit)} transit vehicles / ${count(p.pedestrians)} pedestrians`,
     ...(data.graphicsInterruption?['', 'Last graphics interruption:', data.graphicsInterruption]:[]),
+    ...(data.previousSession?['', 'Previous session snapshot:', data.previousSession]:[]),
   ].join('\n');
 }
