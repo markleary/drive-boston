@@ -21,6 +21,7 @@ import { PartBatches, box } from './geometry-writer';
 import { due, UNPACED, type Pace } from './pacing';
 import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
+import { planStreetSigns, POLE_HEIGHT } from '../simulation/street-signs';
 import { addRoadStructures } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
 import { addSourceFooting } from './source-footings';
@@ -267,7 +268,7 @@ export function createTileBuilder(ctx: TileContext) {
 
     // Street furniture on the owned roads: trees, lamps and name signs.
     {
-      const treePositions: THREE.Vector3[] = [], signRecords: { position: THREE.Vector3; name: string; yaw: number }[] = [];
+      const treePositions: THREE.Vector3[] = [];
       const random = seeded(342 + hash(key) % 1000);
       const occupied = (x: number, z: number) => inTransitCorridor(city, x, z) || !!city.index.at(x, z);
       const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
@@ -281,11 +282,10 @@ export function createTileBuilder(ctx: TileContext) {
         const dx = b[0] - a[0], dz = b[1] - a[1], t = THREE.MathUtils.clamp(((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
         return Math.hypot(x - a[0] - t * dx, z - a[1] - t * dz) < radius;
       });
-      const taken = new Set<string>(), signCells = new Map<string, number>();
+      const taken = new Set<string>();
       for (const road of ownedRoads) {
         if (road.elevations || road.width < 7 || /alley|unnamed/i.test(road.name)) continue;
         if (due(pace)) yield 'props';
-        let run = 0;
         for (let i = 1; i < road.points.length; i++) {
           const a = road.points[i - 1], b = road.points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .1) continue;
           const tx = dx / length, tz = dz / length;
@@ -297,11 +297,11 @@ export function createTileBuilder(ctx: TileContext) {
               if (side === 1 && !inRoad(x - tx * 5, z - tz * 5) && !occupied(x - tx * 5, z - tz * 5)) lamps.push(new THREE.Vector3(x - tx * 5, height(x - tx * 5, z - tz * 5), z - tz * 5));
             }
           }
-          if (run === 0 && length > 15) { const x = a[0] + tx * 10 - tz * (road.width / 2 + 1.2), z = a[1] + tz * 10 + tx * (road.width / 2 + 1.2), cell = `${Math.floor(x / 320)},${Math.floor(z / 320)}`; if ((signCells.get(cell) ?? 0) < 3 && !occupied(x, z) && !inRoad(x, z)) { signRecords.push({ position: new THREE.Vector3(x, height(x, z), z), name: road.name.replace('Street', 'ST').replace('Avenue', 'AVE').toUpperCase(), yaw: Math.atan2(tx, tz) }); signCells.set(cell, (signCells.get(cell) ?? 0) + 1); } }
-          run += length;
         }
       }
-      if (treePositions.length) ctx.trees.add(key, treePositions); stats.trees = treePositions.length; stats.lamps = lamps.length; stats.signs = signRecords.length;
+      // Name signs stand at a sparse, tile-independent set of corners (see planStreetSigns).
+      const streetSigns = planStreetSigns(roadsNear(grow(bounds, 160)), (x, z) => !occupied(x, z) && !inRoad(x, z), insideTile);
+      if (treePositions.length) ctx.trees.add(key, treePositions); stats.trees = treePositions.length; stats.lamps = lamps.length; stats.signs = streetSigns.length;
       const dummy = new THREE.Object3D();
       if (lamps.length) {
         const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(.055, .1, 5.7, 6), ctx.iron, lamps.length), bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(.27, 8, 6), ctx.lampMat, lamps.length);
@@ -309,12 +309,14 @@ export function createTileBuilder(ctx: TileContext) {
         poles.castShadow = true; poles.name = 'Lamp poles'; bulbs.name = 'Lamp globes'; group.add(...spatialInstances(poles, 500), ...spatialInstances(bulbs, 500));
       }
       const hardware = new PartBatches(500), matrix = new THREE.Matrix4();
-      for (const sign of signRecords) {
+      for (const { position: [x, z], blades } of streetSigns) {
         if (due(pace)) yield 'props';
-        const writer = hardware.at(ctx.iron, sign.position.x, sign.position.z);
-        writer.append(new THREE.CylinderGeometry(.04, .04, 3.2, 6), matrix.makeTranslation(sign.position.x, sign.position.y + 1.6, sign.position.z));
-        writer.box(box(2.67, .5, .045), matrix.makeRotationY(sign.yaw).setPosition(sign.position.x, sign.position.y + 3, sign.position.z));
-        const plate = createStreetSign(sign.name); plate.position.set(sign.position.x, sign.position.y + 3, sign.position.z); plate.rotation.y = sign.yaw; group.add(plate); owned.push(plate.material as THREE.Material);
+        const y = height(x, z), writer = hardware.at(ctx.iron, x, z);
+        writer.append(new THREE.CylinderGeometry(.04, .04, POLE_HEIGHT, 6), matrix.makeTranslation(x, y + POLE_HEIGHT / 2, z));
+        for (const blade of blades) {
+          writer.box(box(2.67, .5, .045), matrix.makeRotationY(blade.yaw).setPosition(x, y + blade.height, z));
+          const plate = createStreetSign(blade.name); plate.position.set(x, y + blade.height, z); plate.rotation.y = blade.yaw; group.add(plate); owned.push(plate.material as THREE.Material);
+        }
       }
       addBatches(hardware);
     }
