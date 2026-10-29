@@ -19,6 +19,10 @@ from building_clearance import RoadClearanceIndex
 from building_collision_policy import exact_far_collision
 from harvard_bridge import validate_harvard_profile
 from harvard_cambridge import validate_cambridge
+from road_connections import validate_source_connections
+from longfellow_connections import validate_longfellow_connections
+from rutherford_connections import validate_rutherford
+from leverett_connections import validate_leverett
 from road_structure_clearance import validate_bridge_clearance
 from harvard_terrain import repair_memorial_terrain
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
@@ -177,6 +181,10 @@ def distance_to_segment(p,a,b):
 # ---- roads
 validate_harvard_profile(city['roads'])
 validate_cambridge(city['roads'],lambda p:elevation(*p))
+validate_source_connections(city['roads'],lambda p:elevation(*p))
+validate_longfellow_connections(city['roads'],lambda p:elevation(*p))
+validate_rutherford(city,json.loads((ROOT/'public/data/road-connections-source.json').read_text()),heights)
+validate_leverett(city,json.loads((ROOT/'public/data/leverett-connections-source.json').read_text()),heights)
 validate_bridge_clearance(city['roads'],elevation)
 cells=defaultdict(list)
 for r in city['roads']:

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {roadGraph} from '../src/simulation/traffic.ts';
+import {sampleDriveSurface} from '../src/simulation/road-surfaces.ts';
+import {closestRoad} from '../src/simulation/roads.ts';
 import {loadCentralCity} from './helpers/metro-city.mjs';
 
 const road=(id,a,b,extra={})=>({id,name:'Main Avenue',width:16,oneway:0,points:[a,b],...extra});
@@ -39,6 +41,17 @@ test('named OSM primary and secondary routes keep their narrow carriageways outs
 test('short connectors do not join a road that merely crosses their endpoint on another level',()=>{
  const c=city([road('upper',[0,0],[40,0],{elevations:[4,4]}),road('short',[40,0],[46,0],{elevations:[4,4]}),road('lower',[46,0],[90,0])]);
  assert.equal(roadGraph(c).edges.filter(e=>e.road.id==='short').length,0);
+});
+
+test('survey-only connector patches retain driving support without creating isolated traffic routes',()=>{
+ const ordinary=road('normal',[0,0],[100,0]),enabled=road('enabled',[100,0],[180,0],{traffic:true});
+ const patch=road('survey-patch',[0,40],[100,40],{traffic:false,elevations:[10,10]});
+ const c=city([ordinary,enabled,patch]),{edges}=roadGraph(c);
+ follow(edges,['normal','enabled']);
+ assert.equal(edges.filter(e=>e.road===patch).length,0,'traffic must not spawn or route onto a patch with no survey continuation in its graph');
+ assert.equal(sampleDriveSurface(c,30,40,10.2).height,10,'physical support must remain on the elevated patch');
+ assert.equal(sampleDriveSurface(c,30,40,0,patch.id).road,patch,'explicit deck resets must still resolve the patch');
+ assert.equal(closestRoad(c,30,40).road,patch,'the patch remains available for player road lookup');
 });
 
 test('real Cambridge traffic continues past the former Massachusetts Avenue terminal in both directions',async()=>{
