@@ -44,7 +44,7 @@ function elevatedNear(city:CityData,x:number,z:number){
   if(!cells){
     cells=new Map();const seen=new Set<string>();
     for(const road of city.roads??[]){
-      if(!road.elevations)continue;const margin=road.width/2+1;
+      if(!road.elevations)continue;const margin=Math.max(road.width,...(road.deckWidths??[]))/2+1;
       for(let i=1;i<road.points.length;i++){
         const a=road.points[i-1],b=road.points[i];
         for(let cx=Math.floor((Math.min(a[0],b[0])-margin)/ELEVATED_CELL);cx<=Math.floor((Math.max(a[0],b[0])+margin)/ELEVATED_CELL);cx++)for(let cz=Math.floor((Math.min(a[1],b[1])-margin)/ELEVATED_CELL);cz<=Math.floor((Math.max(a[1],b[1])+margin)/ELEVATED_CELL);cz++){

@@ -17,6 +17,10 @@ ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scr
 from mesh_winding import orient_shells
 from building_clearance import RoadClearanceIndex
 from building_collision_policy import exact_far_collision
+from harvard_bridge import validate_harvard_profile
+from harvard_cambridge import validate_cambridge
+from road_structure_clearance import validate_bridge_clearance
+from harvard_terrain import repair_memorial_terrain
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
 data_dir=args.data_dir;city=json.loads((data_dir/'city.json').read_text());provenance=json.loads((data_dir/'provenance.json').read_text())
 assert provenance.get('region')=='metro','validate-city.py checks metro packages written by scripts/build-metro.py'
@@ -63,6 +67,7 @@ def load_grid(name):
  reproducible(name);values=np.frombuffer(gzip.decompress((data_dir/name).read_bytes()),dtype='<i2').astype(np.float64)*grid.get('scale',.01)
  assert values.size==w*h and np.isfinite(values).all();return values
 heights=load_grid(grid['file']);source=load_grid(grid['source'])
+assert repair_memorial_terrain(city,heights,apply=False)['changedVertices']==0,'Memorial underpass terrain needs restore-water-crossings.py'
 assert cell<=12 and heights.min()>-100 and 50<heights.max()<200,"harbour channels reach about -80 m on the local datum; hills stay under 120 m"
 assert grid['originX']<=bounds['minX'] and grid['originX']+(w-1)*cell>=bounds['maxX'] and grid['originZ']<=bounds['minZ'] and grid['originZ']+(h-1)*cell>=bounds['maxZ']
 delta=heights-source;changed=int((np.abs(delta)>.001).sum())
@@ -170,12 +175,15 @@ def distance_to_segment(p,a,b):
  return math.hypot(p[0]-a[0]-u*dx,p[1]-a[1]-u*dz)
 
 # ---- roads
+validate_harvard_profile(city['roads'])
+validate_cambridge(city['roads'],lambda p:elevation(*p))
+validate_bridge_clearance(city['roads'],elevation)
 cells=defaultdict(list)
 for r in city['roads']:
  assert len(r['points'])>=2 and r['oneway'] in (-1,0,1) and 3<=r['width']<=20,r['id']
  if r.get('elevations'):assert len(r['elevations'])==len(r['points']) and all(math.isfinite(v) for v in r['elevations']),'invalid deck profile'
- if r.get('deckWidths'):assert r.get('elevations') and len(r['deckWidths'])==len(r['points']) and all(math.isfinite(v) and 3<=v<=r['width'] for v in r['deckWidths']),'invalid per-section deck width'
- if r.get('deckTangents'):assert set(r['deckTangents'])=={'start','end'} and all(len(v)==2 and all(math.isfinite(n) for n in v) and math.hypot(*v)>.001 for v in r['deckTangents'].values()),'invalid shared deck tangent'
+ if r.get('deckWidths'):assert r.get('elevations') and len(r['deckWidths'])==len(r['points']) and all(math.isfinite(v) and 3<=v<=20 for v in r['deckWidths']),'invalid per-section deck width'
+ if r.get('deckTangents'):assert set(r['deckTangents'])<={'start','end'} and all(len(v)==2 and all(math.isfinite(n) for n in v) and math.hypot(*v)>.001 for v in r['deckTangents'].values()),'invalid shared deck tangent'
  for x,z in r['points']:
   assert bounds['minX']-.01<=x<=bounds['maxX']+.01 and bounds['minZ']-.01<=z<=bounds['maxZ']+.01
   assert covered.covers(Point(x,z)),f"road escapes curated coverage: {r['name']} {r['id']}"

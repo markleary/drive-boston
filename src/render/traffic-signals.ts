@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import type {CityData} from '../types';
-import {planTrafficSignals} from '../simulation/signal-placement';
-import {sampleElevation} from '../simulation/terrain';
-import {signalAxis,signalPhase} from '../simulation/signals';
-import {mergeSpatialGeometries} from './spatial-batches';
+import {planTrafficSignals} from '../simulation/signal-placement.ts';
+import {sampleElevation} from '../simulation/terrain.ts';
+import {sampleRoadElevation} from '../simulation/road-surfaces.ts';
+import {signalAxis,signalPhase} from '../simulation/signals.ts';
+import {mergeSpatialGeometries} from './spatial-batches.ts';
 
 let shared:{iron:THREE.Material;back:THREE.Material;rim:THREE.Material;lenses:THREE.MeshStandardMaterial[][]}|undefined;
 /** One set of lens materials drives every signal head, whichever tile built it. */
@@ -19,9 +20,10 @@ export function createTrafficSignals(scene:THREE.Object3D,city:CityData,placemen
   const {iron,back,rim,lenses}=signalMaterials();
   const add=(g:THREE.BufferGeometry,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{g.rotateY(yaw).translate(x,y,z);const batch=batches.get(m)??[];batch.push(g);batches.set(m,batch);};
   for(const signal of placements){
-    const[x,z]=signal.position,y=sampleElevation(city,x,z),nx=Math.sin(signal.armYaw),nz=Math.cos(signal.armYaw),length=signal.armLength;
-    add(new THREE.CylinderGeometry(.085,.14,5.65,10),iron,x,y+2.825,z);
-    add(new THREE.CylinderGeometry(.21,.26,.18,10),iron,x,y+.09,z);
+    const[x,z]=signal.position,footing=sampleElevation(city,x,z),y=signal.road.elevations?Math.max(footing,sampleRoadElevation(city,signal.road,...signal.roadPoint)):footing,nx=Math.sin(signal.armYaw),nz=Math.cos(signal.armYaw),length=signal.armLength;
+    const mastHeight=y+5.65-footing;
+    add(new THREE.CylinderGeometry(.085,.14,mastHeight,10),iron,x,footing+mastHeight/2,z);
+    add(new THREE.CylinderGeometry(.21,.26,.18,10),iron,x,footing+.09,z);
     add(new THREE.CylinderGeometry(.065,.085,length,8).rotateX(Math.PI/2),iron,x+nx*length*.5,y+5.5,z+nz*length*.5,signal.armYaw);
     for(const side of [0,1]){
       const sx=x+nx*(length-.35-side*.9),sz=z+nz*(length-.35-side*.9),yaw=signal.yaw+side*Math.PI,axis=signalAxis(yaw);
