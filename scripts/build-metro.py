@@ -771,7 +771,12 @@ def write_tiles(out,buildings,geometry,curbs,park_paths,roads):
   if len(curb)<2:continue
   spread(curb,lambda tx,tz:tiles[(tx,tz)]['curbs'].extend(clip_to_tile(curb,tx,tz)))
  for path in park_paths:
-  spread(path['points'],lambda tx,tz:tiles[(tx,tz)]['parkPaths'].extend({**path,'id':path['id']+f'-{tx}_{tz}_{n}','points':pts} for n,pts in enumerate(clip_to_tile(path['points'],tx,tz))))
+  fragments=[]
+  spread(path['points'],lambda tx,tz:fragments.extend((tx,tz,n,pts) for n,pts in enumerate(clip_to_tile(path['points'],tx,tz))))
+  for tx,tz,n,pts in fragments:
+   entry={**path,'id':path['id']+f'-{tx}_{tz}_{n}','points':pts}
+   if path.get('bridge') and len(fragments)>1:entry['bridgePoints']=path['points']
+   tiles[(tx,tz)]['parkPaths'].append(entry)
  for road in roads:
   spread(road['points'],lambda tx,tz:tiles[(tx,tz)]['roads'].add(road['id']) if box(tx*TILE,tz*TILE,(tx+1)*TILE,(tz+1)*TILE).buffer(road['width']+2).intersects(LineString(road['points'])) else None)
  keys=[]

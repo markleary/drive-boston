@@ -28,6 +28,14 @@ export function roadNormal(city:CityData,road:Road,x:number,z:number){
 export function roadRotation(city:CityData,road:Road,x:number,z:number,yaw:number){return rotationFromNormal(roadNormal(city,road,x,z),yaw);}
 
 const elevatedIndexes=new WeakMap<CityData,Map<string,Road[]>>();
+const streamedSurfaces=new WeakMap<CityData,Map<string,{road:Road;references:number}>>();
+/** Park paths arrive in tiles, outside city.roads. Keep their support query alive
+ * for exactly as long as their physical decks (including overlapping owners). */
+export function registerDriveSurface(city:CityData,road:Road){
+  let surfaces=streamedSurfaces.get(city);if(!surfaces){surfaces=new Map();streamedSurfaces.set(city,surfaces);}
+  const entry=surfaces.get(road.id)??{road,references:0};entry.references++;surfaces.set(road.id,entry);
+  return()=>{if(--entry.references===0)surfaces.delete(road.id);};
+}
 const ELEVATED_CELL=128;
 /** Elevated roads near a point, from a per-city cell index: a metro has hundreds
  * of structures, and the surface query runs for every reset, save and actor. */
@@ -53,10 +61,10 @@ function elevatedNear(city:CityData,x:number,z:number){
 /** Highest support no more than 0.4m above the supplied reference. A car below
  * an overpass stays below it; explicit road IDs make deck destination resets unambiguous. */
 export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
-  const chosen=roadId?city.roads?.find(r=>r.id===roadId):undefined;
+  const registered=streamedSurfaces.get(city),chosen=roadId?city.roads?.find(r=>r.id===roadId)??registered?.get(roadId)?.road:undefined;
   if(chosen&&roadProjection(chosen,x,z).distance<=roadWidthAt(chosen,x,z)/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
   let height=sampleElevation(city,x,z),normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
-  for(const candidate of elevatedNear(city,x,z)){
+  for(const candidate of [...elevatedNear(city,x,z),...[...(registered?.values()??[])].map(s=>s.road)]){
     if(!candidate.elevations)continue;
     const hit=roadProjection(candidate,x,z);if(hit.distance>roadWidthAt(candidate,x,z)/2+.05)continue;
     const h=sampleRoadElevation(city,candidate,x,z);

@@ -329,7 +329,8 @@ export function createTileBuilder(ctx: TileContext) {
     yield 'signals';
 
     {
-      const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group, budgets: { trees: 120, benches: 25 }, pace }));
+      for(const path of tile.parkPaths)colliders.push(...physics.addFootbridge(subCity,path));
+      const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group, budgets: { trees: 120, benches: 25 }, pace, onShore:(vertices,indices)=>colliders.push(physics.addStaticMesh(vertices,indices)) }));
       stats.parkTrees = parks.userData.trees ?? 0;
     }
     yield 'parks';

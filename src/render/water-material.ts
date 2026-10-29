@@ -8,17 +8,20 @@ export function updateWater(time:number){waterTime.value=time;}
 const WATER_PARS=/* glsl */`
 uniform float waterTime;
 varying vec3 vWaterWorld;
+varying vec2 vWaterMotion;
+varying float vWaterEdge;
 `;
 const WATER_NORMAL=/* glsl */`
 {
   vec2 p=vWaterWorld.xz;
+  float drift=waterTime*vWaterMotion.y;
   // Different scales and drift speeds break the repeating tile into wind
   // ripples. Mipmaps filter distant waves instead of sparkling at the horizon.
-  vec2 a=texture2D(normalMap,p/18.0+waterTime*vec2(-0.012,0.004)).xy*2.0-1.0;
-  vec2 b=texture2D(normalMap,p/7.3+waterTime*vec2(-0.018,-0.009)).xy*2.0-1.0;
+  vec2 a=texture2D(normalMap,p/18.0+drift*vec2(-0.012,0.004)).xy*2.0-1.0;
+  vec2 b=texture2D(normalMap,p/7.3+drift*vec2(-0.018,-0.009)).xy*2.0-1.0;
   mat2 rotate=mat2(0.8,-0.6,0.6,0.8);
-  vec2 c=texture2D(normalMap,rotate*p/3.1+waterTime*vec2(0.013,0.021)).xy*2.0-1.0;
-  vec2 slope=a*0.7+b*0.22+transpose(rotate)*c*0.08;
+  vec2 c=texture2D(normalMap,rotate*p/3.1+drift*vec2(0.013,0.021)).xy*2.0-1.0;
+  vec2 slope=(a*0.7+b*0.22+transpose(rotate)*c*0.08)*vWaterMotion.x;
   // Shading moves, but the geometric surface/shoreline remain horizontal.
   normal=normalize(mat3(viewMatrix)*normalize(vec3(slope.x,1.0,slope.y)));
   float footprint=max(length(dFdx(p)),length(dFdy(p)));
@@ -55,18 +58,21 @@ let ripples:THREE.DataTexture|undefined;
 /** Dielectric water uses Three's Fresnel reflection, sun glints, shadows and
  * the world's existing sky/local reflection probe (sky only on mobile). */
 export function createWaterMaterial(){
-  const material=new THREE.MeshPhysicalMaterial({color:'#26494a',roughness:.16,metalness:0,ior:1.333,normalMap:ripples??=rippleTexture()});
+  const material=new THREE.MeshPhysicalMaterial({color:'#26494a',roughness:.16,metalness:0,ior:1.333,normalMap:ripples??=rippleTexture(),transparent:true,depthWrite:false});
   material.name='Rippling water';
   material.onBeforeCompile=shader=>{
     shader.uniforms.waterTime=waterTime;
-    shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 vWaterWorld;')
-      .replace('#include <project_vertex>','#include <project_vertex>\nvWaterWorld=(modelMatrix*vec4(transformed,1.0)).xyz;');
+    shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nattribute vec2 waterMotion;\nattribute float waterEdge;\nvarying vec2 vWaterMotion;\nvarying float vWaterEdge;\nvarying vec3 vWaterWorld;')
+      .replace('#include <project_vertex>','#include <project_vertex>\nvWaterWorld=(modelMatrix*vec4(transformed,1.0)).xyz;\nvWaterMotion=waterMotion;\nvWaterEdge=waterEdge;');
     shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\n'+WATER_PARS)
+      // A shallow bank under the water supplies the shore color; the blend is
+      // local to the wet edge and leaves the open-water interior fully opaque.
+      .replace('#include <color_fragment>','#include <color_fragment>\ndiffuseColor.a*=smoothstep(0.0,1.0,vWaterEdge);')
       .replace('#include <normal_fragment_maps>',WATER_NORMAL)
       // scene.environment overrides material.envMapIntensity. Boost only the
       // water's reflected radiance, leaving the city's diffuse lighting alone.
       .replace('#include <lights_fragment_maps>','#include <lights_fragment_maps>\n#if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular )\nradiance *= 3.5;\n#endif');
   };
-  material.customProgramCacheKey=()=>'boston-rippling-water-1';
+  material.customProgramCacheKey=()=>'boston-rippling-water-3';
   return material;
 }
