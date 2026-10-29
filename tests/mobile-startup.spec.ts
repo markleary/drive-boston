@@ -112,7 +112,9 @@ test.describe('mobile startup memory limits',()=>{
     expect(traveled.farCity.geometryBytes).toBeLessThan(12*1024*1024);
     expect(traveled.state.y).toBeGreaterThan(traveled.groundHeight-1);
     await page.setViewportSize({width:393,height:852});
-    await page.getByRole('button',{name:'Helicopter mode',exact:true}).tap();
+    await page.getByRole('button',{name:'Pause and open settings'}).tap();
+    await page.locator('#settings-modal [data-travel="helicopter"]').tap();
+    await page.getByRole('button',{name:'Keep flying'}).tap();
     await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('helicopter');
     const ascend=(await page.getByRole('button',{name:'Ascend',exact:true}).boundingBox())!;
     await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:ascend.x+ascend.width/2,y:ascend.y+ascend.height/2}]});

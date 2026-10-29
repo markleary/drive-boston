@@ -10,6 +10,7 @@ import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
 import {HELICOPTER} from '../simulation/helicopter';
 import {createMinimapLabeler} from './minimap-labels';
+import {createTouchDrivingControls, TOUCH_DRIVING_MARKUP, type TouchDrivingMode} from './touch-driving';
 
 export interface InterfaceCallbacks {
   onReset(): void;
@@ -90,6 +91,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     </section>
     <section class="modal-scrim hidden" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="panel"><button class="close-btn" id="close-settings" aria-label="Resume driving">${svg('close')}</button><div class="eyebrow">Take a moment</div><h2 id="settings-title">Your afternoon.</h2>
+        <div class="touch-settings"><span class="setting-label">Touch controls</span><div class="segments" aria-label="Touch control layout"><button data-touch-mode="analog" class="active" aria-pressed="true">Steering + pedals</button><button data-touch-mode="joystick" aria-pressed="false">Combined joystick</button></div><p class="touch-help" id="touch-help">Drag left or right to steer. Use Gas and Brake to control speed. Stop before choosing D or R.</p>
+        <span class="setting-label">Your vehicle</span><div class="segments" aria-label="Mobile travel mode"><button data-travel="drive" class="active" aria-pressed="true">Car</button><button data-travel="bike" aria-pressed="false">Ultra Bee</button><button data-travel="helicopter" aria-pressed="false">Helicopter</button></div></div>
         <span class="setting-label">Time of day</span><div class="segments" aria-label="Time of day"><button data-light="golden" class="active" aria-pressed="true">Golden hour</button><button data-light="day" aria-pressed="false">Daylight</button><button data-light="night" aria-pressed="false">Night</button></div>
         <span class="setting-label">Your view</span><div class="segments" aria-label="Camera"><button data-camera="chase" class="active" aria-pressed="true">Chase</button><button data-camera="hood" aria-pressed="false">Hood</button><button data-camera="aerial" aria-pressed="false">Aerial</button></div>
         <span class="setting-label">City sound</span><div class="segments" aria-label="City sound"><button data-sound="on" class="active" aria-pressed="true">Sound on</button><button data-sound="off" aria-pressed="false">Muted</button></div>
@@ -101,8 +104,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     </section>
     <section class="modal-scrim hidden" id="credits-modal" role="dialog" aria-modal="true" aria-labelledby="credits-title"><div class="panel"><button class="close-btn" id="close-credits" aria-label="Back to settings">${svg('close')}</button><div class="eyebrow">An independent prototype</div><h2 id="credits-title">A real place.</h2><div class="credits-copy"><p>Built around Boston’s real streets, building shapes, and hills. Façades and street details are artistic interpretations; this is an exploration game, not a navigation service.</p><ul id="source-list"></ul><p>Original game implementation with Three.js and Rapier.</p></div></div></section>
     <section class="map-modal hidden" id="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-header"><div><div class="eyebrow">The Boston atlas</div><h2 id="map-title">Find your next turn.</h2></div><button class="close-map" id="close-map">Back to driving <kbd>M</kbd></button></div><canvas id="fullmap" aria-label="Interactive map of Boston streets, buildings and landmarks"></canvas><div class="map-tools"><button id="map-zoom-in" aria-label="Zoom map in">+</button><button id="map-zoom-out" aria-label="Zoom map out">−</button><button id="map-center" aria-label="Center map on car">${svg('target')}</button><button id="map-overview" aria-label="Show all Boston destinations" title="Show all destinations">${svg('map')}</button></div><aside class="map-places" id="map-places"><div class="map-places-heading">Places to explore<span>Choose a place to start nearby</span></div><div class="map-destinations" id="map-destinations" role="navigation" aria-label="Landmark destinations"></div></aside><div class="map-note">Drag to explore · Scroll to zoom</div></section>
-    <div class="touch-controls suspended" id="touch-controls" aria-label="Touch driving controls"><div class="touch-pad"><button class="touch-btn" data-touch="left" aria-label="Steer left">←</button><button class="touch-btn" data-touch="right" aria-label="Steer right">→</button></div><button class="touch-btn wheelie-touch" data-touch="wheelie" aria-label="Wheelie">WHEELIE</button><button class="touch-btn brake" data-touch="handbrake" aria-label="Handbrake">BRAKE</button><div class="touch-pad"><button class="touch-btn" data-touch="reverse" aria-label="Brake and reverse">↓</button><button class="touch-btn" data-touch="accelerate" aria-label="Accelerate">↑</button></div></div>
-    <div class="flight-touch suspended" id="flight-touch" aria-label="Helicopter lift and rotation"><button class="touch-btn" data-touch="yaw-left" aria-label="Rotate helicopter left">↶</button><button class="touch-btn" data-touch="yaw-right" aria-label="Rotate helicopter right">↷</button><button class="touch-btn" data-touch="descend" aria-label="Descend">⇩</button><button class="touch-btn" data-touch="ascend" aria-label="Ascend">⇧</button></div>
+    ${TOUCH_DRIVING_MARKUP}
+    <div class="flight-touch suspended" id="flight-touch" aria-label="Touch helicopter controls"><div class="flight-movement"><span class="touch-control-caption">Move</span><div class="flight-pad"><button class="touch-btn" data-touch="accelerate" aria-label="Fly forward">↑</button><button class="touch-btn" data-touch="reverse" aria-label="Fly backward">↓</button><button class="touch-btn" data-touch="left" aria-label="Move helicopter left">←</button><button class="touch-btn" data-touch="right" aria-label="Move helicopter right">→</button></div></div><div class="flight-actions"><span class="touch-control-caption">Turn / altitude</span><div class="flight-pad"><button class="touch-btn" data-touch="yaw-left" aria-label="Rotate helicopter left">↶</button><button class="touch-btn" data-touch="yaw-right" aria-label="Rotate helicopter right">↷</button><button class="touch-btn" data-touch="descend" aria-label="Descend">⇩</button><button class="touch-btn" data-touch="ascend" aria-label="Ascend">⇧</button></div></div></div>
     <section class="modal-scrim hidden" id="graphics-modal" role="dialog" aria-modal="true" aria-labelledby="graphics-title">
       <div class="panel"><div class="eyebrow">Drive paused</div><h2 id="graphics-title">Graphics interrupted.</h2>
         <p id="graphics-status" role="status">Waiting for the browser to restore graphics. Your drive is paused here.</p>
@@ -136,6 +139,29 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   let mapZoom = 1;
   let previousFocus: HTMLElement | null = null;
   const held = new Set<string>();
+  const flightPointers = new Map<number, HTMLButtonElement>();
+  const touchMedia = matchMedia('(any-pointer: coarse)');
+  let touchSeen = false;
+  const touchDriving = createTouchDrivingControls(host,{isPaused});
+  let touchMode: TouchDrivingMode = 'analog';
+  try { if(localStorage.getItem('boston-touch-controls-v1')==='joystick')touchMode='joystick'; } catch { /* Optional preferences. */ }
+  function setTouchMode(mode:TouchDrivingMode,persist=false){
+    touchMode=mode;touchDriving.setMode(mode);
+    host.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach(button=>{const selected=button.dataset.touchMode===mode;button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));});
+    el('touch-help').textContent=mode==='analog'?'Drag left or right to steer. Use Gas and Brake to control speed. Stop before choosing D or R.':'Push up to accelerate and left or right to steer. Pull down to brake, then reverse. Release to coast.';
+    if(persist)try{localStorage.setItem('boston-touch-controls-v1',mode);}catch{/* Optional preferences. */}
+  }
+  setTouchMode(touchMode);
+  function updateTouchAvailability(){const touch=touchMedia.matches||touchSeen;host.classList.toggle('touch-enabled',touch);host.querySelector('.map-note')!.textContent=touch?'Drag to explore · Pinch to zoom':'Drag to explore · Scroll to zoom';resize();}
+  on(touchMedia,'change',updateTouchAvailability);
+  on(document,'pointerdown',event=>{if((event as PointerEvent).pointerType==='touch'&&!touchSeen){touchSeen=true;updateTouchAvailability();}},{capture:true,passive:true});
+  on(host,'selectstart',event=>event.preventDefault());
+  on(host,'contextmenu',event=>event.preventDefault());
+  // These surfaces use pointer events. Suppress their later compatibility click
+  // so a held thumb cannot activate a menu that opens during an interruption.
+  on(host,'touchstart',event=>{
+    if(event.cancelable&&event.target instanceof Element&&event.target.closest('#touch-steering,[data-drive-action],#flight-touch [data-touch]'))event.preventDefault();
+  },{passive:false});
   const neighborhoods=indexAreas(city.neighborhoods??[]);
   const mapRoads=city.roads.map(road=>({road,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
   const boxed=<T extends {rings:Point2[][]}>(areas:T[])=>areas.filter(a=>a.rings[0]?.length).map(area=>{const ring=area.rings[0];let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of ring){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}return{area,minX,maxX,minZ,maxZ};});
@@ -159,8 +185,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   function isPaused() { return graphicsInterrupted || !started || mapOpen || settingsOpen || creditsOpen; }
   function updatePause() {
     const paused = isPaused();
-    held.clear(); host.querySelectorAll('.touch-btn').forEach(b => b.classList.remove('held'));
-    el('touch-controls').classList.toggle('suspended', paused);
+    clearFlightInput();touchDriving.setSuspended(paused);
     el('flight-touch').classList.toggle('suspended', paused);
     callbacks.onPause(paused);
     diagnostics.suspend(paused);
@@ -179,13 +204,18 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       mapCenter = [(city.bounds.minX + city.bounds.maxX) / 2, (city.bounds.minZ + city.bounds.maxZ) / 2];
       mapZoom = 1;
       focusModal('map-modal', 'close-map'); resize(); drawFullMap();
-    } else { el('map-modal').classList.add('hidden'); restoreFocus(); }
+    } else { clearMapGesture();el('map-modal').classList.add('hidden'); restoreFocus(); }
     updatePause();
   }
   function setSettings(open: boolean) {
     if (!started) return;
     settingsOpen = open;
-    if (open) { if (mapOpen) setMap(false); focusModal('settings-modal', 'resume-drive'); }
+    if (open) {
+      if (mapOpen) setMap(false);
+      const touch=host.classList.contains('touch-enabled');
+      focusModal('settings-modal',touch?'close-settings':'resume-drive');
+      if(touch)el('settings-modal').querySelector<HTMLElement>('.panel')!.scrollTop=0;
+    }
     else { el('settings-modal').classList.add('hidden'); restoreFocus(); }
     updatePause();
   }
@@ -215,7 +245,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     const flying = mode === 'helicopter',riding=mode==='bike';
     host.classList.toggle('riding',riding);
     host.classList.toggle('flying', flying);
-    held.clear(); host.querySelectorAll('.touch-btn').forEach(button => button.classList.remove('held'));
+    clearFlightInput();touchDriving.setTravelMode(mode);
     host.querySelectorAll<HTMLButtonElement>('[data-travel]').forEach(button => { const active = button.dataset.travel === mode; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
     el('altitude-readout').classList.toggle('hidden', !flying);
     el('journey-label').textContent = flying ? 'ABOVE BOSTON' : riding ? 'ULTRA BEE · ELECTRIC' : 'AFTERNOON DRIVE';
@@ -235,14 +265,10 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       : '<span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Car / Ultra Bee / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd>';
     if(riding)el('controls-help').innerHTML='<span>Throttle / brake & reverse assist</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Lean / steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Both brakes</span><kbd>Space</kbd><span>Wheelie · up to 3 seconds while accelerating</span><kbd>X</kbd><span>Gamepad wheelie</span><span>X / Square</span><span>Car / Ultra Bee / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / camera / reset</span><span><kbd>M</kbd> <kbd>C</kbd> <kbd>R</kbd></span><span>Hide interface / mute / pause</span><span><kbd>H</kbd> <kbd>N</kbd> <kbd>Esc</kbd></span>';
     el('controls-help').insertAdjacentHTML('beforeend',statsHelp);
-    host.querySelector('[data-touch=handbrake]')?.setAttribute('aria-label',riding?'Brake bike':'Handbrake');
-    const labels = flying ? { left:'Move helicopter left', right:'Move helicopter right', reverse:'Fly backward', accelerate:'Fly forward' } : { left:'Steer left', right:'Steer right', reverse:'Brake and reverse', accelerate:'Accelerate' };
-    for (const [touch, label] of Object.entries(labels)) host.querySelector(`[data-touch="${touch}"]`)?.setAttribute('aria-label', label);
-    el('touch-controls').setAttribute('aria-label', flying ? 'Touch flight movement' : 'Touch driving controls');
     host.querySelectorAll<HTMLButtonElement>('[data-destination]').forEach(button => { const name = button.querySelector('strong')?.textContent; button.setAttribute('aria-label', `${flying ? 'Fly' : 'Start driving'} near ${name}`); });
     setCamera(camera);
     // A deliberate mode switch brings a hidden HUD back so the new mode's instruments show.
-    if (notify && changed) { setHudHidden(false); callbacks.onTravelMode?.(mode); toast(flying ? (matchMedia('(pointer: coarse)').matches ? 'Helicopter · Upper arrows control altitude' : 'Helicopter · Space to rise, Shift to descend') : riding ? (matchMedia('(pointer: coarse)').matches?'Ultra Bee · Accelerate, then tap Wheelie':'Ultra Bee · Accelerate, then X for a 3-second wheelie') : 'Back behind the wheel.'); }
+    if (notify && changed) { setHudHidden(false); callbacks.onTravelMode?.(mode); toast(flying ? (host.classList.contains('touch-enabled') ? 'Left: move · Right: turn and altitude' : 'Helicopter · Space to rise, Shift to descend') : riding ? (host.classList.contains('touch-enabled')?'Ultra Bee · Accelerate, then tap Wheelie':'Ultra Bee · Accelerate, then X for a 3-second wheelie') : 'Back behind the wheel.'); }
   }
   function toast(message: string) {
     el('toast').textContent = message; el('toast').classList.add('visible'); window.clearTimeout(toastTimer);
@@ -279,6 +305,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     window.setTimeout(() => el('welcome').classList.add('hidden'), 700);
     callbacks.onStart?.(); updatePause();
     el('start-drive').blur();
+    if(host.classList.contains('touch-enabled'))toast(touchMode==='analog'?'Left thumb steers · Gas and Brake on the right':'Push up to drive · Down brakes, then reverses');
   }
   click('start-drive', start); click('open-map', () => setMap(true)); click('minimap-button', () => setMap(true)); click('close-map', () => setMap(false));
   click('resume-graphics', () => {
@@ -307,9 +334,10 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   host.querySelectorAll<HTMLButtonElement>('[data-camera]').forEach(b => on(b, 'click', () => setCamera(b.dataset.camera as CameraMode, true)));
   host.querySelectorAll<HTMLButtonElement>('[data-sound]').forEach(b => on(b, 'click', () => setSound(b.dataset.sound === 'on', true)));
   host.querySelectorAll<HTMLButtonElement>('[data-quality]').forEach(b => on(b, 'click', () => setQuality(b.dataset.quality as QualityMode, true)));
+  host.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach(b=>on(b,'click',()=>setTouchMode(b.dataset.touchMode as TouchDrivingMode,true)));
   host.querySelector('[data-hud="performance"]')!.addEventListener('click',diagnostics.togglePerformance);
   host.querySelector('[data-hud="debug"]')!.addEventListener('click',diagnostics.toggleDebug);
-  host.querySelectorAll<HTMLButtonElement>('[data-travel]').forEach(b => on(b, 'click', () => { if (started && !isPaused()) { setTravelMode(b.dataset.travel as TravelMode, true); b.blur(); } }));
+  host.querySelectorAll<HTMLButtonElement>('[data-travel]').forEach(b => on(b, 'click', () => { if (started && !graphicsInterrupted && (!isPaused()||settingsOpen)) { setTravelMode(b.dataset.travel as TravelMode, true); b.blur(); } }));
   for (const source of city.sources) {
     const li = document.createElement('li'), a = document.createElement('a');
     a.href = source.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = source.name;
@@ -327,6 +355,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   }
   let mapViewport={left:30,top:120,right:800,bottom:700};
   function resize() {
+    clearFlightInput();clearMapGesture();touchDriving.reset();
     resizeCanvas(mini);
     if(mapOpen){
       resizeCanvas(full);
@@ -438,21 +467,25 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   function fullScale() {
     return Math.min((mapViewport.right-mapViewport.left) / (city.bounds.maxX-city.bounds.minX), (mapViewport.bottom-mapViewport.top) / (city.bounds.maxZ-city.bounds.minZ)) * mapZoom;
   }
-  function drawMiniMap() { drawMap(miniContext,mini,[state.x,state.z],mini.clientWidth / (travelMode === 'helicopter' ? 460 + Math.max(0, altitude - 30) * 2 : 460),false); }
+  function drawMiniMap() { if(!started||isPaused()||document.hidden||host.classList.contains('hud-off')||mini.clientWidth===0)return;drawMap(miniContext,mini,[state.x,state.z],mini.clientWidth / (travelMode === 'helicopter' ? 460 + Math.max(0, altitude - 30) * 2 : 460),false); }
   function drawFullMap() { if (mapOpen) drawMap(fullContext,full,mapCenter,fullScale(),true); }
   function zoom(factor: number) { mapZoom = Math.max(.65, Math.min(Math.max(24,mapExtent/150), mapZoom * factor)); drawFullMap(); }
   click('map-zoom-in', () => zoom(1.3)); click('map-zoom-out', () => zoom(1/1.3)); click('map-center', () => { mapCenter=[state.x,state.z];mapZoom=Math.max(1.8,Math.min(20,mapExtent/850));drawFullMap(); });
   click('map-overview',()=>{mapCenter=[(city.bounds.minX+city.bounds.maxX)/2,(city.bounds.minZ+city.bounds.maxZ)/2];mapZoom=1;drawFullMap();});
   on(full, 'wheel', event => { const e = event as WheelEvent; e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 1/1.12); }, { passive:false });
-  let drag: { id: number; x: number; y: number; center: Point2 } | null = null;
-  on(full,'pointerdown',event=>{const e=event as PointerEvent;drag={id:e.pointerId,x:e.clientX,y:e.clientY,center:[...mapCenter]};full.setPointerCapture(e.pointerId);});
-  on(full,'pointermove',event=>{const e=event as PointerEvent;if(!drag||drag.id!==e.pointerId)return;const scale=fullScale();mapCenter=[drag.center[0]-(e.clientX-drag.x)/scale,drag.center[1]-(e.clientY-drag.y)/scale];drawFullMap();});
-  on(full,'pointerup',()=>{drag=null;});on(full,'pointercancel',()=>{drag=null;});
-  host.querySelectorAll<HTMLButtonElement>('[data-touch]').forEach(button=>{
-    on(button,'pointerdown',event=>{if(isPaused())return;const e=event as PointerEvent;e.preventDefault();button.setPointerCapture(e.pointerId);held.add(button.dataset.touch!);button.classList.add('held');});
-    const release=()=>{held.delete(button.dataset.touch!);button.classList.remove('held');};on(button,'pointerup',release);on(button,'pointercancel',release);on(button,'lostpointercapture',release);
+  const mapPointers=new Map<number,Point2>();
+  function clearMapGesture(){const pointers=[...mapPointers.keys()];mapPointers.clear();for(const id of pointers)if(full.hasPointerCapture(id))full.releasePointerCapture(id);}
+  const mapGesture=()=>{const points=[...mapPointers.values()];return{mid:points.length===2?[(points[0][0]+points[1][0])/2,(points[0][1]+points[1][1])/2] as Point2:points[0],distance:points.length===2?Math.hypot(points[1][0]-points[0][0],points[1][1]-points[0][1]):0};};
+  on(full,'pointerdown',event=>{const e=event as PointerEvent;if(e.button!==0||mapPointers.size>=2)return;e.preventDefault();mapPointers.set(e.pointerId,[e.clientX,e.clientY]);full.setPointerCapture(e.pointerId);});
+  on(full,'pointermove',event=>{const e=event as PointerEvent;if(!mapOpen||!mapPointers.has(e.pointerId))return;e.preventDefault();const before=mapGesture(),scale=fullScale();mapPointers.set(e.pointerId,[e.clientX,e.clientY]);const after=mapGesture();const rect=full.getBoundingClientRect(),cx=rect.left+(mapViewport.left+mapViewport.right)/2,cy=rect.top+(mapViewport.top+mapViewport.bottom)/2;const anchor:Point2=[mapCenter[0]+(before.mid[0]-cx)/scale,mapCenter[1]+(before.mid[1]-cy)/scale];if(before.distance>0&&after.distance>0)mapZoom=Math.max(.65,Math.min(Math.max(24,mapExtent/150),mapZoom*after.distance/before.distance));const nextScale=fullScale();mapCenter=[anchor[0]-(after.mid[0]-cx)/nextScale,anchor[1]-(after.mid[1]-cy)/nextScale];drawFullMap();});
+  for(const event of ['pointerup','pointercancel','lostpointercapture'])on(full,event,e=>{mapPointers.delete((e as PointerEvent).pointerId);});
+  function clearFlightInput(){held.clear();for(const [id,button] of flightPointers){if(button.hasPointerCapture(id))button.releasePointerCapture(id);button.classList.remove('held');}flightPointers.clear();}
+  el('flight-touch').querySelectorAll<HTMLButtonElement>('[data-touch]').forEach(button=>{
+    on(button,'pointerdown',event=>{if(isPaused()||travelMode!=='helicopter')return;const e=event as PointerEvent;if(e.button!==0)return;e.preventDefault();button.setPointerCapture(e.pointerId);flightPointers.set(e.pointerId,button);held.add(button.dataset.touch!);button.classList.add('held');});
+    const release=(event:Event)=>{flightPointers.delete((event as PointerEvent).pointerId);if(![...flightPointers.values()].includes(button)){held.delete(button.dataset.touch!);button.classList.remove('held');}};on(button,'pointerup',release);on(button,'pointercancel',release);on(button,'lostpointercapture',release);
   });
-  on(window,'blur',()=>{held.clear();if(started&&!isPaused())setSettings(true);});
+  on(window,'blur',()=>{clearFlightInput();clearMapGesture();if(started&&!isPaused())setSettings(true);});
+  on(document,'visibilitychange',()=>{if(document.hidden){clearFlightInput();clearMapGesture();if(started&&!isPaused())setSettings(true);}});
   on(window,'resize',resize);
   on(window,'keydown',event=>{
     const e=event as KeyboardEvent;
@@ -477,7 +510,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
 
   function update(next: VehicleState, stats?: InterfaceStats) {
     if(stats?.travelMode && stats.travelMode!==travelMode)setTravelMode(stats.travelMode);
-    state=next;latestStats=stats??{};const speed=Math.abs(state.speed)*2.236936;
+    state=next;touchDriving.setSpeed(state.speed);latestStats=stats??{};const speed=Math.abs(state.speed)*2.236936;
     const speedScale=travelMode==='helicopter'?HELICOPTER.cruiseSpeed*2.236936:travelMode==='bike'?56:65;
     el('speed-value').textContent=String(Math.round(speed));el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;el('gear').textContent=travelMode==='helicopter'?'H':state.speed<-.3?'R':travelMode==='bike'?'E':`D${stats?.gear&&stats.gear>0?stats.gear:''}`;
     el('gear').title=travelMode==='drive'&&stats?.rpm?`Automatic transmission · ${Math.round(stats.rpm)} rpm`:'';
@@ -488,7 +521,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     }
     const now=performance.now();
     diagnostics.update(now);
-    if(now-lastMapDraw>90){drawMiniMap();if(mapOpen)drawFullMap();lastMapDraw=now;}
+    if(now-lastMapDraw>90){drawMiniMap();lastMapDraw=now;}
     if(now-lastLocation>500){
       const neighborhood=neighborhoodAt(state.x,state.z);
       const near=closestRoad(city,state.x,state.z);
@@ -506,10 +539,10 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       el('next-street').classList.toggle('hidden',!nextShown||el('next-street-label').textContent===label);
     }
   }
-  resize();updatePause();
+  updateTouchAvailability();updatePause();
   return {
-    update,isPaused,isMapOpen:()=>mapOpen,
-    getTouchInput:():DriveInput=>({throttle:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),brake:0,steer:isPaused()?0:Number(held.has('left'))-Number(held.has('right')),handbrake:!isPaused()&&held.has('handbrake'),wheelie:!isPaused()&&held.has('wheelie')}),
+    update,isPaused,isMapOpen:()=>mapOpen,isTouchEnabled:()=>host.classList.contains('touch-enabled'),
+    getTouchInput:():DriveInput=>touchDriving.getInput(),
     getFlightTouchInput:()=>({forward:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),strafe:isPaused()?0:Number(held.has('right'))-Number(held.has('left')),yaw:isPaused()?0:Number(held.has('yaw-right'))-Number(held.has('yaw-left')),lift:isPaused()?0:Number(held.has('ascend'))-Number(held.has('descend'))}),
     setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},
     setReady(){ready=true;cancelAnimationFrame(loadFrame);loadShown=1;drawLoading();el('welcome').classList.add('ready');el<HTMLButtonElement>('start-drive').disabled=false;if(graphicsInterrupted)el<HTMLButtonElement>('resume-graphics').disabled=!graphicsRestored;else el('start-drive').focus();},
@@ -531,6 +564,6 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     },
     setError(message:string){loadFailed=true;cancelAnimationFrame(loadFrame);el('loading-copy').textContent=message;el('loading-copy').style.color='#ffd1ad';el('welcome').classList.remove('hidden','leaving','ready');host.classList.add('not-started');el<HTMLButtonElement>('start-drive').disabled=true;ready=false;started=false;updatePause();},
     setCamera:(mode:CameraMode)=>setCamera(mode),setLighting:(mode:LightingMode)=>setLighting(mode),setSound:(enabled:boolean)=>setSound(enabled),setQuality:(mode:QualityMode)=>setQuality(mode),setTravelMode:(mode:TravelMode)=>setTravelMode(mode),toast,
-    destroy(){diagnostics.destroy();disposers.forEach(fn=>fn());window.clearTimeout(toastTimer);host.innerHTML='';},
+    destroy(){touchDriving.dispose();diagnostics.destroy();disposers.forEach(fn=>fn());window.clearTimeout(toastTimer);host.innerHTML='';},
   };
 }

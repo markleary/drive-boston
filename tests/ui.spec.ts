@@ -133,10 +133,7 @@ test.describe('phone layout', () => {
     const accelerator = await page.getByRole('button', { name: 'Accelerate', exact: true }).boundingBox();
     expect(accelerator!.width).toBeGreaterThanOrEqual(44);
     expect(accelerator!.x + accelerator!.width).toBeLessThanOrEqual(375);
-    const mini=await page.locator('#minimap-button').boundingBox();
-    expect(mini!.width).toBeGreaterThan(111);
-    expect(mini!.y+mini!.height).toBeLessThan(accelerator!.y);
-    await expect(page.locator('#minimap')).toHaveAttribute('aria-label',/Nearby roads:/);
+    await expect(page.locator('#minimap-button')).toBeHidden();
     await page.screenshot({ path: testInfo.outputPath('drive-mobile.png') });
     await page.getByRole('button', { name: 'Open map', exact: true }).click();
     await expect(page.locator('#map-modal')).toBeVisible();
@@ -153,5 +150,13 @@ test.describe('phone layout', () => {
     await expect.poll(async () => (await snapshot(page)).lighting).toBe('day');
     await page.getByRole('button', { name: 'Keep driving' }).click();
     expect((await snapshot(page)).paused).toBe(false);
+    await page.setViewportSize({width:812,height:375});
+    await expect(page.locator('#minimap-button')).toBeVisible();
+    const mini=(await page.locator('#minimap-button').boundingBox())!;
+    expect(mini.width).toBeGreaterThanOrEqual(96);
+    expect(mini.x).toBeLessThan(100);
+    expect(mini.y).toBeLessThan(100);
+    await expect(page.locator('#minimap')).toHaveAttribute('aria-label',/Your position in Boston/);
+    await page.screenshot({path:testInfo.outputPath('drive-mobile-landscape.png')});
   });
 });

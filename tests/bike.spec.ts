@@ -81,11 +81,15 @@ test('Ultra Bee keyboard steering changes heading and banks in both directions',
 test.describe('phone bike controls',()=>{
   test.use({viewport:{width:375,height:812},hasTouch:true,isMobile:true,deviceScaleFactor:1});
   test('touch wheelie button fits beside the brake and responds while riding',async({page},testInfo)=>{
-    await start(page);await page.getByTestId('mode-bike').tap();
+    await start(page);
+    await page.getByRole('button',{name:'Pause and open settings'}).tap();
+    await page.locator('#settings-modal [data-travel="bike"]').tap();
+    await page.getByRole('button',{name:'Keep driving'}).tap();
     const wheelie=page.getByRole('button',{name:'Wheelie',exact:true}),accelerate=page.getByRole('button',{name:'Accelerate',exact:true});
     await expect(wheelie).toBeVisible();await expect(page.getByRole('button',{name:'Brake bike',exact:true})).toBeVisible();
     const w=(await wheelie.boundingBox())!,a=(await accelerate.boundingBox())!;
-    for(const selector of ['.travel-switch','.touch-controls','#drive-hint']){const r=(await page.locator(selector).boundingBox())!;expect(r.x).toBeGreaterThanOrEqual(0);expect(r.x+r.width).toBeLessThanOrEqual(375);}
+    await expect(page.locator('.travel-switch')).toBeHidden();await expect(page.locator('#drive-hint')).toBeHidden();
+    for(const target of [wheelie,accelerate,page.locator('.touch-controls')]){const r=(await target.boundingBox())!;expect(r.x).toBeGreaterThanOrEqual(0);expect(r.x+r.width).toBeLessThanOrEqual(375);}
     const touch=await page.context().newCDPSession(page);
     const point=(r:{x:number;y:number;width:number;height:number},id:number)=>({x:r.x+r.width/2,y:r.y+r.height/2,id});
     await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point(a,1)]});
@@ -95,6 +99,9 @@ test.describe('phone bike controls',()=>{
       await expect.poll(async()=>(await snapshot(page)).state.wheelieRemaining).toBeGreaterThan(1);
       await page.screenshot({path:testInfo.outputPath('ultra-bee-mobile-wheelie.png')});
     }finally{await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await touch.detach();}
-    await page.getByTestId('mode-drive').tap();await expect(wheelie).toBeHidden();
+    await page.getByRole('button',{name:'Pause and open settings'}).tap();
+    await page.locator('#settings-modal [data-travel="drive"]').tap();
+    await page.getByRole('button',{name:'Keep driving'}).tap();
+    await expect(wheelie).toBeHidden();
   });
 });

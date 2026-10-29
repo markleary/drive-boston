@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "Drive Boston",
+  "short_name": "Drive Boston",
+  "description": "Drive real Boston streets, ride an electric dirt bike, or fly above the city.",
+  "lang": "en-US",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0a0f1c",
+  "theme_color": "#233b3b",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

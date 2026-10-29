@@ -18,6 +18,7 @@ import { addStreetscape } from './render/streetscape';
 import { createGraphics, type QualityMode } from './render/graphics';
 import { releaseSceneContext } from './render/context-resources';
 import { createContextGate } from './render/context-gate';
+import {applyChaseViewOffset,groundChaseFraming,portraitChaseInset,vehicleScreenBounds} from './render/chase-framing';
 import { sceneAttributeBytes } from './render/scene-memory';
 import { createSessionJournal } from './simulation/session-journal';
 import { addFacadeDetails } from './render/facade-details';
@@ -56,6 +57,7 @@ async function boot(){
   let prudential:ReturnType<typeof addPrudentialCrown>|undefined;let metroLandmarks:ReturnType<typeof addMetroLandmarkDetails>|undefined;
   let populateNeighborhood=()=>{};
   const keys=new Set<string>(),audio=new DriveAudio();let cameraSnap=true,lookOffset=0,orbitPitch=.3,zoom=1;
+  let cancelCameraDrag=()=>{};
   const journal=createSessionJournal((()=>{try{return localStorage;}catch{try{return sessionStorage;}catch{return undefined;}}})());
   let captureSession=()=>{};
   const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,.15,2200);
@@ -70,15 +72,15 @@ async function boot(){
   };
   const ui=createInterface(city,{
     onReset(){if(!physics)return;if(travelMode==='helicopter'){flight?.reset();populateNeighborhood();cameraSnap=true;lookOffset=0;}else void travelTo(city.spawn.x,city.spawn.z,()=>physics!.reset(city.spawn.x,city.spawn.z,city.spawn.yaw));},
-    onCamera(mode){cameraMode=mode;cameraSnap=true;lookOffset=0;},
+    onCamera(mode){cancelCameraDrag();cameraMode=mode;cameraSnap=true;lookOffset=0;},
     onTravelMode(mode){
       if(!flight||!physics||mode===travelMode)return;
       if(mode==='helicopter'){const car=physics.getState();flight.reset({x:car.x,y:Math.max(20,car.y+18),z:car.z},car.yaw);}
       if(mode!=='helicopter')physics.setVehicleType(mode==='bike'?'ultrabee':'car');
-      travelMode=mode;keys.clear();audio.setMode(mode);cameraMode='chase';ui.setCamera(cameraMode);cameraSnap=true;lookOffset=0;orbitPitch=.3;zoom=1;
+      travelMode=mode;keys.clear();cancelCameraDrag();audio.setMode(mode);cameraMode='chase';ui.setCamera(cameraMode);cameraSnap=true;lookOffset=0;orbitPitch=.3;zoom=1;
     },
     onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');transit?.setNight(mode==='night');prudential?.setNight(mode==='night');metroLandmarks?.setNight(mode==='night');},
-    onPause(){keys.clear();},
+    onPause(){keys.clear();cancelCameraDrag();},
     onStart(){audio.start();journal.start();captureSession();},
     onSound(enabled){audio.enabled=enabled;},
     onQuality(mode){quality=mode;graphics?.setQuality(mode);world?.setQuality(mode==='high');},
@@ -222,12 +224,20 @@ async function boot(){
         event.preventDefault();if(ui.isPaused())return;keys.add(event.code);if(event.code==='KeyF'&&!event.repeat&&travelMode==='drive')audio.horn();
       }
     });
-    window.addEventListener('keyup',event=>keys.delete(event.code));window.addEventListener('blur',()=>keys.clear());
-    document.addEventListener('visibilitychange',()=>{keys.clear();if(document.hidden)save();});
-    let dragging=false,lastX=0,lastY=0;
-    renderer.domElement.addEventListener('pointerdown',event=>{if(ui.isPaused())return;dragging=true;lastX=event.clientX;lastY=event.clientY;renderer.domElement.setPointerCapture(event.pointerId);});
-    renderer.domElement.addEventListener('pointermove',event=>{if(dragging&&!ui.isPaused()){lookOffset-=(event.clientX-lastX)*.005;if(travelMode==='helicopter')orbitPitch=THREE.MathUtils.clamp(orbitPitch+(event.clientY-lastY)*.005,-.15,1.4);lastX=event.clientX;lastY=event.clientY;}});
-    renderer.domElement.addEventListener('pointerup',()=>dragging=false);renderer.domElement.addEventListener('pointercancel',()=>dragging=false);
+    window.addEventListener('keyup',event=>keys.delete(event.code));window.addEventListener('blur',()=>{keys.clear();cancelCameraDrag();});
+    document.addEventListener('visibilitychange',()=>{keys.clear();cancelCameraDrag();if(document.hidden)save();});
+    let dragPointer:number|null=null,lastX=0,lastY=0;
+    cancelCameraDrag=()=>{const pointer=dragPointer;dragPointer=null;if(pointer!==null&&renderer.domElement.hasPointerCapture(pointer))renderer.domElement.releasePointerCapture(pointer);};
+    renderer.domElement.style.touchAction='none';
+    renderer.domElement.addEventListener('pointerdown',event=>{
+      if(ui.isPaused()||event.button!==0||dragPointer!==null)return;
+      event.preventDefault();dragPointer=event.pointerId;lastX=event.clientX;lastY=event.clientY;renderer.domElement.setPointerCapture(event.pointerId);
+    });
+    renderer.domElement.addEventListener('pointermove',event=>{
+      if(event.pointerId!==dragPointer||ui.isPaused())return;
+      event.preventDefault();lookOffset-=(event.clientX-lastX)*.005;if(travelMode==='helicopter')orbitPitch=THREE.MathUtils.clamp(orbitPitch+(event.clientY-lastY)*.005,-.15,1.4);lastX=event.clientX;lastY=event.clientY;
+    });
+    for(const type of ['pointerup','pointercancel','lostpointercapture'])renderer.domElement.addEventListener(type,event=>{if((event as PointerEvent).pointerId===dragPointer)cancelCameraDrag();});
     renderer.domElement.addEventListener('wheel',event=>{if(!ui.isPaused()){event.preventDefault();zoom=THREE.MathUtils.clamp(zoom+event.deltaY*.001,.65,2);}}, {passive:false});
     function input():DriveInput{
       const touch=ui.getTouchInput();let throttle=(keys.has('KeyW')||keys.has('ArrowUp')?1:0)-(keys.has('KeyS')||keys.has('ArrowDown')?1:0)+touch.throttle;
@@ -273,6 +283,9 @@ async function boot(){
     const tick=(now:number,scheduleNext=true)=>{
       const raw=(now-previous)/1000;previous=now;const dt=Math.min(.05,Math.max(0,raw));const paused=ui.isPaused()||document.hidden;
       if(contextLost||!graphics){accumulator=0;if(scheduleNext)requestAnimationFrame(tick);return;}
+      // Mobile background tabs should not rebuild foliage or draw frames. The
+      // one-shot startup renders still run so opening a background tab can finish loading.
+      if(document.hidden&&scheduleNext){accumulator=0;requestAnimationFrame(tick);return;}
       const flying=travelMode==='helicopter';
       const controls=paused||flying?{throttle:0,brake:flying?1:0,steer:0,handbrake:flying}:input();
       const flightControls=paused||!flying?{forward:0,strafe:0,turn:0,lift:0}:flightInput();
@@ -283,6 +296,8 @@ async function boot(){
       helicopter.update(flight!.state,paused?0:dt,flying);helicopter.group.visible=flying&&cameraMode!=='hood';
       const state=flying?{...flight!.state,steering:0}:carState;
       const yaw=state.yaw+lookOffset;target.set(state.x,state.y+.5,state.z);
+      const portraitInset=cameraMode==='chase'?portraitChaseInset(ui.isTouchEnabled(),innerWidth,innerHeight):0;
+      applyChaseViewOffset(camera,innerWidth,innerHeight,portraitInset);
       camera.up.set(0,1,0);
       if(cameraMode==='hood'){
         desired.set(state.x+Math.sin(yaw)*.5,state.y+(riding&&!flying?1.02:.9),state.z+Math.cos(yaw)*.5);look.set(state.x+Math.sin(yaw)*40,state.y+(flying?-7-(orbitPitch-.3)*35:.7),state.z+Math.cos(yaw)*40);camera.fov=65;
@@ -296,9 +311,9 @@ async function boot(){
         desired.set(state.x-Math.sin(yaw)*Math.cos(orbitPitch)*follow,state.y+Math.sin(orbitPitch)*follow+2,state.z-Math.cos(yaw)*Math.cos(orbitPitch)*follow);
         look.set(state.x+Math.sin(state.yaw)*3,state.y+.3,state.z+Math.cos(state.yaw)*3);camera.fov=58;
       }else{
-        const follow=((riding?4.8:7.8)+Math.min(riding?2.5:5,Math.abs(state.speed)*.16))*zoom;
-        const ahead=riding?3*Math.max(0,Math.cos(lookOffset)):9;
-        desired.set(state.x-Math.sin(yaw)*follow,state.y+(riding?2.1:2.8)*zoom,state.z-Math.cos(yaw)*follow);look.set(state.x+Math.sin(state.yaw)*ahead,state.y+(riding?.65:1.5),state.z+Math.cos(state.yaw)*ahead);camera.fov=55+Math.min(5,Math.abs(state.speed)*.13);
+        const framing=groundChaseFraming(riding,state.speed,zoom,lookOffset,portraitInset>0);
+        const lookYaw=portraitInset>0?yaw:state.yaw;
+        desired.set(state.x-Math.sin(yaw)*framing.follow,state.y+framing.height,state.z-Math.cos(yaw)*framing.follow);look.set(state.x+Math.sin(lookYaw)*framing.ahead,state.y+framing.lookHeight,state.z+Math.cos(lookYaw)*framing.ahead);camera.fov=55+Math.min(5,Math.abs(state.speed)*.13);
       }
       // First person is attached to the rider. Chase smoothing would leave the
       // camera meters behind the bike as speed increases.
@@ -323,12 +338,12 @@ async function boot(){
       if(journal.startedAt&&now-lastSessionCapture>=15000)captureSession();
       if(scheduleNext)requestAnimationFrame(tick);
     };
-    window.addEventListener('resize',()=>{graphics?.resize();camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();});
+    window.addEventListener('resize',()=>{cancelCameraDrag();graphics?.resize();camera.aspect=innerWidth/innerHeight;applyChaseViewOffset(camera,innerWidth,innerHeight,cameraMode==='chase'?portraitChaseInset(ui.isTouchEnabled(),innerWidth,innerHeight):0);camera.updateProjectionMatrix();cameraSnap=true;});
     const population=()=>{
       const observer=travelMode==='helicopter'?flight!.state:physics!.getState();
       return {traffic:traffic!.population(observer),pedestrians:streetLife.population(observer)};
     };
-    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),camera:cameraMode,carBodyVisible:car.bodyVisible,cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city,
+    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),touchInput:ui.getTouchInput(),camera:cameraMode,carBodyVisible:car.bodyVisible,vehicleScreenBounds:cameraMode==='hood'||(travelMode==='drive'&&!car.bodyVisible)?null:vehicleScreenBounds(travelMode==='helicopter'?helicopter.group:travelMode==='bike'?bike.group:car.group,camera,innerWidth,innerHeight),cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,audio:audio.getStatus(),distance}),city,
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
       travelTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>physics!.reset(x,z,yaw)),
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
