@@ -289,7 +289,11 @@ async function boot(){
       const flying=travelMode==='helicopter';
       const controls=paused||flying?{throttle:0,brake:flying?1:0,steer:0,handbrake:flying}:input();
       const flightControls=paused||!flying?{forward:0,strafe:0,turn:0,lift:0}:flightInput();
-      if(!paused){accumulator+=dt;while(accumulator>=1/60){const before=physics!.getState(),observer=flying?flight!.state:before;transit!.update(1/60,before,observer,traffic!.obstacles());traffic!.update(1/60,before,observer,transit!.obstacles());physics!.step(controls,1/60);if(flying)flight!.update(1/60,flightControls);elapsed+=1/60;accumulator-=1/60;distance+=Math.abs(flying?flight!.state.speed:before.speed)/60;}}else accumulator=0;
+      if(!paused){accumulator+=dt;while(accumulator>=1/60){const before=physics!.getState(),observer=flying?flight!.state:before;transit!.update(1/60,before,observer,traffic!.obstacles());traffic!.update(1/60,before,observer,transit!.obstacles());physics!.step(controls,1/60);elapsed+=1/60;accumulator-=1/60;if(!flying)distance+=Math.abs(before.speed)/60;}}else accumulator=0;
+      // Flight already substeps at <= 1/120 s and sweeps its full movement for
+      // clearance. Advance it on the camera's clock: quantizing it to Rapier's
+      // 60 Hz ticks makes a moving aircraft bob against the smoothed camera.
+      if(flying&&!paused){flight!.update(dt,flightControls);distance+=flight!.state.speed*dt;}
       const carState=physics!.getState(),riding=carState.vehicle==='ultrabee';
       if(!riding)car.update(carState,lighting==='night',paused?0:dt);car.group.visible=!riding&&(flying||cameraMode!=='hood');
       if(riding)bike.update(carState,lighting==='night',cameraMode==='hood'&&!flying);bike.group.visible=riding;
