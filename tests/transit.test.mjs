@@ -6,6 +6,7 @@ import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {createTransit,transitPoint,routeDecks,routeSurface} from '../src/simulation/transit.ts';
 import {signalAxis,signalPhase} from '../src/simulation/signals.ts';
 import {pointInside} from '../src/simulation/roads.ts';
+import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
 
 import {loadCentralCity,loadMetroCity} from './helpers/metro-city.mjs';
 const BUS_LINES=['1','9','23','28','39','57','66','86'];
@@ -23,11 +24,11 @@ test('perpendicular signal approaches never receive green together and include c
 test('mapped Green Line uses separate surface tracks and every bus route stays within coverage',async()=>{
  const city=await loadCentralCity();
  const data=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8'));
- // These concave source complexes span public streets in their convex footprint
- // proxies: the Prudential and 145 Dartmouth use exact source mesh collision at run
- // time (the road-structure physics regression checks the open street corridors), and
- // the Boston Medical Center model straddles Massachusetts Avenue with an overhead link.
- const complexes=new Set(['BOS-KBIA4-2XA04-WNETP','BOS-Q6TUK-T7ZG3-2SJKK','BOS-HO11N-VJBYE-3RDXF']);
+ // Concave source complexes whose convex footprint proxies span public streets
+ // collide as exact source meshes at runtime (the Prudential and 145 Dartmouth here,
+ // and the Boston Medical Center model whose overhead link straddles Massachusetts
+ // Avenue); tests/street-corridors.test.mjs drives the open street corridors.
+ const complexes=meshBuildingIds;
  assert.equal(data.routes.filter(r=>r.kind==='tram').length,2);assert.equal(data.routes.filter(r=>r.kind==='bus').length,16);
  for(const line of BUS_LINES)assert.equal(data.routes.filter(r=>r.line===line).length,2,`route ${line} runs in both directions`);
  for(const route of data.routes){
