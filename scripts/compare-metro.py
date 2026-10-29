@@ -22,16 +22,19 @@ def compare(a,b):
   if ra==rb:same+=1;continue
   if da==db:header_only+=1;continue
   differences+=1;why=[]
-  for raw_a,raw_b,label in [(da,db,'')]:
-   na,nb=struct.unpack_from('<I',raw_a,4)[0],struct.unpack_from('<I',raw_b,4)[0];ha,hb=json.loads(raw_a[8:8+na]),json.loads(raw_b[8:8+nb])
-   for key in sorted(set(ha)|set(hb)):
-    if json.dumps(ha.get(key))==json.dumps(hb.get(key)):continue
-    if key!='buildings':why.append(f'header.{key}');continue
-    ids=[x['id'] for x in ha[key]],[x['id'] for x in hb[key]]
-    if ids[0]!=ids[1]:why.append(f'building set/order ({len(ids[0])} vs {len(ids[1])}, {len(set(ids[0])^set(ids[1]))} unshared)')
-    else:
-     changed=[x['id'] for x,y in zip(ha[key],hb[key]) if json.dumps(x)!=json.dumps(y)];why.append(f'{len(changed)} building records ({", ".join(changed[:4])}{", ..." if len(changed)>4 else ""})')
-   if raw_a[8+na:]!=raw_b[8+nb:]:why.append(f'geometry ({len(raw_a)-8-na} vs {len(raw_b)-8-nb} bytes)')
+  na,nb=struct.unpack_from('<I',da,4)[0],struct.unpack_from('<I',db,4)[0];ha,hb=json.loads(da[8:8+na]),json.loads(db[8:8+nb])
+  for key in sorted(set(ha)|set(hb)):
+   if json.dumps(ha.get(key))==json.dumps(hb.get(key)):continue
+   if key!='buildings':why.append(f'header.{key}');continue
+   ids=[x['id'] for x in ha[key]],[x['id'] for x in hb[key]]
+   if ids[0]!=ids[1]:why.append(f'building set/order ({len(ids[0])} vs {len(ids[1])}, {len(set(ids[0])^set(ids[1]))} unshared)')
+   else:
+    changed=[x['id'] for x,y in zip(ha[key],hb[key]) if json.dumps(x)!=json.dumps(y)];why.append(f'{len(changed)} building records ({", ".join(changed[:4])}{", ..." if len(changed)>4 else ""})')
+  # The header JSON is padded to 4 bytes before the geometry (tileformat.write_tile), so
+  # the body starts at the padded offset; a metadata change that crosses a 4-byte boundary
+  # otherwise reads as a geometry change.
+  ga,gb=da[8+na+(-(8+na))%4:],db[8+nb+(-(8+nb))%4:]
+  if ga!=gb:why.append(f'geometry ({len(ga)} vs {len(gb)} bytes)')
   lines.append(f'tiles/{name}: '+'; '.join(why))
  lines.insert(0,f'tiles: {same} byte-identical, {header_only} identical content behind a different gzip header, {differences} differ')
  differences+=header_only
