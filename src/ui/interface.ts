@@ -11,6 +11,7 @@ import {sampleDriveSurface} from '../simulation/road-surfaces';
 import {HELICOPTER} from '../simulation/helicopter';
 import {createMinimapLabeler} from './minimap-labels';
 import {createTouchDrivingControls, TOUCH_DRIVING_MARKUP, type TouchDrivingMode} from './touch-driving';
+import {createFlightTouchControls} from './touch-flight';
 
 export interface InterfaceCallbacks {
   onReset(): void;
@@ -138,8 +139,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   let mapCenter: Point2 = [(city.bounds.minX + city.bounds.maxX) / 2, (city.bounds.minZ + city.bounds.maxZ) / 2];
   let mapZoom = 1;
   let previousFocus: HTMLElement | null = null;
-  const held = new Set<string>();
-  const flightPointers = new Map<number, HTMLButtonElement>();
+  const flightTouch=createFlightTouchControls(el('flight-touch'),()=>!isPaused()&&travelMode==='helicopter');
   const touchMedia = matchMedia('(any-pointer: coarse)');
   let touchSeen = false;
   const touchDriving = createTouchDrivingControls(host,{isPaused});
@@ -161,7 +161,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   // These surfaces use pointer events. Suppress their later compatibility click
   // so a held thumb cannot activate a menu that opens during an interruption.
   on(host,'touchstart',event=>{
-    if(event.cancelable&&event.target instanceof Element&&event.target.closest('#touch-steering,[data-drive-action],#flight-touch [data-touch]'))event.preventDefault();
+    if(event.cancelable&&event.target instanceof Element&&event.target.closest('#touch-steering,[data-drive-action]'))event.preventDefault();
   },{passive:false});
   const neighborhoods=indexAreas(city.neighborhoods??[]);
   const mapRoads=city.roads.map(road=>({road,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
@@ -480,11 +480,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   on(full,'pointerdown',event=>{const e=event as PointerEvent;if(e.button!==0||mapPointers.size>=2)return;e.preventDefault();mapPointers.set(e.pointerId,[e.clientX,e.clientY]);full.setPointerCapture(e.pointerId);});
   on(full,'pointermove',event=>{const e=event as PointerEvent;if(!mapOpen||!mapPointers.has(e.pointerId))return;e.preventDefault();const before=mapGesture(),scale=fullScale();mapPointers.set(e.pointerId,[e.clientX,e.clientY]);const after=mapGesture();const rect=full.getBoundingClientRect(),cx=rect.left+(mapViewport.left+mapViewport.right)/2,cy=rect.top+(mapViewport.top+mapViewport.bottom)/2;const anchor:Point2=[mapCenter[0]+(before.mid[0]-cx)/scale,mapCenter[1]+(before.mid[1]-cy)/scale];if(before.distance>0&&after.distance>0)mapZoom=Math.max(.65,Math.min(Math.max(24,mapExtent/150),mapZoom*after.distance/before.distance));const nextScale=fullScale();mapCenter=[anchor[0]-(after.mid[0]-cx)/nextScale,anchor[1]-(after.mid[1]-cy)/nextScale];drawFullMap();});
   for(const event of ['pointerup','pointercancel','lostpointercapture'])on(full,event,e=>{mapPointers.delete((e as PointerEvent).pointerId);});
-  function clearFlightInput(){held.clear();for(const [id,button] of flightPointers){if(button.hasPointerCapture(id))button.releasePointerCapture(id);button.classList.remove('held');}flightPointers.clear();}
-  el('flight-touch').querySelectorAll<HTMLButtonElement>('[data-touch]').forEach(button=>{
-    on(button,'pointerdown',event=>{if(isPaused()||travelMode!=='helicopter')return;const e=event as PointerEvent;if(e.button!==0)return;e.preventDefault();button.setPointerCapture(e.pointerId);flightPointers.set(e.pointerId,button);held.add(button.dataset.touch!);button.classList.add('held');});
-    const release=(event:Event)=>{flightPointers.delete((event as PointerEvent).pointerId);if(![...flightPointers.values()].includes(button)){held.delete(button.dataset.touch!);button.classList.remove('held');}};on(button,'pointerup',release);on(button,'pointercancel',release);on(button,'lostpointercapture',release);
-  });
+  function clearFlightInput(){flightTouch.reset();}
   on(window,'blur',()=>{clearFlightInput();clearMapGesture();if(started&&!isPaused())setSettings(true);});
   on(document,'visibilitychange',()=>{if(document.hidden){clearFlightInput();clearMapGesture();if(started&&!isPaused())setSettings(true);}});
   on(window,'resize',resize);
@@ -544,7 +540,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   return {
     update,isPaused,isMapOpen:()=>mapOpen,isTouchEnabled:()=>host.classList.contains('touch-enabled'),
     getTouchInput:():DriveInput=>touchDriving.getInput(),
-    getFlightTouchInput:()=>({forward:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),strafe:isPaused()?0:Number(held.has('right'))-Number(held.has('left')),yaw:isPaused()?0:Number(held.has('yaw-right'))-Number(held.has('yaw-left')),lift:isPaused()?0:Number(held.has('ascend'))-Number(held.has('descend'))}),
+    getFlightTouchInput:()=>flightTouch.getInput(),
     setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},
     setReady(){ready=true;cancelAnimationFrame(loadFrame);loadShown=1;drawLoading();el('welcome').classList.add('ready');el<HTMLButtonElement>('start-drive').disabled=false;if(graphicsInterrupted)el<HTMLButtonElement>('resume-graphics').disabled=!graphicsRestored;else el('start-drive').focus();},
     setPreviousSessionReport(report:string){previousSessionReport=report;el('previous-session').classList.toggle('hidden',!report);},
@@ -565,6 +561,6 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     },
     setError(message:string){loadFailed=true;cancelAnimationFrame(loadFrame);el('loading-copy').textContent=message;el('loading-copy').style.color='#ffd1ad';el('welcome').classList.remove('hidden','leaving','ready');host.classList.add('not-started');el<HTMLButtonElement>('start-drive').disabled=true;ready=false;started=false;updatePause();},
     setCamera:(mode:CameraMode)=>setCamera(mode),setLighting:(mode:LightingMode)=>setLighting(mode),setSound:(enabled:boolean)=>setSound(enabled),setQuality:(mode:QualityMode)=>setQuality(mode),setTravelMode:(mode:TravelMode)=>setTravelMode(mode),toast,
-    destroy(){touchDriving.dispose();diagnostics.destroy();disposers.forEach(fn=>fn());window.clearTimeout(toastTimer);host.innerHTML='';},
+    destroy(){flightTouch.dispose();touchDriving.dispose();diagnostics.destroy();disposers.forEach(fn=>fn());window.clearTimeout(toastTimer);host.innerHTML='';},
   };
 }
