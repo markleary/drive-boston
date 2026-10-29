@@ -30,9 +30,14 @@ test('five-minute library drive alternates car and Ultra Bee without growing gra
     await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+box.width/2,y:box.y+box.height/2}]});
     try{await page.waitForTimeout(12000);}finally{await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
     await page.keyboard.down('Space');await page.waitForTimeout(18000);await page.keyboard.up('Space');
+    // Sample once the streamer is idle, after drawing everything resident: a
+    // geometry's GL buffers are created on its first draw, so without that the
+    // totals would grow whenever the faster Ultra Bee showed the camera a part
+    // of the loaded tiles the car never reached, which is not a leak.
+    await expect.poll(async()=>{const t=await page.evaluate(()=>(window as any).__backbay.snapshot().tiles);return !t.building&&!t.fetching&&!t.pending;},{timeout:60000}).toBe(true);
     const sample=await page.evaluate(()=>{
-      const s=(window as any).__backbay.snapshot();
-      return{...(window as any).__sessionBuffers,geometries:s.geometries,textures:s.textures,colliders:s.physicsColliders,tiles:s.tiles.keys,mode:s.travelMode,paused:s.paused,x:s.state.x,z:s.state.z};
+      const b=(window as any).__backbay;b.drawResident();const s=b.snapshot();
+      return{...(window as any).__sessionBuffers,geometries:s.geometries,textures:s.textures,colliders:s.physicsColliders,objects:s.sceneObjects,tiles:s.tiles.keys,farChunks:s.farCity?.residentChunks,mode:s.travelMode,paused:s.paused,x:s.state.x,z:s.state.z};
     });samples.push({second:(cycle+1)*30,...sample});
     expect(sample.losses).toBe(0);expect(sample.paused).toBe(false);
     expect(sample.mode).toBe(cycle%2?'bike':'drive');
@@ -43,7 +48,10 @@ test('five-minute library drive alternates car and Ultra Bee without growing gra
   // These are allocated vertex/index/instance bytes, not total browser or GPU memory.
   const steady=samples.slice(2).map(s=>s.allocated);
   expect(Math.max(...steady)-Math.min(...steady)).toBeLessThan(8*1024*1024);
-  expect(Math.max(...samples.map(s=>s.peak))).toBeLessThan(200*1024*1024);
+  // With every resident object drawn the peak covers geometry the game keeps
+  // hidden here (the other vehicles, building chunks beyond 1100 m): about
+  // 215 MB for this neighborhood, against roughly 140 MB the game uploads by itself.
+  expect(Math.max(...samples.map(s=>s.peak))).toBeLessThan(256*1024*1024);
   expect(Math.max(...samples.slice(2).map(s=>s.geometries))-Math.min(...samples.slice(2).map(s=>s.geometries))).toBeLessThan(20);
   expect(errors).toEqual([]);await page.screenshot({path:testInfo.outputPath('library-five-minutes.png')});
 });

@@ -369,7 +369,11 @@ async function boot(){
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
       travelTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>physics!.reset(x,z,yaw)),
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
-      flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw))};
+      flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw)),
+      /** Browser specs: the live scene graph and renderer, for attributing resource growth to its owner group. */
+      scene,renderer,
+      /** Browser specs: draw every resident object once, with frustum culling off and distance-hidden objects shown (lights stay as they are so no shader variant recompiles). three.js uploads a geometry's GL buffers on its first draw, so without this the renderer's geometry count and buffer bytes track what the camera has happened to see rather than what the scene holds. */
+      drawResident:()=>{const culled:THREE.Object3D[]=[],hidden:THREE.Object3D[]=[];scene.traverse(o=>{if(o.frustumCulled){o.frustumCulled=false;culled.push(o);}if(!o.visible&&!(o as THREE.Light).isLight){o.visible=true;hidden.push(o);}});try{renderer.render(scene,camera);}finally{for(const o of culled)o.frustumCulled=true;for(const o of hidden)o.visible=false;}}};
     Object.assign(window,{__backbay:diagnostic});
     // Lamp and headlight lights are hidden outside night mode, which changes the
     // light count compiled into every lit shader. Compile the night, night with
