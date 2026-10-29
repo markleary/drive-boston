@@ -107,3 +107,125 @@
 .previous-session .text-btn{color:var(--paper);font-size:11px}
 #session-copy-status{display:block;margin-top:5px}
 #session-report{width:100%;font:10px/1.4 monospace;pointer-events:auto;resize:vertical}
+
+/* The game is a touch surface, including its labels and long-press targets. */
+*,*::before,*::after{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+/* Manual copying remains available when browser clipboard access is denied. */
+#session-report,#graphics-report{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+html,body{height:100dvh}
+[hidden]{display:none!important}
+.touch-settings{display:none}
+.touch-help{font-size:12px;line-height:1.6;color:#52685f;margin:12px 0 0}
+
+/* Mobile controls stay under the thumbs; the road and player occupy the centre. */
+#interface.touch-enabled{
+  --touch-left:max(16px,env(safe-area-inset-left));
+  --touch-right:max(16px,env(safe-area-inset-right));
+  --touch-top:max(14px,env(safe-area-inset-top));
+  --touch-bottom:calc(max(16px,env(safe-area-inset-bottom)) + 12px);
+  --steering-width:156px;
+  --pedal-width:70px;
+}
+#interface.touch-enabled .brand,#interface.touch-enabled .travel-switch,
+#interface.touch-enabled #drive-hint,#interface.touch-enabled #controls-help,
+#interface.touch-enabled kbd,#interface.touch-enabled .key{display:none}
+#interface.touch-enabled .touch-settings{display:block}
+#interface.touch-enabled .toolbar{top:var(--touch-top);left:var(--touch-left);right:var(--touch-right);gap:8px;justify-content:flex-end;pointer-events:none}
+#interface.touch-enabled .tool-btn{width:44px;height:44px;min-width:44px;padding:0;background:#233b3be8;backdrop-filter:none}
+#interface.touch-enabled .tool-btn.wide span{display:none}
+#interface.touch-enabled .location-pill{display:flex;top:var(--touch-top);width:max-content;max-width:calc(100% - 330px);padding:8px 13px;border-radius:9px;background:#233b3be8;backdrop-filter:none;font-size:12px;letter-spacing:.02em;white-space:normal;text-align:center}
+#interface.touch-enabled .location-text{min-width:0}
+#interface.touch-enabled .next-street{font-size:11px;justify-content:center;gap:5px}
+#interface.touch-enabled .next-prefix{font-size:9px}
+#interface.touch-enabled .minimap-wrap{left:var(--touch-left);top:var(--touch-top);bottom:auto;display:block}
+#interface.touch-enabled .minimap-button{width:108px;height:108px;box-shadow:0 3px 14px #0004}
+#interface.touch-enabled .map-caption{display:none}
+#interface.touch-enabled .speed-cluster{top:calc(var(--touch-top) + 56px);right:var(--touch-right);bottom:auto;min-width:0}
+#interface.touch-enabled .speed-value{font-size:31px;line-height:1.1}
+#interface.touch-enabled .speed-unit{font-size:10px;margin-left:6px}
+#interface.touch-enabled .speed-label,#interface.touch-enabled .speed-line,#interface.touch-enabled .camera-label{display:none}
+#interface.touch-enabled .altitude-readout{padding:4px 0 0;margin:4px 0 0}
+#interface.touch-enabled .altitude-number{font-size:18px}
+#interface.touch-enabled .altitude-caption{font-size:9px;gap:8px}
+#interface.touch-enabled .toast{top:calc(var(--touch-top) + 62px);font-size:12px;max-width:min(340px,calc(100% - 36px));padding:9px 12px;pointer-events:none}
+#interface.touch-enabled #touch-controls{display:block;position:absolute;inset:0;transform:none;pointer-events:none}
+#interface.touch-enabled #touch-controls.suspended,#interface.touch-enabled #flight-touch.suspended{visibility:hidden}
+#interface.touch-enabled .touch-steering-group{position:absolute;left:var(--touch-left);bottom:var(--touch-bottom);width:var(--steering-width);pointer-events:none}
+.touch-control-caption{display:block;text-align:center;font-size:11px;letter-spacing:.12em;font-weight:600;margin-bottom:9px;text-shadow:0 1px 6px #0009}
+#interface.touch-enabled .touch-steering{position:relative;width:100%;height:76px;border:1px solid #f4efdfaa;border-radius:40px;background:#233b3bdc;touch-action:none;pointer-events:auto;outline-offset:4px}
+.touch-steering.analog::before{content:'';position:absolute;left:22px;right:22px;top:50%;height:2px;background:#f4efdf4d}
+.touch-steering-left,.touch-steering-right{position:absolute;top:50%;transform:translateY(-50%);font-size:27px;line-height:1;pointer-events:none}
+.touch-steering-left{left:12px}.touch-steering-right{right:12px}
+.touch-stick-knob{position:absolute;top:50%;left:50%;width:50px;height:50px;border-radius:50%;border:1px solid #fff9;background:#f4efdf;box-shadow:0 2px 9px #0004;transform:translate(calc(-50% + var(--touch-x,0px)),calc(-50% + var(--touch-y,0px)));pointer-events:none}
+.touch-stick-knob::after{content:'';position:absolute;top:21px;left:17px;width:14px;height:7px;border-top:2px solid #233b3b60;border-bottom:2px solid #233b3b60}
+.touch-steering.held .touch-stick-knob{background:var(--orange)}
+#interface.touch-enabled .touch-steering.joystick{width:136px;height:136px;border-radius:50%;margin:0 auto;background:radial-gradient(circle,#f4efdf0a 0 28%,transparent 29% 52%,#f4efdf19 53% 54%,transparent 55%),#233b3bdc}
+.touch-steering.joystick::before,.touch-steering.joystick::after{content:'';position:absolute;background:#f4efdf33;pointer-events:none}
+.touch-steering.joystick::before{left:50%;width:1px;top:15px;bottom:15px}
+.touch-steering.joystick::after{top:50%;height:1px;left:15px;right:15px}
+.touch-stick-forward,.touch-stick-backward{position:absolute;left:0;right:0;text-align:center;font-size:10px;font-weight:600;letter-spacing:.04em}
+.touch-stick-forward{top:11px}.touch-stick-backward{bottom:11px}
+#interface.touch-enabled .touch-pedals{position:absolute;right:var(--touch-right);bottom:var(--touch-bottom);display:flex;align-items:flex-end;gap:12px;pointer-events:none}
+#interface.touch-enabled .touch-btn{touch-action:none;backdrop-filter:none;pointer-events:auto;min-height:44px;font-size:12px}
+#interface.touch-enabled .touch-pedal{width:var(--pedal-width);height:90px;border-radius:16px;background:#233b3be5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px;font-size:11px;letter-spacing:.08em;padding:8px}
+#interface.touch-enabled .touch-gas{height:106px;background:#f4efdf;color:var(--ink)}
+.touch-pedal-grip{width:26px;height:23px;border-top:3px solid currentColor;border-bottom:3px solid currentColor;opacity:.65;position:relative}
+.touch-pedal-grip::after{content:'';position:absolute;left:0;right:0;top:7px;border-top:3px solid currentColor}
+#interface.touch-enabled .touch-btn.held{background:var(--orange);border-color:var(--orange);color:var(--ink)}
+#interface.touch-enabled .touch-gears{position:absolute;right:var(--touch-right);bottom:calc(var(--touch-bottom) + 119px);display:flex;gap:3px;border:1px solid #fff5;border-radius:9px;background:#233b3be8;padding:3px;pointer-events:auto}
+#interface.touch-enabled .touch-gears .touch-btn{width:44px;height:44px;border:none;border-radius:6px;background:transparent}
+#interface.touch-enabled .touch-gears .touch-btn[aria-pressed=true]{background:var(--paper);color:var(--ink)}
+#interface.touch-enabled .touch-gears .touch-btn:disabled{cursor:default;opacity:.55}
+#interface.touch-enabled .touch-actions{position:absolute;left:var(--touch-left);bottom:calc(var(--touch-bottom) + 111px);display:flex;gap:7px;pointer-events:none}
+#interface.touch-enabled .touch-actions .touch-btn{width:82px;height:44px;border-radius:10px;font-size:9px;letter-spacing:.04em;background:#233b3be5;padding:5px}
+#interface.touch-enabled .touch-actions .wheelie-touch{width:66px}
+#interface.touch-enabled [data-control-mode=joystick] .touch-actions{left:auto;right:var(--touch-right);bottom:var(--touch-bottom);flex-direction:column}
+#interface.touch-enabled .flight-touch{display:none;inset:0;transform:none;pointer-events:none}
+#interface.touch-enabled.flying .flight-touch{display:block}
+#interface.touch-enabled .flight-movement,#interface.touch-enabled .flight-actions{position:absolute;bottom:var(--touch-bottom)}
+#interface.touch-enabled .flight-movement{left:var(--touch-left)}
+#interface.touch-enabled .flight-actions{right:var(--touch-right)}
+#interface.touch-enabled .flight-pad{display:grid;grid-template-columns:repeat(2,48px);gap:8px}
+#interface.touch-enabled .flight-pad .touch-btn{width:48px;height:48px;font-size:23px;border-radius:13px;background:#233b3be5}
+#interface.touch-enabled .flight-pad .touch-btn.held{background:var(--orange);color:var(--ink)}
+#interface.touch-enabled .modal-scrim{padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));backdrop-filter:none;background:#142f2abf}
+#interface.touch-enabled .panel{max-height:calc(100dvh - max(16px,env(safe-area-inset-top)) - max(16px,env(safe-area-inset-bottom)));padding:24px;overscroll-behavior:contain;touch-action:pan-y}
+#interface.touch-enabled .close-btn{width:44px;height:44px;top:12px;right:12px}
+#interface.touch-enabled .segments button,#interface.touch-enabled .text-btn,#interface.touch-enabled .map-tools button,#interface.touch-enabled .close-map{min-height:44px;touch-action:manipulation}
+#interface.touch-enabled .map-tools button{width:44px;height:44px}
+#interface.touch-enabled .map-header{top:var(--touch-top);left:var(--touch-left);right:var(--touch-right)}
+#interface.touch-enabled .map-places{bottom:max(15px,env(safe-area-inset-bottom));right:var(--touch-right)}
+#interface.touch-enabled .map-note{display:block;bottom:calc(max(16px,env(safe-area-inset-bottom)) + 3px)}
+#interface.touch-enabled .diagnostics{top:calc(var(--touch-top) + 115px);right:var(--touch-right);max-height:calc(100dvh - 335px)}
+@media(orientation:portrait){
+  #interface.touch-enabled{--steering-width:clamp(128px,36vw,150px);--pedal-width:clamp(56px,15.5vw,64px)}
+  #interface.touch-enabled .minimap-wrap{display:none}
+  #interface.touch-enabled #open-map{margin-right:auto}
+  #interface.touch-enabled .speed-cluster{top:calc(var(--touch-top) + 6px);left:calc(var(--touch-left) + 58px);right:auto;text-align:left}
+  #interface.touch-enabled .location-pill{top:calc(var(--touch-top) + 59px);max-width:calc(100% - 32px)}
+  #interface.touch-enabled .toast{top:calc(var(--touch-top) + 122px)}
+  #interface.touch-enabled .touch-pedals{gap:10px}
+  #interface.touch-enabled .touch-pedal{height:87px}
+  #interface.touch-enabled .touch-gas{height:101px}
+  #interface.touch-enabled .touch-gears{bottom:calc(var(--touch-bottom) + 114px)}
+  #interface.touch-enabled .touch-actions{bottom:calc(var(--touch-bottom) + 109px);gap:6px}
+  #interface.touch-enabled .touch-actions .touch-handbrake{width:84px;font-size:10px}
+  #interface.touch-enabled .touch-actions .wheelie-touch{width:58px;font-size:9px}
+  #interface.touch-enabled.flying .speed-cluster{max-width:calc(100% - 200px)}
+  #interface.touch-enabled.flying .altitude-readout{border:0;padding:0;margin:2px 0}
+  #interface.touch-enabled.flying .altitude-number{font-size:12px}
+  #interface.touch-enabled.flying .altitude-caption{display:none}
+  #interface.touch-enabled .map-note{display:none}
+  #interface.touch-enabled .map-places{left:var(--touch-left)}
+}
+@media(orientation:landscape) and (max-height:360px){
+  #interface.touch-enabled .minimap-button{width:88px;height:88px}
+  #interface.touch-enabled .touch-steering.joystick{width:120px;height:120px}
+  #interface.touch-enabled .location-pill{max-width:calc(100% - 310px);font-size:11px}
+}
+@media(orientation:portrait) and (max-width:350px){
+  #interface.touch-enabled{--touch-left:max(12px,env(safe-area-inset-left));--touch-right:max(12px,env(safe-area-inset-right))}
+  #interface.touch-enabled .touch-pedals{gap:8px}
+  #interface.touch-enabled .speed-value{font-size:27px}
+  #interface.touch-enabled .speed-unit{font-size:9px;margin-left:4px}
+}

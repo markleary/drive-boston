@@ -1,4 +1,5 @@
 import {test,expect,type Page} from '@playwright/test';
+import {expectManualReportCopy} from './report-selection';
 
 type GameState={state:{x:number;y:number;z:number};travelMode:string;paused:boolean;graphicsContext:{lost:boolean;losses:number;builds:number};audio:{activeLoops:number};tiles:{keys:string[]}};
 const snapshot=(page:Page)=>page.evaluate(()=>(window as unknown as {__backbay:{snapshot():GameState}}).__backbay.snapshot());
@@ -17,7 +18,12 @@ for(const mobile of [true,false])test.describe(mobile?'phone graphics recovery':
     await context.grantPermissions(['clipboard-read','clipboard-write']);
     await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});
     await page.getByTestId('start-drive').click();await expect(page.locator('#welcome')).toBeHidden();
-    await page.getByTestId('mode-bike').click();await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('bike');
+    if(mobile){
+      await page.locator('#open-settings').tap();
+      await page.locator('#settings-modal [data-travel="bike"]').tap();
+      await page.locator('#resume-drive').tap();
+    }else await page.getByTestId('mode-bike').click();
+    await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('bike');
     const before=await snapshot(page);
     await lose(page);await expect(page.getByRole('heading',{name:'Graphics interrupted.'})).toBeVisible();
     await expect(page.locator('#resume-graphics')).toBeDisabled();
@@ -35,6 +41,7 @@ for(const mobile of [true,false])test.describe(mobile?'phone graphics recovery':
     await page.evaluate(()=>Object.assign(window,{__originalClipboard:navigator.clipboard}));
     await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('Clipboard denied'))}}));
     await page.locator('#copy-graphics-report').click();await expect(page.locator('#graphics-report')).toHaveValue(report);
+    await expectManualReportCopy(page,'#graphics-report');
     await expect(page.locator('#graphics-report')).toBeFocused();await page.keyboard.press('Tab');
     await expect(page.locator('#reload-graphics')).toBeFocused();
     await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:(window as any).__originalClipboard}));
