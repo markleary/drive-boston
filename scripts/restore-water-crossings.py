@@ -12,6 +12,10 @@ from shapely import union_all, set_precision
 from shapely.ops import unary_union, substring
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
+from harvard_bridge import harmonize_harvard
+from harvard_cambridge import repair_cambridge,UPPER_IDS,SLIP_IDS,CONNECTOR_ID
+from harvard_terrain import repair_memorial_terrain
+from tileformat import write_gzip
 
 def restore(city,source,heights):
  grid=city['elevation'];width=grid['width'];cell=grid['cellSize']
@@ -49,6 +53,7 @@ def restore(city,source,heights):
  # single-lane carriageway. Keep a central reservation for the Red Line.
  for r in city['roads']:
   if r['id'].startswith(('14614-','14615-','water-link-14614-','water-link-14615-')) or r['name']=='Longfellow Bridge':r['width']=7;r['name']='Longfellow Bridge'
+ repair_cambridge(city['roads'],ground)
  harmonize_harvard(city['roads'])
  # Traffic coverage includes each bridge ribbon; district and building bounds stay fixed.
  base=[Polygon(p) for p in city['coverage']]
@@ -59,32 +64,6 @@ def restore(city,source,heights):
  parts=list(coverage.geoms) if coverage.geom_type=='MultiPolygon' else [coverage]
  city['coverage']=[[[round(x,3),round(z,3)] for x,z in p.exterior.coords[:-1]] for p in parts]
  return added
-
-def harmonize_harvard(roads):
- """Keep the Boston GIS and Cambridge OSM decks on one shared cross-section.
- Per-point widths taper into the existing 10 m Boston street; endpoints retain
- the original graded heights and use the whole bridge's tangent at each join.
- """
- ids=['15082-0-0','11255-0-0','14557-0-1','water-link-14557-0-0','14557-0-0','osm-29328400-0','osm-1329523286-0','osm-961263635-0']
- by_id={r['id']:r for r in roads};points=[];sections=[]
- for n,id in enumerate(ids):
-  r=by_id[id];r['width']=16;r.pop('deckWidths',None);r.pop('deckTangents',None)
-  if n==0:
-   lengths=[0]
-   for a,b in zip(r['points'],r['points'][1:]):lengths.append(lengths[-1]+math.dist(a,b))
-   r['deckWidths']=[round(16-6*(d/lengths[-1])**2*(3-2*d/lengths[-1]),5) for d in lengths]
-  reverse=n==0 or math.dist(r['points'][-1],points[-1])<.02
-  indexes=list(range(len(r['points'])));indexes=indexes[::-1] if reverse else indexes
-  start=len(points)-1 if points else 0
-  for i in indexes:
-   p=r['points'][i]
-   if not points or math.dist(points[-1],p)>.001:points.append(p)
-  sections.append((r,reverse,start,len(points)-1))
- for r,reverse,start,end in sections:
-  tangents=[]
-  for i in [start,end]:
-   a,b=points[max(0,i-1)],points[min(len(points)-1,i+1)];t=[round((b[k]-a[k])*(-1 if reverse else 1),6) for k in [0,1]];tangents.append(t)
-  r['deckTangents']={'start':tangents[1] if reverse else tangents[0],'end':tangents[0] if reverse else tangents[1]}
 
 def extract(city,cache):
  spec=importlib.util.spec_from_file_location('metro',ROOT/'scripts/build-metro.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -118,8 +97,12 @@ def main():
  city=json.loads((a.data_dir/'city.json').read_text())
  if a.extract_source:a.source_file.write_text(json.dumps(extract(city,a.extract_source),separators=(',',':'))+'\n')
  source=json.loads(a.source_file.read_text());grid=city['elevation'];heights=np.frombuffer(gzip.decompress((a.data_dir/grid['file']).read_bytes()),dtype='<i2')*grid.get('scale',.01)
+ terrain=repair_memorial_terrain(city,heights)
+ write_gzip(a.data_dir/grid['file'],np.rint(heights/grid.get('scale',.01)).astype('<i2').tobytes())
  added=restore(city,source,heights);(a.data_dir/'city.json').write_text(json.dumps(city,separators=(',',':'))+'\n')
- provenance=json.loads((a.data_dir/'provenance.json').read_text());provenance['coveragePolygons']=len(city['coverage']);provenance['roads']['boston']['count']=sum(not r['id'].startswith('osm-') for r in city['roads']);provenance['restoredWaterCrossings']={'source':source['source'],'method':source['method'],'sourceSHA256':hashlib.sha256(a.source_file.read_bytes()).hexdigest(),'roads':[r['id'] for r in added],'harvardDeck':'16 m basin pavement with a 10 m Boston street landing, per-point tapered widths, shared endpoint tangents; original elevations retained'};(a.data_dir/'provenance.json').write_text(json.dumps(provenance,separators=(',',':'))+'\n')
- print(f'Restored {len(added)} source water spans; {len(city["roads"])} total roads.')
+ provenance=json.loads((a.data_dir/'provenance.json').read_text());provenance['coveragePolygons']=len(city['coverage']);provenance['roads']['boston']['count']=sum(not r['id'].startswith('osm-') for r in city['roads']);provenance['restoredWaterCrossings']={'source':source['source'],'method':source['method'],'sourceSHA256':hashlib.sha256(a.source_file.read_bytes()).hexdigest(),'roads':[r['id'] for r in added],'harvardDeck':'16 m basin pavement with a 10 m Boston street landing, per-point tapered widths, shared endpoint tangents; one linear Boston approach across the three shore pieces, retaining the graded street landing and basin deck','cambridgeApproach':{'roads':UPPER_IDS+SLIP_IDS+[CONNECTOR_ID],'method':'Retained OSM horizontal alignments; extend the basin deck above Memorial Drive and grade connected approaches to unchanged outer terrain landings. One-lane slips use 5 m pavement with flared junction mouths; divided Massachusetts Avenue forks widen through overlapping full-width junction mouths. Estimated game profile, not surveyed elevations.'}}
+ provenance['restoredWaterCrossings']['cambridgeTerrain']={k:v for k,v in terrain.items() if k not in ('changedVertices','maxChangeMeters')}
+ (a.data_dir/'provenance.json').write_text(json.dumps(provenance,separators=(',',':'))+'\n')
+ print(f'Restored {len(added)} source water spans; {len(city["roads"])} total roads. Leveled {terrain["changedVertices"]} Memorial underpass terrain vertices.')
  for r in added:print(r['id'],r['name'],round(LineString(r['points']).length))
 if __name__=='__main__':main()
