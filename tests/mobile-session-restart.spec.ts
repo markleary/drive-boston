@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import {expectManualReportCopy} from './report-selection';
 
 test.use({viewport:{width:393,height:852},hasTouch:true,isMobile:true});
 test('a renderer process crash leaves a copyable previous-session report on the next load',async({page,context},testInfo)=>{
@@ -6,7 +7,9 @@ test('a renderer process crash leaves a copyable previous-session report on the 
   await page.goto('/');await expect(page.locator('#start-drive')).toBeEnabled({timeout:90000});
   await expect(page.locator('#previous-session')).toBeHidden();
   await page.locator('#start-drive').tap();await expect(page.locator('#welcome')).toBeHidden();
-  await page.getByTestId('mode-bike').tap();
+  await page.locator('#open-settings').tap();
+  await page.locator('#settings-modal [data-travel="bike"]').tap();
+  await page.locator('#resume-drive').tap();
   // Observe a real periodic snapshot after the vehicle switch, before killing
   // the renderer without pagehide or JavaScript error callbacks.
   await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('backbay-session-v1')??'null')?.report),{timeout:25000}).toContain('Vehicle: bike');
@@ -27,6 +30,7 @@ test('a renderer process crash leaves a copyable previous-session report on the 
   expect(report).toContain('Resident scene attribute bytes:');expect(report).toContain('Resident tile groups:');
   await reopened.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('denied'))}}));
   await reopened.locator('#copy-session-report').tap();await expect(reopened.locator('#session-report')).toHaveValue(report);
+  await expectManualReportCopy(reopened,'#session-report');
   await reopened.screenshot({path:testInfo.outputPath('previous-session-phone.png')});
   await expect(reopened.locator('#start-drive')).toBeEnabled({timeout:90000});await reopened.locator('#start-drive').tap();
   await expect(reopened.locator('#previous-session')).toBeHidden();expect(errors).toEqual([]);

@@ -110,6 +110,8 @@
 
 /* The game is a touch surface, including its labels and long-press targets. */
 *,*::before,*::after{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+/* Manual copying remains available when browser clipboard access is denied. */
+#session-report,#graphics-report{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
 html,body{height:100dvh}
 [hidden]{display:none!important}
 .touch-settings{display:none}

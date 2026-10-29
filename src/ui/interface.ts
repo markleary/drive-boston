@@ -155,8 +155,9 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   function updateTouchAvailability(){const touch=touchMedia.matches||touchSeen;host.classList.toggle('touch-enabled',touch);host.querySelector('.map-note')!.textContent=touch?'Drag to explore · Pinch to zoom':'Drag to explore · Scroll to zoom';resize();}
   on(touchMedia,'change',updateTouchAvailability);
   on(document,'pointerdown',event=>{if((event as PointerEvent).pointerType==='touch'&&!touchSeen){touchSeen=true;updateTouchAvailability();}},{capture:true,passive:true});
-  on(host,'selectstart',event=>event.preventDefault());
-  on(host,'contextmenu',event=>event.preventDefault());
+  for(const type of ['selectstart','contextmenu'])on(host,type,event=>{
+    if(!(event.target instanceof Element&&event.target.matches('textarea#session-report,textarea#graphics-report')))event.preventDefault();
+  });
   // These surfaces use pointer events. Suppress their later compatibility click
   // so a held thumb cannot activate a menu that opens during an interruption.
   on(host,'touchstart',event=>{
