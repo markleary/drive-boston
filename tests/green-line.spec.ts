@@ -21,7 +21,7 @@ test('all four Green Line branches run single articulated cars through the strea
    const now=((await snapshot(page)).transit as Tram[]).find(t=>t.route===tram.route)!;
    return Math.hypot(now.x-tram.x,now.z-tram.z);
   },{timeout:30000}).toBeGreaterThan(2);
-  await expect(page.getByText('Loading the neighborhood',{exact:true})).toBeHidden({timeout:30000});
+  await expect(page.locator('#toast')).not.toHaveClass(/visible/);
   await page.screenshot({path:testInfo.outputPath(`${line.toLowerCase()}.png`)});
  }
  const final=await snapshot(page);

@@ -1,6 +1,7 @@
 import type {CityData,Point2,Road} from '../types';
 import {isHarvardBridgeRoad} from './harvard-bridge.ts';
 import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
+import {inTransitClearance} from './transit-corridors.ts';
 
 export function roadProjection(road:Road,x:number,z:number){
   let best={distance:Infinity,index:0,t:0,x:road.points[0]?.[0]??x,z:road.points[0]?.[1]??z};
@@ -215,8 +216,20 @@ export function bridgeBarriers(city:CityData,road:Road){
   if(isHarvardBridgeRoad(road))return[]; // Outer sidewalk parapets are built in harvard-bridge.ts.
   // The outside probe preserves protection on the union's exposed perimeter,
   // including where two source road ribbons share the same outer edge.
-  return bridgeEdgeSections(city,road,.18,-.06).map(({a,b,ya,yb})=>{
+  return bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz);
-    return{x:(a[0]+b[0])/2,y:(ya+yb)/2+.38,z:(a[1]+b[1])/2,length:Math.hypot(distance,dy)+.008,yaw:Math.atan2(dx,dz),slope:Math.atan2(dy,distance)};
+    const clear=(t:number)=>inTransitClearance(city,a[0]+dx*t,a[1]+dz*t,ya+dy*t),steps=Math.max(1,Math.ceil(distance/.4));
+    const exposed:[number,number][]=[],boundary=(low:number,high:number,state:boolean)=>{
+      for(let i=0;i<12;i++){const middle=(low+high)/2;if(clear(middle)===state)low=middle;else high=middle;}return(low+high)/2;
+    };
+    let previous=clear(0),start=0;
+    for(let i=1;i<=steps;i++){
+      const t=i/steps,current=clear(t);if(current===previous)continue;
+      const edge=boundary((i-1)/steps,t,previous);if(!previous)exposed.push([start,edge]);else start=edge;previous=current;
+    }
+    if(!previous)exposed.push([start,1]);
+    return exposed.filter(([lo,hi])=>(hi-lo)*distance>.12).map(([lo,hi])=>{
+      const center=(lo+hi)/2;return{x:a[0]+dx*center,y:ya+dy*center+.38,z:a[1]+dz*center,length:Math.hypot(distance,dy)*(hi-lo)+.008,yaw:Math.atan2(dx,dz),slope:Math.atan2(dy,distance)};
+    });
   });
 }
