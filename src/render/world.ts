@@ -34,7 +34,7 @@ export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?
 export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData,options:WorldOptions={}) {
   const metro=isMetroCity(city)?city:undefined;
   if(!metro)prepareNeighborhoodArchitecture(city);
-  const materials=createMaterials();
+  const materials=createMaterials(!!options.mobile);
   const height=(x:number,z:number)=>sampleElevation(city,x,z);
   scene.background=null;scene.fog=new THREE.Fog('#aeb9bc',250,1050);
   const hemi=new THREE.HemisphereLight(0xb8d9f1,0x625343,.6);scene.add(hemi);

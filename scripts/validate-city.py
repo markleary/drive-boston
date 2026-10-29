@@ -118,7 +118,7 @@ for b in supported:
  assert b['norm']['min']<=parent['norm']['max']+.251 and abs(b['baseElevation']-parent['baseElevation'])<.001 and abs(b['norm']['ground']-parent['norm']['ground'])<.001,f"{b['id']} support does not reach the upper part"
 landmark_ids={b['id'] for b in city['landmarkBuildings']}
 assert landmark_ids<=set(buildings) and all(buildings[b['id']]['center']==b['center'] for b in city['landmarkBuildings'])
-assert {'BOS-KBIA4-2XA04-WNETP','BOS-1WKHX-X382F-V5VL1','BOS-Q6TUK-T7ZG3-2SJKK','BOS-73AP7-T4BL0-O4QDM','BOS-DA4MQ-LLJZX-89MF5','BOS-2ZJZB-IWPEJ-JUBMC','BOS-0HKZL-2YJWH-V1GAU','BOS-2E9SM-83L3W-UVT08','BOS-4WO5X-6OJI5-G5S26'}<=landmark_ids,'exact-mesh complexes must be addressable before their tiles stream'
+assert {'BOS-KBIA4-2XA04-WNETP','BOS-1WKHX-X382F-V5VL1','BOS-Q6TUK-T7ZG3-2SJKK','BOS-73AP7-T4BL0-O4QDM','BOS-DA4MQ-LLJZX-89MF5','BOS-2ZJZB-IWPEJ-JUBMC','BOS-0HKZL-2YJWH-V1GAU','BOS-2E9SM-83L3W-UVT08','BOS-4WO5X-6OJI5-G5S26','BOS-HO11N-VJBYE-3RDXF','BOS-3R76C-CGBE8-V3V1H'}<=landmark_ids,'exact-mesh complexes must be addressable before their tiles stream'
 structures=[b for b in buildings.values() if b.get('structure')];assert {b['id'] for b in structures}=={'BOS-2E9SM-83L3W-UVT08'} and all(len(b['footprint'])==4 and Polygon(b['footprint']).area<50 for b in structures),'structures carry a token footprint'
 assert {'BOS-2TDFM-6RXRJ-7SQZ9','BOS-P19FP-VQY0E-MMBXS'}<=set(buildings),'original Back Bay churches were lost'
 assert sum(b['district']=='Back Bay' for b in buildings.values())>=160,'original Back Bay coverage was lost'
