@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite, then select **Start driving**. No API keys, accounts, or runtime map services are needed. All geographic assets ship with the application. The package totals approximately 83 MB before transfer compression, but a session only downloads the 6 MB city index, the 11 MB terrain grid, the 4 MB far-building hulls, and the 1 km building tiles near the player (about 280 KB each, 191 in all). Subsequent visits can reuse the browser cache.
+Open the local URL printed by Vite, then select **Start driving**. No API keys, accounts, or runtime map services are needed. All geographic assets ship with the application. The package totals approximately 86 MB before transfer compression, but a session only downloads the 6 MB city index, the 11 MB terrain grid, the 4 MB far-building hulls, and the 1 km building tiles near the player (about 280 KB each, 191 in all). Subsequent visits can reuse the browser cache.
 
 ```sh
 npm run build

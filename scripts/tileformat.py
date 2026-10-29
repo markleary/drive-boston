@@ -11,7 +11,7 @@ Layout (little-endian, whole file gzip-compressed):
   (facade triangles then roof triangles per building)
 """
 from __future__ import annotations
-import gzip, json, math, pathlib, struct
+import gzip, io, json, math, pathlib, struct
 import numpy as np
 from mesh_winding import orient_shells
 
@@ -62,9 +62,16 @@ def write_tile(path,header,geometry):
  while len(out)%4:out.append(0)
  kind='<u4' if wide else '<u2'
  for record in geometry:out.extend(np.ascontiguousarray(record[1],dtype=kind).tobytes());out.extend(np.ascontiguousarray(record[2],dtype=kind).tobytes())
- path.parent.mkdir(parents=True,exist_ok=True)
- with gzip.open(path,'wb',compresslevel=9) as f:f.write(bytes(out))
+ write_gzip(path,bytes(out))
  return len(out)
+
+def write_gzip(path,data):
+ """gzip whose bytes depend on `data` alone: zero mtime, no file name and the
+ portable unknown-OS byte (the same stream Node's zlib writes for elevation.bin),
+ so a rebuild from unchanged sources is byte-identical and diffs stay minimal."""
+ buffer=io.BytesIO()
+ with gzip.GzipFile(fileobj=buffer,mode='wb',compresslevel=9,mtime=0) as f:f.write(data)
+ path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(buffer.getvalue())
 
 def read_tile(path):
  """Return (header, buildings) with absolute float positions and face index lists."""

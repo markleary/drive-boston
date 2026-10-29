@@ -14,6 +14,10 @@
  * Output: <data-dir>/elevation.bin is overwritten with the graded grid (gzip,
  * int16 centimetres), the ungraded grid is kept as elevation-source.bin, and
  * city.json gains elevation.source / elevation.graded / elevation.grading.
+ * The result depends only on the inputs and the chunk, margin and band
+ * sizes: every window is solved by the same single-threaded code and the
+ * seams are blended in chunk order, so --workers changes the wall-clock time
+ * and nothing else, and a rebuild from the same metro build is byte-identical.
  *
  *   node scripts/grade-terrain.mjs [--data-dir public/data] [--chunk 2000]
  *     [--margin 400] [--band 100] [--workers N] [--force]
@@ -34,6 +38,7 @@ const USAGE=`usage: node scripts/grade-terrain.mjs [options]
   --band <metres>    blend ramp beyond the interior edge, within the margin (default 100)
   --workers <n>      worker threads (default availableParallelism-1, capped at 10); a dense 2 km window
                      peaks near 0.5 GB of solver objects per worker, so lower this on a small machine
+                     (the graded grid does not depend on it)
   --force            regrade a directory whose city.json already says elevation.graded`;
 const DEFAULT_WORKERS=Math.max(1,Math.min(10,availableParallelism()-1));
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -199,11 +204,15 @@ async function main(){
   const plan=planChunks(grid,o),{chunks}=plan,workers=Math.max(1,Math.min(o.workers,chunks.length));
   console.log(`grid ${grid.width}x${grid.height} cells at ${grid.cellSize} m, ${city.roads.length} roads, ${buildings.length} buildings`);
   console.log(`${chunks.length} chunks (${plan.nx}x${plan.nz} of ${plan.cols}x${plan.rows} cell interiors, margin ${plan.pad} cells, blend band ${plan.ramp} cells), ${workers} workers`);
-  const accum=new Float64Array(count),weight=new Float32Array(count),gradedRoads=new Set();let profiles=0,chunkChanged=0,finished=0;
+  const accum=new Float64Array(count),weight=new Float32Array(count),gradedRoads=new Set(),graded=new Array(chunks.length);let profiles=0,chunkChanged=0,finished=0;
   await runPool({...o,workers},grid,heights,city.roads,buildings,chunks,message=>{
-    const c=chunks[message.index];blendChunk(accum,weight,grid,c,plan.ramp,message.heights);profiles+=message.stats.roads;chunkChanged+=message.stats.changedVertices;for(const id of message.gradedIds)gradedRoads.add(id);
+    const c=chunks[message.index];graded[message.index]=message.heights;profiles+=message.stats.roads;chunkChanged+=message.stats.changedVertices;for(const id of message.gradedIds)gradedRoads.add(id);
     console.log(`chunk ${++finished}/${chunks.length} (${c.cx},${c.cz}) ${message.roads} road pieces, ${message.buildings} buildings, ${message.stats.changedVertices} changed cells, cut ${message.stats.maxCut.toFixed(2)} fill ${message.stats.maxFill.toFixed(2)} in ${(message.elapsedMs/1000).toFixed(1)} s; ${((performance.now()-began)/1000).toFixed(1)} s elapsed`);
   });
+  // The pool hands windows back in whatever order the workers finish them and
+  // float sums are not associative, so the seams are blended in chunk order
+  // once every window is in; the grid is then independent of the scheduling.
+  for(const c of chunks)blendChunk(accum,weight,grid,c,plan.ramp,graded[c.index]);
   const out=new Int16Array(count);let changed=0,maxCut=0,maxFill=0,nan=0,unweighted=0;
   for(let k=0;k<count;k++){
     let h=weight[k]>0?accum[k]/weight[k]:(unweighted++,heights[k]);if(Number.isNaN(h)){nan++;h=heights[k];}
@@ -217,9 +226,10 @@ async function main(){
   const elevation=gzipSync(Buffer.from(out.buffer),{level:9});writeFileSync(path.join(o.dataDir,grid.file),elevation);
   // roads counts distinct source roads that produced a graded profile, and changedVertices/maxCut/maxFill
   // describe the final blended grid against the raw one; per-chunk sums would double count the margins.
-  const grading={roads:gradedRoads.size,changedVertices:changed,maxCut:Math.round(maxCut*1000)/1000,maxFill:Math.round(maxFill*1000)/1000,elapsedMs:Math.round(performance.now()-began),chunks:chunks.length,workers};
+  // The record holds only what the grid depends on (timing and the worker count stay on the console).
+  const grading={roads:gradedRoads.size,changedVertices:changed,maxCut:Math.round(maxCut*1000)/1000,maxFill:Math.round(maxFill*1000)/1000,chunks:chunks.length,chunk:o.chunk,margin:o.margin,band:o.band};
   city.elevation={...grid,source:sourceFile,graded:true,grading};
   writeFileSync(path.join(o.dataDir,'city.json'),JSON.stringify(city)+'\n');
-  console.log(JSON.stringify({...grading,chunkProfiles:profiles,chunkChangedVertices:chunkChanged,elevationBytes:elevation.length,dataDir:o.dataDir}));
+  console.log(JSON.stringify({...grading,workers,elapsedMs:Math.round(performance.now()-began),chunkProfiles:profiles,chunkChangedVertices:chunkChanged,elevationBytes:elevation.length,dataDir:o.dataDir}));
 }
 if(isMainThread&&process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main().catch(error=>{console.error(error?.stack??error);process.exit(1);});

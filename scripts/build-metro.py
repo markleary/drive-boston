@@ -9,7 +9,7 @@ source level topology and water crossings, and streamed world tiles.
 Requires: pip install -r scripts/requirements.txt (see DATA_SOURCES.md).
 """
 from __future__ import annotations
-import argparse, csv, gzip, hashlib, importlib.util, io, json, math, pathlib, re, struct, subprocess, sys, time, zipfile
+import argparse, csv, hashlib, importlib.util, io, json, math, pathlib, re, struct, subprocess, sys, time, zipfile
 from collections import Counter, defaultdict
 import numpy as np
 import shapely
@@ -175,7 +175,7 @@ def main():
  tile_keys=write_tiles(out,buildings,geometry,curbs,park_paths,roads)
  far_bytes=write_far(out,buildings)
  heights=np.rint(grid.heights.reshape(-1)*100).astype('<i2')
- with gzip.open(out/'elevation.bin','wb',compresslevel=9) as f:f.write(heights.tobytes())
+ tileformat.write_gzip(out/'elevation.bin',heights.tobytes())
  lon,lat=TO_GEO.transform(ORIGIN[0]+central.OFFSET[0],ORIGIN[1]+central.OFFSET[1])
  polygons=polygon_parts(coverage);outlines=[[rounded(v) for v in polygon.exterior.coords[:-1]] for polygon in polygons]
  corners=[xy(x,y) for x in [envelope[0],envelope[2]] for y in [envelope[1],envelope[3]]]
@@ -825,7 +825,7 @@ def write_far(out,buildings):
  header=json.dumps({'size':TILE,'tiles':directory},separators=(',',':')).encode()
  raw=b'DBF2'+struct.pack('<I',len(header))+header
  raw+=b'\0'*((-len(raw))%4)+bytes(body)
- with gzip.open(out/'far.bin','wb',compresslevel=9) as f:f.write(raw)
+ tileformat.write_gzip(out/'far.bin',raw)
  return len(raw)
 
 if __name__=='__main__':main()
