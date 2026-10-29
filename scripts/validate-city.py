@@ -35,6 +35,22 @@ assert {'Boston Common','Public Garden','Back Bay Fens','Franklin Park','Arnold 
 for area in city['parks']+city['water']:
  assert area['rings'] and all(len(ring)>=3 and all(math.isfinite(v) for p in ring for v in p) for ring in area['rings'])
 
+# Hydro unions connect rivers at different heights; their render partitions
+# must survive regeneration and preserve mapped shores/islands without overlap.
+largest_water=max(city['water'],key=lambda a:Polygon(a['rings'][0],a['rings'][1:]).area)
+assert largest_water.get('surfaces'),'run build-water-surfaces.py after terrain grading to retain horizontal basin/reach levels'
+for area in city['water']:
+ if 'surfaces' not in area:continue
+ polygons=[]
+ for surface in area['surfaces']:
+  assert math.isfinite(surface['level']),f"{area['id']} has a missing water level"
+  rings=surface['rings'];assert rings and all(len(r)>=3 and all(math.isfinite(v) for p in r for v in p) for r in rings)
+  polygon=Polygon(rings[0],rings[1:]);assert polygon.is_valid and polygon.area>0,f"{area['id']} has an invalid water surface ({surface['name']})"
+  polygons.append(polygon)
+ outline=Polygon(area['rings'][0],area['rings'][1:]);joined=unary_union(polygons);tolerance=max(1,outline.area*1e-6)
+ assert outline.symmetric_difference(joined).area<tolerance,f"{area['id']} water surfaces leave gaps or escape the mapped shoreline"
+ assert sum(p.area for p in polygons)-joined.area<1,f"{area['id']} water planes overlap"
+
 # ---- elevation grids
 grid=city['elevation'];w,h,cell=grid['width'],grid['height'],grid['cellSize']
 assert grid['encoding']=='int16-gzip' and grid.get('graded') and grid.get('source') and grid.get('grading'),'ship a graded grid with its ungraded source beside it'

@@ -10,7 +10,7 @@ const triangulations=new WeakMap<Point2[][],{vertices:THREE.Vector2[];faces:numb
 /** Clip polygon triangulation against the exact DEM triangles. This preserves
  * shore/park boundaries and hill crests without recursively oversampling long,
  * thin shoreline triangles. Holes are removed by Earcut before ground clipping. */
-export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeight?:number,bounds?:Bounds,coverTerrain=false){
+export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeight?:number,bounds?:Bounds,water=false){
   let triangulated=triangulations.get(rings);
   if(!triangulated){
     const contour=rings[0]?.map(p=>new THREE.Vector2(...p))??[];
@@ -21,12 +21,26 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
   const positions:number[]=[],uv:number[]=[];
   const emitTriangles=(poly:Point2[])=>{
     for(let i=1;i<poly.length-1;i++){
-      const a=poly[0],b=poly[i],c=poly[i+1],cross=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+      const a=poly[0],b=poly[i],c=poly[i+1];
+      // Tiny contour/pavement slivers can collapse at world-coordinate Float32
+      // precision. Cull them after that conversion so normals stay upward.
+      const ax=Math.fround(a[0]),az=Math.fround(a[1]),bx=Math.fround(b[0]),bz=Math.fround(b[1]),cx=Math.fround(c[0]),cz=Math.fround(c[1]),cross=(bx-ax)*(cz-az)-(bz-az)*(cx-ax);
       if(Math.abs(cross)<1e-7)continue;
-      for(const p of cross>0?[a,c,b]:[a,b,c]){const ground=sampleElevation(city,...p);positions.push(p[0],(coverTerrain?Math.max(flatHeight??ground,ground):flatHeight??ground)+offset,p[1]);uv.push(p[0]/7,p[1]/7);}
+      for(const p of cross>0?[a,c,b]:[a,b,c]){positions.push(p[0],(flatHeight??sampleElevation(city,...p))+offset,p[1]);uv.push(p[0]/7,p[1]/7);}
     }
   };
-  const emit=(poly:Point2[])=>{for(const part of coverTerrain?uncoveredWater(city,poly):[poly])emitTriangles(part);};
+  const emit=(poly:Point2[])=>{
+    // Intersect each DEM face with a horizontal water plane. A bank can rise
+    // through the surface, but must never pull the water's vertices uphill.
+    if(water&&flatHeight!==undefined&&poly.length){
+      const out:Point2[]=[];let a=poly.at(-1)!,da=sampleElevation(city,...a)-flatHeight;
+      for(const b of poly){const db=sampleElevation(city,...b)-flatHeight;
+        if((da<=0)!==(db<=0)){const t=da/(da-db);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);}
+        if(db<=0)out.push(b);a=b;da=db;
+      }poly=out;
+    }
+    for(const part of water?uncoveredWater(city,poly):[poly])emitTriangles(part);
+  };
   const clip=(poly:Point2[],nx:number,nz:number,limit:number)=>{
     const out:Point2[]=[];if(!poly.length)return out;
     let a=poly[poly.length-1],da=a[0]*nx+a[1]*nz-limit;
@@ -43,7 +57,7 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
       triangle=clip(triangle,-1,0,-bounds.minX);triangle=clip(triangle,1,0,bounds.maxX);triangle=clip(triangle,0,-1,-bounds.minZ);triangle=clip(triangle,0,1,bounds.maxZ);
       if(triangle.length<3)continue;
     }
-    if(flatHeight!==undefined&&!coverTerrain){emit(triangle);continue;}
+    if(flatHeight!==undefined&&!water){emit(triangle);continue;}
     const minX=Math.floor((Math.min(...triangle.map(p=>p[0]))-ox)/cell),maxX=Math.floor((Math.max(...triangle.map(p=>p[0]))-ox)/cell);
     const minZ=Math.floor((Math.min(...triangle.map(p=>p[1]))-oz)/cell),maxZ=Math.floor((Math.max(...triangle.map(p=>p[1]))-oz)/cell);
     for(let ix=minX;ix<=maxX;ix++)for(let iz=minZ;iz<=maxZ;iz++){
