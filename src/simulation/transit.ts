@@ -96,7 +96,7 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
  const group=new THREE.Group();group.name='Boston public transport';scene.add(group);
  const routes=data.routes.map(route=>routeData(route,city));
  const tracks=createTransitTracks(city,routes,transitPoint,(route,distance,point)=>routeSurface(city,route,distance,...point).height,(route,distance)=>!!route.rail&&railCovered(route.rail,distance,1.5));group.add(tracks.group);
- const actors:Actor[]=[];
+ const actors:Actor[]=[],colliders=new Set<number>();
  for(let i=0;i<routes.length;i++){
   const route=routes[i],fleet=Math.max(1,Math.min(3,Math.round(route.length/4000)));
   // The Huntington services keep a vehicle near the MFA/Longwood stops so the showcase
@@ -108,7 +108,7 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
    const bodies:RAPIER.RigidBody[]=[];
    for(let part=0;part<(tram?3:1);part++){
     const body=physics.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
-    physics.world.createCollider(RAPIER.ColliderDesc.cuboid(tram?1.25:1.25,tram?1.25:1.3,tram?(part===1?3.12:3.85):5.9).setFriction(.4).setRestitution(.02),body);bodies.push(body);
+    colliders.add(physics.world.createCollider(RAPIER.ColliderDesc.cuboid(tram?1.25:1.25,tram?1.25:1.3,tram?(part===1?3.12:3.85):5.9).setFriction(.4).setRestitution(.02),body).handle);bodies.push(body);
    }
    const actor:Actor={route,distance,speed:0,dwell:0,nextStop:Math.max(0,route.stops.findIndex(s=>s.distance>distance+3)),model,tram,bodies,x:point[0],z:point[1],y:routeSurface(city,route,distance,...point).height,yaw,lastStop:''};
    if(route.stops.every(s=>s.distance<=distance+3))actor.nextStop=route.stops.length;actors.push(actor);
@@ -136,6 +136,8 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
  const obstacles=():TrafficObstacle[]=>actors.filter(a=>!a.route.rail||!railCovered(a.route.rail,a.distance)).map(a=>({x:a.x,y:a.y,z:a.z,halfLength:a.tram?11.25:6.0,halfWidth:1.3,speed:a.speed}));
  return{
   count:actors.length,busCount:actors.filter(a=>!a.tram).length,tramCount:actors.filter(a=>a.tram).length,obstacles,
+  /** Collider handles of every bus and tram section; they stay kinematic (a 12 t bus does not budge for a car). */
+  colliders,
   snapshot:()=>actors.map(a=>({kind:a.route.kind,line:a.route.line,destination:a.route.destination,route:a.route.id,distance:a.distance,yaw:a.yaw,covered:!!a.route.rail&&railCovered(a.route.rail,a.distance),carCount:1,x:a.x,y:a.y,z:a.z,speed:a.speed,dwell:a.dwell,nextStop:a.route.stops[a.nextStop]?.name,lastStop:a.lastStop})),
   update(dt:number,player:VehicleState,observer:Pick<VehicleState,'x'|'y'|'z'>=player,traffic:TrafficObstacle[]=[]){
    dt=Math.max(0,Math.min(dt,1/30));elapsed+=dt;const fleet=obstacles();tracks.updateVisibility(observer.x,observer.z);

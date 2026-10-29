@@ -14,8 +14,14 @@ import { createActivityProfile } from './activity.ts';
 
 interface Edge { id: number; start: number; end: number; points: Point2[]; length:number; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; }
 interface Path { points: Point2[]; distances: number[]; length: number; stops: {distance:number;yaw:number}[]; roadAt:Road[]; component?: number; }
-interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; signalStop?: number; signalCommitted?: boolean; }
+/** A struck car runs as a dynamic body (`knocked`) until it comes to rest, then
+ * eases back onto its lane over `rejoin` from the pose it was left in. */
+interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; }
 const COUNT = 64;
+/** Typical sedan mass (kg); the kinematic lane keeper ignores it until the car is struck. */
+export const TRAFFIC_CAR_MASS = 1350;
+/** Closing speed (m/s) at which a touch becomes a knock rather than a nudge. */
+export const KNOCK_SPEED = 1.2;
 const LOCAL_RADIUS = 650;
 const distance = (a: Point2, b: Point2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
 
@@ -302,14 +308,78 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     const road=pathRoad(path,d),normal=roadNormal(city,road,p[0],p[1]),ground=sampleRoadElevation(city,road,p[0],p[1]);
     const body = physics.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
       .setTranslation(p[0]+normal.x*.65,ground+normal.y*.65,p[1]+normal.z*.65).setRotation(roadRotation(city,road,p[0],p[1],yaw)));
-    const collider = physics.world.createCollider(RAPIER.ColliderDesc.cuboid(.85, .45, 1.95).setFriction(.5).setRestitution(.04), body);
+    const collider = physics.world.createCollider(RAPIER.ColliderDesc.cuboid(.85, .45, 1.95).setMass(TRAFFIC_CAR_MASS).setFriction(.5).setRestitution(.04), body);
     actors.push({ body, collider, path, distance: d, speed: 0, cruise: 5.5 + random() * 3.5, x: p[0], z: p[1], yaw, color: new THREE.Color(palette[i % palette.length]) });
   }
+  const byCollider=new Map(actors.map(actor=>[actor.collider.handle,actor]));
   for(const {mesh,model} of meshes){const count=model===null?actors.length:Math.max(0,Math.ceil((actors.length-model)/styles.length));for(let i=0;i<mesh.instanceCount;i++)mesh.setVisibleAt(i,i<count);}
   const matrix = new THREE.Matrix4();
-  const rotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3(1, 1, 1);
+  const rotation = new THREE.Quaternion(), laneRotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3(1, 1, 1), lift = new THREE.Vector3(), meshPosition = new THREE.Vector3();
+  /** Write one actor's instance matrices from the body pose in `position`/`rotation`
+   * (the body sits .65 m above the wheels' contact, the mesh origin on it). */
+  function draw(index:number){
+    lift.set(0,.65,0).applyQuaternion(rotation);meshPosition.copy(position).sub(lift);matrix.compose(meshPosition,rotation,scale);
+    for (const { mesh, model } of meshes) {
+      if (model !== null && model !== index % styles.length) continue;
+      const slot = model === null ? index : Math.floor(index / styles.length);
+      mesh.setMatrixAt(slot, matrix);
+      if (mesh.userData.paint) mesh.setColorAt(slot, actors[index].color);
+    }
+  }
+  /** A struck car becomes a sliding, spinning dynamic box of sedan mass, carrying
+   * its lane speed into the collision; its taller shape rests on the road. */
+  function knock(actor:Actor){
+    if(actor.knocked)return;
+    actor.knocked={since:elapsed,settled:0};actor.rejoin=undefined;
+    actor.collider.setShape(new RAPIER.Cuboid(.85,.62,1.95));
+    actor.body.setBodyType(RAPIER.RigidBodyType.Dynamic,true);
+    actor.body.setLinearDamping(.3);actor.body.setAngularDamping(1.2);
+    actor.body.setLinvel({x:Math.sin(actor.yaw)*actor.speed,y:0,z:Math.cos(actor.yaw)*actor.speed},true);actor.body.setAngvel({x:0,y:0,z:0},true);
+  }
+  function restore(actor:Actor){
+    if(!actor.knocked)return;
+    actor.knocked=undefined;actor.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased,true);actor.collider.setShape(new RAPIER.Cuboid(.85,.45,1.95));
+    actor.body.setLinvel({x:0,y:0,z:0},true);actor.body.setAngvel({x:0,y:0,z:0},true);
+  }
+  /** Knock every lane keeper the player (or an already knocked car) is pushing into. */
+  function detectKnocks(){
+    const struck:Actor[]=[],pv=physics.body.linvel();
+    const closing=(v:{x:number;z:number},actor:Actor)=>Math.hypot(v.x-Math.sin(actor.yaw)*actor.speed,v.z-Math.cos(actor.yaw)*actor.speed);
+    physics.world.contactPairsWith(physics.chassisCollider,other=>{const actor=byCollider.get(other.handle);if(actor&&!actor.knocked&&closing(pv,actor)>KNOCK_SPEED)struck.push(actor);});
+    for(const actor of actors)if(actor.knocked){const v=actor.body.linvel();physics.world.contactPairsWith(actor.collider,other=>{const hit=byCollider.get(other.handle);if(hit&&!hit.knocked&&closing(v,hit)>KNOCK_SPEED+.3)struck.push(hit);});}
+    for(const actor of struck)knock(actor);
+  }
+  /** Route distance of the lane point nearest to where the car now lies, within 90 m. */
+  function nearestSlot(actor:Actor){
+    let best=actor.distance,bestGap=Infinity;
+    for(let s=Math.max(0,actor.distance-90);s<=Math.min(actor.path.length-.05,actor.distance+90);s+=1){const p=at(actor.path,s),gap=Math.hypot(p[0]-actor.x,p[1]-actor.z);if(gap<bestGap){bestGap=gap;best=s;}}
+    return best;
+  }
+  const rejoinProbe=new RAPIER.Cuboid(.85,.3,1.95);
+  /** Sweep the car's footprint from `from` to `to`, lifted clear of the road,
+   * ignoring terrain, traffic and sensors. */
+  function sweep(actor:Actor,from:{x:number;y:number;z:number},to:{x:number;y:number;z:number},accept:(handle:number)=>boolean){
+    return physics.world.castShape({x:from.x,y:from.y+.3,z:from.z},actor.body.rotation(),{x:to.x-from.x,y:to.y-from.y,z:to.z-from.z},rejoinProbe,0,1,true,undefined,undefined,actor.collider,undefined,c=>accept(c.handle)&&!byCollider.has(c.handle)&&!physics.terrainColliders.has(c.handle)&&!c.isSensor());
+  }
+  /** Whether a settled car may ease back onto its lane. The player's chassis in
+   * the way means wait (a kinematic car would shove it); anything else (a wall,
+   * parked car or bus) means the way is blocked. */
+  function rejoinWay(actor:Actor):'wait'|'blocked'|'clear'{
+    const s=nearestSlot(actor),p=at(actor.path,s),hit=sweep(actor,actor.body.translation(),{x:p[0],y:sampleRoadElevation(city,pathRoad(actor.path,s),p[0],p[1])+.65,z:p[1]},()=>true);
+    return !hit?'clear':hit.collider.handle===physics.chassisCollider.handle?'wait':'blocked';
+  }
+  /** Back to a lane keeper at the nearest point of its route; nearby cars ease
+   * there over two seconds from where they stopped, distant ones just resume. */
+  function beginRejoin(actor:Actor,observer:Pick<VehicleState,'x'|'z'>){
+    const t=actor.body.translation(),r=actor.body.rotation();
+    restore(actor);
+    actor.distance=nearestSlot(actor);actor.speed=0;actor.signalStop=undefined;actor.signalCommitted=false;
+    const far=Math.hypot(actor.x-observer.x,actor.z-observer.z)>160;
+    actor.rejoin={t:0,duration:far?0:2.2,x:t.x,y:t.y,z:t.z,q:new THREE.Quaternion(r.x,r.y,r.z,r.w)};
+  }
   function relocate(actor:Actor,path:Path,d=5){
     const start=at(path,d),next=at(path,d+2);
+    restore(actor);actor.rejoin=undefined;
     actor.path=path;actor.distance=d;actor.speed=0;actor.signalStop=undefined;actor.signalCommitted=false;
     actor.x=start[0];actor.z=start[1];actor.yaw=Math.atan2(next[0]-start[0],next[1]-start[1]);
     const road=pathRoad(path,d),normal=roadNormal(city,road,...start);
@@ -341,8 +411,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         if(candidate){relocate(actor,candidate.path,candidate.d);if(Math.hypot(candidate.p[0]-observer.x,candidate.p[1]-observer.z)<240)nearby++;const p=aheadOf(candidate.p,observer);if(p.along>35&&p.along<200&&Math.abs(p.across)<12)inFront++;}
       }
     },
-    snapshot:()=>actors.map(a=>{const stop=a.path.stops.find(s=>s.distance>=a.distance-.2);return{x:a.x,z:a.z,yaw:a.yaw,speed:a.speed,road:pathRoad(a.path,a.distance).name,signal:stop?signalPhase(elapsed,stop.yaw):undefined,stopGap:stop?stop.distance-a.distance:Infinity};}),
+    snapshot:()=>actors.map(a=>{const stop=a.path.stops.find(s=>s.distance>=a.distance-.2);return{x:a.x,z:a.z,yaw:a.yaw,speed:a.speed,road:pathRoad(a.path,a.distance).name,signal:stop?signalPhase(elapsed,stop.yaw):undefined,stopGap:stop?stop.distance-a.distance:Infinity,knocked:!!a.knocked,rejoining:!!a.rejoin,dynamic:a.body.isDynamic()};}),
     obstacles:():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:2.1,halfWidth:.95,speed:a.speed})),
+    /** Collider handles of the fleet, so an impact on the player can be classified. */
+    colliders:new Set(byCollider.keys()),
     update(dt: number, player: VehicleState, observer: Pick<VehicleState,'x'|'y'|'z'> = player, external:TrafficObstacle[] = []) {
       dt = Math.max(0, Math.min(dt, 1 / 30));
       elapsed += dt;rehomeTimer+=dt;
@@ -354,6 +426,16 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         Math.hypot(point[0] - player.x, point[1] - player.z) > 35 &&
         !actors.some(other => other !== actor && Math.hypot(other.x - point[0], other.z - point[1]) < 18) &&
         !external.some(other => Math.hypot(other.x - point[0], other.z - point[1]) < (other.halfLength ?? 2.1) + 5);
+      // Retain the old body until an unoccupied distant replacement has been found.
+      const respawnAway=(actor:Actor)=>{
+        for (let attempt = 0; attempt < 12; attempt++) {
+          const connected=spawnEdges.filter(edge=>components.get(edge.start)===actor.path.component);if(!connected.length)return false;
+          const path = route(choose(connected)), start = at(path, 5);
+          if (Math.hypot(start[0] - observer.x, start[1] - observer.z) < recycleDistance || !clearRelocation(start,actor)) continue;
+          relocate(actor,path);return true;
+        }
+        return false;
+      };
       if(rehomeTimer>.25){
         rehomeTimer=0;
         const target=activityAt(observer.x,observer.z).traffic;
@@ -377,10 +459,28 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       // Snapshot once per step instead of allocating an O(N²) pile of obstacle
       // objects. The stable snapshot also avoids actor-order-dependent following.
       const obstacles:TrafficObstacle[]=[{...player,halfLength:2.1,halfWidth:.9},...actors.map(actor=>({x:actor.x,y:actor.body.translation().y,z:actor.z,halfLength:2.1,halfWidth:.95,speed:actor.speed})),...external];
+      detectKnocks();
       for (let index = 0; index < actors.length; index++) {
         const actor = actors[index];
+        if(actor.knocked){
+          // Rapier moves this one. Track it so other cars still brake for it,
+          // and hand it back to the lane once it has stopped sliding (or after
+          // ten seconds, or if it was pushed off the loaded ground).
+          const k=actor.knocked,t=actor.body.translation(),r=actor.body.rotation(),v=actor.body.linvel(),w=actor.body.angvel();
+          const lost=![t.x,t.y,t.z].every(Number.isFinite)||t.y<sampleElevation(city,t.x,t.z)-6;
+          if(!lost){
+            actor.x=t.x;actor.z=t.z;actor.speed=Math.hypot(v.x,v.z);
+            const fx=2*(r.x*r.z+r.w*r.y),fz=1-2*(r.x*r.x+r.y*r.y);if(Math.hypot(fx,fz)>.1)actor.yaw=Math.atan2(fx,fz);
+            k.settled=Math.hypot(v.x,v.y,v.z)>.4||Math.hypot(w.x,w.y,w.z)>.4?0:k.settled+dt;
+          }
+          const way=lost?'lost':k.settled>1.2||elapsed-k.since>10?rejoinWay(actor):'wait';
+          if(way==='lost')relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));
+          else if(way==='blocked'){if(!respawnAway(actor))relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));}
+          else if(way==='clear')beginRejoin(actor,observer);
+          else{rotation.set(r.x,r.y,r.z,r.w);position.set(t.x,t.y,t.z);draw(index);continue;}
+        }
         const forwardX = Math.sin(actor.yaw), forwardZ = Math.cos(actor.yaw);
-        let target = actor.cruise;
+        let target = actor.rejoin?0:actor.cruise;
         const p = at(actor.path, actor.distance), ahead = at(actor.path, actor.distance + 12);
         const upcomingYaw = Math.atan2(ahead[0] - p[0], ahead[1] - p[1]);
         const turn = Math.abs(Math.atan2(Math.sin(upcomingYaw - actor.yaw), Math.cos(upcomingYaw - actor.yaw)));
@@ -405,31 +505,25 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         if (remaining < 12) target = Math.min(target, Math.sqrt(Math.max(0, 2 * 3 * (remaining - 2))));
         actor.speed += Math.max(-6 * dt, Math.min(2.2 * dt, target - actor.speed));
         actor.distance = Math.min(actor.path.length - .05, actor.distance + actor.speed * dt);
-        if (remaining < 3 && Math.hypot(actor.x - observer.x, actor.z - observer.z) > localRadius*1.35) {
-          // Recycling occurs only well away from the player. Retain the old body
-          // until an unoccupied distant replacement has been found.
-          for (let attempt = 0; attempt < 12; attempt++) {
-            const connected=spawnEdges.filter(edge=>components.get(edge.start)===actor.path.component);if(!connected.length)break;
-            const path = route(choose(connected)), start = at(path, 5);
-            if (Math.hypot(start[0] - observer.x, start[1] - observer.z) < recycleDistance || !clearRelocation(start,actor)) continue;
-            relocate(actor,path);
-            break;
-          }
-        }
+        // Recycling occurs only well away from the player.
+        if (remaining < 3 && Math.hypot(actor.x - observer.x, actor.z - observer.z) > localRadius*1.35) respawnAway(actor);
         const next = at(actor.path, actor.distance), look = at(actor.path, actor.distance + 1.5);
         actor.x = next[0]; actor.z = next[1];
         if (distance(next, look) > .01) actor.yaw = Math.atan2(look[0] - next[0], look[1] - next[1]);
         const road=pathRoad(actor.path,actor.distance),normal=roadNormal(city,road,actor.x,actor.z),ground=sampleRoadElevation(city,road,actor.x,actor.z),pose=roadRotation(city,road,actor.x,actor.z,actor.yaw);
-        rotation.set(pose.x,pose.y,pose.z,pose.w);
-        actor.body.setNextKinematicTranslation({ x: actor.x+normal.x*.65, y: ground+normal.y*.65, z: actor.z+normal.z*.65 });
-        actor.body.setNextKinematicRotation(rotation);
-        position.set(actor.x, ground, actor.z); matrix.compose(position, rotation, scale);
-        for (const { mesh, model } of meshes) {
-          if (model !== null && model !== index % styles.length) continue;
-          const slot = model === null ? index : Math.floor(index / styles.length);
-          mesh.setMatrixAt(slot, matrix);
-          if (mesh.userData.paint) mesh.setColorAt(slot, actor.color);
+        rotation.set(pose.x,pose.y,pose.z,pose.w);position.set(actor.x+normal.x*.65,ground+normal.y*.65,actor.z+normal.z*.65);
+        if(actor.rejoin){
+          // Hold the blend while the chassis is in what is left of the way: a still kinematic car is a kerb, one moving at the chassis a shove.
+          const rejoin=actor.rejoin,chassis=physics.chassisCollider.handle;
+          if(!sweep(actor,actor.body.translation(),position,handle=>handle===chassis))rejoin.t+=dt;
+          const u=rejoin.duration>0?Math.min(1,rejoin.t/rejoin.duration):1,s=u*u*(3-2*u);
+          position.set(rejoin.x,rejoin.y,rejoin.z).lerp(meshPosition.set(actor.x+normal.x*.65,ground+normal.y*.65,actor.z+normal.z*.65),s);
+          rotation.copy(rejoin.q).slerp(laneRotation.set(pose.x,pose.y,pose.z,pose.w),s);
+          if(u>=1)actor.rejoin=undefined;
         }
+        actor.body.setNextKinematicTranslation(position);
+        actor.body.setNextKinematicRotation(rotation);
+        draw(index);
       }
       for (const { mesh } of meshes) {
         mesh.computeBoundingSphere();

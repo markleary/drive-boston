@@ -3,6 +3,10 @@ import * as THREE from 'three';
 export interface PedestrianAppearance {
   id:number; position:THREE.Vector3; yaw:number; height:number; width:number; speed:number;
   bag:boolean; scarf:boolean; outfit?:number;
+  /** Full body orientation of a tumbling or lying actor; replaces `yaw` while set. */
+  orientation?:THREE.Quaternion;
+  /** 0..1 limp posture: arms flung out, legs splayed, eyes shut, as after a knock-down. */
+  sprawl?:number;
 }
 type Point = [number,number,number];
 type Section = [number,number,number]; // height, half width, half depth
@@ -240,7 +244,8 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
     blend[i]=THREE.MathUtils.damp(blend[i],walking,10,Math.max(0,Math.min(.1,dt)));
     const amount=blend[i],stride=1.12,cycle=distance/(stride*person.height),gait=cycle*Math.PI*2;
     const bob=Math.cos((cycle-.31)*Math.PI*4)*.020*amount+(1-amount)*.045,sway=Math.sin(gait)*.012*amount;
-    rotation.setFromAxisAngle(THREE.Object3D.DEFAULT_UP,person.yaw);
+    const sprawl=THREE.MathUtils.clamp(person.sprawl??0,0,1);
+    if(person.orientation)rotation.copy(person.orientation);else rotation.setFromAxisAngle(THREE.Object3D.DEFAULT_UP,person.yaw);
     actor.compose(person.position,rotation,scale.set(person.width*person.height,person.height,person.height));
     const hipY=.895+bob,bodyY=1.14+bob,twist=Math.sin(gait)*.035*amount;
     const longCoat=person.outfit===3,build=.94+(i%7)*.018;
@@ -248,7 +253,7 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
     place(pelvis,i,[sway,hipY+.015,0],[.32,.22,.245],0,-twist);
     place(collar,i,[sway,1.442+bob,.006],[.122,.033,.112],0,twist);
     place(seams,i,[sway,bodyY-(longCoat?.055:0),.012],[.425*build,longCoat?.70:.59,.285*(.97+i%3*.03)],.025*amount,twist,-sway*.6);
-    const headY=1.623+bob,headTurn=Math.sin(distance*.29+i*1.7)*.085;
+    const headY=1.623+bob,headTurn=THREE.MathUtils.lerp(Math.sin(distance*.29+i*1.7)*.085,(i%2?.42:-.42),sprawl);
     const faceWidth=.176*(.96+(i%5)*.02),headSize:Point=[faceWidth,.232,.202];
     const headMesh=detailed?heads:distantHeads,headIndex=detailed?nearHeadCount++:farHeadCount++;
     place(headMesh,headIndex,[sway,headY,.014],headSize,0,headTurn);tint(headMesh,headIndex,skins[i%skins.length]);
@@ -259,7 +264,7 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
     place(scarves,i,[sway,1.463+bob,.008],person.scarf?[.143,.055,.13]:[0,0,0]);
     place(coatHem,i,[sway,.79+bob,.005],person.outfit===1?[.37,.30,.225]:[0,0,0],0,twist);
     visualTime[i]+=Math.max(0,dt);
-    const blinkPhase=(visualTime[i]+i*.71)%(3.7+(i%5)*.43),blink=blinkPhase<.16?1-.94*Math.sin(blinkPhase/.16*Math.PI):1;
+    const blinkPhase=(visualTime[i]+i*.71)%(3.7+(i%5)*.43),blink=(blinkPhase<.16?1-.94*Math.sin(blinkPhase/.16*Math.PI):1)*(1-sprawl*.9);
     for(let sideIndex=0;sideIndex<2;sideIndex++){
       const side=sideIndex===0?-1:1,index=i*2+sideIndex;
       const step=((cycle+sideIndex*.5)%1+1)%1,stance=.62,extent=stride*stance*.5;
@@ -274,7 +279,9 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
       }
       footZ*=amount;lift*=amount;pitch*=amount;
       const contactIndex=THREE.MathUtils.clamp((pitch+.35)/.5*256,0,256),lower=Math.floor(contactIndex);
-      const footX=side*.09,shoeY=lerpContact(lower,contactIndex-lower)+lift;
+      // A limp body splays its legs: one knee drawn up, the other leg trailing.
+      const footX=THREE.MathUtils.lerp(side*.09,side*.27,sprawl),shoeY=THREE.MathUtils.lerp(lerpContact(lower,contactIndex-lower)+lift,.06+sideIndex*.1,sprawl);
+      footZ=THREE.MathUtils.lerp(footZ,sideIndex?.28:-.22,sprawl);
       const hip:Point=[side*.088+sway,hipY,0],ankle:Point=[footX,shoeY+.045,footZ-.015];
       const dy=ankle[1]-hip[1],dz=ankle[2]-hip[2],length=Math.hypot(dy,dz),bone=.430;
       const bend=Math.sqrt(Math.max(0,bone*bone-length*length*.25));
@@ -287,6 +294,11 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
       const elbow:Point=[side*.222+sway,shoulder[1]-Math.cos(armSwing)*.277,.005+Math.sin(armSwing)*.277];
       const elbowBend=.18+.12*(.5+.5*Math.sin(phase+.7))*amount;
       const hand:Point=[side*.216+sway,elbow[1]-Math.cos(armSwing+elbowBend)*.254,elbow[2]+Math.sin(armSwing+elbowBend)*.254];
+      if(sprawl>0){
+        // Arms flung outward and slightly up, as a body thrown off balance.
+        const flungElbow:Point=[side*.44+sway,1.33+sideIndex*.05,.09-sideIndex*.12],flungHand:Point=[side*.66+sway,1.27+sideIndex*.12,.2-sideIndex*.3];
+        for(let axis=0;axis<3;axis++){elbow[axis]=THREE.MathUtils.lerp(elbow[axis],flungElbow[axis],sprawl);hand[axis]=THREE.MathUtils.lerp(hand[axis],flungHand[axis],sprawl);}
+      }
       limb(arms,index,hand,elbow,shoulder);
       place(skin,i*5+1+sideIndex,[hand[0],hand[1]-.024,hand[2]+.005],[.060,.108,.038],armSwing+elbowBend);
       place(skin,i*5+3+sideIndex,[side*.079+sway,headY-.008,.008],[.024,.046,.030],0,headTurn);

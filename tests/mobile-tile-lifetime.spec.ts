@@ -11,7 +11,9 @@ test('paced tiles download once and leave no orphan scenes or colliders after re
     await page.waitForTimeout(1000);
   };
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});
-  await page.getByTestId('start-drive').tap();await page.getByTestId('mode-bike').tap();await settled();
+  await page.getByTestId('start-drive').tap();
+  // Phones hide the HUD travel switch; the vehicle is chosen in the settings sheet.
+  await page.locator('#open-settings').tap();await page.locator('#settings-modal [data-travel="bike"]').tap();await page.locator('#resume-drive').tap();await settled();
   // A second request for an in-progress tile used to enqueue a duplicate build.
   expect(requests.length).toBe(new Set(requests).size);
   const start=await page.evaluate(()=>(window as any).__backbay.city.spawn);

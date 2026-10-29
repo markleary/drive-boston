@@ -94,14 +94,26 @@ test('a blocked road projection is skipped rather than recovering inside a colli
   }finally{p.dispose();}
 });
 
-test('bike recovery falls back safely without a local road, and car recovery retains its existing saved position',async()=>{
-  for(const [kind,city]of [['ultrabee',{...flat,roads:[]}],['ultrabee',{...flat,roads:[road('Remote',-500)]}],['car',flat]]){
+test('crash recovery falls back to the last reset point for either vehicle only when no local road qualifies',async()=>{
+  for(const [kind,city]of [['ultrabee',{...flat,roads:[]}],['ultrabee',{...flat,roads:[road('Remote',-500)]}],['car',{...flat,roads:[]}],['car',{...flat,roads:[road('Remote',-500)]}]]){
     const p=await create(city,kind);try{
       layOnSide(p,{x:110,y:.5,z:208},0,kind==='car'?Math.PI:Math.PI/2);const recovered=advance(p,4);
       assert.ok(Math.abs(recovered.x-city.spawn.x)<.2&&Math.abs(recovered.z-city.spawn.z)<.2,`${kind} uses the last reset when local recovery does not apply`);
       assert.ok(upY(recovered)>.98);
     }finally{p.dispose();}
   }
+});
+
+test('an upside-down car recovers upright on the nearest road, like the bike',async()=>{
+  const p=await create(flat,'car');try{
+    layOnSide(p,{x:110,y:.6,z:208},0,Math.PI);const down=advance(p,2);
+    assert.ok(upY(down)<0,'the car stays on its roof until the recovery delay expires');
+    const recovered=advance(p,1.5);
+    assert.ok(Math.abs(recovered.x-110)<.2&&Math.abs(recovered.z-200)<.2,`recover on Crash road beside the crash, not at spawn: ${JSON.stringify(recovered)}`);
+    assert.ok(upY(recovered)>.98&&Math.abs(recovered.speed)<.1&&[0,1,2,3].every(i=>p.controller.wheelIsInContact(i)));
+    assert.ok(Math.abs(recovered.yaw+Math.PI/2)<.02,'face the one-way direction of the recovered road');
+    const moving=advance(p,1,{throttle:1});assert.ok(moving.x<recovered.x-2&&moving.speed>4,'drive away from the recovery point');
+  }finally{p.dispose();}
 });
 
 test('actual Mission Hill crash recovery retains the surveyed hill elevation near the crash',async()=>{
