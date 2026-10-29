@@ -4,7 +4,8 @@ export interface Road { id: string; name: string; points: Point2[]; width: numbe
 /** `kind` is the OpenStreetMap building tag of a town extrusion (house, apartments, retail...). */
 export interface Building { id: string; name: string; center: Point2; height: number; /** Generated wall height above base, excluding the pitched roof. */ eaveHeight?: number; footprint: Point2[]; landmark?: string; baseElevation?: number; kind?: string; amenity?: string; sourceName?: string; /** Preserve surveyed openings where the convex footprint crosses a road. */ collision?: 'mesh'; }
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
-export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; }
+export interface WaterSurface { source:string; name:string; rings:Point2[][]; level:number; }
+export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; /** Constant-height source basins/reaches inside a merged hydro outline. */ surfaces?:WaterSurface[]; }
 export interface ParkPath { id: string; points: Point2[]; width: number; bridge?: boolean; }
 export interface CityData {
   origin: { xFeet: number; yFeet: number; longitude: number; latitude: number };

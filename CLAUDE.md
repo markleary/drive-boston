@@ -64,6 +64,7 @@ python3 -m venv .venv-data
 node scripts/grade-terrain.mjs --data-dir /tmp/boston-staging        # offline road grading (about two minutes, 10 workers)
 .venv-data/bin/python scripts/build-road-structures.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/restore-water-crossings.py --data-dir /tmp/boston-staging
+.venv-data/bin/python scripts/build-water-surfaces.py --source-dir data-source-cache --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/building_clearance_package.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/validate-city.py --data-dir /tmp/boston-staging
 ```
