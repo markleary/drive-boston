@@ -349,7 +349,7 @@ async function boot(){
       camera.near=flying?1:.15;camera.lookAt(look);camera.updateProjectionMatrix();cameraSnap=false;
       car.setCameraPosition(camera.position);
       const flightShadows=flying&&quality==='high'&&!mobile;
-      world!.update(target,elapsed,!mobile||!paused,flightShadows);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,{...carState,halfLength:riding?.8:2.1,halfWidth:riding?.4:.95});updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
+      world!.update(target,elapsed,!mobile||!paused,flightShadows);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:{...carState,halfLength:riding?.8:2.1,halfWidth:riding?.4:.95});updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
       for(const impact of physics!.takeImpacts())if(!paused)audio.impact(classifyImpact(impact),impact.severity);
       for(const speed of streetLife.takeHits())if(!paused)audio.impact('pedestrian',speed);

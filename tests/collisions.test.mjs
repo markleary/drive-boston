@@ -53,19 +53,30 @@ test('the crash kick scales with the hit and stays off for the bike',async()=>{
   }finally{Object.assign(CRASH_KICK,original);}
 });
 
+/** Launch the player at a moving lane keeper: from six metres behind along its
+ * heading, or from seven metres off its right side aimed at where it will be. */
+async function launchAt(physics,traffic,side){
+  const far={...physics.getState(),x:city.bounds.minX+40,z:city.bounds.minZ+40};
+  for(let i=0;i<120;i++)traffic.update(1/60,far,far,[]);
+  const index=traffic.snapshot().findIndex(a=>a.speed>4),before=traffic.snapshot()[index];assert.ok(index>=0,'a moving lane keeper is available');
+  assert.equal(before.knocked,false);assert.equal(before.dynamic,false);
+  const fx=Math.sin(before.yaw),fz=Math.cos(before.yaw),rx=fz,rz=-fx;
+  const ax=before.x+fx*before.speed*.45,az=before.z+fz*before.speed*.45;
+  const x=side?ax+rx*7:before.x-fx*6,z=side?az+rz*7:before.z-fz*6,vx=side?-rx*16:fx*16,vz=side?-rz*16:fz*16,yaw=side?Math.atan2(-rx,-rz):before.yaw;
+  physics.body.setTranslation({x,y:sampleElevation(city,x,z)+.78,z},true);physics.body.setRotation({x:0,y:Math.sin(yaw/2),z:0,w:Math.cos(yaw/2)},true);
+  physics.body.setLinvel({x:vx,y:0,z:vz},true);physics.body.setAngvel({x:0,y:0,z:0},true);
+  return {index,before,fx,fz};
+}
+const park=(physics,x,z)=>{physics.body.setTranslation({x,y:sampleElevation(city,x,z)+.78,z},true);physics.body.setLinvel({x:0,y:0,z:0},true);physics.body.setAngvel({x:0,y:0,z:0},true);};
+
 test('a struck traffic car is shoved as a dynamic body, then eases back into its lane as a lane keeper',async()=>{
   const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);
   try{
-    const far={...physics.getState(),x:city.bounds.minX+40,z:city.bounds.minZ+40};
-    for(let i=0;i<120;i++)traffic.update(1/60,far,far,[]);
-    const index=traffic.snapshot().findIndex(a=>a.speed>4),before=traffic.snapshot()[index];assert.ok(index>=0,'a moving lane keeper is available');
-    assert.equal(before.knocked,false);assert.equal(before.dynamic,false);
-    // Launch the player at the car from six metres behind it along its heading.
-    const fx=Math.sin(before.yaw),fz=Math.cos(before.yaw),x=before.x-fx*6,z=before.z-fz*6;
-    physics.body.setTranslation({x,y:sampleElevation(city,x,z)+.78,z},true);physics.body.setRotation({x:0,y:Math.sin(before.yaw/2),z:0,w:Math.cos(before.yaw/2)},true);
-    physics.body.setLinvel({x:fx*16,y:0,z:fz*16},true);physics.body.setAngvel({x:0,y:0,z:0},true);
+    const {index,before,fx,fz}=await launchAt(physics,traffic,false);
     let knockedAt=-1,peakSpeed=0,impacts=[],restoredAt=-1;
     for(let i=0;i<60*16;i++){
+      // Brake after the hit, then back well away so the way to the lane is clear.
+      if(i===240)park(physics,before.x-fx*60,before.z-fz*60);
       const state=physics.getState();traffic.update(1/60,state,state,[]);physics.step({...released,brake:i>30?1:0},1/60);
       impacts.push(...physics.takeImpacts());
       const now=traffic.snapshot()[index];
@@ -83,6 +94,44 @@ test('a struck traffic car is shoved as a dynamic body, then eases back into its
     assert.ok(traffic.obstacles().every(o=>[o.x,o.y,o.z].every(Number.isFinite)));
     assert.ok(Math.abs(physics.getState().speed)<KNOCK_SPEED+30);
   }finally{traffic.dispose();physics.dispose();}
+});
+
+test('a settled car waits while the player sits in its way back, rejoins once they leave, and respawns elsewhere when a wall blocks the way',async()=>{
+  for(const obstruction of ['player','wall']){
+    const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);
+    try{
+      // A side hit shoves the car off its lane and the braking player stops between the two.
+      const {index}=await launchAt(physics,traffic,true);
+      let knockedAt=-1,rejoinAt=-1,restoredAt=-1,rest,restored,wall;
+      for(let i=0;i<60*20;i++){
+        const state=physics.getState();
+        if(i===60*12){
+          // Twelve seconds of sitting there: the way back is not clear, so the car is still Rapier's.
+          const now=traffic.snapshot()[index];assert.ok(now.knocked&&now.dynamic&&!now.rejoining,`${obstruction}: a car whose way back is occupied stays dynamic`);
+          rest={x:now.x,z:now.z};
+          const t=physics.body.translation(),r=physics.body.rotation();park(physics,state.x+100,state.z+100);
+          if(obstruction==='wall')wall=physics.world.createCollider(RAPIER.ColliderDesc.cuboid(.85,.5,2.02).setTranslation(t.x,t.y,t.z).setRotation(r),physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed()));
+        }
+        traffic.update(1/60,state,state,[]);physics.step({...released,brake:i>30?1:0},1/60);
+        const now=traffic.snapshot()[index];
+        if(now.knocked&&knockedAt<0)knockedAt=i;
+        if(now.rejoining&&rejoinAt<0)rejoinAt=i;
+        if(rest&&restoredAt<0&&!now.knocked&&!now.rejoining){restoredAt=i;restored={x:now.x,z:now.z};}
+        assert.ok([now.x,now.z,now.yaw].every(Number.isFinite));
+      }
+      assert.ok(knockedAt>=0&&knockedAt<120,`${obstruction}: the side hit knocks the car (step ${knockedAt})`);
+      const after=traffic.snapshot()[index];assert.ok(!after.knocked&&!after.dynamic&&!after.rejoining,`${obstruction}: a lane keeper again at the end`);
+      assert.ok(restoredAt>60*12&&restoredAt<60*17,`${obstruction}: hands back within five seconds of the way clearing (step ${restoredAt})`);
+      if(obstruction==='player'){
+        assert.ok(rejoinAt>60*12,`eases back only after the player has gone (step ${rejoinAt})`);
+        assert.ok(Math.hypot(restored.x-rest.x,restored.z-rest.z)<12,'rejoins its lane beside where it came to rest, then drives on');
+      }else{
+        assert.equal(rejoinAt,-1,'never eases through the wall');
+        assert.ok(Math.hypot(restored.x-rest.x,restored.z-rest.z)>60,`respawns well away from the blocked spot (${Math.hypot(restored.x-rest.x,restored.z-rest.z).toFixed(0)} m)`);
+        physics.world.removeCollider(wall,true);
+      }
+    }finally{traffic.dispose();physics.dispose();}
+  }
 });
 
 test('a struck walker is thrown, lies flat, gets up and rejoins a sidewalk route',()=>{

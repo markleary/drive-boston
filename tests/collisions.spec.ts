@@ -22,7 +22,8 @@ test('driving into traffic knocks the car and plays a crash; a struck walker goe
   expect(struck!.traffic.filter(a=>a.knocked).every(a=>a.dynamic)).toBe(true);
   await expect.poll(async()=>(await snapshot(page)).audio.impactCount).toBeGreaterThan(0);
   await page.screenshot({path:testInfo.outputPath('traffic-knock.png')});
-  // Every struck car comes to rest and is a lane keeper again within a quarter minute.
+  // Back away so the way to the lane is clear: every struck car comes to rest and is a lane keeper again within a quarter minute.
+  await page.keyboard.down('s');await page.waitForTimeout(2500);await page.keyboard.up('s');
   await expect.poll(async()=>(await snapshot(page)).traffic.every(a=>!a.knocked&&!a.rejoining&&!a.dynamic),{timeout:30000}).toBe(true);
   expect((await snapshot(page)).traffic.every(a=>[a.x,a.z,a.yaw].every(Number.isFinite))).toBe(true);
 

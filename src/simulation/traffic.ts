@@ -349,14 +349,31 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     for(const actor of actors)if(actor.knocked){const v=actor.body.linvel();physics.world.contactPairsWith(actor.collider,other=>{const hit=byCollider.get(other.handle);if(hit&&!hit.knocked&&closing(v,hit)>KNOCK_SPEED+.3)struck.push(hit);});}
     for(const actor of struck)knock(actor);
   }
+  /** Route distance of the lane point nearest to where the car now lies, within 90 m. */
+  function nearestSlot(actor:Actor){
+    let best=actor.distance,bestGap=Infinity;
+    for(let s=Math.max(0,actor.distance-90);s<=Math.min(actor.path.length-.05,actor.distance+90);s+=1){const p=at(actor.path,s),gap=Math.hypot(p[0]-actor.x,p[1]-actor.z);if(gap<bestGap){bestGap=gap;best=s;}}
+    return best;
+  }
+  const rejoinProbe=new RAPIER.Cuboid(.85,.3,1.95);
+  /** Sweep the car's footprint from `from` to `to`, lifted clear of the road,
+   * ignoring terrain, traffic and sensors. */
+  function sweep(actor:Actor,from:{x:number;y:number;z:number},to:{x:number;y:number;z:number},accept:(handle:number)=>boolean){
+    return physics.world.castShape({x:from.x,y:from.y+.3,z:from.z},actor.body.rotation(),{x:to.x-from.x,y:to.y-from.y,z:to.z-from.z},rejoinProbe,0,1,true,undefined,undefined,actor.collider,undefined,c=>accept(c.handle)&&!byCollider.has(c.handle)&&!physics.terrainColliders.has(c.handle)&&!c.isSensor());
+  }
+  /** Whether a settled car may ease back onto its lane. The player's chassis in
+   * the way means wait (a kinematic car would shove it); anything else (a wall,
+   * parked car or bus) means the way is blocked. */
+  function rejoinWay(actor:Actor):'wait'|'blocked'|'clear'{
+    const s=nearestSlot(actor),p=at(actor.path,s),hit=sweep(actor,actor.body.translation(),{x:p[0],y:sampleRoadElevation(city,pathRoad(actor.path,s),p[0],p[1])+.65,z:p[1]},()=>true);
+    return !hit?'clear':hit.collider.handle===physics.chassisCollider.handle?'wait':'blocked';
+  }
   /** Back to a lane keeper at the nearest point of its route; nearby cars ease
    * there over two seconds from where they stopped, distant ones just resume. */
   function beginRejoin(actor:Actor,observer:Pick<VehicleState,'x'|'z'>){
     const t=actor.body.translation(),r=actor.body.rotation();
     restore(actor);
-    let best=actor.distance,bestGap=Infinity;
-    for(let s=Math.max(0,actor.distance-90);s<=Math.min(actor.path.length-.05,actor.distance+90);s+=1){const p=at(actor.path,s),gap=Math.hypot(p[0]-actor.x,p[1]-actor.z);if(gap<bestGap){bestGap=gap;best=s;}}
-    actor.distance=best;actor.speed=0;actor.signalStop=undefined;actor.signalCommitted=false;
+    actor.distance=nearestSlot(actor);actor.speed=0;actor.signalStop=undefined;actor.signalCommitted=false;
     const far=Math.hypot(actor.x-observer.x,actor.z-observer.z)>160;
     actor.rejoin={t:0,duration:far?0:2.2,x:t.x,y:t.y,z:t.z,q:new THREE.Quaternion(r.x,r.y,r.z,r.w)};
   }
@@ -409,6 +426,16 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         Math.hypot(point[0] - player.x, point[1] - player.z) > 35 &&
         !actors.some(other => other !== actor && Math.hypot(other.x - point[0], other.z - point[1]) < 18) &&
         !external.some(other => Math.hypot(other.x - point[0], other.z - point[1]) < (other.halfLength ?? 2.1) + 5);
+      // Retain the old body until an unoccupied distant replacement has been found.
+      const respawnAway=(actor:Actor)=>{
+        for (let attempt = 0; attempt < 12; attempt++) {
+          const connected=spawnEdges.filter(edge=>components.get(edge.start)===actor.path.component);if(!connected.length)return false;
+          const path = route(choose(connected)), start = at(path, 5);
+          if (Math.hypot(start[0] - observer.x, start[1] - observer.z) < recycleDistance || !clearRelocation(start,actor)) continue;
+          relocate(actor,path);return true;
+        }
+        return false;
+      };
       if(rehomeTimer>.25){
         rehomeTimer=0;
         const target=activityAt(observer.x,observer.z).traffic;
@@ -446,8 +473,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
             const fx=2*(r.x*r.z+r.w*r.y),fz=1-2*(r.x*r.x+r.y*r.y);if(Math.hypot(fx,fz)>.1)actor.yaw=Math.atan2(fx,fz);
             k.settled=Math.hypot(v.x,v.y,v.z)>.4||Math.hypot(w.x,w.y,w.z)>.4?0:k.settled+dt;
           }
-          if(lost){relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));}
-          else if(k.settled>1.2||elapsed-k.since>10)beginRejoin(actor,observer);
+          const way=lost?'lost':k.settled>1.2||elapsed-k.since>10?rejoinWay(actor):'wait';
+          if(way==='lost')relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));
+          else if(way==='blocked'){if(!respawnAway(actor))relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));}
+          else if(way==='clear')beginRejoin(actor,observer);
           else{rotation.set(r.x,r.y,r.z,r.w);position.set(t.x,t.y,t.z);draw(index);continue;}
         }
         const forwardX = Math.sin(actor.yaw), forwardZ = Math.cos(actor.yaw);
@@ -476,24 +505,18 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         if (remaining < 12) target = Math.min(target, Math.sqrt(Math.max(0, 2 * 3 * (remaining - 2))));
         actor.speed += Math.max(-6 * dt, Math.min(2.2 * dt, target - actor.speed));
         actor.distance = Math.min(actor.path.length - .05, actor.distance + actor.speed * dt);
-        if (remaining < 3 && Math.hypot(actor.x - observer.x, actor.z - observer.z) > localRadius*1.35) {
-          // Recycling occurs only well away from the player. Retain the old body
-          // until an unoccupied distant replacement has been found.
-          for (let attempt = 0; attempt < 12; attempt++) {
-            const connected=spawnEdges.filter(edge=>components.get(edge.start)===actor.path.component);if(!connected.length)break;
-            const path = route(choose(connected)), start = at(path, 5);
-            if (Math.hypot(start[0] - observer.x, start[1] - observer.z) < recycleDistance || !clearRelocation(start,actor)) continue;
-            relocate(actor,path);
-            break;
-          }
-        }
+        // Recycling occurs only well away from the player.
+        if (remaining < 3 && Math.hypot(actor.x - observer.x, actor.z - observer.z) > localRadius*1.35) respawnAway(actor);
         const next = at(actor.path, actor.distance), look = at(actor.path, actor.distance + 1.5);
         actor.x = next[0]; actor.z = next[1];
         if (distance(next, look) > .01) actor.yaw = Math.atan2(look[0] - next[0], look[1] - next[1]);
         const road=pathRoad(actor.path,actor.distance),normal=roadNormal(city,road,actor.x,actor.z),ground=sampleRoadElevation(city,road,actor.x,actor.z),pose=roadRotation(city,road,actor.x,actor.z,actor.yaw);
         rotation.set(pose.x,pose.y,pose.z,pose.w);position.set(actor.x+normal.x*.65,ground+normal.y*.65,actor.z+normal.z*.65);
         if(actor.rejoin){
-          const rejoin=actor.rejoin;rejoin.t+=dt;const u=rejoin.duration>0?Math.min(1,rejoin.t/rejoin.duration):1,s=u*u*(3-2*u);
+          // Hold the blend while the chassis is in what is left of the way: a still kinematic car is a kerb, one moving at the chassis a shove.
+          const rejoin=actor.rejoin,chassis=physics.chassisCollider.handle;
+          if(!sweep(actor,actor.body.translation(),position,handle=>handle===chassis))rejoin.t+=dt;
+          const u=rejoin.duration>0?Math.min(1,rejoin.t/rejoin.duration):1,s=u*u*(3-2*u);
           position.set(rejoin.x,rejoin.y,rejoin.z).lerp(meshPosition.set(actor.x+normal.x*.65,ground+normal.y*.65,actor.z+normal.z*.65),s);
           rotation.copy(rejoin.q).slerp(laneRotation.set(pose.x,pose.y,pose.z,pose.w),s);
           if(u>=1)actor.rejoin=undefined;
