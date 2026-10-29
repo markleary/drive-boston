@@ -68,7 +68,7 @@ export class DrivingPhysics {
   private constructor(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string>; streaming?: boolean }) {
     this.bounds = city.bounds;
     this.city = city;
-    this.meshBuildingIds = new Set(options.meshBuildingIds);
+    this.meshBuildingIds = new Set([...(options.meshBuildingIds ?? []), ...city.buildings.filter(b => b.collision === 'mesh').map(b => b.id)]);
     this.streaming = !!options.streaming;
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
@@ -173,7 +173,7 @@ export class DrivingPhysics {
   /** Convex footprint proxy, extended below the lowest terrain along the footprint
    * so hillside entries cannot pass through the visible wall under a level base. */
   addBuildingHull(building: CityData['buildings'][number]) {
-    if (building.footprint.length < 3 || building.height < 0.5 || this.meshBuildingIds.has(building.id)) return undefined;
+    if (building.footprint.length < 3 || building.height < 0.5 || building.collision === 'mesh' || this.meshBuildingIds.has(building.id)) return undefined;
     const city = this.city, vertices: number[] = [], base = buildingBaseElevation(city, building);
     let bottom = Math.min(base, sampleElevation(city, building.center[0], building.center[1])) - .5;
     for (let i = 0; i < building.footprint.length; i++) {

@@ -17,7 +17,7 @@ import { createGrassMaterial } from './ground-cover';
 import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
 import { addRoadStructures } from './bridges';
-import { meshBuildingIds } from '../simulation/building-collisions';
+import { usesExactBuildingCollision } from '../simulation/building-collisions';
 import { inTransitCorridor } from '../simulation/transit-corridors';
 import { addSourceFooting } from './source-footings';
 import {isStateHouse,createStateHouseShellMaterials,splitStateHouseShell} from './state-house';
@@ -159,9 +159,9 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     if(b&&parkStructures.has(b.id))material=parkStone;
     if(b&&isFenwayBuilding(b))material=isRoof?fenwayMaterials.roof:fenwayMaterials.wall;
     const geometry=object.geometry.clone().applyMatrix4(object.matrixWorld);
-    const footing=!isRoof&&b&&meshBuildingIds.has(b.id)?addSourceFooting(scene,city,b,geometry):undefined;
+    const footing=!isRoof&&b&&usesExactBuildingCollision(b)?addSourceFooting(scene,city,b,geometry):undefined;
     if(footing)buildingCollisions.push(footing);
-    if(b&&meshBuildingIds.has(b.id)){
+    if(b&&usesExactBuildingCollision(b)){
       const positions=geometry.getAttribute('position');
       const vertices=new Float32Array(positions.count*3);
       for(let i=0;i<positions.count;i++){vertices[i*3]=positions.getX(i);vertices[i*3+1]=positions.getY(i);vertices[i*3+2]=positions.getZ(i);}
@@ -200,7 +200,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     for(const g of geometries)g.dispose();
   }
 
-  const foundations=new THREE.Mesh(foundationGeometry({...city,buildings:city.buildings.filter(b=>!meshBuildingIds.has(b.id))}),new THREE.MeshStandardMaterial({color:'#827c6d',roughness:.95,side:THREE.DoubleSide}));foundations.receiveShadow=true;scene.add(foundations);
+  const foundations=new THREE.Mesh(foundationGeometry({...city,buildings:city.buildings.filter(b=>!usesExactBuildingCollision(b))}),new THREE.MeshStandardMaterial({color:'#827c6d',roughness:.95,side:THREE.DoubleSide}));foundations.receiveShadow=true;scene.add(foundations);
 
   const treePositions:THREE.Vector3[]=[];const lampPositions:THREE.Vector3[]=[];const signRecords:{position:THREE.Vector3,name:string,yaw:number}[]=[];
   const random=seeded(342);

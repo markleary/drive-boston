@@ -21,6 +21,8 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 import tileformat
 from building_semantics import apply_building_identity,facade_style,index_footprints
+from building_clearance_package import prepare_buildings,prepare_package
+from building_collision_policy import KEY_BUILDING_IDS,exact_far_collision
 spec=importlib.util.spec_from_file_location('city_compiler',ROOT/'scripts/build-city.py');central=importlib.util.module_from_spec(spec);spec.loader.exec_module(central)
 xy,rounded,hull,load_layer,feature_polygons,polygon_rings,polygon_parts,context_polygons,visible_floor,geographic_polygon=central.xy,central.rounded,central.hull,central.load_layer,central.feature_polygons,central.polygon_rings,central.polygon_parts,central.context_polygons,central.visible_floor,central.geographic_polygon
 FT=central.FT;ORIGIN=central.ORIGIN;TO_GEO=central.TO_GEO
@@ -148,6 +150,8 @@ def main():
  log('Roads',len(roads),'bridge decks',sum(1 for r in roads if r.get('elevations')),'omitted tunnels',len(omitted),'degenerate stubs',road_sources['droppedDegenerate'])
  # ---- buildings
  buildings,geometry,manifest_stats,landmark_hits=build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildings)
+ clearance=prepare_buildings(buildings,geometry,roads)
+ log('Building road clearance',clearance)
  log('Buildings',len(buildings))
  # ---- curbs and signals
  curbs=[]
@@ -202,6 +206,7 @@ def main():
  (out/'provenance.json').write_text(json.dumps(provenance,separators=(',',':'))+'\n')
  log('Running Bowker road structures')
  subprocess.run([sys.executable,str(ROOT/'scripts/build-road-structures.py'),'--data-dir',str(out)],check=True)
+ log('Rechecking building clearance after road structures',prepare_package(out))
  size=sum(f.stat().st_size for f in tiles_dir.glob('*.bin'))
  print(json.dumps({'buildings':len(buildings),'districts':dict(Counter(b['district'] for b in buildings)),'roads':len(roads),'curbs':len(curbs),'signals':len(signals),'landmarks':len(landmarks),'parks':len(parks),'water':len(water),'parkPaths':len(park_paths),'tiles':len(tile_keys),'tileBytes':size,'farBytes':far_bytes,'elevationBytes':(out/'elevation.bin').stat().st_size,'cityJsonBytes':(out/'city.json').stat().st_size,'coverageAreaSquareMeters':round(coverage.area),'minutes':round((time.time()-began)/60,1)},indent=1))
 
@@ -772,13 +777,6 @@ def write_tiles(out,buildings,geometry,curbs,park_paths,roads):
  log('Wrote',len(keys),'tiles')
  return keys
 
-# Buildings the runtime addresses by identity before their tile streams in:
-# the State House dome, Prudential complex, 145 Dartmouth and the four Fenway
-# Park shells (see src/render/*.ts and src/simulation/building-collisions.ts),
-# plus the BUMC ambulatory care center (an overhead link across Massachusetts
-# Avenue) and NEXUS in Allston (an L around Western Avenue), whose convex hulls
-# would otherwise wall off about 200 m of each street.
-KEY_BUILDING_IDS={'BOS-1WKHX-X382F-V5VL1','BOS-KBIA4-2XA04-WNETP','BOS-Q6TUK-T7ZG3-2SJKK','BOS-73AP7-T4BL0-O4QDM','BOS-DA4MQ-LLJZX-89MF5','BOS-2ZJZB-IWPEJ-JUBMC','BOS-0HKZL-2YJWH-V1GAU','BOS-2E9SM-83L3W-UVT08','BOS-4WO5X-6OJI5-G5S26','BOS-HO11N-VJBYE-3RDXF','BOS-3R76C-CGBE8-V3V1H'}
 # Survey meshes of structures rather than buildings (the Zakim Bridge with its
 # Charlestown viaduct): exact-mesh collision, no foundation skirt, no far box and
 # a token footprint so a 2 km convex hull never blocks streets, sidewalks or the
@@ -804,7 +802,7 @@ def far_fragments(vertices,base,height,cell=20):
    poly=hull([p for k in group for p in points[k]])
    if len(poly)>=3:out.append({'footprint':[rounded(p) for p in poly],'height':round(min(cap,max(cells[k] for k in group)),2)})
  return out
-LANDMARK_FIELDS={'id','name','center','height','footprint','baseElevation','district','landmark','anchor','kind','amenity','sourceName'}
+LANDMARK_FIELDS={'id','name','center','height','footprint','baseElevation','district','landmark','anchor','kind','amenity','sourceName','collision','buildingPassage'}
 
 def write_far(out,buildings):
  """Coarse far-distance representation: convex footprints with height, base
@@ -818,7 +816,7 @@ def write_far(out,buildings):
  for (tx,tz),entries in sorted(by_tile.items()):
   directory.append({'key':f'{tx}_{tz}','offset':len(body),'count':sum(1+len(FAR_FRAGMENTS.get(b['id'],())) for b in entries)});ox,oz=tx*TILE,tz*TILE
   for b in entries:
-   fragments=FAR_FRAGMENTS.get(b['id'],());flags=(1 if b.get('landmark') else 0)|(2 if b['id'] in KEY_BUILDING_IDS else 0)|(4 if b.get('structure') or fragments else 0)
+   fragments=FAR_FRAGMENTS.get(b['id'],());flags=(1 if b.get('landmark') else 0)|(2 if exact_far_collision(b) else 0)|(4 if b.get('structure') or fragments else 0)
    for part,extra in [(b,0)]+[(f,8) for f in fragments]:
     pts=part['footprint'][:60];body.extend(struct.pack('<HHhBB',len(pts),min(65535,int(round(part['height']*100))),int(round(b['baseElevation']*100)),flags|extra,facade_style(b)))
     for x,z in pts:body.extend(struct.pack('<hh',int(round((x-ox)*10)),int(round((z-oz)*10))))

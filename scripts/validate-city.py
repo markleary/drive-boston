@@ -15,6 +15,8 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scripts'));import tileformat
 from mesh_winding import orient_shells
+from building_clearance import RoadClearanceIndex
+from building_collision_policy import exact_far_collision
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
 data_dir=args.data_dir;city=json.loads((data_dir/'city.json').read_text());provenance=json.loads((data_dir/'provenance.json').read_text())
 assert provenance.get('region')=='metro','validate-city.py checks metro packages written by scripts/build-metro.py'
@@ -62,15 +64,19 @@ assert abs(elevation(*sp))<.5,'graded spawn height drifted from the datum'
 reproducible(city['tiles']['far']);raw=gzip.decompress((data_dir/city['tiles']['far']).read_bytes());assert raw[:4]==b'DBF2'
 length=struct.unpack_from('<I',raw,4)[0];far_header=json.loads(raw[8:8+length]);body=8+length;body+=(-body)%4
 assert far_header['size']==city['tiles']['size']
-far_counts={};far_total=0;far_fragments=0;far_hidden=0
+far_counts={};far_flags={};far_total=0;far_fragments=0;far_hidden=0
 for entry in far_header['tiles']:
- offset=body+entry['offset'];primaries=0;previous=None
+ offset=body+entry['offset'];primaries=0;previous=None;flags_for_tile=[]
  for n in range(entry['count']):
   points,height_cm,base_cm,flags,style=struct.unpack_from('<HHhBB',raw,offset);offset+=8+points*4
   assert 3<=points<=60 and 0<=flags<=15 and height_cm>0
-  if flags&8:assert previous is not None and previous&4,'massing fragments must follow a hidden primary';far_fragments+=1
-  else:primaries+=1;previous=flags;far_hidden+=bool(flags&4)
+  if flags&8:
+   assert previous is not None and previous&4,'massing fragments must follow a hidden primary'
+   assert flags&2==previous&2,'massing fragments must share their primary exact-mesh flag'
+   far_fragments+=1
+  else:primaries+=1;previous=flags;far_hidden+=bool(flags&4);flags_for_tile.append(flags)
  far_counts[entry['key']]=primaries;far_total+=primaries
+ far_flags[entry['key']]=flags_for_tile
 assert far_total==city['tiles']['buildingCount'] and far_fragments>20 and far_hidden>=3,'sprawling complexes must ship terraced far massing'
 
 # ---- tiles
@@ -80,15 +86,21 @@ assert set(far_counts)<=set(keys),'far hull tiles must be manifest tiles (tiles 
 policies={'catalog-metres-and-source-floor','source-floor-no-catalog-ground','legacy-backbay-feet','cambridge-catalog-feet-and-source-floor','osm-type-default','osm-levels','osm-height-tag'}
 west,north,east,south=provenance['legacyCoreBounds']
 buildings={};footprints_by_tile=defaultdict(list);curbs=0;park_paths=0;triangles=0;grounded=0;supported=[];scaled=0
+clearance_index=RoadClearanceIndex(city['roads'])
 for key in keys:
  tx,tz=map(int,key.split('_'));reproducible(f'{tiles["directory"]}/{tileformat.tile_name(tx,tz)}');header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
  assert (header['tx'],header['tz'],header['size'])==(tx,tz,size) and len(entries)==far_counts.get(key,0)
  curbs+=len(header['curbs']);park_paths+=len(header['parkPaths']);assert all(isinstance(r,str) for r in header['roads'])
- for b in entries:
+ for ordinal,b in enumerate(entries):
   assert b['id'] not in buildings,f"duplicate building {b['id']}";buildings[b['id']]=b
   x,z=b['center'];assert tx*size<=x<(tx+1)*size and tz*size<=z<(tz+1)*size,'building filed in the wrong tile'
   assert covered.covers(Point(x,z)),f"building outside coverage: {b['id']}"
   assert len(b['footprint'])>=3 and b['height']>0 and b['district'] in names and b['norm']['policy'] in policies
+  crossing_roads=clearance_index.overlaps(b)
+  assert b.get('roadOverlaps',[])==[r['id'] for r in crossing_roads],f"{b['id']} road-overlap metadata is stale"
+  if crossing_roads:
+   assert b.get('collision')=='mesh',f"{b['id']} convex proxy crosses a street; regenerate building clearance metadata"
+  assert bool(far_flags[key][ordinal]&2)==exact_far_collision(b),f"{b['id']} far proxy collision policy is stale"
   p=b['positions'];base=b['baseElevation'];assert len(p)==b['v']>0 and np.isfinite(p).all()
   if not b.get('structure'):
    assert not orient_shells(p,np.concatenate([b['facade'],b['roof']]))[1],f"{b['id']} contains an inverted occupied shell"

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {Ray} from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
-import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
+import {meshBuildingIds,usesExactBuildingCollision} from '../src/simulation/building-collisions.ts';
 import {createHelicopterFlight,HELICOPTER} from '../src/simulation/helicopter.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 import {sampleDriveSurface,sampleRoadElevation,roadDeckGeometry,roadSlabGeometry} from '../src/simulation/road-surfaces.ts';
@@ -15,7 +15,7 @@ function run(physics,seconds,input={}){for(let i=0;i<seconds*60;i++)physics.step
 test('actual concave survey meshes leave Huntington and the Dartmouth bus corridor open',async()=>{
  const physics=await DrivingPhysics.create(city,{meshBuildingIds});
  try{
-  const installed=installExactMeshes(physics,city),central=new Set([...meshBuildingIds].filter(id=>city.buildings.some(b=>b.id===id)));
+  const installed=installExactMeshes(physics,city),central=new Set(city.buildings.filter(usesExactBuildingCollision).map(b=>b.id));
   assert.deepEqual(installed,central,'all selected source structures must retain their real walls');
   assert.ok(['BOS-KBIA4-2XA04-WNETP','BOS-Q6TUK-T7ZG3-2SJKK','BOS-73AP7-T4BL0-O4QDM'].every(id=>installed.has(id)),'the Prudential, 145 Dartmouth and Fenway are in the central tiles');
   physics.world.step();

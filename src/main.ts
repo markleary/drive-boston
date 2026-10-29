@@ -35,7 +35,7 @@ import { createInterface } from './ui/interface';
 import { closestRoad } from './simulation/roads';
 import { createTraffic } from './simulation/traffic';
 import { createTransit, type TransitData } from './simulation/transit';
-import { meshBuildingIds } from './simulation/building-collisions';
+import { meshBuildingIds, usesExactBuildingCollision } from './simulation/building-collisions';
 import { reserveTransitCorridors } from './simulation/transit-corridors';
 import { DriveAudio } from './simulation/audio';
 import type { CameraMode, CityData, DriveInput, LightingMode, TravelMode } from './types';
@@ -153,7 +153,7 @@ async function boot(){
         const saved=JSON.parse(localStorage.getItem('backbay-drive-v1')??'null');
         if(!saved||![saved.x,saved.z,saved.yaw].every(Number.isFinite))return;
         const occupant=buildingAt(city,saved.x,saved.z);
-        const blocked=occupant&&(!('id' in occupant)||!meshBuildingIds.has(occupant.id));
+        const blocked=occupant&&('id' in occupant?!usesExactBuildingCollision(occupant):!occupant.exactMesh);
         if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&closestRoad(city,saved.x,saved.z).distance<10&&!blocked)
           return {x:saved.x as number,z:saved.z as number,yaw:saved.yaw as number,roadId:typeof saved.roadId==='string'?saved.roadId:undefined};
       }catch{/* Storage is optional. */}
