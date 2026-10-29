@@ -31,8 +31,8 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
   const { scene, city } = ctx, builder = createTileBuilder(ctx);
   const loadRadius = mobile ? 450 : LOAD_RADIUS, unloadRadius = mobile ? 700 : UNLOAD_RADIUS;
   const maxFetches = mobile ? 1 : MAX_FETCHES;
-  const coverage = mobile ? new RoadTileCoverage(city, builder.roadsNear) : undefined;
-  const wantedAround = (x: number, z: number, radius: number) => coverage?.tilesNear(x, z, radius) ?? tilesNear(city, x, z, radius);
+  const coverage = new RoadTileCoverage(city, builder.roadsNear);
+  const wantedAround = (x: number, z: number, radius: number) => mobile ? coverage.tilesNear(x, z, radius) : tilesNear(city, x, z, radius);
   const group = new THREE.Group(); group.name = 'Streamed tiles'; scene.add(group);
   const loaded = new Map<string, BuiltTile>(), fetched = new Map<string, CityTile>(), fetching = new Map<string, Promise<CityTile>>(), failed = new Set<string>();
   type Active = { key: string; tile: CityTile; generator: Generator<TileStage, BuiltTile>; partial: PartialTile; stage?: TileStage; stageMs: Record<string, number> };
@@ -111,7 +111,11 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
 
   async function ensureAround(x: number, z: number, radius = mobile ? 180 : 350) {
     focus = { x, z, until: performance.now() + 8000 };
-    const wanted = wantedAround(x, z, radius);
+    // A teleport/reload must install every supporting deck before placing the
+    // vehicle. Even on desktop a long bridge's midpoint owner can lie outside
+    // this smaller synchronous radius (the Chelsea end of Tobin is 371 m away).
+    // The normal desktop frame loop keeps its cheaper, larger spatial window.
+    const wanted = coverage.tilesNear(x, z, radius);
     if (!mobile) await Promise.all(wanted.map(t => loaded.has(t.key) || (active?.key === t.key) || fetched.has(t.key) ? undefined : fetch(t.tx, t.tz, t.key)?.catch(() => undefined)));
     for (const t of wanted) {
       if (mobile && !loaded.has(t.key) && active?.key !== t.key && !fetched.has(t.key)) await fetch(t.tx, t.tz, t.key)?.catch(() => undefined);

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Free-roaming browser driving/flying prototype of Greater Boston (every Boston neighborhood except Roslindale, West Roxbury, Hyde Park and the Harbor Islands, plus Cambridge, Somerville and Brookline) built with Three.js, TypeScript, Vite, and Rapier (`@dimforge/rapier3d-compat`). All geographic data ships as static files in `public/data/` and streams in 1 km tiles; there are no runtime map services or API keys. README.md describes gameplay and scope; DATA_SOURCES.md documents data sources, licenses, coordinate conversion, and how to regenerate assets.
+Free-roaming browser driving/flying prototype of Greater Boston (every Boston neighborhood except Roslindale, West Roxbury, Hyde Park and the Harbor Islands, plus Cambridge, Somerville, Brookline and Chelsea) built with Three.js, TypeScript, Vite, and Rapier (`@dimforge/rapier3d-compat`). All geographic data ships as static files in `public/data/` and streams in 1 km tiles; there are no runtime map services or API keys. README.md describes gameplay and scope; DATA_SOURCES.md documents data sources, licenses, coordinate conversion, and how to regenerate assets.
 
 ## Commands
 
@@ -62,10 +62,13 @@ python3 -m venv .venv-data
 .venv-data/bin/python scripts/fetch-metro-sources.py --source-dir data-source-cache   # once
 .venv-data/bin/python scripts/build-metro.py --output-dir /tmp/boston-staging
 node scripts/grade-terrain.mjs --data-dir /tmp/boston-staging        # offline road grading (about two minutes, 10 workers)
-.venv-data/bin/python scripts/build-road-structures.py --data-dir /tmp/boston-staging
-.venv-data/bin/python scripts/restore-water-crossings.py --data-dir /tmp/boston-staging
-.venv-data/bin/python scripts/build-water-surfaces.py --source-dir data-source-cache --data-dir /tmp/boston-staging
+mkdir -p /tmp/boston-baseline
+git archive 20856dfb6688e2d350af6fd13e1b2e2550ba8d8d public/data | tar -x -C /tmp/boston-baseline
+.venv-data/bin/python scripts/merge-metro-extension.py --data-dir /tmp/boston-staging --base-data /tmp/boston-baseline/public/data --baseline-commit 20856dfb6688e2d350af6fd13e1b2e2550ba8d8d
+.venv-data/bin/python scripts/build-chelsea-bridges.py --data-dir /tmp/boston-staging
+.venv-data/bin/python scripts/build-tobin-bridge.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/building_clearance_package.py --data-dir /tmp/boston-staging
+.venv-data/bin/python scripts/build-chelsea-places.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/validate-city.py --data-dir /tmp/boston-staging
 ```
 

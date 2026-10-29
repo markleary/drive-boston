@@ -29,6 +29,7 @@ import { createFarCity } from './far-city';
 import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
+import { addTobinBridgeDetails } from './tobin-bridge';
 import { updateWater } from './water-material';
 import { updateSunShadow } from './shadows';
 
@@ -89,6 +90,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const charlesBridges=addCharlesBridgeDetails(scene,city);buildingCollisions.push(...charlesBridges.collisions);
   roadStructures.userData.longfellow=charlesBridges.group.userData;
   const harvardBridge=addHarvardBridgeDetails(scene,city);buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
+  const tobinBridge=addTobinBridgeDetails(scene,city);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
 
   /** The original single-survey build: every road, curb, building and prop at once. */
   async function buildWholeCity(){
@@ -268,7 +270,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   let mode:LightingMode='golden';
   const direction=new THREE.Vector3(-270,255,330);
   function setLighting(next:LightingMode){
-    mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;
+    mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);
     sky.visible=!night;environmentSky.visible=!night;
     scene.background=night?new THREE.Color('#07111e'):null;
     environmentScene.background=night?new THREE.Color('#152638'):null;

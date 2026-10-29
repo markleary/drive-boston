@@ -9,7 +9,7 @@ import numpy as np
 import tileformat
 from building_clearance import RoadClearanceIndex
 from building_collision_policy import exact_far_collision
-from building_passages import PASSAGES,apply_building_passages
+from building_passages import PASSAGES,apply_building_passages,apply_passage_identity
 
 
 def _order_generated_fields(entry):
@@ -25,6 +25,7 @@ def prepare_buildings(buildings, geometry, roads):
  summary=RoadClearanceIndex(roads).mark(buildings);corrected=[]
  for i,(entry,record) in enumerate(zip(buildings,geometry)):
   if entry['id'] not in PASSAGES:continue
+  apply_passage_identity(entry)
   positions,facade,roof,scale=record
   vertices=positions.astype(np.float64)*scale+np.asarray(entry['anchor'])
   vertices,faces,metadata=apply_building_passages(entry,vertices,np.concatenate([facade,roof]))
@@ -46,6 +47,7 @@ def prepare_package(data_dir):
   path=data_dir/city['tiles']['directory']/f't_{key}.bin';header,entries=tileformat.read_tile(path)
   before=json.dumps(header,separators=(',',':'));index.mark(header['buildings']);records=[];geometry_changed=False
   for entry,b in zip(header['buildings'],entries):
+   apply_passage_identity(entry)
    scale=entry.get('scale',tileformat.SCALE)
    metadata=None
    if entry['id'] in PASSAGES:vertices,faces,metadata=apply_building_passages(entry,b['positions'],np.concatenate([b['facade'],b['roof']]))

@@ -12,6 +12,7 @@ from shapely.ops import linemerge, polygonize, polygonize_full, unary_union
 
 PASSAGE_VERSION = 1
 BMC_ID = 'BOS-HO11N-VJBYE-3RDXF'
+CHELSEA_LIFT_ID = 'osm-way-196751230'
 PASSAGES = {
  BMC_ID: {
   'start': [-19.699, 1685.902], 'end': [120.412, 1839.278],
@@ -21,7 +22,23 @@ PASSAGES = {
   'evidence': 'User-provided Massachusetts Avenue Street View, October 29, 2026',
   'clearanceEstimated': True,
  },
+ CHELSEA_LIFT_ID: {
+  'start': [4260., -4065.], 'end': [4220., -4152.],
+  # OSM marks the lift frame as a closed building footprint. Its over-road
+  # machinery cannot be extruded down through both bridge travel lanes.
+  'left': -8.5, 'right': 8.5, 'ceiling': 8.5,
+  'roads': ['chelsea-street-bridge'],
+  'evidence': 'Chelsea Street vertical-lift bridge towers and overhead machinery: https://www.lusas.com/case/bridge/chelsea_street_bridge.html; OSM way 196751230',
+  'clearanceEstimated': True,
+  'identity': {'name': 'Chelsea Street Bridge north lift frame', 'kind': 'transportation'},
+ },
 }
+
+
+def apply_passage_identity(entry):
+ identity=PASSAGES.get(entry['id'],{}).get('identity')
+ if identity:
+  entry.setdefault('sourceName',entry['name']);entry.update(identity)
 
 
 def _split(poly, normal, offset):
