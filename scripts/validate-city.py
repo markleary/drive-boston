@@ -38,8 +38,11 @@ for area in city['parks']+city['water']:
 # ---- elevation grids
 grid=city['elevation'];w,h,cell=grid['width'],grid['height'],grid['cellSize']
 assert grid['encoding']=='int16-gzip' and grid.get('graded') and grid.get('source') and grid.get('grading'),'ship a graded grid with its ungraded source beside it'
+def reproducible(name):
+ """Shipped gzip streams must depend on their content alone (tileformat.write_gzip, Node zlib): zero mtime, no name, no extra fields."""
+ head=(data_dir/name).read_bytes()[:10];assert head[:3]==b'\x1f\x8b\x08' and head[3]==0 and head[4:8]==b'\0\0\0\0',f'{name} gzip header carries a timestamp or file name; rebuild with the reproducible writers'
 def load_grid(name):
- values=np.frombuffer(gzip.decompress((data_dir/name).read_bytes()),dtype='<i2').astype(np.float64)*grid.get('scale',.01)
+ reproducible(name);values=np.frombuffer(gzip.decompress((data_dir/name).read_bytes()),dtype='<i2').astype(np.float64)*grid.get('scale',.01)
  assert values.size==w*h and np.isfinite(values).all();return values
 heights=load_grid(grid['file']);source=load_grid(grid['source'])
 assert cell<=12 and heights.min()>-100 and 50<heights.max()<200,"harbour channels reach about -80 m on the local datum; hills stay under 120 m"
@@ -56,7 +59,7 @@ assert abs(elevation(*sp,source))<.1,'original Back Bay reference datum moved'
 assert abs(elevation(*sp))<.5,'graded spawn height drifted from the datum'
 
 # ---- far hulls (DBF2)
-raw=gzip.decompress((data_dir/city['tiles']['far']).read_bytes());assert raw[:4]==b'DBF2'
+reproducible(city['tiles']['far']);raw=gzip.decompress((data_dir/city['tiles']['far']).read_bytes());assert raw[:4]==b'DBF2'
 length=struct.unpack_from('<I',raw,4)[0];far_header=json.loads(raw[8:8+length]);body=8+length;body+=(-body)%4
 assert far_header['size']==city['tiles']['size']
 far_counts={};far_total=0;far_fragments=0;far_hidden=0
@@ -78,7 +81,7 @@ policies={'catalog-metres-and-source-floor','source-floor-no-catalog-ground','le
 west,north,east,south=provenance['legacyCoreBounds']
 buildings={};footprints_by_tile=defaultdict(list);curbs=0;park_paths=0;triangles=0;grounded=0;supported=[];scaled=0
 for key in keys:
- tx,tz=map(int,key.split('_'));header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
+ tx,tz=map(int,key.split('_'));reproducible(f'{tiles["directory"]}/{tileformat.tile_name(tx,tz)}');header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
  assert (header['tx'],header['tz'],header['size'])==(tx,tz,size) and len(entries)==far_counts.get(key,0)
  curbs+=len(header['curbs']);park_paths+=len(header['parkPaths']);assert all(isinstance(r,str) for r in header['roads'])
  for b in entries:

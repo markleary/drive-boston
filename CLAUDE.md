@@ -67,7 +67,7 @@ node scripts/grade-terrain.mjs --data-dir /tmp/boston-staging        # offline r
 .venv-data/bin/python scripts/validate-city.py --data-dir /tmp/boston-staging
 ```
 
-Copy a validated staging directory over `public/data/` (keep `transit.json`, `road-structures-source.json`, and `bridge-spans-source.json`), then rerun `scripts/build-fenway-detail.py` and `scripts/build-transit.py`, which read the installed package (see DATA_SOURCES.md). `build-city.py` still builds the legacy single-GLB central package for comparison; the runtime keeps that whole-city path working. Audio clips in `public/audio/` come from `node scripts/generate-audio.mjs --generate` (needs `ELEVENLABS_API_KEY` in `.env`; never overwrites existing clips).
+The chain is reproducible: two runs from the same cache write byte-identical tiles, `far.bin`, both elevation grids, `city.json` and `provenance.json` (deterministic gzip headers, chunk-ordered seam blending, no timing in the manifest), so `.venv-data/bin/python scripts/compare-metro.py /tmp/boston-staging public/data` lists exactly what a script or source change touched. Copy a validated staging directory over `public/data/` (keep `transit.json`, `road-structures-source.json`, and `bridge-spans-source.json`), then rerun `scripts/build-fenway-detail.py` and `scripts/build-transit.py`, which read the installed package (see DATA_SOURCES.md). `build-city.py` still builds the legacy single-GLB central package for comparison; the runtime keeps that whole-city path working. Audio clips in `public/audio/` come from `node scripts/generate-audio.mjs --generate` (needs `ELEVENLABS_API_KEY` in `.env`; never overwrites existing clips).
 
 ## Deployment
 
