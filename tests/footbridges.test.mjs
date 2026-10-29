@@ -3,7 +3,7 @@ import test from 'node:test';
 import {Ray} from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {footbridgeRoad} from '../src/simulation/footbridges.ts';
-import {roadSlabGeometry,sampleDriveSurface,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
+import {roadSlabGeometry,roadDeckGeometry,roadNormal,sampleDriveSurface,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 import {buildTerrainGeometryData,sampleElevation} from '../src/simulation/terrain.ts';
 import {loadMetroCity,windowCity} from './helpers/metro-city.mjs';
 
@@ -65,4 +65,48 @@ test('streamed footbridge collision matches the visible deck and is removed with
   assert.equal(sampleDriveSurface(local,x,z,undefined,road.id).height,ground,'a stale saved bridge ID falls back to terrain');
   assert.ok(colliders.every(c=>!p.detailedColliders.has(c.handle)));
  }finally{p.dispose();}
+});
+
+test('tile fragments share one arch and identical slab cross-sections at a mapped bend',()=>{
+ const flat={...city,elevation:undefined},bridgePoints=[[-12,0],[0,0],[8,8],[14,8]];
+ const paths=[{id:'left',width:2.6,bridge:true,bridgePoints,points:bridgePoints.slice(0,2)},{id:'right',width:2.6,bridge:true,bridgePoints,points:bridgePoints.slice(1)}],roads=paths.map(p=>footbridgeRoad(flat,p));
+ const left=roads[0],right=roads[1],height=left.elevations.at(-1);
+ assert.ok(height>.8,'a tile boundary in the middle of the span is not a ground landing');assert.equal(height,right.elevations[0]);
+ const a=roadDeckGeometry(flat,left),b=roadDeckGeometry(flat,right);
+ assert.deepEqual([...a.vertices.slice(-6)],[...b.vertices.slice(0,6)],'both complete width edges meet even at a bend');
+ assert.ok(left.points.every(p=>p[0]<=0)&&right.points.every(p=>p[0]>=0),'each owner retains only its own fragment');
+ for(const [road,mesh]of [[left,a],[right,b]]){
+  for(let i=0;i<mesh.indices.length;i+=3){const [a,b,c]=[0,1,2].map(j=>mesh.indices[i+j]*3),p=mesh.vertices;assert.ok((p[b+2]-p[a+2])*(p[c]-p[a])-(p[b]-p[a])*(p[c+2]-p[a+2])>0,'top face normals point upward');}
+  const n=roadNormal(flat,road,0,0);assert.ok(n.y>.99,'a seam cannot introduce a steep ramp wall');
+ }
+ const reversed=footbridgeRoad(flat,{...paths[1],points:[...paths[1].points].reverse()}),end=roadDeckGeometry(flat,reversed).vertices.slice(-6);
+ const edgePairs=values=>[0,3].map(i=>[...values.slice(i,i+3)].join(',')).sort();
+ assert.deepEqual(edgePairs(end),edgePairs(b.vertices.slice(0,6)),'reversed source orientation preserves the same seam');
+});
+
+test('the shipped split Riverway bridge carries shared metadata and exact seam geometry',async()=>{
+ const bounds={minX:-3020,maxX:-2970,minZ:450,maxZ:505},metro=await loadMetroCity({bounds}),local=windowCity(metro,bounds),paths=local.parkPaths.filter(p=>p.id.startsWith('osm-way-1176608877-0-'));
+ assert.equal(paths.length,2);assert.deepEqual(paths[0].bridgePoints,paths[1].bridgePoints);assert.ok(paths[0].bridgePoints?.length>=2);
+ const roads=paths.map(p=>footbridgeRoad(local,p)),seam=roads.map(road=>({road,index:road.points.findIndex(p=>p[0]===-3000)}));
+ assert.ok(seam.every(s=>s.index===0||s.index===s.road.points.length-1));
+ const heights=seam.map(s=>s.road.elevations[s.index]);assert.ok(Math.abs(heights[0]-heights[1])<1e-9);assert.ok(heights[0]>sampleElevation(local,-3000,472.4)+.3,'the old duplicate shore landing is gone');
+ const edges=seam.map(({road,index})=>{const p=roadDeckGeometry(local,road).vertices;return[0,3].map(i=>[...p.slice(index*6+i,index*6+i+3)].join(',')).sort();});assert.deepEqual(edges[0],edges[1]);
+});
+
+for(const reverse of [false,true])test(`Ultra Bee crosses a real streamed-tile seam ${reverse?'eastbound':'westbound'} without a dip`,async()=>{
+ const bounds={minX:-3020,maxX:-2970,minZ:450,maxZ:505},metro=await loadMetroCity({bounds}),local=windowCity(metro,bounds),paths=local.parkPaths.filter(p=>p.id.startsWith('osm-way-1176608877-0-'));
+ const source=paths[0].bridgePoints;assert.ok(source?.length>=2);const ends=[[-2992.205,481.463],[-3002.825,469.115]],a=ends[reverse?1:0],b=ends[reverse?0:1],length=Math.hypot(b[0]-a[0],b[1]-a[1]),dx=(b[0]-a[0])/length,dz=(b[1]-a[1])/length,yaw=Math.atan2(dx,dz);
+ Object.assign(local,{roads:[],buildings:[],parkPaths:paths,spawn:{x:a[0]-dx*4,z:a[1]-dz*4,yaw}});
+ const full=footbridgeRoad(local,{id:'full',points:source,width:paths[0].width,bridge:true}),physics=await DrivingPhysics.create(local);physics.setVehicleType('ultrabee');
+ try{
+  settle(physics);let arrived=false,seamSamples=0;
+  for(let i=0;i<600;i++){
+   const s=physics.getState(),along=(s.x-a[0])*dx+(s.z-a[1])*dz;
+   if(along>length+3){arrived=true;break;}
+   if(Math.abs(s.x+3000)<.8){const deck=sampleRoadElevation(local,full,s.x,s.z);assert.ok(s.y>deck+.4&&s.y<deck+.8,'suspension follows the continuous full-span profile');assert.ok([0,1].every(j=>physics.controller.wheelIsInContact(j)));seamSamples++;}
+   const desired=Math.atan2(b[0]+dx*6-s.x,b[1]+dz*6-s.z),error=Math.atan2(Math.sin(desired-s.yaw),Math.cos(desired-s.yaw));
+   physics.step({...released,throttle:s.speed<4?.4:0,brake:s.speed>5?.1:0,steer:Math.max(-1,Math.min(1,error*3))},1/60);
+  }
+  assert.ok(arrived);assert.ok(seamSamples>15,'drive through the cross-tile join, not merely inspect its endpoints');
+ }finally{physics.dispose();}
 });

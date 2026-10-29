@@ -6,7 +6,7 @@ export interface Building { id: string; name: string; center: Point2; height: nu
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
 export interface WaterSurface { source:string; name:string; rings:Point2[][]; level:number; }
 export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; /** Constant-height source basins/reaches inside a merged hydro outline. */ surfaces?:WaterSurface[]; }
-export interface ParkPath { id: string; points: Point2[]; width: number; bridge?: boolean; }
+export interface ParkPath { id: string; points: Point2[]; width: number; bridge?: boolean; /** Complete pre-tile-clipped bridge centerline; fragments share its height profile. */ bridgePoints?:Point2[]; }
 export interface CityData {
   origin: { xFeet: number; yFeet: number; longitude: number; latitude: number };
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
