@@ -46,7 +46,10 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
   };
   const distanceTo = (built: { bounds: BuiltTile['bounds'] }, x: number, z: number) => Math.hypot(Math.max(built.bounds.minX - x, 0, x - built.bounds.maxX), Math.max(built.bounds.minZ - z, 0, z - built.bounds.maxZ));
   const fetch = (tx: number, tz: number, key: string) => {
-    if (fetching.has(key) || fetched.has(key) || loaded.has(key) || failed.has(key)) return fetching.get(key);
+    // A paced build can span many frames after its download leaves `fetched`.
+    // Fetching it again during that interval queues a second build which would
+    // replace the map entry and strand the first tile's scene and colliders.
+    if (active?.key === key || fetching.has(key) || fetched.has(key) || loaded.has(key) || failed.has(key)) return fetching.get(key);
     const promise = loadTile(city, tx, tz, read).then(tile => { fetched.set(key, tile); return tile; }, error => { console.error(`Tile ${key} failed to load`, error); failed.add(key); throw error; }).finally(() => fetching.delete(key));
     fetching.set(key, promise); return promise;
   };
@@ -127,7 +130,7 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     for (const t of loaded.values()) { for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] += t.stats[k]; for (const [stage, ms] of Object.entries(t.stats.stageMs ?? {})) stageMs[stage] = (stageMs[stage] ?? 0) + ms; }
     for (const stage of Object.keys(stageMs)) stageMs[stage] = Math.round(stageMs[stage]);
     const tiles = [...loaded.values()].map(t => ({ key: t.key, buildings: t.stats.buildings, triangles: t.stats.triangles, buildMs: t.stats.buildMs, cpuMs: t.stats.cpuMs, stageMs: t.stats.stageMs }));
-    return { loadRadius, unloadRadius, maxFetches, loaded: loaded.size, keys: [...loaded.keys()], fetching: fetching.size, pending: fetched.size, failed: failed.size, building: active?.key, stage: active?.stage, budgetMs: Math.round(budget * 10) / 10, tileSize: city.tiles.size, available: city.tiles.keys.length, farBuildings: city.tiles.buildingCount, ...totals, stageMs, tiles };
+    return { loadRadius, unloadRadius, maxFetches, loaded: loaded.size, residentGroups: group.children.length, keys: [...loaded.keys()], fetching: fetching.size, pending: fetched.size, failed: failed.size, building: active?.key, stage: active?.stage, budgetMs: Math.round(budget * 10) / 10, tileSize: city.tiles.size, available: city.tiles.keys.length, farBuildings: city.tiles.buildingCount, ...totals, stageMs, tiles };
   }
   return { group, buildingChunks, lampPositions, signals, update, ensureAround, loaded, stats };
 }

@@ -83,7 +83,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       <div class="welcome-content"><div class="welcome-eyebrow">NO MISSIONS. NO TIMER.</div><h1>Boston.</h1><p class="welcome-description">Just the city, from the Pike to the Tobin. Pick a direction and drive.</p>
         <div class="welcome-loader"><div class="loading-row"><span class="loading-copy" id="loading-copy" role="status">${LOAD_STEPS[0][1]}</span><span class="loading-pct" id="loading-pct" aria-hidden="true">0%</span></div><div class="loading-track" id="loading-track" role="progressbar" aria-label="Loading Boston" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="loading-progress" id="loading-progress"></div></div>
           <div class="ready-row"><span class="ready-copy">Your car is ready.</span><button class="welcome-start" id="start-drive" disabled data-testid="start-drive">Start driving ${svg('arrow')}</button></div></div>
-        <div class="welcome-foot">Single player / Keyboard, touch or gamepad</div></div>
+        <div class="welcome-foot">Single player / Keyboard, touch or gamepad</div>
+        <div class="previous-session hidden" id="previous-session"><button type="button" class="text-btn" id="copy-session-report">Copy previous session report</button><span id="session-copy-status" role="status"></span><textarea class="hidden" id="session-report" readonly rows="3" aria-label="Previous session report"></textarea></div></div>
       <div class="welcome-tip"><span class="welcome-tip-count" id="welcome-tip-count">TIP 01 / 05</span><p id="welcome-tip">${LOAD_TIPS[0]}</p></div>
       <div class="welcome-coordinate">42.3499° N &nbsp; 71.0773° W</div>
     </section>
@@ -125,6 +126,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   let graphicsInterrupted = false, graphicsRestored = false;
   let graphicsFocus: HTMLElement | null = null;
   let graphicsReport = '';
+  let previousSessionReport='';
   try { graphicsReport = localStorage.getItem('backbay-graphics-interruption-v1') ?? ''; } catch { /* Optional storage. */ }
   let camera: CameraMode = 'chase', lighting: LightingMode = 'golden', sound = true;
   let travelMode: TravelMode = 'drive', altitude = 0;
@@ -149,7 +151,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const diagnostics=createDiagnostics(host,()=>{
     const road=(travelMode!=='helicopter'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z).road;
     return{state:{...state},groundHeight:latestStats.groundHeight??0,road:{name:road.name,id:road.id},neighborhood:neighborhoodAt(state.x,state.z),camera,lighting,quality:latestStats.quality??'high',travelMode,
-      performance:latestStats.performance??{fps:latestStats.fps??0,frameMs:0,drawCalls:0,triangles:0,geometries:0,textures:0,traffic:0,transit:0,pedestrians:0},graphicsInterruption:graphicsReport||undefined};
+      performance:latestStats.performance??{fps:latestStats.fps??0,frameMs:0,drawCalls:0,triangles:0,geometries:0,textures:0,traffic:0,transit:0,pedestrians:0},graphicsInterruption:graphicsReport||undefined,previousSession:previousSessionReport||undefined};
   });
   const statsHelp='<span>Performance / debug stats</span><span><kbd>P</kbd> <kbd>&#96;</kbd></span>';
   el('controls-help').insertAdjacentHTML('beforeend',statsHelp);
@@ -287,14 +289,15 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(!started)el('start-drive').focus();else graphicsFocus?.focus();graphicsFocus=null;
   });
   click('reload-graphics', () => location.reload());
-  click('copy-graphics-report', () => {
-    void navigator.clipboard?.writeText(graphicsReport).then(() => { el('graphics-copy-status').textContent = 'Copied. Paste this with your issue.'; }, showGraphicsReport);
-    if (!navigator.clipboard) showGraphicsReport();
-  });
-  function showGraphicsReport() {
-    const field = el<HTMLTextAreaElement>('graphics-report'); field.value = graphicsReport;
-    field.classList.remove('hidden'); field.focus(); field.select();
-    el('graphics-copy-status').textContent = 'Select and copy the report above.';
+  click('copy-graphics-report',()=>{void copyStoredReport(graphicsReport,'graphics-report','graphics-copy-status');});
+  click('copy-session-report',()=>{void copyStoredReport(previousSessionReport,'session-report','session-copy-status');});
+  async function copyStoredReport(report:string,fieldId:string,statusId:string){
+    try{await navigator.clipboard.writeText(report);el(statusId).textContent='Copied. Paste this with your issue.';}
+    catch{
+      const field=el<HTMLTextAreaElement>(fieldId);field.value=report;
+      field.classList.remove('hidden');field.focus();field.select();
+      el(statusId).textContent='Select and copy the report.';
+    }
   }
   click('cycle-camera', cycleCamera); click('open-settings', () => setSettings(true)); click('close-settings', () => setSettings(false)); click('resume-drive', () => setSettings(false));
   click('reset-drive', () => { reset(); setSettings(false); });
@@ -510,6 +513,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     getFlightTouchInput:()=>({forward:isPaused()?0:Number(held.has('accelerate'))-Number(held.has('reverse')),strafe:isPaused()?0:Number(held.has('right'))-Number(held.has('left')),yaw:isPaused()?0:Number(held.has('yaw-right'))-Number(held.has('yaw-left')),lift:isPaused()?0:Number(held.has('ascend'))-Number(held.has('descend'))}),
     setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},
     setReady(){ready=true;cancelAnimationFrame(loadFrame);loadShown=1;drawLoading();el('welcome').classList.add('ready');el<HTMLButtonElement>('start-drive').disabled=false;if(graphicsInterrupted)el<HTMLButtonElement>('resume-graphics').disabled=!graphicsRestored;else el('start-drive').focus();},
+    setPreviousSessionReport(report:string){previousSessionReport=report;el('previous-session').classList.toggle('hidden',!report);},
     setGraphicsInterrupted(report:string){
       if(!graphicsInterrupted)graphicsFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
       graphicsInterrupted=true;graphicsRestored=false;graphicsReport=report;
