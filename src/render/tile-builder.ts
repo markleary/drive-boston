@@ -21,7 +21,7 @@ import { PartBatches, box } from './geometry-writer';
 import { due, UNPACED, type Pace } from './pacing';
 import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
-import { planStreetSigns, POLE_HEIGHT } from '../simulation/street-signs';
+import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { addRoadStructures } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
 import { addSourceFooting } from './source-footings';
@@ -312,10 +312,11 @@ export function createTileBuilder(ctx: TileContext) {
       for (const { position: [x, z], blades } of streetSigns) {
         if (due(pace)) yield 'props';
         const y = height(x, z), writer = hardware.at(ctx.iron, x, z);
-        writer.append(new THREE.CylinderGeometry(.04, .04, POLE_HEIGHT, 6), matrix.makeTranslation(x, y + POLE_HEIGHT / 2, z));
+        writer.append(new THREE.CylinderGeometry(POLE_RADIUS, POLE_RADIUS, POLE_HEIGHT, 6), matrix.makeTranslation(x, y + POLE_HEIGHT / 2, z));
         for (const blade of blades) {
-          writer.box(box(2.67, .5, .045), matrix.makeRotationY(blade.yaw).setPosition(x, y + blade.height, z));
-          const plate = createStreetSign(blade.name); plate.position.set(x, y + blade.height, z); plate.rotation.y = blade.yaw; group.add(plate); owned.push(plate.material as THREE.Material);
+          const bx = x + blade.offset[0], bz = z + blade.offset[1];
+          writer.box(box(2.67, .5, .045), matrix.makeRotationY(blade.yaw).setPosition(bx, y + blade.height, bz));
+          const plate = createStreetSign(blade.name); plate.position.set(bx, y + blade.height, bz); plate.rotation.y = blade.yaw; group.add(plate); owned.push(plate.material as THREE.Material);
         }
       }
       addBatches(hardware);

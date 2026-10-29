@@ -1,12 +1,16 @@
 import type {Point2,Road} from '../types';
 
 /** One name blade. `yaw` turns the blade's face normal (+Z) so the blade runs
- * parallel to the street it names; `height` is the blade center above the pole base. */
-export interface StreetSignBlade{name:string;yaw:number;height:number}
+ * parallel to the street it names; `height` is the blade center above the pole
+ * base and `offset` its horizontal center relative to the pole axis. */
+export interface StreetSignBlade{name:string;yaw:number;height:number;offset:Point2}
 /** A corner pole. `blades[0]` names the main street; a second, higher blade names the side street. */
 export interface PlacedStreetSign{position:Point2;corner:Point2;blades:StreetSignBlade[]}
 
-export const BLADE_HEIGHTS=[3.0,3.54],POLE_HEIGHT=3.85;
+export const BLADE_HEIGHTS=[3.0,3.54],POLE_HEIGHT=3.85,POLE_RADIUS=.04;
+/** Blade center to pole axis: the pole radius, half the faced blade (plates at
+ * ±.025 m) and a 1 cm bracket gap, so the pole stands wholly behind the lettering. */
+export const BLADE_STANDOFF=POLE_RADIUS+.025+.01;
 const key=(p:Point2)=>`${Math.round(p[0]*2)},${Math.round(p[1]*2)}`;
 const unsigned=(road:Road)=>!road.name||!!road.elevations||/alley|unnamed|driveway|parking|private|ramp|tunnel|turnpike|expressway|highway|interstate|connector|^I-?\d/i.test(road.name)||/^(motorway|trunk)|_link$/.test(road.kind??'');
 /** Stable [0,1) draw per intersection, so a corner is signed the same way whichever tile builds it. */
@@ -66,9 +70,14 @@ export function planStreetSigns(roads:Road[],clear:(x:number,z:number)=>boolean,
       const x=c.p[0]+n[0]*s1*a+u[0]*t,z=c.p[1]+n[1]*s1*a+u[1]*t;if(clear(x,z))position=[x,z];
     }
     if(!position)continue;
-    const blades:StreetSignBlade[]=[{name:label(c.main.road.name),yaw:Math.atan2(u[0],u[1])+Math.PI/2,height:BLADE_HEIGHTS[0]}];
+    // Each blade hangs on the intersection side of the pole: drivers reading it across the corner see no pole.
+    const blade=(name:string,dir:Point2,height:number):StreetSignBlade=>{
+      const yaw=Math.atan2(dir[0],dir[1])+Math.PI/2,nx=Math.sin(yaw),nz=Math.cos(yaw),side=nx*(c.p[0]-position![0])+nz*(c.p[1]-position![1])<0?-1:1;
+      return {name:label(name),yaw,height,offset:[nx*side*BLADE_STANDOFF,nz*side*BLADE_STANDOFF]};
+    };
+    const blades=[blade(c.main.road.name,u,BLADE_HEIGHTS[0])];
     // A straight name change (no real cross street) keeps only the main blade.
-    if(Math.abs(cross)>.5&&draw(c.k+'|side')<(c.side.road.width>=10?.55:.3))blades.push({name:label(c.side.road.name),yaw:Math.atan2(v[0],v[1])+Math.PI/2,height:BLADE_HEIGHTS[1]});
+    if(Math.abs(cross)>.5&&draw(c.k+'|side')<(c.side.road.width>=10?.55:.3))blades.push(blade(c.side.road.name,v,BLADE_HEIGHTS[1]));
     placed.push({position,corner:c.p,blades});
   }
   return placed;

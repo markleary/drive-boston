@@ -9,7 +9,7 @@ import { closestRoad, pointInside } from '../simulation/roads';
 import { createMaterials, facadeStyleIndex, seeded, stabilizeFacadeUVs } from './materials';
 import { createStreetTrees, createTreeField } from './foliage';
 import { createStreetSign } from './signs';
-import { planStreetSigns, POLE_HEIGHT } from '../simulation/street-signs';
+import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { sampleElevation, terrainRange } from '../simulation/terrain';
 import { drapedRibbon, terrainTiles, foundationGeometry, backBayPaving } from './terrain-ground';
 import { mergeSpatialGeometries, spatialInstances } from './spatial-batches';
@@ -248,10 +248,11 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   lampPositions.forEach((p,i)=>{dummy.position.copy(p).add(new THREE.Vector3(0,2.85,0));dummy.rotation.set(0,0,0);dummy.scale.set(1,1,1);dummy.updateMatrix();poles.setMatrixAt(i,dummy.matrix);dummy.position.y=p.y+5.85;dummy.updateMatrix();lamps.setMatrixAt(i,dummy.matrix);});poles.castShadow=true;scene.add(...spatialInstances(poles),...spatialInstances(lamps));
   const signHardware:THREE.BufferGeometry[]=[];
   for(const {position:[x,z],blades} of planStreetSigns(city.roads,(x,z)=>!occupied(x,z)&&!inRoad(x,z))){
-    const y=height(x,z);signHardware.push(new THREE.CylinderGeometry(.04,.04,POLE_HEIGHT,6).translate(x,y+POLE_HEIGHT/2,z));
+    const y=height(x,z);signHardware.push(new THREE.CylinderGeometry(POLE_RADIUS,POLE_RADIUS,POLE_HEIGHT,6).translate(x,y+POLE_HEIGHT/2,z));
     for(const blade of blades){
-      signHardware.push(new THREE.BoxGeometry(2.67,.5,.045).rotateY(blade.yaw).translate(x,y+blade.height,z));
-      const plate=createStreetSign(blade.name);plate.position.set(x,y+blade.height,z);plate.rotation.y=blade.yaw;scene.add(plate);
+      const bx=x+blade.offset[0],bz=z+blade.offset[1];
+      signHardware.push(new THREE.BoxGeometry(2.67,.5,.045).rotateY(blade.yaw).translate(bx,y+blade.height,bz));
+      const plate=createStreetSign(blade.name);plate.position.set(bx,y+blade.height,bz);plate.rotation.y=blade.yaw;scene.add(plate);
     }
   }
   mergeAdd(signHardware,iron);
