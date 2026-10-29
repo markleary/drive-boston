@@ -151,7 +151,7 @@ On October 29, 2026, the BUMC crossing was checked against the user-provided Mas
 .venv-data/bin/python scripts/building_clearance.py --data-dir public/data --report /tmp/building-road-audit.json
 ```
 
-The updater preserves far-massing fragments and changes only the required tile records and exact-mesh flags. `validate-city.py` rejects missing or stale road-overlap metadata and mismatched far flags. `tests/building-passages.test.mjs` drives the full BMC crossing in both directions and tests visible walls, generated footings and bus-shaped collisions across both carriageways. `scripts/test_building_clearance.py` covers thin walls, lateral-only obstructions and low bus clearance. These checks replace the earlier sparse point/short-drive assumption; they do not certify every real-world street as passable.
+The updater preserves far-massing fragments and changes only the required tile records and exact-mesh flags. An exact-mesh far flag only admits a saved position for inspection. Startup loads every building owner touching the chassis and the required road tiles, then checks the actual reset pose against static colliders before moving the car; blocked or incompletely loaded saves fall back to the normal spawn. `validate-city.py` rejects missing or stale road-overlap metadata and mismatched far flags. `tests/building-passages.test.mjs` drives the full BMC crossing in both directions and tests visible walls, generated footings and bus-shaped collisions across both carriageways. `scripts/test_building_clearance.py` covers thin walls, lateral-only obstructions and low bus clearance. These checks replace the earlier sparse point/short-drive assumption; they do not certify every real-world street as passable.
 
 ## MBTA corridor and vehicle artwork
 

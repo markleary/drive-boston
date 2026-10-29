@@ -147,7 +147,8 @@ async function boot(){
     contextGate.restore();
   });
   try{
-    // Validate storage before streaming so mobile loads only the arrival neighborhood.
+    // Screen storage before streaming. Exact hulls are only candidates; check
+    // their actual colliders after loading before accepting a saved arrival.
     const saved=(()=>{
       try{
         const saved=JSON.parse(localStorage.getItem('backbay-drive-v1')??'null');
@@ -164,11 +165,37 @@ async function boot(){
     if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait});}
     else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile,waitForContext:contextGate.wait})]);physics=results[0];world=results[1];}
     const streamer=world.streamer;
-    if(streamer){const arrival=mobile&&saved?saved:{...city.spawn,roadId:undefined};ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(arrival.x,arrival.z);physics.reset(arrival.x,arrival.z,arrival.yaw,arrival.roadId);}
+    if(streamer){const arrival=mobile&&saved?saved:city.spawn;ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(arrival.x,arrival.z);}
     await contextGate.wait();
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
     const embrace=addTheEmbrace(scene,city);physics.addStaticMesh(embrace.collision.vertices,embrace.collision.indices);
     metroLandmarks=metro?addMetroLandmarkDetails(scene,city):undefined;for(const mesh of metroLandmarks?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
+    let restored=false;
+    if(saved){
+      let loaded=true;
+      if(streamer){
+        loaded=await streamer.ensureAround(saved.x,saved.z);
+        if(isMetroCity(city)){
+          // A large source building can reach into the arrival tile from a
+          // distant owner tile. Load every hull touching the chassis envelope.
+          const size=city.tiles.size,owners=new Map<string,{tx:number;tz:number}>();
+          for(const hull of city.index.query(saved.x-3,saved.x+3,saved.z-3,saved.z+3))owners.set(`${hull.tx}_${hull.tz}`,hull);
+          const tx=Math.floor(saved.x/size),tz=Math.floor(saved.z/size);owners.set(`${tx}_${tz}`,{tx,tz});
+          for(const [key,owner]of owners){
+            if(!streamer.loaded.has(key))loaded=await streamer.ensureAround((owner.tx+.5)*size,(owner.tz+.5)*size,0)&&loaded;
+            if(!streamer.loaded.has(key))loaded=false;
+          }
+          // Retain the player's neighborhood as the streaming focus after
+          // fetching distant source owners, including its road/deck owners.
+          loaded=await streamer.ensureAround(saved.x,saved.z)&&loaded;
+        }
+      }
+      if(loaded&&physics.canResetAt(saved.x,saved.z,saved.yaw,saved.roadId)){physics.reset(saved.x,saved.z,saved.yaw,saved.roadId);restored=true;}
+    }
+    if(!restored){
+      if(streamer&&!await streamer.ensureAround(city.spawn.x,city.spawn.z))throw new Error('The starting neighborhood could not be loaded. Please reload.');
+      physics.reset(city.spawn.x,city.spawn.z,city.spawn.yaw);
+    }
     // Populate Rapier's query structures before aircraft spawn/clearance checks.
     physics.world.step();
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
@@ -179,7 +206,6 @@ async function boot(){
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     const streetLife=createStreetLife(scene,city,physics);
     await contextGate.run(()=>{ensureGraphics();world!.setQuality(quality==='high');});
-    if(saved&&(!mobile||!streamer)){if(streamer)await streamer.ensureAround(saved.x,saved.z);physics.reset(saved.x,saved.z,saved.yaw,saved.roadId);}
     populateNeighborhood=()=>{
       const player=physics!.getState(),observer=travelMode==='helicopter'?flight!.state:player;
       traffic!.populateAt(observer,player,transit!.obstacles());streetLife.populateAt(observer,player);
