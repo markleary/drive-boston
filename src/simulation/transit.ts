@@ -1,16 +1,17 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import type {CityData,Point2,Road,VehicleState} from '../types';
 import type {DrivingPhysics} from '../physics/vehicle';
-import {sampleElevation,sampleTerrainNormal,terrainRotation,rotationFromNormal} from './terrain.ts';
+import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
 import {sampleRoadElevation,roadNormal,roadProjection} from './road-surfaces.ts';
 import {signalPhase} from './signals.ts';
 import {createGreenLine,createTransitBus} from '../render/transit-vehicles.ts';
-export interface TransitRoute {id:string;line:string;kind:'bus'|'tram';destination:string;points:Point2[];length:number;stops:{id:string;name:string;distance:number;position:Point2}[];}
+import {createTransitTracks} from '../render/transit-tracks.ts';
+import {createRailProfile,railSurface,railCovered,railStopDistance,type RailProfile} from './transit-rail-surface.ts';
+export interface TransitRoute {id:string;line:string;kind:'bus'|'tram';destination:string;directionId?:number;covered?:{start:number;end:number}[];bridges?:{start:number;end:number}[];points:Point2[];length:number;stops:{id:string;name:string;distance:number;position:Point2}[];}
 export interface TransitData {routes:TransitRoute[];sources:{name:string;url:string;license:string}[];notes:string;}
 export interface TrafficObstacle {x:number;y:number;z:number;halfLength?:number;halfWidth?:number;speed?:number;}
-interface Route extends TransitRoute {distances:number[];signalStops:{distance:number;yaw:number}[];decks:(Road|undefined)[];}
+interface Route extends TransitRoute {rail?:RailProfile;distances:number[];signalStops:{distance:number;yaw:number}[];decks:(Road|undefined)[];}
 interface Actor {signalStop?:number;signalCommitted?:boolean;route:Route;distance:number;speed:number;dwell:number;nextStop:number;model:THREE.Group;tram?:ReturnType<typeof createGreenLine>;bodies:RAPIER.RigidBody[];x:number;z:number;y:number;yaw:number;lastStop:string;}
 const dist=(a:Point2,b:Point2)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
 export function transitPoint(route:Pick<Route,'points'|'distances'|'length'>,distance:number):Point2{
@@ -63,8 +64,9 @@ export function routeDecks(city:CityData,route:Pick<Route,'points'|'distances'|'
  }
  return decks;
 }
-/** Height and up vector under a vehicle at a route distance: its deck sample, else the terrain. */
-export function routeSurface(city:CityData,route:Pick<Route,'decks'>,distance:number,x:number,z:number){
+/** Height and up vector on the rail profile, bus bridge deck, or graded terrain. */
+export function routeSurface(city:CityData,route:Pick<Route,'decks'|'rail'>,distance:number,x:number,z:number){
+ if(route.rail)return railSurface(route.rail,distance);
  const deck=route.decks[Math.round(distance/DECK_STEP)];
  return deck?{height:sampleRoadElevation(city,deck,x,z),normal:roadNormal(city,deck,x,z)}:{height:sampleElevation(city,x,z),normal:sampleTerrainNormal(city,x,z)};
 }
@@ -72,11 +74,19 @@ function routeData(source:TransitRoute,city:CityData):Route{
  const distances=[0];for(let i=1;i<source.points.length;i++)distances.push(distances[i-1]+dist(source.points[i],source.points[i-1]));
  const route:Route={...source,distances,length:distances[distances.length-1],signalStops:[],decks:[]};
  let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of route.points){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}
- for(const signal of city.signals){if(signal[0]<minX-13||signal[0]>maxX+13||signal[1]<minZ-13||signal[1]>maxZ+13)continue;let best={d:Infinity,s:0,yaw:0};for(let i=1;i<route.points.length;i++){
+ for(const signal of route.line==='Green-D'?[]:city.signals){if(signal[0]<minX-13||signal[0]>maxX+13||signal[1]<minZ-13||signal[1]>maxZ+13)continue;let best={d:Infinity,s:0,yaw:0};for(let i=1;i<route.points.length;i++){
   const a=route.points[i-1],b=route.points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=dist(a,b),t=THREE.MathUtils.clamp(((signal[0]-a[0])*dx+(signal[1]-a[1])*dz)/(length*length||1),0,1),d=Math.hypot(signal[0]-a[0]-dx*t,signal[1]-a[1]-dz*t);
   if(d<best.d)best={d,s:distances[i-1]+t*length,yaw:Math.atan2(dx,dz)};
  }if(best.d<13&&!route.signalStops.some(s=>Math.abs(s.distance-best.s)<22))route.signalStops.push({distance:Math.max(0,best.s-10),yaw:best.yaw});}
- route.signalStops.sort((a,b)=>a.distance-b.distance);if(route.kind==='bus')route.decks=routeDecks(city,route);return route;
+ route.signalStops.sort((a,b)=>a.distance-b.distance);
+ if(route.kind==='bus')route.decks=routeDecks(city,route);
+ else{
+  route.rail=createRailProfile(city,route);
+  // Parent-station coordinates can be below a road bridge. Dwell on the nearby
+  // open platform so one complete car remains visible while serving the stop.
+  route.stops=route.stops.map(stop=>{const distance=railStopDistance(route.rail!,stop.distance);return{...stop,distance,position:transitPoint(route,distance)};}).sort((a,b)=>a.distance-b.distance);
+ }
+ return route;
 }
 
 /** Static MBTA geometry and a bounded service simulation: one vehicle per 4 km of
@@ -85,28 +95,7 @@ function routeData(source:TransitRoute,city:CityData):Route{
 export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhysics,data:TransitData){
  const group=new THREE.Group();group.name='Boston public transport';scene.add(group);
  const routes=data.routes.map(route=>routeData(route,city));
- const iron=new THREE.MeshStandardMaterial({color:'#555c5d',metalness:.7,roughness:.36});
- const concrete=new THREE.MeshStandardMaterial({color:'#777d70',roughness:.95});
- const railGeometries:THREE.BufferGeometry[]=[],beds:THREE.BufferGeometry[]=[],wires:THREE.BufferGeometry[]=[],supports:THREE.BufferGeometry[]=[];
- const cable=(a:THREE.Vector3,b:THREE.Vector3,r:number)=>{const delta=b.clone().sub(a),g=new THREE.CylinderGeometry(r,r,delta.length(),5);g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),delta.normalize()));return g.translate(...a.add(b).multiplyScalar(.5).toArray());};
- for(const route of routes.filter(r=>r.kind==='tram')){
-  let lastPole=-100;
-  for(let s=0;s<route.length-1;s+=3){
-   const a=transitPoint(route,s),b=transitPoint(route,Math.min(route.length,s+3)),dx=b[0]-a[0],dz=b[1]-a[1],length=dist(a,b),yaw=Math.atan2(dx,dz),nx=-dz/(length||1),nz=dx/(length||1);
-   const ya=sampleElevation(city,...a),yb=sampleElevation(city,...b),tilt=-Math.atan2(yb-ya,length),cy=(ya+yb)/2;
-   // Only the reserved northeastern section receives a concrete rail bed.
-   // Beyond Brigham Circle the Green Line shares the paved street.
-   if(a[0]>-2460)beds.push(new THREE.BoxGeometry(2.5,.035,length+.025).rotateX(tilt).rotateY(yaw).translate((a[0]+b[0])/2,cy+.062,(a[1]+b[1])/2));
-   for(const side of [-1,1])railGeometries.push(new THREE.BoxGeometry(.065,.04,length+.03).rotateX(tilt).rotateY(yaw).translate((a[0]+b[0])/2+nx*.7175*side,cy+.095,(a[1]+b[1])/2+nz*.7175*side));
-   wires.push(cable(new THREE.Vector3(a[0],ya+5.73,a[1]),new THREE.Vector3(b[0],yb+5.73,b[1]),.012));
-   // One set of poles per track, offset to the median between the tracks.
-   if(route.id===routes.find(r=>r.kind==='tram')?.id&&s-lastPole>34&&a[0]>-2460){
-    lastPole=s;const x=a[0]+nx*1.9,z=a[1]+nz*1.9,y=sampleElevation(city,x,z);supports.push(new THREE.CylinderGeometry(.07,.1,6.3,7).translate(x,y+3.15,z));supports.push(cable(new THREE.Vector3(x,y+6.1,z),new THREE.Vector3(a[0]-nx*4,ya+6.1,a[1]-nz*4),.035));
-   }
-  }
- }
- const mesh=(geometries:THREE.BufferGeometry[],material:THREE.Material,name:string)=>{if(!geometries.length)return;const g=mergeGeometries(geometries,false);geometries.forEach(g=>g.dispose());if(g){const m=new THREE.Mesh(g,material);m.name=name;m.receiveShadow=true;m.castShadow=name==='Catenary poles';group.add(m);}};
- mesh(beds,concrete,'Reserved Green Line rail bed');mesh(railGeometries,iron,'Standard gauge Green Line rails');mesh(wires,iron,'Green Line overhead wire');mesh(supports,iron,'Catenary poles');
+ const tracks=createTransitTracks(city,routes,transitPoint,(route,distance,point)=>routeSurface(city,route,distance,...point).height,(route,distance)=>!!route.rail&&railCovered(route.rail,distance,1.5));group.add(tracks.group);
  const actors:Actor[]=[];
  for(let i=0;i<routes.length;i++){
   const route=routes[i],fleet=Math.max(1,Math.min(3,Math.round(route.length/4000)));
@@ -129,19 +118,27 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
  const place=(object:THREE.Object3D,body:RAPIER.RigidBody,route:Route,distance:number,immediate=false)=>{
   const p=transitPoint(route,distance),a=transitPoint(route,distance-1),b=transitPoint(route,distance+1),yaw=Math.atan2(b[0]-a[0],b[1]-a[1]),surface=routeSurface(city,route,distance,...p),y=surface.height+(route.kind==='tram'?.11:.01),q=rotationFromNormal(surface.normal,yaw);
   object.position.set(p[0],y,p[1]);object.quaternion.set(q.x,q.y,q.z,q.w);
-  const position={x:p[0],y:y+1.6,z:p[1]};if(immediate){body.setTranslation(position,true);body.setRotation(q,true);}else{body.setNextKinematicTranslation(position);body.setNextKinematicRotation(q);}
+  let reset=immediate;
+  if(route.rail){object.visible=!railCovered(route.rail,distance);reset||=!body.isEnabled()||!object.visible;body.setEnabled(object.visible);}
+  // Disabled kinematic bodies do not consume next-pose targets. Keep their real
+  // pose current, including on re-entry, so emerging from cover cannot impart
+  // an entire underpass's travel as a one-frame collision velocity.
+  const position={x:p[0],y:y+1.6,z:p[1]};if(reset){body.setTranslation(position,true);body.setRotation(q,true);}else{body.setNextKinematicTranslation(position);body.setNextKinematicRotation(q);}
  };
  const pose=(actor:Actor,immediate=false)=>{
-  if(actor.tram){actor.tram.sections.forEach((section,i)=>place(section,actor.bodies[i],actor.route,actor.distance+actor.tram!.offsets[i],immediate));actor.tram.bellows.forEach((joint,i)=>{const distance=actor.distance+(i===0?3.32:-3.32),p=transitPoint(actor.route,distance),a=transitPoint(actor.route,distance-1),b=transitPoint(actor.route,distance+1),q=terrainRotation(city,...p,Math.atan2(b[0]-a[0],b[1]-a[1]));joint.position.set(p[0],sampleElevation(city,...p)+.11,p[1]);joint.quaternion.set(q.x,q.y,q.z,q.w);});}
+  if(actor.tram){
+   actor.tram.sections.forEach((section,i)=>place(section,actor.bodies[i],actor.route,actor.distance+actor.tram!.offsets[i],immediate));
+   actor.tram.bellows.forEach((joint,i)=>{const distance=actor.distance+(i===0?3.32:-3.32),p=transitPoint(actor.route,distance),a=transitPoint(actor.route,distance-1),b=transitPoint(actor.route,distance+1),surface=routeSurface(city,actor.route,distance,...p),q=rotationFromNormal(surface.normal,Math.atan2(b[0]-a[0],b[1]-a[1]));joint.position.set(p[0],surface.height+.11,p[1]);joint.quaternion.set(q.x,q.y,q.z,q.w);joint.visible=!railCovered(actor.route.rail!,distance);});
+  }
   else place(actor.model,actor.bodies[0],actor.route,actor.distance,immediate);
  };
  actors.forEach(a=>pose(a,true));
- const obstacles=():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.y,z:a.z,halfLength:a.tram?11.25:6.0,halfWidth:1.3,speed:a.speed}));
+ const obstacles=():TrafficObstacle[]=>actors.filter(a=>!a.route.rail||!railCovered(a.route.rail,a.distance)).map(a=>({x:a.x,y:a.y,z:a.z,halfLength:a.tram?11.25:6.0,halfWidth:1.3,speed:a.speed}));
  return{
   count:actors.length,busCount:actors.filter(a=>!a.tram).length,tramCount:actors.filter(a=>a.tram).length,obstacles,
-  snapshot:()=>actors.map(a=>({kind:a.route.kind,line:a.route.line,x:a.x,y:a.y,z:a.z,speed:a.speed,dwell:a.dwell,nextStop:a.route.stops[a.nextStop]?.name,lastStop:a.lastStop})),
+  snapshot:()=>actors.map(a=>({kind:a.route.kind,line:a.route.line,destination:a.route.destination,route:a.route.id,distance:a.distance,yaw:a.yaw,covered:!!a.route.rail&&railCovered(a.route.rail,a.distance),carCount:1,x:a.x,y:a.y,z:a.z,speed:a.speed,dwell:a.dwell,nextStop:a.route.stops[a.nextStop]?.name,lastStop:a.lastStop})),
   update(dt:number,player:VehicleState,observer:Pick<VehicleState,'x'|'y'|'z'>=player,traffic:TrafficObstacle[]=[]){
-   dt=Math.max(0,Math.min(dt,1/30));elapsed+=dt;const fleet=obstacles();
+   dt=Math.max(0,Math.min(dt,1/30));elapsed+=dt;const fleet=obstacles();tracks.updateVisibility(observer.x,observer.z);
    for(const actor of actors){
     const p=transitPoint(actor.route,actor.distance),look=transitPoint(actor.route,actor.distance+6),fx=Math.sin(actor.yaw),fz=Math.cos(actor.yaw),half=actor.tram?11.25:6;
     let target=actor.tram?8:8.5;
@@ -151,7 +148,8 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
     else if(stop){const gap=stop.distance-actor.distance;target=Math.min(target,Math.sqrt(Math.max(0,2*1.8*(gap-.7))));if(gap<1.1&&actor.speed<.2){actor.dwell=actor.tram?8:5;actor.lastStop=stop.name;actor.nextStop++;}}
     const light=actor.route.signalStops.find(l=>l.distance>=actor.distance+half-.3);
     if(light&&signalPhase(elapsed,light.yaw)!=='green'){const gap=light.distance-actor.distance-half;if(actor.signalStop!==light.distance){actor.signalStop=light.distance;actor.signalCommitted=actor.speed>2&&gap<actor.speed*actor.speed/7+1;}if(!actor.signalCommitted)target=Math.min(target,Math.sqrt(Math.max(0,2*2.4*(gap-.6))));}else{actor.signalStop=undefined;actor.signalCommitted=false;}
-    const others:TrafficObstacle[]=[{...player,halfLength:2.1,halfWidth:.9},...traffic,...fleet.filter(a=>a.x!==actor.x||a.z!==actor.z)];
+    const covered=!!actor.route.rail&&railCovered(actor.route.rail,actor.distance);
+    const others:TrafficObstacle[]=[...(covered?[]:[{...player,halfLength:2.1,halfWidth:.9},...traffic]),...fleet.filter(a=>a.x!==actor.x||a.z!==actor.z)];
     for(const other of others){
      if(Math.abs(other.y-actor.y)>4)continue;const dx=other.x-actor.x,dz=other.z-actor.z,along=dx*fx+dz*fz,across=Math.abs(dx*fz-dz*fx),gap=along-half-(other.halfLength??2.1)-2;
      if(along>0&&along<65&&across<1.35+(other.halfWidth??.9))target=Math.min(target,Math.sqrt(Math.max(0,2*3.2*gap)));
@@ -165,6 +163,6 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
    }
   },
   setNight(night:boolean){group.traverse(o=>{if(o instanceof THREE.Mesh&&o.material instanceof THREE.MeshStandardMaterial&&['head','tail'].includes(o.name))o.material.emissiveIntensity=night?2.4:.3;});},
-  dispose(){for(const a of actors)for(const b of a.bodies)physics.world.removeRigidBody(b);const materials=new Set<THREE.Material>();group.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose();(Array.isArray(o.material)?o.material:[o.material]).forEach(m=>materials.add(m));}});materials.forEach(m=>{if(m instanceof THREE.MeshStandardMaterial)m.map?.dispose();m.dispose();});scene.remove(group);}
+  dispose(){for(const a of actors)for(const b of a.bodies)physics.world.removeRigidBody(b);const geometries=new Set<THREE.BufferGeometry>(),materials=new Set<THREE.Material>(),textures=new Set<THREE.Texture>();group.traverse(o=>{if(o instanceof THREE.Mesh){geometries.add(o.geometry);(Array.isArray(o.material)?o.material:[o.material]).forEach(m=>materials.add(m));}});geometries.forEach(g=>g.dispose());materials.forEach(m=>{for(const value of Object.values(m))if(value instanceof THREE.Texture)textures.add(value);m.dispose();});textures.forEach(t=>t.dispose());scene.remove(group);}
  };
 }

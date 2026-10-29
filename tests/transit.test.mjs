@@ -6,7 +6,9 @@ import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {createTransit,transitPoint,routeDecks,routeSurface} from '../src/simulation/transit.ts';
 import {signalAxis,signalPhase} from '../src/simulation/signals.ts';
 import {pointInside} from '../src/simulation/roads.ts';
-import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
+import {meshBuildingIds,usesExactBuildingCollision} from '../src/simulation/building-collisions.ts';
+import {createRailProfile,railCovered} from '../src/simulation/transit-rail-surface.ts';
+import {tileCollisionIndices} from '../src/render/tile-geometry.ts';
 
 import {loadCentralCity,loadMetroCity} from './helpers/metro-city.mjs';
 const BUS_LINES=['1','9','23','28','39','57','66','86'];
@@ -29,10 +31,10 @@ test('mapped Green Line uses separate surface tracks and every bus route stays w
  // and the Boston Medical Center model whose overhead link straddles Massachusetts
  // Avenue); tests/street-corridors.test.mjs drives the open street corridors.
  const complexes=meshBuildingIds;
- assert.equal(data.routes.filter(r=>r.kind==='tram').length,2);assert.equal(data.routes.filter(r=>r.kind==='bus').length,16);
+ assert.equal(data.routes.filter(r=>r.kind==='tram').length,8);assert.equal(data.routes.filter(r=>r.kind==='bus').length,16);
  for(const line of BUS_LINES)assert.equal(data.routes.filter(r=>r.line===line).length,2,`route ${line} runs in both directions`);
  for(const route of data.routes){
-  assert.ok(route.points.length>80);assert.ok(route.stops.length>=8);
+  assert.ok(route.points.length>80);assert.ok(route.stops.length>=(route.line==='Green-D'?6:8));
   if(route.kind==='bus')assert.ok(route.length>(route.line==='39'?7900:5000),`${route.destination} keeps its full in-coverage alignment`);
   for(const stop of route.stops)assert.ok(stop.distance>0&&stop.distance<route.length);
   const path=withDistances(route),crossed=new Map();
@@ -45,9 +47,79 @@ test('mapped Green Line uses separate surface tracks and every bus route stays w
   // A bus drives through the Nubian Square canopies; nothing taller than a shelter, and nothing for long.
   for(const [building,metres] of crossed)assert.ok(metres<=16||building.height<=4,`${route.destination} crosses ${building.name} (${building.height} m tall) for ${metres} m`);
  }
- const mfa=data.routes.filter(r=>r.kind==='tram').map(r=>r.stops.find(s=>s.name==='Museum of Fine Arts').position);
- const separation=Math.hypot(mfa[0][0]-mfa[1][0],mfa[0][1]-mfa[1][1]);
- assert.ok(separation>2.7&&separation<8,`opposing tracks need distinct geometry (${separation}m)`);
+ for(const [line,station]of [['Green-B','Harvard Avenue'],['Green-C','Coolidge Corner'],['Green-D','Longwood'],['Green-E','Museum of Fine Arts']]){
+  const pair=data.routes.filter(r=>r.line===line);assert.equal(pair.length,2,`${line} runs in both directions`);
+  assert.deepEqual(pair.map(r=>r.directionId).sort(),[0,1]);
+  const platforms=pair.map(r=>r.stops.find(s=>s.name===station).position),separation=Math.hypot(platforms[0][0]-platforms[1][0],platforms[0][1]-platforms[1][1]);
+  assert.ok(separation>2.7&&separation<8,`${line} opposing tracks need distinct geometry (${separation}m)`);
+ }
+});
+
+test('western Green Line branches stop at their subway portals and the D at the map boundary',()=>{
+ const data=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8'));
+ const portals={'Green-B':[-1941,131],'Green-C':[-2529,415],'Green-D':[-2308,451],'Green-E':[-1026,1020]};
+ for(const route of data.routes.filter(r=>r.kind==='tram')){
+  const portal=route.directionId===0?route.points[0]:route.points.at(-1),expected=portals[route.line];
+  assert.ok(Math.hypot(portal[0]-expected[0],portal[1]-expected[1])<6,`${route.destination} must end at its actual surface portal`);
+  assert.ok(route.stops.every(s=>!['Kenmore','Copley','Government Center','Lechmere','Union Square','Riverside','Newton Centre','Chestnut Hill'].includes(s.name)),'subway and out-of-map stops cannot be projected onto surface routes');
+  if(route.line==='Green-B'){
+   assert.ok(route.length>6500&&route.length<6650);assert.equal(route.stops.length,16);
+   assert.ok(route.stops.some(s=>s.name==='Boston College'));
+   assert.equal(route.bridges.length,1,'the B retains its mapped Turnpike bridge');
+   assert.ok(route.bridges[0].end-route.bridges[0].start>110);
+  }
+  if(route.line==='Green-C'){
+   assert.ok(route.length>3700&&route.length<3850);assert.equal(route.stops.length,13);
+   assert.ok(route.stops.some(s=>s.name==='Cleveland Circle'));
+  }
+  if(route.line==='Green-D'){
+   assert.ok(route.length>5500&&route.length<5750);assert.equal(route.coveragePercent,38);
+   assert.ok(route.stops.some(s=>s.name==='Reservoir'),'the D reaches Reservoir before the map boundary');
+   assert.equal(route.covered.length,4,'retain the four mapped D underpasses without rendering tracks over their roofs');
+   let previous=0;for(const span of route.covered){assert.ok(span.start>previous&&span.end>span.start&&span.end<route.length);previous=span.end;}
+  }
+ }
+ const d=data.routes.filter(r=>r.line==='Green-D');
+ for(const p of d[0].points.filter(([x])=>x>-4119&&x<-3998)){
+  let separation=Infinity;
+  for(let i=1;i<d[1].points.length;i++){
+   const a=d[1].points[i-1],b=d[1].points[i],dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/(dx*dx+dz*dz)));
+   separation=Math.min(separation,Math.hypot(p[0]-a[0]-dx*t,p[1]-a[1]-dz*t));
+  }
+  assert.ok(separation>2.9&&separation<4.1,'paired local building-clearance corrections keep opposing cars separated');
+ }
+});
+
+test('new western rail corridors clear tall buildings across all their streamed tiles',async()=>{
+ const routes=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8')).routes.filter(r=>['Green-B','Green-C','Green-D'].includes(r.line));
+ const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
+ for(const route of routes)for(const[x,z]of route.points){bounds.minX=Math.min(bounds.minX,x-30);bounds.maxX=Math.max(bounds.maxX,x+30);bounds.minZ=Math.min(bounds.minZ,z-30);bounds.maxZ=Math.max(bounds.maxZ,z+30);}
+ const city=await loadMetroCity({bounds}),buildings=city.buildings.filter(b=>b.height>4).map(b=>({building:b,minX:Math.min(...b.footprint.map(p=>p[0])),maxX:Math.max(...b.footprint.map(p=>p[0])),minZ:Math.min(...b.footprint.map(p=>p[1])),maxZ:Math.max(...b.footprint.map(p=>p[1]))}));
+ assert.ok(city.loadedTiles.size>=28,'load the entire B/C/D corridor, including Allston and Brookline');
+ const exact=new Map(),material=new THREE.MeshBasicMaterial({side:THREE.DoubleSide});
+ try{
+  for(const route of routes){
+   const path=withDistances(route),profile=createRailProfile(city,path);
+   for(let s=12;s<path.length-12;s+=4){
+    if(railCovered(profile,s))continue;
+    const p=transitPoint(path,s),a=transitPoint(path,s-1),b=transitPoint(path,s+1),dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz)||1;
+    for(const side of [-1.3,0,1.3]){
+     const point=[p[0]-dz/length*side,p[1]+dx/length*side];
+     for(const candidate of buildings){
+      if(point[0]<candidate.minX||point[0]>candidate.maxX||point[1]<candidate.minZ||point[1]>candidate.maxZ)continue;
+      const building=candidate.building;if(!pointInside(point,building.footprint))continue;
+      assert.ok(usesExactBuildingCollision(building),`${route.destination} overlaps the solid footprint of ${building.name} at ${s} m`);
+      // 1395 Commonwealth's convex hull reaches across the B, but its actual surveyed
+      // shell does not. Check that opening instead of exempting the building by ID.
+      let mesh=exact.get(building.id);
+      if(!mesh){const data=city.geometry.get(building.id),geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(data.positions,3));geometry.setIndex(new THREE.BufferAttribute(tileCollisionIndices(data),1));mesh=new THREE.Mesh(geometry,material);exact.set(building.id,mesh);}
+      const ray=new THREE.Raycaster(new THREE.Vector3(point[0],1000,point[1]),new THREE.Vector3(0,-1,0));
+      assert.equal(ray.intersectObject(mesh).length,0,`${route.destination} overlaps the source shell of ${building.name} at ${s} m`);
+     }
+    }
+   }
+  }
+ }finally{for(const mesh of exact.values())mesh.geometry.dispose();material.dispose();}
 });
 
 test('buses ride the surveyed bridge decks and stay out of the water',async()=>{
