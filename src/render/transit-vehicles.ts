@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
+export {createTransitBus} from './transit-bus.ts';
 
 type Surface='body'|'green'|'yellow'|'glass'|'dark'|'metal'|'rubber'|'head'|'tail';
 const palette:Record<Surface,number>={body:0xd9dedb,green:0x246a4e,yellow:0xe4bd25,glass:0x20343c,dark:0x22292c,metal:0x8d9b9e,rubber:0x171d20,head:0xf2eacf,tail:0xa72922};
@@ -11,36 +12,14 @@ function builder(){
  const finish=()=>{const group=new THREE.Group();for(const[kind,geometries]of parts){const geometry=mergeGeometries(geometries,false);geometries.forEach(g=>g.dispose());if(!geometry)continue;const material=new THREE.MeshStandardMaterial({color:palette[kind],roughness:kind==='glass'?.16:kind==='metal'?.34:.55,metalness:kind==='glass'?.4:kind==='metal'?.75:.15,emissive:kind==='head'?0xf2dfb8:kind==='tail'?0xc92b21:0,emissiveIntensity:.3});const mesh=new THREE.Mesh(geometry,material);mesh.name=kind;mesh.castShadow=kind!=='glass';mesh.receiveShadow=true;group.add(mesh);}return group;};
  return{add,box,beam,finish};
 }
+/** Destination displays are painted once per headsign and shared by every vehicle showing it. */
+const signTextures=new Map<string,THREE.CanvasTexture>();
 function sign(text:string,w:number,h:number){
  if(typeof document==='undefined')return new THREE.Group();
- const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=128;const c=canvas.getContext('2d')!;c.fillStyle='#101512';c.fillRect(0,0,1024,128);c.fillStyle='#f5bf55';c.textAlign='center';c.textBaseline='middle';c.font='bold 64px monospace';c.fillText(text,512,65,970);const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:texture}));return mesh;
+ let texture=signTextures.get(text);
+ if(!texture){const canvas=document.createElement('canvas');canvas.width=512;canvas.height=64;const c=canvas.getContext('2d')!;c.fillStyle='#101512';c.fillRect(0,0,512,64);c.fillStyle='#f5bf55';c.textAlign='center';c.textBaseline='middle';c.font='bold 32px monospace';c.fillText(text,256,33,485);texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;signTextures.set(text,texture);}
+ return new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({map:texture}));
 }
-function logo(){
- if(typeof document==='undefined')return new THREE.Group();
- const canvas=document.createElement('canvas');canvas.width=canvas.height=128;const c=canvas.getContext('2d')!;c.fillStyle='#f2f1df';c.beginPath();c.arc(64,64,61,0,Math.PI*2);c.fill();c.strokeStyle='#202a2a';c.lineWidth=8;c.stroke();c.fillStyle='#202a2a';c.font='bold 91px Arial';c.textAlign='center';c.textBaseline='middle';c.fillText('T',64,69);const t=new THREE.CanvasTexture(canvas);t.colorSpace=THREE.SRGBColorSpace;return new THREE.Mesh(new THREE.PlaneGeometry(.72,.72),new THREE.MeshStandardMaterial({map:t,transparent:true,roughness:.6}));
-}
-
-/** Original 40-foot low-floor city bus: white/black glazing band, yellow belt,
- * curb-side double doors, rooftop HVAC, dual rear tires and destination display. */
-export function createTransitBus(destination:string){
- const p=builder();p.box('body',2.5,2.52,11.7,0,1.68,0);p.box('dark',2.52,1.14,10.6,0,2.08,-.35);p.box('yellow',2.53,.3,11.62,0,1.35,0);
- p.box('body',2.5,.29,11.7,0,2.97,0);p.box('dark',2.48,.3,11.9,0,.4,0);p.box('body',1.85,.32,3.3,0,3.23,-2.65);
- p.box('dark',2.3,1.34,.08,0,2.09,5.875);p.box('glass',2.19,1.03,.04,0,1.95,5.93);p.box('dark',.04,1.13,.05,0,1.98,5.96);
- p.box('yellow',2.51,.36,.08,0,1.12,5.91);p.box('dark',2.28,.39,.06,0,2.77,5.94);
- for(const side of [-1,1]){
-  for(let z=-4.8;z<4.5;z+=1.25){p.box('glass',.035,1.04,1.14,side*1.268,2.12,z);p.box('body',.055,1.15,.055,side*1.285,2.1,z+.61);}
-  for(const z of [3.64,-3.64]){const tire=new THREE.CylinderGeometry(.47,.47,.28,20).rotateZ(Math.PI/2).translate(side*1.19,.48,z);p.add('rubber',tire);p.add('metal',new THREE.CylinderGeometry(.27,.27,.035,14).rotateZ(Math.PI/2).translate(side*1.345,.48,z));}
-  p.beam('dark',[side*1.15,2.6,5.4],[side*1.52,2.5,5.9],.035);p.box('dark',.12,.45,.26,side*1.53,2.23,5.92);
-  p.box('head',.37,.2,.07,side*.86,.78,5.95);p.box('tail',.2,.5,.06,side*1.02,1.09,-5.92);
-  for(let i=0;i<5;i++)p.box('dark',.036,.034,2.1,side*1.28,.57+i*.11,-4.6);
- }
- for(const z of [4.43,.22]){p.box('dark',.045,2.16,1.34,-1.301,1.56,z);for(const offset of [-.32,.32])p.box('glass',.035,1.9,.58,-1.329,1.59,z+offset);p.box('yellow',.05,.09,1.38,-1.35,.62,z);}
- const group=p.finish();group.name='MBTA-style Route 39 bus';const display=sign(destination,2.18,.32);display.position.set(0,2.77,5.985);group.add(display);
- const rear=sign(destination.split(' ')[0],.8,.28);rear.position.set(0,2.6,-5.96);rear.rotation.y=Math.PI;group.add(rear);
- for(const side of [-1,1]){const t=logo();t.position.set(side*1.29,.88,-1.42);t.rotation.y=side*Math.PI/2;group.add(t);}
- return group;
-}
-
 /** Original articulated Green Line vehicle inspired by the contemporary
  * silver/green fleet. Separate body sections follow the track's local tangent. */
 export function createGreenLine(destination:string){

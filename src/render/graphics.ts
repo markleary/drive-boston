@@ -79,6 +79,6 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
       composer.render(dt);
     },
     get quality() { return quality; },
-    dispose() { ao.dispose(); bloom.dispose(); composer.dispose(); },
+    dispose() { for(const pass of composer.passes)pass.dispose(); composer.dispose(); },
   };
 }

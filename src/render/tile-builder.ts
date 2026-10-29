@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { IndexedSurfaceWriter, SurfaceBatches } from './indexed-surfaces.ts';
 import { staticDetailBatchSteps } from './static-batches.ts';
+import { disposeTileResources } from './tile-resources.ts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
@@ -54,7 +55,7 @@ export interface BuiltTile {
   dispose(): void;
 }
 export type TileStage = 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
-export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; }
+export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; ownedMaterials?: THREE.Material[]; }
 
 /** Run a paced helper as one named stage: each pause it takes becomes a yield of that stage. */
 function* stage<T>(name: TileStage, steps: Generator<void, T>): Generator<TileStage, T> { let r = steps.next(); while (!r.done) { yield name; r = steps.next(); } return r.value; }
@@ -108,7 +109,7 @@ export function createTileBuilder(ctx: TileContext) {
     const began = performance.now(), key = tile.key, size = tile.size, x0 = tile.tx * size, z0 = tile.tz * size, x1 = x0 + size, z1 = z0 + size;
     const bounds: Bounds = { minX: x0, maxX: x1, minZ: z0, maxZ: z1 }, insideTile = (x: number, z: number) => x >= x0 && x < x1 && z >= z0 && z < z1;
     const group = partial.group; group.name = `Tile ${key}`;
-    const colliders = partial.colliders, meshes: THREE.Mesh[] = [], owned: THREE.Material[] = [], lamps: THREE.Vector3[] = [];
+    const colliders = partial.colliders, meshes: THREE.Mesh[] = [], owned = partial.ownedMaterials ??= [], lamps: THREE.Vector3[] = [];
     const stats: TileStats = { buildings: 0, exactMeshes: 0, triangles: 0, roads: 0, structures: 0, trees: 0, lamps: 0, signs: 0, signals: 0, parkTrees: 0, storefronts: 0, facades: 0, rooftops: 0, porches: 0, colliders: 0, buildMs: 0, cpuMs: 0 };
     const near = grow(bounds, 80), roads = roadsNear(near), ownedRoads = roads.filter(r => { const m = midpoint(r); return insideTile(m[0], m[1]); });
     const subCity: CityData = { ...city, roads, buildings: tile.buildings, signals: collect(signalCells, grow(bounds, 40), s => s[0] >= x0 - 40 && s[0] < x1 + 40 && s[1] >= z0 - 40 && s[1] < z1 + 40), curbs: tile.curbs, parkPaths: tile.parkPaths,
@@ -358,18 +359,16 @@ export function createTileBuilder(ctx: TileContext) {
     physics.removeColliders(built.colliders); built.colliders.length = 0;
     removeTileBuildings(city, built.tile); for (const b of built.tile.buildings) ctx.buildingMap.delete(b.id);
     ctx.trees.remove(built.key); ctx.parkTrees.remove(built.key);
-    built.group.traverse(object => { if (object instanceof THREE.Mesh) { if(object instanceof THREE.BatchedMesh)object.dispose();else object.geometry.dispose(); } });
-    for (const material of owned) { const m = material as THREE.MeshStandardMaterial; m.map?.dispose(); m.emissiveMap?.dispose(); m.dispose(); }
-    built.group.removeFromParent();
+    disposeTileResources(built.group, owned);
   }
 
   /** Abandon a tile whose build was interrupted: whatever stages ran are undone. */
   function abandon(partial: PartialTile) {
     physics.removeColliders(partial.colliders);
+    partial.colliders.length = 0;
     removeTileBuildings(city, partial.tile); for (const b of partial.tile.buildings) ctx.buildingMap.delete(b.id);
     ctx.trees.remove(partial.key); ctx.parkTrees.remove(partial.key);
-    partial.group.traverse(object => { if (object instanceof THREE.Mesh) { if(object instanceof THREE.BatchedMesh)object.dispose();else object.geometry.dispose(); } });
-    partial.group.removeFromParent();
+    disposeTileResources(partial.group, partial.ownedMaterials);
   }
 
   return { build, abandon, roadsNear, midpoint };

@@ -29,7 +29,7 @@ import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 
-export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; }
+export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; }
 
 export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData,options:WorldOptions={}) {
   const metro=isMetroCity(city)?city:undefined;
@@ -47,7 +47,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   sky.material.fragmentShader=sky.material.fragmentShader.replace('vec4( texColor, 1.0 )','vec4( min( texColor * 0.65, vec3( 1.2 ) ), 1.0 )');
   const skyUniforms=sky.material.uniforms;skyUniforms.turbidity.value=3;skyUniforms.rayleigh.value=1.5;skyUniforms.mieCoefficient.value=.004;skyUniforms.mieDirectionalG.value=.82;
   const environmentScene=new THREE.Scene(),environmentSky=sky.clone();environmentScene.add(environmentSky);
-  const pmrem=new THREE.PMREMGenerator(renderer);let skyEnvironment:THREE.WebGLRenderTarget|undefined,reflectionEnvironment:THREE.WebGLRenderTarget|undefined;
+  let pmrem=new THREE.PMREMGenerator(renderer);let skyEnvironment:THREE.WebGLRenderTarget|undefined,reflectionEnvironment:THREE.WebGLRenderTarget|undefined;
   const probeTarget=options.mobile?undefined:new THREE.WebGLCubeRenderTarget(256,{type:THREE.HalfFloatType,generateMipmaps:true,minFilter:THREE.LinearMipmapLinearFilter});
   const probe=probeTarget?new THREE.CubeCamera(.4,900,probeTarget):undefined;if(probe)scene.add(probe);
   const probePosition=new THREE.Vector3(Infinity,Infinity,Infinity);let reflectionDirty=true,lastProbeTime=-100,probeFace=-1;
@@ -282,7 +282,9 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     scene.environmentIntensity=night?.22:.16;renderer.toneMappingExposure=night?1.05:.93;
     reflectionDirty=true;probeFace=-1;
   }
-  setLighting('golden');
+  // Legacy scene downloads can finish during a lost context too. The first
+  // environment render must wait even though geometry preparation can proceed.
+  await options.waitForContext?.();setLighting('golden');
   function update(position:THREE.Vector3,time:number,stream=true){
     // Keep the shadow focus on the ground as the helicopter climbs. Widen the
     // coverage from street detail to the district without moving the world datum.
@@ -344,5 +346,13 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     highQuality=high;const size=options.mobile?1024:high?4096:2048;
     if(sun.shadow.mapSize.x!==size){sun.shadow.mapSize.set(size,size);sun.shadow.map?.dispose();sun.shadow.map=null;sun.shadow.needsUpdate=true;}
   }
-  return {setLighting,update,updateReflections,setQuality,get shadowMapSize(){return sun.shadow.mapSize.x;},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
+  // Clear old-context listeners/handles while GL is lost. Disposing them only
+  // after restoration would try to delete objects belonging to the old context.
+  function releaseGraphicsTargets(){
+    skyEnvironment?.dispose();skyEnvironment=undefined;
+    reflectionEnvironment?.dispose();reflectionEnvironment=undefined;
+    probeTarget?.dispose();sun.shadow.map?.dispose();sun.shadow.map=null;
+    pmrem.dispose();pmrem=new THREE.PMREMGenerator(renderer);
+  }
+  return {setLighting,update,updateReflections,setQuality,releaseGraphicsTargets,get shadowMapSize(){return sun.shadow.mapSize.x;},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
 }

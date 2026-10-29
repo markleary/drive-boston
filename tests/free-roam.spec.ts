@@ -12,10 +12,11 @@ test('free roam has moving MBTA services, clear controls, and a drivable elevate
   // Signals and exact building colliders arrive with the streamed tiles around the spawn.
   await expect.poll(async()=>{const s=await snapshot(page);return s.signalCount>180&&s.exactBuildingColliders>=3;},{timeout:60000}).toBe(true);
   let state=await snapshot(page);
-  expect(state.transitCount).toBe(4);expect(state.transit.filter(a=>a.kind==='tram')).toHaveLength(2);expect(state.transit.filter(a=>a.kind==='bus')).toHaveLength(2);
+  expect(state.transitCount).toBe(34);expect(state.transit.filter(a=>a.kind==='tram')).toHaveLength(2);expect(state.transit.filter(a=>a.kind==='bus')).toHaveLength(32);
   expect(state.signalCount).toBeGreaterThan(180);expect(state.exactBuildingColliders).toBeGreaterThanOrEqual(3);expect(state.groundCover.puddles).toBeGreaterThan(15);
   await destination(page,'huntington-mfa');const initial=(await snapshot(page)).transit;
-  await expect.poll(async()=>{const now=(await snapshot(page)).transit;return Math.min(...now.map((a,i)=>Math.hypot(a.x-initial[i].x,a.z-initial[i].z)));},{timeout:20000}).toBeGreaterThan(3);
+  // A trolley and a bus serve the Museum of Fine Arts stop; both must be under way (a bus elsewhere may be held at a signal or a terminal).
+  await expect.poll(async()=>{const now=await snapshot(page);return ['tram','bus'].every(kind=>now.transit.some((a,i)=>a.kind===kind&&Math.hypot(a.x-now.state.x,a.z-now.state.z)<700&&Math.hypot(a.x-initial[i].x,a.z-initial[i].z)>3));},{timeout:20000}).toBe(true);
   await page.screenshot({path:testInfo.outputPath('huntington-services.png')});
   await destination(page,'bowker-overpass');const start=(await snapshot(page)).state;
   await page.keyboard.down('w');
