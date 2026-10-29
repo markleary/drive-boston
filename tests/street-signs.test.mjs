@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';import test from 'node:test';
-import {planStreetSigns,BLADE_HEIGHTS} from '../src/simulation/street-signs.ts';
+import {planStreetSigns,BLADE_HEIGHTS,POLE_RADIUS} from '../src/simulation/street-signs.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 import {loadCentralCity} from './helpers/metro-city.mjs';
 const distance=(p,a,b)=>{const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(p[0]-a[0]-dx*t,p[1]-a[1]-dz*t);};
@@ -29,6 +29,10 @@ test('each blade runs parallel to the street it names, the side street above the
       // The blade's face normal is (sin yaw, cos yaw); parallel to the street means that normal is across it.
       const along=Math.min(...dirs.map(dir=>Math.abs(Math.sin(blade.yaw)*dir[0]+Math.cos(blade.yaw)*dir[1])));
       assert.ok(along<.05,`${blade.name} blade faces across its street (|cos| ${along.toFixed(3)})`);
+      // Mounted on the pole's intersection side, faces (±.025 m) clear of the pole, offset straight out from the face.
+      const nx=Math.sin(blade.yaw),nz=Math.cos(blade.yaw),out=blade.offset[0]*nx+blade.offset[1]*nz;
+      assert.ok(Math.abs(out)-.025>POLE_RADIUS,`${blade.name} blade clears the pole`);assert.ok(Math.abs(blade.offset[0]*nz-blade.offset[1]*nx)<1e-9,'offset is along the face normal');
+      assert.ok(out*(nx*(s.corner[0]-s.position[0])+nz*(s.corner[1]-s.position[1]))>=0,`${blade.name} blade hangs toward the intersection`);
     }
   }
 });
