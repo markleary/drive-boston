@@ -1,9 +1,14 @@
 import type { DriveInput, TravelMode } from '../types';
 
-type SoundName = 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor';
+type SoundName = 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
+/** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
+export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
 type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number };
 interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; }
-const SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor'];
+const SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
+const ONE_SHOTS = new Set<SoundName>(['horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
+/** Velocity change (m/s in one physics step) below which a knock is a bump rather than a crash. */
+const LIGHT_IMPACT = 3.5;
 const clamp = (value: number, low = 0, high = 1) => Math.max(low, Math.min(high, value));
 
 /** Local sound assets only: no provider credentials or API calls in the browser. */
@@ -25,6 +30,9 @@ export class DriveAudio {
   private rpm = 850;
   private previousTime = 0;
   private lastHorn = -Infinity;
+  private lastImpact = new Map<ImpactKind, number>();
+  private impactCount = 0;
+  private noise?: AudioBuffer;
   private gate = -1;
 
   get enabled() { return !this.muted; }
@@ -59,7 +67,7 @@ export class DriveAudio {
       activeOneShots: this.oneShots.size, fallback: Boolean(this.mode === 'drive' ? this.fallback : this.mode==='helicopter'?this.rotorFallback:false),
       masterGain: this.master?.gain.value ?? 0, rpm: Math.round(this.rpm), gear: this.gear + 1,
       rotorGain: this.loops.get('helicopter-rotor')?.gain.gain.value ?? 0,
-      electricGain:this.electric?.gain.gain.value??0,
+      electricGain:this.electric?.gain.gain.value??0, impactCount: this.impactCount,
       engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0),
     };
   }
@@ -163,13 +171,55 @@ export class DriveAudio {
     if (now - this.lastHorn < 0.7) return;
     this.resume(); this.lastHorn = now; this.stopOneShots();
     const buffer = this.buffers.get('horn');
-    if (buffer) {
-      const source = context.createBufferSource(); source.buffer = buffer;
-      const gain = context.createGain(); gain.gain.value = 0.7;
-      source.connect(gain); gain.connect(this.master); this.oneShots.add(source);
-      source.onended = () => { this.oneShots.delete(source); source.disconnect(); gain.disconnect(); };
-      source.start();
-    } else if (this.failed.has('horn')) this.fallbackHorn();
+    if (buffer) this.playOneShot(buffer, 0.7, 1);
+    else if (this.failed.has('horn')) this.fallbackHorn();
+  }
+
+  private playOneShot(buffer: AudioBuffer, volume: number, rate: number) {
+    const context = this.context!;
+    const source = context.createBufferSource(); source.buffer = buffer; source.playbackRate.value = rate;
+    const gain = context.createGain(); gain.gain.value = volume;
+    source.connect(gain); gain.connect(this.master!); this.oneShots.add(source);
+    source.onended = () => { this.oneShots.delete(source); source.disconnect(); gain.disconnect(); };
+    source.start();
+  }
+
+  /** A filtered noise burst with a fast decay stands in for a missing crash clip. */
+  private fallbackImpact(volume: number, soft: boolean) {
+    const context = this.context!, now = context.currentTime;
+    if (!this.noise) {
+      const length = Math.floor(context.sampleRate * .45); this.noise = context.createBuffer(1, length, context.sampleRate);
+      const samples = this.noise.getChannelData(0); let seed = 1;
+      for (let i = 0; i < length; i++) { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; samples[i] = (seed / 4294967296 * 2 - 1) * Math.exp(-i / length * 9); }
+    }
+    const source = context.createBufferSource(); source.buffer = this.noise;
+    const filter = context.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = soft ? 260 : 900; filter.Q.value = .7;
+    const gain = context.createGain(); gain.gain.setValueAtTime(volume * .5, now); gain.gain.exponentialRampToValueAtTime(.001, now + (soft ? .25 : .45));
+    source.connect(filter); filter.connect(gain); gain.connect(this.master!); this.oneShots.add(source);
+    source.onended = () => { this.oneShots.delete(source); source.disconnect(); filter.disconnect(); gain.disconnect(); };
+    source.start();
+  }
+
+  /** One collision sound. `severity` is the chassis velocity change of the knock
+   * (m/s per step) or, for a walker, the vehicle speed; it sets clip and volume. */
+  impact(kind: ImpactKind, severity: number) {
+    const context = this.context;
+    if (!context || !this.master || this.mode === 'helicopter' || this.muted || this.paused || document.hidden || this.disposed || !Number.isFinite(severity)) return;
+    const now = context.currentTime;
+    if (now - (this.lastImpact.get(kind) ?? -Infinity) < (kind === 'pedestrian' ? .3 : .18)) return;
+    this.lastImpact.set(kind, now); this.resume();
+    let name: SoundName, gain: number;
+    if (kind === 'pedestrian') { name = 'pedestrian-thump'; gain = .35 + clamp(severity / 20) * .45; }
+    else {
+      const heavy = kind === 'heavy' || kind === 'static';
+      name = severity < LIGHT_IMPACT ? 'crash-light' : heavy ? 'crash-heavy' : 'crash-car';
+      gain = severity < LIGHT_IMPACT ? .22 + severity / LIGHT_IMPACT * .3 : .5 + clamp((severity - LIGHT_IMPACT) / 14) * .5;
+      if (kind === 'ground') gain *= .6;
+    }
+    this.impactCount++;
+    const buffer = this.buffers.get(name);
+    if (buffer) this.playOneShot(buffer, gain, kind === 'pedestrian' ? .95 + Math.random() * .1 : .92 + Math.random() * .16);
+    else if (this.failed.has(name)) this.fallbackImpact(gain, kind === 'pedestrian');
   }
 
   dispose() {
@@ -206,10 +256,10 @@ export class DriveAudio {
         if (!response.ok) throw new Error('Audio unavailable');
         let buffer = await context.decodeAudioData(await response.arrayBuffer());
         if (this.disposed) return;
-        if (name !== 'horn') buffer = this.seamlessBuffer(buffer);
+        if (!ONE_SHOTS.has(name)) buffer = this.seamlessBuffer(buffer);
         this.normalize(buffer);
         this.buffers.set(name, buffer);
-        if (name !== 'horn') this.createLoop(name, buffer);
+        if (!ONE_SHOTS.has(name)) this.createLoop(name, buffer);
       } catch {
         if (!this.disposed) this.failed.add(name);
       }

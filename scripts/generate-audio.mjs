@@ -42,6 +42,22 @@ const clips = [
     id: 'helicopter-rotor', seconds: 8, loop: true,
     prompt: 'A small civilian sightseeing helicopter hovering steadily, heard from a close chase-camera perspective just behind the aircraft. Continuous warm rhythmic rotor blade chopping and a restrained turbine hum, natural realistic recording. Exactly constant operating speed and level throughout, seamless loop. No start-up, no shutdown, no flyby, no Doppler pitch change, no speech, no radio, no weapons, no music, no sirens.'
   },
+  {
+    id: 'crash-light', seconds: 1.5, loop: false,
+    prompt: 'A single low-speed car bump: a dull plastic bumper thud against the bumper of another parked car, with a brief shudder of body panels and a faint rattle of trim. One short impact that starts immediately and fades within a second. Close, dry, natural recording. No glass breaking, no horn, no tire squeal, no voices, no music, no engine.'
+  },
+  {
+    id: 'crash-car', seconds: 2.5, loop: false,
+    prompt: 'A single hard collision between two passenger cars: a sharp heavy metal crunch, crumpling body panels, a short burst of shattering glass and a snapping plastic bumper, then a few pieces of debris settling on asphalt. The impact starts immediately and decays within two seconds. Close, dry and realistic. No explosion, no horn, no tire squeal, no voices, no music, no engine.'
+  },
+  {
+    id: 'crash-heavy', seconds: 3, loop: false,
+    prompt: 'A single very heavy collision of a passenger car driving into the side of a large city bus or a concrete wall at speed: a deep booming impact, metal crumpling with a long steel groan, glass shattering, then loose parts clattering onto the road. The impact starts immediately and decays within three seconds. Close, dry and realistic. No explosion, no fire, no horn, no voices, no music, no engine.'
+  },
+  {
+    id: 'pedestrian-thump', seconds: 1.5, loop: false,
+    prompt: 'A single soft dull thump of a heavy padded duffel bag landing on a car hood, with a short rustle of thick winter clothing and a faint flap of a coat, then silence. Starts immediately and fades within a second. Close, natural recording. No voices, no screaming, no glass, no metal crunch, no music.'
+  },
 ];
 
 async function exists(path) { try { await access(path); return true; } catch { return false; } }
@@ -60,7 +76,7 @@ async function localKey() {
 
 async function main() {
   const total = clips.reduce((sum, clip) => sum + clip.seconds, 0);
-  if (total > 50) throw new Error('Generation duration exceeds the 50-second task budget.');
+  if (total > 60) throw new Error('Generation duration exceeds the 60-second task budget.');
   const pending = [];
   for (const clip of clips) if (!await exists(resolve(output, `${clip.id}.mp3`))) pending.push(clip);
   console.log(`Audio plan: ${clips.length} clips / ${total}s total; ${pending.length} missing / ${pending.reduce((sum, clip) => sum + clip.seconds, 0)}s to generate.`);

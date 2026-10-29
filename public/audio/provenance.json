@@ -76,6 +76,46 @@
       "generatedAt": "2026-10-26T21:18:00.512Z",
       "bytes": 129192,
       "sha256": "9e3811cb8cda4d93abecf3062f2273ec6fbb3ba4ef5097051b5b2aa3ba368741"
+    },
+    {
+      "id": "crash-light",
+      "seconds": 1.5,
+      "loop": false,
+      "prompt": "A single low-speed car bump: a dull plastic bumper thud against the bumper of another parked car, with a brief shudder of body panels and a faint rattle of trim. One short impact that starts immediately and fades within a second. Close, dry, natural recording. No glass breaking, no horn, no tire squeal, no voices, no music, no engine.",
+      "file": "crash-light.mp3",
+      "generatedAt": "2026-10-29T20:07:26.560Z",
+      "bytes": 24702,
+      "sha256": "2c2287633a42231595050573ecd2f8994c54f994c57d562754a22979d69ae113"
+    },
+    {
+      "id": "crash-car",
+      "seconds": 2.5,
+      "loop": false,
+      "prompt": "A single hard collision between two passenger cars: a sharp heavy metal crunch, crumpling body panels, a short burst of shattering glass and a snapping plastic bumper, then a few pieces of debris settling on asphalt. The impact starts immediately and decays within two seconds. Close, dry and realistic. No explosion, no horn, no tire squeal, no voices, no music, no engine.",
+      "file": "crash-car.mp3",
+      "generatedAt": "2026-10-29T20:07:28.275Z",
+      "bytes": 40585,
+      "sha256": "381f1177cacd5a2b682543e16e6cb1551408fb1a3131d0601b52f241079dfbab"
+    },
+    {
+      "id": "crash-heavy",
+      "seconds": 3,
+      "loop": false,
+      "prompt": "A single very heavy collision of a passenger car driving into the side of a large city bus or a concrete wall at speed: a deep booming impact, metal crumpling with a long steel groan, glass shattering, then loose parts clattering onto the road. The impact starts immediately and decays within three seconds. Close, dry and realistic. No explosion, no fire, no horn, no voices, no music, no engine.",
+      "file": "crash-heavy.mp3",
+      "generatedAt": "2026-10-29T20:07:30.251Z",
+      "bytes": 48944,
+      "sha256": "cfcc0dbf597603a3fd89dc0192a33c69a2a8eb6e55314927e0ce1554291df4d1"
+    },
+    {
+      "id": "pedestrian-thump",
+      "seconds": 1.5,
+      "loop": false,
+      "prompt": "A single soft dull thump of a heavy padded duffel bag landing on a car hood, with a short rustle of thick winter clothing and a faint flap of a coat, then silence. Starts immediately and fades within a second. Close, natural recording. No voices, no screaming, no glass, no metal crunch, no music.",
+      "file": "pedestrian-thump.mp3",
+      "generatedAt": "2026-10-29T20:07:31.963Z",
+      "bytes": 24702,
+      "sha256": "cff03da3d5bf5a1a9f12e6ba9e2c02d9f603e90621c4288c6ebea9ee64187416"
     }
   ]
 }

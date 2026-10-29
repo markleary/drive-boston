@@ -21,7 +21,8 @@ test('five-minute library drive alternates car and Ultra Bee without growing gra
   await page.getByTestId('start-drive').tap();await expect(page.locator('#welcome')).toBeHidden();
   const session=await page.context().newCDPSession(page),samples:Record<string,any>[]=[];
   for(let cycle=0;cycle<10;cycle++){
-    await page.getByTestId(cycle%2?'mode-bike':'mode-drive').tap();
+    // Phones hide the HUD travel switch; the vehicle is chosen in the settings sheet.
+    await page.locator('#open-settings').tap();await page.locator(`#settings-modal [data-travel="${cycle%2?'bike':'drive'}"]`).tap();await page.locator('#resume-drive').tap();
     // Repeat the same local stretch by the library; test duration, not distance
     // into unrelated neighborhoods, matches the reported three-minute failure.
     await page.evaluate(async position=>{await (window as any).__backbay.travelTo(position.x,position.z,position.yaw);},origin);

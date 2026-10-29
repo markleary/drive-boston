@@ -15,14 +15,33 @@ import { createPedestrianModel } from './pedestrian-model.ts';
 interface Segment { road: Road; a: Point2; b: Point2; length: number; tx: number; tz: number; index: number; }
 interface WalkRoute { road: string; start: Point2; end: Point2; length: number; yaw: number; }
 const PEDESTRIAN_CAPACITY = 112;
+/** A struck walker: thrown through the air as a tumbling body, lying still, then rising. */
+export interface KnockedDown { phase:'air'|'down'|'rising'; hip:THREE.Vector3; velocity:THREE.Vector3; spin:THREE.Vector3; orientation:THREE.Quaternion; timer:number; rest?:THREE.Quaternion; upright?:THREE.Quaternion; }
 export interface StreetPedestrian {
   id: number; road: string; start: Point2; end: Point2; position: THREE.Vector3; yaw: number;
   speed: number; height: number; phase: number; route: WalkRoute; width: number; bag: boolean; scarf: boolean;
   pauseUntil?:number; outfit?:number;
+  orientation?:THREE.Quaternion; sprawl?:number; knocked?:KnockedDown;
+  /** Offset from the sidewalk route where a walker got back up; it fades out while walking. */
+  rejoin?:{dx:number;dz:number;t:number};
 }
 export interface ParkedVehicle { id: number; road: string; x: number; y: number; z: number; yaw: number; meter: Point2 | null; }
+/** The moving vehicle a walker can be struck by: its yaw and box are needed for the hit test. */
+export interface WalkerThreat { x:number; z:number; y?:number; speed?:number; yaw?:number; halfLength?:number; halfWidth?:number; }
+/** Player speed (m/s) below which touching a walker only makes them stop and wait. */
+export const PEDESTRIAN_HIT_SPEED = 1.5;
+const HIP = .9, LYING = .32;
 const gap = (a: Point2, b: Point2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
-const lerp = THREE.MathUtils.lerp;
+const lerp = THREE.MathUtils.lerp, smooth = (t: number) => t * t * (3 - 2 * t);
+const UP = new THREE.Vector3(0, 1, 0), tumbleAxis = new THREE.Vector3(), tumbleStep = new THREE.Quaternion(), halfBody = new THREE.Vector3(), candidate = new THREE.Quaternion();
+/** The flat pose nearest to `orientation`: on the back or the front, head pointing where the body's up axis leans. */
+function lyingPose(orientation:THREE.Quaternion){
+  const up=halfBody.set(0,1,0).applyQuaternion(orientation),forward=new THREE.Vector3(0,0,1).applyQuaternion(orientation);
+  const head=Math.hypot(up.x,up.z)>.15?[up.x,up.z]:[forward.x,forward.z];
+  const back=new THREE.Quaternion().setFromAxisAngle(UP,Math.atan2(-head[0],-head[1])).multiply(candidate.setFromAxisAngle(new THREE.Vector3(1,0,0),-Math.PI/2));
+  const front=new THREE.Quaternion().setFromAxisAngle(UP,Math.atan2(head[0],head[1])).multiply(candidate.setFromAxisAngle(new THREE.Vector3(1,0,0),Math.PI/2));
+  return Math.abs(orientation.dot(back))>=Math.abs(orientation.dot(front))?back:front;
+}
 function pointSegment(p: Point2, a: Point2, b: Point2) {
   const dx = b[0] - a[0], dz = b[1] - a[1];
   const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / (dx * dx + dz * dz || 1)));
@@ -282,21 +301,78 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       const person=distant[moved++];
       person.route=route;person.road=route.road;person.start=route.start;person.end=route.end;
       person.phase=-elapsed+t*route.length/person.speed;person.yaw=route.yaw;
+      person.knocked=undefined;person.orientation=undefined;person.sprawl=0;person.rejoin=undefined;
       person.position.set(x,sampleElevation(city,x,z)+.035,z);relocations++;
     }
   }
   // Map teleports replace the whole view, so populate that new scene at once.
   // Ordinary travel uses the protected outer ring to avoid nearby appearances.
   function populateAt(observer:{x:number;z:number},player?:{x:number;z:number}){refill(observer,player,true);}
-  function update(dt: number, time?: number,observer?:{x:number;z:number;y?:number},player?:{x:number;z:number;speed?:number}) {
+  const hits:number[]=[];
+  /** Thrown with the vehicle's motion plus a sideways shove off its line and a
+   * hop over the hood, tumbling about the axis across the car. Speeds are m/s. */
+  function knockDown(person:StreetPedestrian,threat:WalkerThreat,across:number){
+    const speed=Math.abs(threat.speed??0),direction=Math.sign(threat.speed??1)||1,fx=Math.sin(threat.yaw??0)*direction,fz=Math.cos(threat.yaw??0)*direction;
+    const side=Math.sign(across)||1,px=fz*side,pz=-fx*side,shove=1.2+speed*.08;
+    const velocity=new THREE.Vector3(fx*speed*.85+px*shove,1.3+Math.min(5,speed*.22),fz*speed*.85+pz*shove);
+    const spin=new THREE.Vector3(fz,0,-fx).multiplyScalar(1.5+speed*.3);spin.y=(random()-.5)*2.5;
+    const hip=new THREE.Vector3(person.position.x,person.position.y-.035+HIP*person.height,person.position.z);
+    person.knocked={phase:'air',hip,velocity,spin,orientation:new THREE.Quaternion().setFromAxisAngle(UP,person.yaw),timer:0};
+    person.sprawl=1;person.rejoin=undefined;hits.push(speed);
+  }
+  /** Rejoin the nearest sidewalk stretch from where the walker got up: their own
+   * route if still beside it, else the closest one nearby; the offset fades out. */
+  function resumeWalking(person:StreetPedestrian,x:number,z:number){
+    const along=(route:WalkRoute)=>{const dx=route.end[0]-route.start[0],dz=route.end[1]-route.start[1],t=Math.max(0,Math.min(1,((x-route.start[0])*dx+(z-route.start[1])*dz)/(dx*dx+dz*dz||1)));return {t,distance:Math.hypot(x-route.start[0]-dx*t,z-route.start[1]-dz*t)};};
+    let route=person.route,best=along(route);
+    if(best.distance>5)for(const other of routesNear(x,z,60)){const fit=along(other);if(fit.distance<best.distance&&!pedestrians.some(p=>p!==person&&p.route===other)){route=other;best=fit;}}
+    person.route=route;person.road=route.road;person.start=route.start;person.end=route.end;
+    person.phase=-elapsed+best.t*route.length/person.speed;person.yaw=route.yaw;
+    person.rejoin={dx:x-lerp(route.start[0],route.end[0],best.t),dz:z-lerp(route.start[1],route.end[1],best.t),t:0};
+  }
+  function updateKnocked(person:StreetPedestrian,k:KnockedDown,dt:number){
+    const ground=sampleElevation(city,k.hip.x,k.hip.z),rest=ground+LYING;
+    if(k.phase==='air'){
+      k.velocity.y-=9.81*dt;k.hip.addScaledVector(k.velocity,dt);k.timer+=dt;
+      const rate=k.spin.length();if(rate>1e-6){tumbleStep.setFromAxisAngle(tumbleAxis.copy(k.spin).divideScalar(rate),rate*dt);k.orientation.premultiply(tumbleStep).normalize();}
+      let grounded=false;
+      if(k.hip.y<=rest){
+        grounded=true;const landing=k.hip.y<rest-.01;k.hip.y=rest;
+        if(landing){if(k.velocity.y<0)k.velocity.y=-k.velocity.y*.25;k.velocity.x*=.7;k.velocity.z*=.7;k.spin.multiplyScalar(.55);}
+        const slide=Math.exp(-5*dt);k.velocity.x*=slide;k.velocity.z*=slide;k.spin.multiplyScalar(Math.exp(-4*dt));
+      }
+      if((grounded&&k.velocity.length()<.35&&k.spin.length()<.6)||k.timer>6){k.phase='down';k.timer=1.2+random()*.9;k.rest=lyingPose(k.orientation);k.hip.y=rest;}
+    }else if(k.phase==='down'){
+      k.orientation.slerp(k.rest!,1-Math.exp(-8*dt));k.hip.y=rest;k.timer-=dt;
+      if(k.timer<=0){k.phase='rising';k.timer=0;resumeWalking(person,k.hip.x,k.hip.z);k.upright=new THREE.Quaternion().setFromAxisAngle(UP,person.yaw);}
+    }else{
+      k.timer+=dt;const u=Math.min(1,k.timer/1.1);
+      k.orientation.slerp(k.upright!,1-Math.exp(-4.5*dt));k.hip.y=lerp(rest,ground+HIP*person.height,smooth(u));person.sprawl=1-smooth(u);
+      if(u>=1){person.knocked=undefined;person.orientation=undefined;person.sprawl=0;return;}
+    }
+    // Feet sit a body half-length below the hip along the body's own axis.
+    halfBody.set(0,-HIP*person.height,0).applyQuaternion(k.orientation);
+    person.position.copy(k.hip).add(halfBody);person.orientation=k.orientation;
+  }
+  function update(dt: number, time?: number,observer?:{x:number;z:number;y?:number},player?:WalkerThreat) {
     elapsed = time ?? elapsed + Math.max(0, Math.min(.1, dt));
     relocationTime+=Math.max(0,dt);
     if(observer&&relocationTime>.3){
       relocationTime=0;
       refill(observer,player);
     }
+    const step=Math.max(0,Math.min(.1,dt));
     pedestrians.forEach((person, i) => {
       const route = person.route, travel = route.length / person.speed, turn = 1.45, cycle = 2 * (travel + turn);
+      if(step>0&&!person.knocked&&player&&player.yaw!==undefined&&Math.abs(player.speed??0)>PEDESTRIAN_HIT_SPEED){
+        // Inside the moving vehicle's footprint (plus a bumper margin) at its level.
+        const dx=person.position.x-player.x,dz=person.position.z-player.z,fx=Math.sin(player.yaw),fz=Math.cos(player.yaw),along=dx*fx+dz*fz,across=dx*fz-dz*fx;
+        if(Math.abs(along)<(player.halfLength??2.1)+.3&&Math.abs(across)<(player.halfWidth??.95)+.3&&(player.y===undefined||Math.abs(person.position.y-player.y)<2.5))knockDown(person,player,across);
+      }
+      if(person.knocked){
+        updateKnocked(person,person.knocked,step);
+        if(person.knocked){pedestrianModel.pose(i,person,0,0,dt,!observer||Math.hypot(person.position.x-observer.x,person.position.z-observer.z)<65);return;}
+      }
       const clock = ((elapsed + person.phase) % cycle+cycle)%cycle;
       let along = 0, yaw = route.yaw, walking = 1;
       if (clock < travel) along = clock * person.speed;
@@ -306,7 +382,8 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       else { const t = (clock - 2 * travel - turn) / turn; yaw += Math.PI * (1 + t * t * (3 - 2 * t)); walking = 0; }
       if(player&&Math.hypot(person.position.x-player.x,person.position.z-player.z)<3.4&&Math.abs(player.speed??0)>.5){person.phase-=Math.max(0,dt);walking=0;along=Math.max(0,Math.min(route.length,((person.position.x-route.start[0])*Math.sin(route.yaw)+(person.position.z-route.start[1])*Math.cos(route.yaw))));}
       person.yaw = yaw;
-      const x=lerp(route.start[0],route.end[0],along/route.length),z=lerp(route.start[1],route.end[1],along/route.length);
+      let x=lerp(route.start[0],route.end[0],along/route.length),z=lerp(route.start[1],route.end[1],along/route.length);
+      if(person.rejoin){const rejoin=person.rejoin;rejoin.t+=step;const fade=1-smooth(Math.min(1,rejoin.t/1.6));x+=rejoin.dx*fade;z+=rejoin.dz*fade;if(fade<=0)person.rejoin=undefined;}
       person.position.set(x,sampleElevation(city,x,z)+.035,z);
       // Unfold both route directions into continuous traveled distance; the
       // animation holds its phase during endpoint turns and vehicle pauses.
@@ -320,6 +397,10 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   update(0, 0);
   return {
     group, pedestrians, parked, count, parkedCount: parked.length, meterCount: meters.length, update,populateAt,population,get relocations(){return relocations;},
+    /** Vehicle speeds of the walkers struck since the previous call; the caller plays their sounds. */
+    takeHits(){return hits.splice(0,hits.length);},
+    /** Collider handles of the kerbside parked cars, so an impact can be classified as a vehicle. */
+    parkedColliders:new Set(colliders.map(collider=>collider.handle)),
     dispose() {
       pedestrianModel.dispose();
       if (physics) for (const collider of colliders) physics.world.removeCollider(collider, true);

@@ -34,6 +34,16 @@ export interface PhysicsVehicleState extends VehicleState {
   wheelieRemaining: number;
 }
 
+/** One hard knock on the player chassis: the velocity change of that physics
+ * step beyond gravity (m/s), the speed before it, and the colliders touching
+ * the chassis so the caller can tell a car from a bus, a wall or the ground. */
+export interface Impact { severity: number; speed: number; colliders: number[]; }
+/** Velocity change per step that counts as an impact rather than a bump. The
+ * suspension cannot exceed about .7 m/s per step, so curbs stay silent. */
+export const IMPACT_THRESHOLD = 1.2;
+/** Crumple lever above the chassis contacts (m), share of the stopping torque applied, and its cap (N m s). */
+export const CRASH_KICK = { lift: .35, scale: .9, limit: 15000 };
+
 let initialization: Promise<void> | undefined;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 
@@ -56,6 +66,11 @@ export class DrivingPhysics {
   private rpm = 850;
   private rescue: {x:number;z:number;yaw:number;roadId?:string} = { x: 0, z: 0, yaw: 0 };
   private overturnedTime = 0;
+  /** Ground colliders (whole-city trimesh or streamed tiles), so an impact can be classified. */
+  readonly terrainColliders = new Set<number>();
+  private impacts: Impact[] = [];
+  /** Impacts recorded since the previous call; the caller plays their sounds. */
+  takeImpacts() { const list = this.impacts; this.impacts = []; return list; }
   private readonly bounds: CityData['bounds'];
   private readonly city: CityData;
 
@@ -78,12 +93,12 @@ export class DrivingPhysics {
     const { minX, maxX, minZ, maxZ } = city.bounds;
     if (this.streaming) { /* tiles supply the ground */ } else if (terrainGrid(city)) {
       const { vertices, indices } = buildTerrainGeometryData(city);
-      this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES)
-        .setFriction(1).setRestitution(0));
+      this.terrainColliders.add(this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES)
+        .setFriction(1).setRestitution(0)).handle);
     } else {
-      this.world.createCollider(RAPIER.ColliderDesc.cuboid((maxX - minX) / 2 + 40, 1, (maxZ - minZ) / 2 + 40)
+      this.terrainColliders.add(this.world.createCollider(RAPIER.ColliderDesc.cuboid((maxX - minX) / 2 + 40, 1, (maxZ - minZ) / 2 + 40)
         .setTranslation((minX + maxX) / 2, -1, (minZ + maxZ) / 2)
-        .setFriction(1).setRestitution(0));
+        .setFriction(1).setRestitution(0)).handle);
     }
 
     // Upper decks are closed solids, separate from the original terrain. Wheel
@@ -149,7 +164,8 @@ export class DrivingPhysics {
 
   /** Ground for one streamed tile: the same trimesh flags as the whole-city collider. */
   addTerrainTile(vertices: Float32Array, indices: Uint32Array) {
-    return this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
+    const collider = this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
+    this.terrainColliders.add(collider.handle); return collider;
   }
 
   /** Same closed arched slab as the park renderer; tile disposal removes both
@@ -200,7 +216,7 @@ export class DrivingPhysics {
 
   /** Drop a streamed tile's colliders. Waking bodies lets a parked car settle on whatever replaces them. */
   removeColliders(colliders: Iterable<RAPIER.Collider>) {
-    for (const collider of colliders) { this.surfaceCleanup.get(collider.handle)?.();this.surfaceCleanup.delete(collider.handle);this.detailedColliders.delete(collider.handle); this.world.removeCollider(collider, true); }
+    for (const collider of colliders) { this.surfaceCleanup.get(collider.handle)?.();this.surfaceCleanup.delete(collider.handle);this.detailedColliders.delete(collider.handle);this.terrainColliders.delete(collider.handle); this.world.removeCollider(collider, true); }
   }
 
   private addDetailedCollider(descriptor:RAPIER.ColliderDesc){
@@ -268,7 +284,39 @@ export class DrivingPhysics {
       }
     }
     }
+    const before = this.body.linvel(), speedBefore = Math.hypot(before.x, before.y, before.z), q0 = this.body.rotation();
     this.world.step();
+    // A knock is a velocity change no tire or suspension force can produce in
+    // one step. Record what the chassis touched so the sound matches the object.
+    const after = this.body.linvel(), gravity = this.world.gravity;
+    const severity = Math.hypot(after.x - before.x - gravity.x * timestep, after.y - before.y - gravity.y * timestep, after.z - before.z - gravity.z * timestep);
+    if (severity >= IMPACT_THRESHOLD) {
+      const colliders: number[] = []; let px = 0, py = 0, pz = 0, points = 0;
+      this.world.contactPairsWith(this.chassisCollider, other => {
+        colliders.push(other.handle);
+        this.world.contactPair(this.chassisCollider, other, manifold => {
+          for (let i = 0; i < manifold.numSolverContacts(); i++) { const c = manifold.solverContactPoint(i); if (c) { px += c.x; py += c.y; pz += c.z; points++; } }
+        });
+      });
+      if (this.impacts.length < 8) this.impacts.push({ severity, speed: speedBefore, colliders });
+      // The box chassis meets a flat wall across its whole face, so the solver
+      // stops it dead without any rotation. A real body crumples above the
+      // bumper, so the stopping force acts higher than the chassis contacts:
+      // lift the lever toward the roof and apply the matching share of torque.
+      // Frontal hits dip the nose and lift the tail, offset hits spin the car
+      // and hard side hits can roll it. Vertical knocks (bottoming out on a
+      // crest, landing a jump) keep Rapier's own response; the bike keeps its
+      // rider balance.
+      const horizontal = Math.hypot(after.x - before.x - gravity.x * timestep, after.z - before.z - gravity.z * timestep);
+      if (!this.bike && points && horizontal >= 3) {
+        const com = this.body.worldCom(), up = { x: 2 * (q0.x * q0.y - q0.w * q0.z), y: 1 - 2 * (q0.x * q0.x + q0.z * q0.z), z: 2 * (q0.y * q0.z + q0.w * q0.x) };
+        const { lift, scale, limit } = CRASH_KICK, rx = px / points - com.x + up.x * lift, ry = py / points - com.y + up.y * lift, rz = pz / points - com.z + up.z * lift;
+        const mass = this.body.mass(), jx = (after.x - before.x - gravity.x * timestep) * mass, jy = (after.y - before.y - gravity.y * timestep) * mass, jz = (after.z - before.z - gravity.z * timestep) * mass;
+        let tx = (ry * jz - rz * jy) * scale, ty = (rz * jx - rx * jz) * scale, tz = (rx * jy - ry * jx) * scale;
+        const size = Math.hypot(tx, ty, tz); if (size > limit) { tx *= limit / size; ty *= limit / size; tz *= limit / size; }
+        this.body.applyTorqueImpulse({ x: tx, y: ty, z: tz }, true);
+      }
+    }
 
     const p = this.body.translation();
     const q = this.body.rotation();
@@ -281,8 +329,12 @@ export class DrivingPhysics {
     }
   }
 
+  /** An overturned, fallen or lost vehicle (car or bike) is set upright on the
+   * nearest clear road at the crash's level; the last explicit reset point is
+   * only the fallback when no local road qualifies. */
   private recoverFromCrash(position:{x:number;y:number;z:number}){
-    if(this.bike&&[position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
+    const spawnHeight=this.bike?ULTRA_BEE.spawnHeight:VEHICLE.spawnHeight;
+    if([position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
       const crashSurface=sampleDriveSurface(this.city,position.x,position.z,position.y);
       // Keep recovery inside the already-streamed neighborhood.
       const road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,accept:spot=>{
@@ -292,7 +344,7 @@ export class DrivingPhysics {
         // the candidate's support plane at the crash point so slopes still match.
         const level=surface.height-(n.x*(position.x-spot.x)+n.z*(position.z-spot.z))/Math.max(.5,n.y);
         if(Math.abs(level-crashSurface.height)>1.25)return false;
-        const center={x:spot.x-.06*n.x,y:surface.height+ULTRA_BEE.spawnHeight/Math.max(.5,n.y)-.06*n.y,z:spot.z-.06*n.z};
+        const center={x:spot.x-.06*n.x,y:surface.height+spawnHeight/Math.max(.5,n.y)-.06*n.y,z:spot.z-.06*n.z};
         return !this.world.intersectionWithShape(center,rotationFromNormal(n,spot.yaw),this.chassisCollider.shape,undefined,undefined,this.chassisCollider,this.body);
       }});
       if(Number.isFinite(road.distance)){
