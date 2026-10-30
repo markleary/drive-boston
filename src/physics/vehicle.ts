@@ -5,6 +5,7 @@ import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
 import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, registerDriveSurface } from '../simulation/road-surfaces.ts';
 import {footbridgeRoad} from '../simulation/footbridges.ts';
+import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
 
 export const VEHICLE = {
   mass: 1240,
@@ -92,9 +93,12 @@ export class DrivingPhysics {
     this.world.integrationParameters.numSolverIterations = 8;
     const { minX, maxX, minZ, maxZ } = city.bounds;
     if (this.streaming) { /* tiles supply the ground */ } else if (terrainGrid(city)) {
-      const { vertices, indices } = buildTerrainGeometryData(city);
+      const raw = buildTerrainGeometryData(city), { vertices, indices } = clipTunnelPortals(city,raw.vertices,raw.indices);
       this.terrainColliders.add(this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES)
         .setFriction(1).setRestitution(0)).handle);
+    } else if(city.roads?.some(r=>r.tunnel)){
+      const raw=buildTerrainGeometryData(city),surface=clipTunnelPortals(city,raw.vertices,raw.indices);
+      this.terrainColliders.add(this.world.createCollider(RAPIER.ColliderDesc.trimesh(surface.vertices,surface.indices,RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0)).handle);
     } else {
       this.terrainColliders.add(this.world.createCollider(RAPIER.ColliderDesc.cuboid((maxX - minX) / 2 + 40, 1, (maxZ - minZ) / 2 + 40)
         .setTranslation((minX + maxX) / 2, -1, (minZ + maxZ) / 2)
@@ -103,7 +107,7 @@ export class DrivingPhysics {
 
     // Upper decks are closed solids, separate from the original terrain. Wheel
     // rays can support either level while underpass cars retain their own ground.
-    if(!this.streaming)for(const road of city.roads??[])this.addRoadDeck(city,road);
+    for(const road of city.roads??[])if(!this.streaming||road.tunnel)this.addRoadDeck(city,road);
     if(!this.streaming)for(const path of city.parkPaths??[])this.addFootbridge(city,path);
 
     // Convex footprints are deliberately conservative collision proxies. Exact
@@ -164,6 +168,7 @@ export class DrivingPhysics {
 
   /** Ground for one streamed tile: the same trimesh flags as the whole-city collider. */
   addTerrainTile(vertices: Float32Array, indices: Uint32Array) {
+    ({vertices,indices}=clipTunnelPortals(this.city,vertices,indices));
     const collider = this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
     this.terrainColliders.add(collider.handle); return collider;
   }
@@ -185,6 +190,11 @@ export class DrivingPhysics {
     if (!road.elevations) return colliders;
     const slab = roadSlabGeometry(city, road);
     colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(slab.vertices, slab.indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0)));
+    if(road.tunnel){
+      const shell=tunnelGeometry(city,road);
+      for(const mesh of Object.values(shell))if(mesh.indices.length)colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices,mesh.indices,RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(.5).setRestitution(.02)));
+      return colliders;
+    }
     for (const p of bridgeBarriers(city, road)) {
       // Same yaw/pitch transform as the visible parapet.
       const sx = Math.sin(-p.slope / 2), cx = Math.cos(-p.slope / 2), sy = Math.sin(p.yaw / 2), cy = Math.cos(p.yaw / 2);
@@ -322,7 +332,7 @@ export class DrivingPhysics {
     const q = this.body.rotation();
     const upY = 1 - 2 * (q.x * q.x + q.z * q.z);
     this.overturnedTime = upY < 0.2 ? this.overturnedTime + timestep : 0;
-    if (!Number.isFinite(p.x + p.y + p.z) || p.y < sampleElevation(this.city, p.x, p.z) - 8 || this.overturnedTime > 2.5 ||
+    if (!Number.isFinite(p.x + p.y + p.z) || p.y < sampleDriveSurface(this.city,p.x,p.z,p.y).height - 8 || this.overturnedTime > 2.5 ||
         p.x < this.bounds.minX - 24 || p.x > this.bounds.maxX + 24 ||
         p.z < this.bounds.minZ - 24 || p.z > this.bounds.maxZ + 24) {
       this.recoverFromCrash(p);

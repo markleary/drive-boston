@@ -10,6 +10,8 @@ export const meshBuildingIds = new Set([
   'BOS-4WO5X-6OJI5-G5S26', // Logan terminals and garages around the terminal road loop
   'BOS-HO11N-VJBYE-3RDXF', // BUMC ambulatory care center: an overhead link across Massachusetts Avenue
   'BOS-3R76C-CGBE8-V3V1H', // NEXUS at the Allston Innovation Corridor: an L around Western Avenue
+  'BOS-0RY4U-KSQW8-OJPEA', // The Merano: concave survey around the Central Artery approaches
+  'BOS-Q6LOF-Q1HSG-INZ97', // One Canal podium alongside the southbound tunnel approach
 ]);
 
 /** Compiled road-overlap metadata extends the hand-reviewed legacy exceptions. */

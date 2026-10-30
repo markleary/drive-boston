@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type {Building,CityData} from '../types';
 import {sampleElevation} from '../simulation/terrain.ts';
+import {clipBuildingTunnelPassage} from '../simulation/tunnel-passages.ts';
 
 /** Extend only real wall-bottom edges to the terrain. Convex footprints would
  * close the public streets and courtyards inside these concave source models. */
@@ -34,7 +35,10 @@ export function sourceFootingGeometry(city:CityData,building:Building,source:THR
     }
     if(grounded)groundedEdges++;
   }
-  const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geometry.computeVertexNormals();
+  const raw=new Float32Array(positions),clipped=clipBuildingTunnelPassage(city,building,{vertices:raw,indices:Uint32Array.from({length:raw.length/3},(_,i)=>i)});
+  const visible=clipped.vertices===raw?raw:new Float32Array(clipped.indices.length*3);
+  if(visible!==raw)for(let i=0;i<clipped.indices.length;i++)visible.set(clipped.vertices.subarray(clipped.indices[i]*3,clipped.indices[i]*3+3),i*3);
+  const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(visible,3));geometry.computeVertexNormals();
   geometry.userData={sourceBottomEdges:edges.size,groundedEdges};return geometry;
 }
 

@@ -176,7 +176,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const neighborhoodAt=(x:number,z:number)=>areaAt(neighborhoods,x,z)?.name??'Boston';
   let latestStats:InterfaceStats={};
   const diagnostics=createDiagnostics(host,()=>{
-    const road=(travelMode!=='helicopter'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z).road;
+    const road=(travelMode!=='helicopter'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z,false,{height:state.y}).road;
     return{state:{...state},groundHeight:latestStats.groundHeight??0,road:{name:road.name,id:road.id},neighborhood:neighborhoodAt(state.x,state.z),camera,lighting,quality:latestStats.quality??'high',travelMode,
       performance:latestStats.performance??{fps:latestStats.fps??0,frameMs:0,drawCalls:0,triangles:0,geometries:0,textures:0,traffic:0,transit:0,pedestrians:0},graphicsInterruption:graphicsReport||undefined,previousSession:previousSessionReport||undefined};
   });
@@ -393,10 +393,11 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       ctx.strokeStyle='#72857366';ctx.lineWidth=.8;ctx.setLineDash([3,5]);
       for(const area of neighborhoods){traceRings(area.rings);ctx.stroke();}ctx.setLineDash([]);
     }
-    const visibleRoads=mapRoads.filter(inView);
+    const visibleRoads=mapRoads.filter(inView).sort((a,b)=>Number(!!b.road.tunnel)-Number(!!a.road.tunnel));
     for (const {road} of visibleRoads) {
       if (road.points.length < 2) continue;
       ctx.beginPath(); road.points.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); });
+      if(road.tunnel){ctx.setLineDash([5,4]);ctx.strokeStyle='#778f8c';ctx.lineWidth=Math.max(1.3,road.width*scale*.65);ctx.stroke();ctx.setLineDash([]);continue;}
       ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#c3ccc0'; ctx.lineWidth = Math.max(2, (road.width + 4) * scale); ctx.stroke();
       ctx.strokeStyle = '#faf8f0'; ctx.lineWidth = Math.max(1.4, road.width * scale); ctx.stroke();
     }

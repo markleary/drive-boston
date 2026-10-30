@@ -28,6 +28,9 @@ export function closestRoad(city: CityData, x: number, z: number, majorOnly = fa
       for(const segment of index.cells.get(`${xx},${zz}`)??[]){
       if(seen.has(segment))continue;seen.add(segment);
       const {road,a,dx,dz,len2}=segment;
+      // Facades, surface signals and ordinary map arrivals must not select a
+      // buried carriageway. Underground actors supply their current height.
+      if(road.tunnel&&options.height===undefined)continue;
       if(majorOnly && (road.width<7 || /alley|public|unnamed/i.test(road.name)))continue;
       const t=Math.max(.05,Math.min(.95,((x-a[0])*dx+(z-a[1])*dz)/len2));
       const px=a[0]+t*dx,pz=a[1]+t*dz,d=Math.hypot(px-x,pz-z);

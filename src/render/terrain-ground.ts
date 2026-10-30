@@ -2,6 +2,21 @@ import * as THREE from 'three';
 import type { CityData, Point2 } from '../types';
 import { buildTerrainGeometryData, sampleElevation, terrainGrid } from '../simulation/terrain.ts';
 import { TriangleWriter, type TriangleSink } from './geometry-writer.ts';
+import { clipTunnelPortals,tunnelPortalBoundsIntersect } from '../simulation/tunnels.ts';
+
+/** Ground layers share the physical portal subtraction. Rebuilt metre UVs
+ * keep asphalt, park paving and the coarse terrain from covering a ramp. */
+export function clipPortalSurface(city:CityData,geometry:THREE.BufferGeometry){
+  const positions=geometry.getAttribute('position');if(!positions?.count)return geometry;
+  const indexed=!!geometry.index,vertices=positions.array as Float32Array,indices=geometry.index?Uint32Array.from(geometry.index.array):Uint32Array.from({length:positions.count},(_,i)=>i);
+  const clipped=clipTunnelPortals(city,vertices,indices);if(clipped.vertices===vertices)return geometry;
+  for(const name of Object.keys(geometry.attributes))geometry.deleteAttribute(name);
+  const uv=new Float32Array(clipped.vertices.length/3*2);
+  for(let i=0;i<uv.length/2;i++){uv[i*2]=clipped.vertices[i*3]/4;uv[i*2+1]=clipped.vertices[i*3+2]/4;}
+  geometry.setAttribute('position',new THREE.BufferAttribute(clipped.vertices,3));geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));geometry.setIndex(new THREE.BufferAttribute(clipped.indices,1));geometry.computeVertexNormals();geometry.computeBoundingSphere();
+  if(!indexed){const expanded=geometry.toNonIndexed();geometry.copy(expanded);expanded.dispose();}
+  return geometry;
+}
 
 /** Subdivide across and along roads so hill crests and cross slopes remain
  * attached to the same surface used by the suspension raycasts. The triangles
@@ -10,13 +25,14 @@ import { TriangleWriter, type TriangleSink } from './geometry-writer.ts';
  * would draw every grid crease across the asphalt as a shading line, so the
  * ribbon is collected first and written with the face normals of coincident
  * vertices averaged, as an indexed mesh would shade. */
-export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[],width:number,offset:number,surface=(x:number,z:number)=>sampleElevation(city,x,z)){
+export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[],width:number,offset:number,surface?:(x:number,z:number)=>number){
+  const heightAt=surface??((x:number,z:number)=>sampleElevation(city,x,z));
   let distance=0;const v:number[]=[];
   // Vertices travel as plain numbers (x, y, z, u, v): no objects per vertex or midpoint.
   const emit=(ax:number,ay:number,az:number,au:number,av:number,bx:number,by:number,bz:number,bu:number,bv:number,cx:number,cy:number,cz:number,cu:number,cv:number,depth:number)=>{
-    const abx=(ax+bx)/2,abz=(az+bz)/2,aby=surface(abx,abz)+offset,abu=(au+bu)/2,abv=(av+bv)/2;
-    const bcx=(bx+cx)/2,bcz=(bz+cz)/2,bcy=surface(bcx,bcz)+offset,bcu=(bu+cu)/2,bcv=(bv+cv)/2;
-    const cax=(cx+ax)/2,caz=(cz+az)/2,cay=surface(cax,caz)+offset,cau=(cu+au)/2,cav=(cv+av)/2;
+    const abx=(ax+bx)/2,abz=(az+bz)/2,aby=heightAt(abx,abz)+offset,abu=(au+bu)/2,abv=(av+bv)/2;
+    const bcx=(bx+cx)/2,bcz=(bz+cz)/2,bcy=heightAt(bcx,bcz)+offset,bcu=(bu+cu)/2,bcv=(bv+cv)/2;
+    const cax=(cx+ax)/2,caz=(cz+az)/2,cay=heightAt(cax,caz)+offset,cau=(cu+au)/2,cav=(cv+av)/2;
     const error=Math.max(Math.abs(aby-(ay+by)/2),Math.abs(bcy-(by+cy)/2),Math.abs(cay-(cy+ay)/2));
     if(depth<3&&error>.007){
       emit(ax,ay,az,au,av,abx,aby,abz,abu,abv,cax,cay,caz,cau,cav,depth+1);emit(abx,aby,abz,abu,abv,bx,by,bz,bu,bv,bcx,bcy,bcz,bcu,bcv,depth+1);
@@ -36,7 +52,7 @@ export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[]
     const vertex=(slot:number,t:number,v:number)=>{
       const nx=na[0]+(nb[0]-na[0])*t,nz=na[1]+(nb[1]-na[1])*t;
       const x=a[0]+dx*t+nx*width*(v-.5),z=a[1]+dz*t+nz*width*(v-.5);
-      q[slot]=x;q[slot+1]=surface(x,z)+offset;q[slot+2]=z;q[slot+3]=v*width/5;q[slot+4]=(distance+t*length)/5;
+      q[slot]=x;q[slot+1]=heightAt(x,z)+offset;q[slot+2]=z;q[slot+3]=v*width/5;q[slot+4]=(distance+t*length)/5;
     };
     for(let j=0;j<along;j++)for(let k=0;k<across;k++){
       vertex(0,j/along,k/across);vertex(5,(j+1)/along,k/across);vertex(10,j/along,(k+1)/across);vertex(15,(j+1)/along,(k+1)/across);
@@ -44,6 +60,13 @@ export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[]
       emit(q[10],q[11],q[12],q[13],q[14],q[15],q[16],q[17],q[18],q[19],q[5],q[6],q[7],q[8],q[9],0);
     }
     distance+=length;
+  }
+  let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  if(!surface)for(const [x,z]of points){minX=Math.min(minX,x-width);maxX=Math.max(maxX,x+width);minZ=Math.min(minZ,z-width);maxZ=Math.max(maxZ,z+width);}
+  if(!surface&&tunnelPortalBoundsIntersect(city,minX,maxX,minZ,maxZ)){
+    const vertices=new Float32Array(v.length/5*3);for(let i=0;i<v.length/5;i++)vertices.set(v.slice(i*5,i*5+3),i*3);
+    const clipped=clipTunnelPortals(city,vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
+    if(clipped.vertices!==vertices){v.length=0;for(const i of clipped.indices){const x=clipped.vertices[i*3],y=clipped.vertices[i*3+1],z=clipped.vertices[i*3+2];v.push(x,y,z,x/5,z/5);}}
   }
   const n=v.length/5,sums=new Map<string,number[]>(),keys=new Array<string>(n);
   for(let i=0;i<n;i+=3){
@@ -69,7 +92,7 @@ export function terrainGeometry(city:CityData){
 
 /** Tile only the render buffers; retain every original collision vertex/diagonal. */
 export function terrainTiles(city:CityData,cellCount=64){
-  const full=terrainGeometry(city),grid=terrainGrid(city);if(!grid)return[full];
+  const full=terrainGeometry(city),grid=terrainGrid(city);if(!grid)return[clipPortalSurface(city,full)];
   const result:THREE.BufferGeometry[]=[];
   for(let z=0;z<grid.height-1;z+=cellCount)for(let x=0;x<grid.width-1;x+=cellCount){
     const width=Math.min(cellCount,grid.width-1-x)+1,height=Math.min(cellCount,grid.height-1-z)+1;
@@ -86,7 +109,7 @@ export function terrainTiles(city:CityData,cellCount=64){
     for(let j=0;j<height-1;j++)for(let i=0;i<width-1;i++){
       const a=j*width+i,b=a+1,c=a+width,d=c+1;indices.set([a,c,b,b,c,d],offset);offset+=6;
     }
-    tile.setIndex(new THREE.BufferAttribute(indices,1));tile.computeBoundingSphere();result.push(tile);
+    tile.setIndex(new THREE.BufferAttribute(indices,1));tile.computeBoundingSphere();result.push(clipPortalSurface(city,tile));
   }
   full.dispose();return result;
 }

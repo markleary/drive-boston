@@ -4,6 +4,7 @@ import type { MetroCity } from '../simulation/city-tiles.ts';
 import type { FarBuilding, FarTile } from '../simulation/far-format.ts';
 import { terrainGrid } from '../simulation/terrain.ts';
 import { FACADE_STYLES } from './materials.ts';
+import { clipPortalSurface } from './terrain-ground.ts';
 
 /** Distant representation of the whole metro: one flat-shaded box per hull
  * (its minimum-area oriented rectangle) and a coarse terrain sheet, both per
@@ -88,6 +89,7 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     for (let j = 0; j < cellsZ; j++) for (let i = 0; i < cellsX; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; indices.set([a, c, b, b, c, d], o); o += 6; }
     const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geometry.setIndex(new THREE.BufferAttribute(indices, 1)); geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+    clipPortalSurface(city,geometry);
     const mesh = new THREE.Mesh(geometry, groundMaterial); mesh.name = `Distant ground ${key}`; mesh.renderOrder = -4; mesh.userData.noAO = true; group.add(mesh);
     chunks.get(key)!.ground = mesh;
   }
