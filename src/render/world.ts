@@ -22,6 +22,7 @@ import { usesExactBuildingCollision } from '../simulation/building-collisions';
 import { inTransitCorridor } from '../simulation/transit-corridors';
 import { addSourceFooting } from './source-footings';
 import {isStateHouse,createStateHouseShellMaterials,splitStateHouseShell} from './state-house';
+import {isSymphonyHall,createSymphonyHallMaterials,splitSymphonyHallShell} from './symphony-hall';
 import {createPrudentialPenthouseMaterial,isPrudential,prudentialCrownCollider,splitPrudentialShell} from './prudential';
 import { isMetroCity, type Reader } from '../simulation/city-tiles.ts';
 import type { PlacedSignal } from '../simulation/signal-placement.ts';
@@ -148,6 +149,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const fenwayMaterials=createFenwayShellMaterials();
   const stateHouseMaterials=createStateHouseShellMaterials();
   const missionChurchMaterials=createMissionChurchMaterials();
+  const symphonyHallMaterials=createSymphonyHallMaterials();
   const prudentialPenthouse=createPrudentialPenthouseMaterial();
   // Source tiles include park monuments, shelters and utility structures among
   // the building meshes. Keep their measured forms without residential windows.
@@ -184,6 +186,13 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
       for(const part of splitMissionChurchShell(normalized,b,isRoof)){
         const material=missionChurchMaterials[part.kind],key=`${material.uuid}:mission-church`;
         const bucket=buckets.get(key)??{material,geometries:[]};bucket.geometries.push(part.geometry);buckets.set(key,bucket);
+      }
+      normalized.dispose();if(normalized!==geometry)geometry.dispose();return;
+    }
+    if(b&&isSymphonyHall(b)){
+      for(const part of splitSymphonyHallShell(normalized,b,isRoof)){
+        const hallMaterial=symphonyHallMaterials[part.kind],key=`${hallMaterial.uuid}:symphony-hall`;
+        const bucket=buckets.get(key)??{material:hallMaterial,geometries:[]};bucket.geometries.push(part.geometry);buckets.set(key,bucket);
       }
       normalized.dispose();if(normalized!==geometry)geometry.dispose();return;
     }
