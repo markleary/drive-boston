@@ -1,13 +1,15 @@
 import { test, expect, type Page } from '@playwright/test';
 
 type Snapshot = { paused: boolean; camera: string; travelMode: string; state: { x: number; z: number; yaw: number; speed: number; steering: number }; flight: { y: number } };
-type FakePad = { connected: boolean; pad: { axes: number[]; buttons: { pressed: boolean; value: number }[] } };
+type FakePad = { connected: boolean; idle: boolean; pad: { axes: number[]; buttons: { pressed: boolean; value: number }[] } };
 const BUTTON = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, View: 8, Menu: 9, LS: 10, RS: 11, Up: 12, Down: 13, Left: 14, Right: 15 } as const;
 type Button = keyof typeof BUTTON;
 const snapshot = (page: Page) => page.evaluate(() => (window as unknown as { __backbay: { snapshot(): Snapshot } }).__backbay.snapshot());
 const setButton = (page: Page, name: Button, value: number) => page.evaluate(([index, v]) => { const button = (window as unknown as { __pad: FakePad }).__pad.pad.buttons[index]; button.pressed = v > .1; button.value = v; }, [BUTTON[name], value] as const);
 const setAxes = (page: Page, axes: number[]) => page.evaluate(a => { (window as unknown as { __pad: FakePad }).__pad.pad.axes = a; }, axes);
 const plug = (page: Page, connected: boolean) => page.evaluate(c => { (window as unknown as { __pad: FakePad }).__pad.connected = c; }, connected);
+/** A second, untouched device in slot 1, like a virtual HID gamepad. */
+const plugIdle = (page: Page, connected: boolean) => page.evaluate(c => { (window as unknown as { __pad: FakePad }).__pad.idle = c; }, connected);
 /** Hold long enough for several render-loop polls, then release. */
 async function press(page: Page, name: Button) { await setButton(page, name, 1); await page.waitForTimeout(120); await setButton(page, name, 0); await page.waitForTimeout(120); }
 
@@ -16,8 +18,9 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
     const pad = { index: 0, id: 'Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)', connected: true, mapping: 'standard', timestamp: 0, axes: [0, 0, 0, 0], buttons };
-    const state = { connected: false, pad };
-    Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: () => [state.connected ? pad : null, null, null, null] });
+    const idle = { ...pad, index: 1, id: 'Virtual gamepad', mapping: '', buttons: Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 })) };
+    const state = { connected: false, idle: false, pad };
+    Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: () => [state.connected ? pad : null, state.idle ? idle : null, null, null] });
     Object.assign(window, { __pad: state });
   });
 });
@@ -129,7 +132,9 @@ test('gamepad: start, drive, menus, vehicles and controller tips', async ({ page
   await expect(ui).toHaveClass(/\bgamepad\b/);
   await expect(hint).not.toContainText('Forward / back');
 
-  // Unplugging mid-flight pauses and restores the keyboard tips.
+  // Unplugging mid-flight pauses and restores the keyboard tips, even with another device still connected.
+  await plugIdle(page, true);
+  await page.waitForTimeout(120);
   await plug(page, false);
   await expect(ui).not.toHaveClass(/\bgamepad\b/);
   await expect(page.getByRole('dialog', { name: 'Your afternoon.' })).toBeVisible();

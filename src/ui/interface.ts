@@ -314,11 +314,12 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   }
   /** One controller frame from the render loop. Driving and flight read the same frame in main.ts. */
   function handleGamepad(frame:PadFrame){
+    // Losing the controller in use pauses, even when an idle or virtual device stays connected.
+    if(frame.lost){setInputMode('keyboard');if(started){toast('Controller disconnected');if(!isPaused())setSettings(true);}}
     if(frame.connected!==padConnected){
       padConnected=frame.connected;
       el('welcome-foot').textContent=frame.connected?'Single player / Controller connected':'Single player / Keyboard, touch or gamepad';
       if(frame.connected){setInputMode('gamepad');if(started)toast('Controller connected');}
-      else{setInputMode('keyboard');if(started){toast('Controller disconnected');if(!isPaused())setSettings(true);}}
     }
     if(!frame.connected)return;
     if(frame.active)setInputMode('gamepad');

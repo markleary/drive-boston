@@ -12,6 +12,8 @@ export interface GamepadLike{readonly index:number;readonly id:string;readonly c
 export interface PadFrame{
   /** A controller is connected and selected for this frame. */
   connected:boolean;id:string;
+  /** The controller selected last frame was unplugged, even if another device remains. */
+  lost:boolean;
   /** Seconds since the previous poll, capped at 0.1. */
   dt:number;
   /** Sticks after a radial dead zone (x right, y down) and triggers 0..1. */
@@ -51,7 +53,7 @@ function heldButtons(pad:GamepadLike){
   }
   return held;
 }
-const idleFrame=(dt:number):PadFrame=>({connected:false,id:'',dt,lx:0,ly:0,rx:0,ry:0,lt:0,rt:0,held:EMPTY,pressed:EMPTY,nav:null,active:false});
+const idleFrame=(dt:number,lost=false):PadFrame=>({connected:false,id:'',lost,dt,lx:0,ly:0,rx:0,ry:0,lt:0,rt:0,held:EMPTY,pressed:EMPTY,nav:null,active:false});
 
 /** Polls navigator.getGamepads() once per frame. The controller in use is the one
  * most recently touched, so an idle virtual or second device in slot 0 cannot shadow it. */
@@ -61,6 +63,7 @@ export function createGamepadReader(){
   function poll(now:number,pads:ArrayLike<GamepadLike|null|undefined>|null|undefined):PadFrame{
     const dt=Number.isFinite(lastPoll)?Math.min(.1,Math.max(0,(now-lastPoll)/1000)):0;lastPoll=now;
     const connected=Array.from(pads??[]).filter((pad):pad is GamepadLike=>!!pad&&pad.connected);
+    const lost=selected>=0&&!connected.some(pad=>pad.index===selected);
     for(const index of [...previous.keys()])if(!connected.some(pad=>pad.index===index)){previous.delete(index);lastActive.delete(index);}
     const edges=new Map<number,{held:Set<PadButton>;pressed:Set<PadButton>}>();
     for(const pad of connected){
@@ -74,7 +77,7 @@ export function createGamepadReader(){
       const t=lastActive.get(candidate.index)??-Infinity,best=pad?lastActive.get(pad.index)??-Infinity:-Infinity;
       if(!pad||t>best||(t===best&&(candidate.index===selected||(pad.index!==selected&&candidate.mapping==='standard'&&pad.mapping!=='standard'))))pad=candidate;
     }
-    if(!pad){selected=-1;navDirection=null;return idleFrame(dt);}
+    if(!pad){selected=-1;navDirection=null;return idleFrame(dt,lost);}
     selected=pad.index;
     const {held,pressed}=edges.get(pad.index)!;
     const [lx,ly]=padStick(pad.axes[0],pad.axes[1]),[rx,ry]=padStick(pad.axes[2],pad.axes[3]);
@@ -85,7 +88,7 @@ export function createGamepadReader(){
     if(direction!==navDirection){navDirection=direction;navAt=now+NAV_DELAY;nav=direction;}
     else if(direction&&now>=navAt){nav=direction;navAt=now+NAV_REPEAT;}
     const active=pressed.size>0||Math.hypot(lx,ly)>ACTIVE_STICK||Math.hypot(rx,ry)>ACTIVE_STICK||lt>.3||rt>.3;
-    return{connected:true,id:pad.id,dt,lx,ly,rx,ry,lt,rt,held,pressed,nav,active};
+    return{connected:true,id:pad.id,lost,dt,lx,ly,rx,ry,lt,rt,held,pressed,nav,active};
   }
   return{poll,idle:()=>idleFrame(0)};
 }

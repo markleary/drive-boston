@@ -33,6 +33,17 @@ test('the controller in use is the one last touched, not slot 0',()=>{
   assert.equal(reader.poll(48,null).connected,false);
 });
 
+test('unplugging the controller in use is reported even when another device remains',()=>{
+  const reader=createGamepadReader();
+  assert.equal(reader.poll(0,[pad({index:0,held:['A']}),pad({index:1,mapping:''})]).id,'pad 0');
+  const after=reader.poll(16,[null,pad({index:1,mapping:''})]);
+  assert.equal(after.lost,true);assert.equal(after.connected,true);assert.equal(after.id,'pad 1');
+  assert.equal(reader.poll(32,[null,pad({index:1,mapping:''})]).lost,false);
+  // Unplugging the last one is reported the same way.
+  const empty=reader.poll(48,[]);assert.equal(empty.lost,true);assert.equal(empty.connected,false);
+  assert.equal(reader.poll(64,[]).lost,false);
+});
+
 test('a standard mapping wins when no pad has been touched yet',()=>{
   const result=createGamepadReader().poll(0,[pad({index:0,mapping:''}),pad({index:1})]);
   assert.equal(result.id,'pad 1');assert.equal(result.active,false);
