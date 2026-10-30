@@ -168,6 +168,7 @@ class InstallTest(unittest.TestCase):
    self.assertEqual([s['name'] for s in installed['sources']],['Boston Sidewalk Inventory','OpenStreetMap service roads and parking areas (driveway fills)'])
    town=ss.unpack(data/'tiles/t_1_0.bin')[0];self.assertFalse({json.dumps(c) for c in town['curbs']}&{json.dumps(c) for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))},'legacy mitred curbs are replaced')
    self.assertEqual(len(town['curbs']),first['townCurbs']);self.assertGreater(len(town['curbs']),0)
+   self.assertEqual(first['surveyCurbs']+first['townCurbs'],len(header['curbs'])+len(town['curbs']),'the two counts partition the curbs in the tiles')
    provenance=json.loads((data/'provenance.json').read_text());self.assertEqual(provenance['streetSurfaces']['measuredRoads'],3,'the Boston street and both town streets')
 
 

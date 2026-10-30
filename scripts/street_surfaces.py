@@ -375,21 +375,20 @@ def explained_region(roads,lines,lots):
  return STRtree([LineString(r['points']).buffer(r.get('width',10)/2+CAP_EXTRA) for r in roads if len(r['points'])>=2]+[l.buffer(8) for l in lines]+[l.buffer(4) for l in lots])
 
 
-def prune_stale_curbs(curbs,explained,park_tree,window,survey=lambda curb:True):
+def prune_stale_curbs(curbs,explained,park_tree,window,keep=lambda piece:True):
  """Curb polylines with their stale stretches cut out, in their original order.
  The Boston curb layer and the 2011 sidewalk inventory still trace roadways that
  have since been removed (the Brookline Avenue island at Park Drive before the
  Muddy River restoration, the Central Artery ramps at North End Park, the Casey
  Overpass approaches): a stretch of STALE_LENGTH or more that no street, service
  road or lot could have produced, lying in parkland (parks grown 3 m), is dropped
- and the rest of the polyline kept. Curbs failing `survey` (town fillets) pass
- through untouched, and a remnant that `survey` rejects (its midpoint now across
- the town line) is dropped, as the next run would. Returns (curbs, stretches
- dropped, metres dropped)."""
+ and the rest of the polyline kept. A remnant must satisfy `keep` (the install
+ passes the Boston-side test the next run applies to survey curbs, so a piece
+ whose midpoint now lies across the town line goes now rather than on the rerun).
+ Returns (curbs, stretches dropped, metres dropped)."""
  if park_tree is None:return curbs,0,0.0
  region=unary_union([explained.geometries[i] for i in explained.query(window,predicate='intersects')]);out=[];count=0;length=0.0
  for c in curbs:
-  if not survey(c):out.append(c);continue
   line=LineString(c);beyond=line.difference(region);stale=[]
   for part in (beyond.geoms if beyond.geom_type=='MultiLineString' else [beyond]):
    if part.is_empty or part.length<STALE_LENGTH:continue
@@ -399,7 +398,7 @@ def prune_stale_curbs(curbs,explained,park_tree,window,survey=lambda curb:True):
   count+=len(stale);length+=sum(p.length for p in stale);kept=line.difference(unary_union([p.buffer(.02) for p in stale]))
   for part in (kept.geoms if kept.geom_type=='MultiLineString' else [kept]):
    piece=[[round(x,3),round(z,3)] for x,z in part.coords]
-   if not part.is_empty and part.length>=1 and survey(piece):out.append(piece)
+   if not part.is_empty and part.length>=1 and keep(piece):out.append(piece)
  return out,count,length
 
 
@@ -483,12 +482,14 @@ def install(data_dir,source_dir,xy,log=print):
   tile['curbs']=kept+fillets.get(key,[])
  lines,widths,lots=driveway_features(json.loads((source_dir/'osm-metro-driveways.json').read_text())['elements'],xy);log('Driveway features: service roads',len(lines),'parking lots',len(lots),flush=True)
  explained=explained_region(city['roads'],lines,lots);park_tree=STRtree(polygon_parts(unary_union([Polygon(p['rings'][0],p['rings'][1:]).buffer(0) for p in city['parks']]).buffer(3))) if city['parks'] else None
- stale=0;stale_length=0.0;is_survey=lambda c:len(c)>=2 and not town_prep.contains(Point(c[len(c)//2]))
+ # Each tile holds its survey curbs first and the regenerated fillets after them; only the survey prefix is pruned, and the counts follow that split rather than a midpoint test (a fillet's midpoint may sit on the town line).
+ stale=0;stale_length=0.0;boston_side=lambda piece:not town_prep.contains(Point(piece[len(piece)//2]))
  for key,tile in headers.items():
-  if not any(is_survey(c) for c in tile['curbs']):continue
-  tx,tz=tile['tx'],tile['tz'];pruned,count,length=prune_stale_curbs(tile['curbs'],explained,park_tree,box(tx*size-30,tz*size-30,(tx+1)*size+30,(tz+1)*size+30),is_survey)
-  if count:tile['curbs']=pruned;stale+=count;stale_length+=length
- survey=sum(1 for tile in headers.values() for c in tile['curbs'] if is_survey(c))
+  n=len(tile['curbs'])-len(fillets.get(key,[]))
+  if n<=0:continue
+  tx,tz=tile['tx'],tile['tz'];pruned,count,length=prune_stale_curbs(tile['curbs'][:n],explained,park_tree,box(tx*size-30,tz*size-30,(tx+1)*size+30,(tz+1)*size+30),boston_side)
+  if count:tile['curbs']=pruned+tile['curbs'][n:];stale+=count;stale_length+=length
+ survey=sum(len(tile['curbs'])-len(fillets.get(key,[])) for key,tile in headers.items())
  log('Curbs: survey',survey,'town fillets',added,'stale stretches dropped',stale,f'({stale_length:.0f} m)',flush=True)
  curb_lines=[LineString(c) for t in headers.values() for c in t['curbs'] if len(c)>=2]
  walk_stats={};walks=sidewalk_polygons(json.loads((source_dir/'layer-0.json').read_text())['features'],xy,coverage,city['parks'],walk_stats);walks_tree=STRtree([w for w,_ in walks])
