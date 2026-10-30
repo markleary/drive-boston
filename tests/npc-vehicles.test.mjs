@@ -104,3 +104,30 @@ test('moving and parked fleets share model buffers without freeing another poolâ
  parked.dispose();assert.equal(disposed,0,'the live moving fleet must retain its GPU geometry');
  moving.draw(0,new THREE.Matrix4(),new THREE.Color('white'),0);moving.flush();moving.dispose();assert.equal(disposed,1,'the last owner releases the shared buffers exactly once');
 });
+
+test('all five models roll around their axle pivots, reverse, stop, and steer only the front wheels in both LODs',async()=>{
+ const bytes=await readFile(new URL('../public/models/traffic-fleet.glb',import.meta.url)),gltf=await new GLTFLoader().parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'');
+ const group=new THREE.Group(),fleet=createNPCVehicleBatches(group,5),body=new THREE.Matrix4(),wheel=new THREE.Matrix4(),expected=new THREE.Matrix4(),q=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),.6),position=new THREE.Vector3(),scale=new THREE.Vector3(1,1,1),steer=.24;
+ try{
+  NPC_VEHICLES.forEach((spec,i)=>fleet.bind(i,spec.type));
+  for(const [i,spec] of NPC_VEHICLES.entries()){
+   const root=gltf.scene.getObjectByName(`${spec.type}-near`),pivots=Array.from({length:4},(_,wheel)=>root.children.find(o=>o.userData.npcWheel===wheel).position);
+   for(const [wheel,pivot] of pivots.entries()){
+    assert.ok(Math.abs(pivot.y-spec.wheelRadius)<1e-6);
+    assert.ok(Math.abs(pivot.z-(wheel<2?spec.frontAxle:spec.rearAxle))<1e-6);
+   }
+   position.set(i*10,0,0);body.compose(position,q,scale);fleet.draw(i,body,new THREE.Color('white'),0);
+   // 0.4m forward travel, independent of elapsed time or frame count.
+   position.add(new THREE.Vector3(0,0,.4).applyQuaternion(q));body.compose(position,q,scale);fleet.draw(i,body,new THREE.Color('white'),150,steer);
+   const near=group.children.find(m=>m.name==='NPC near rubber'),far=group.children.find(m=>m.name==='NPC far rubber');
+   for(let w=0;w<4;w++){
+    expected.copy(body).multiply(new THREE.Matrix4().makeTranslation(pivots[w]));if(w<2)expected.multiply(new THREE.Matrix4().makeRotationY(steer));expected.multiply(new THREE.Matrix4().makeRotationX(.4/spec.wheelRadius));
+    near.getMatrixAt(near.userData.npcInstances[i][w+1],wheel);assert.ok(wheel.elements.every((n,k)=>Math.abs(n-expected.elements[k])<2e-6),`${spec.type} wheel ${w} spins around its own center`);
+    far.getMatrixAt(far.userData.npcInstances[i][w+1],wheel);assert.ok(wheel.elements.every((n,k)=>Math.abs(n-expected.elements[k])<2e-6),'both LODs retain the same wheel phase');
+   }
+   fleet.draw(i,body,new THREE.Color('white'),150,steer);far.getMatrixAt(far.userData.npcInstances[i][1],wheel);const stopped=wheel.clone();fleet.draw(i,body,new THREE.Color('white'),0,steer);near.getMatrixAt(near.userData.npcInstances[i][1],wheel);assert.deepEqual(wheel.elements,stopped.elements,'stationary cars do not spin');
+   position.sub(new THREE.Vector3(0,0,.4).applyQuaternion(q));body.compose(position,q,scale);fleet.draw(i,body,new THREE.Color('white'),0);
+   expected.copy(body).multiply(new THREE.Matrix4().makeTranslation(pivots[0]));near.getMatrixAt(near.userData.npcInstances[i][1],wheel);assert.ok(wheel.elements.every((n,k)=>Math.abs(n-expected.elements[k])<2e-6),'reverse motion unwinds the rotation');
+  }
+ }finally{fleet.dispose();gltf.scene.traverse(o=>{o.geometry?.dispose();o.material?.dispose();});}
+});

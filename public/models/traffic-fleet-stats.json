@@ -1,22 +1,22 @@
 {
   "compact": {
-    "near": 23662,
-    "far": 6586
+    "near": 23735,
+    "far": 6519
   },
   "sedan": {
-    "near": 25601,
-    "far": 8536
+    "near": 25540,
+    "far": 8570
   },
   "minivan": {
-    "near": 26131,
-    "far": 8316
+    "near": 26188,
+    "far": 8333
   },
   "pickup": {
-    "near": 30047,
-    "far": 6698
+    "near": 30089,
+    "far": 6520
   },
   "box": {
-    "near": 50298,
-    "far": 9774
+    "near": 50346,
+    "far": 9773
   }
 }

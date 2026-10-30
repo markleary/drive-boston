@@ -82,7 +82,7 @@ function geometryParts() {
   return { add, box, beam, path, quad, finish };
 }
 
-function wheelGeometry(side: number) {
+export function createVehicleWheelGeometry(side: number) {
   const parts = geometryParts();
   const tire = new THREE.LatheGeometry([
     new THREE.Vector2(.232, -.12), new THREE.Vector2(.285, -.14), new THREE.Vector2(.325, -.115),
@@ -269,7 +269,7 @@ export function createVehicleGeometry(style: VehicleStyle, includeWheels = true)
 export function createVehicleWheelsGeometry() {
   const parts = geometryParts();
   for (const z of [1.33, -1.33]) for (const side of [-1, 1]) {
-    for (const [surface, geometry] of wheelGeometry(side)) {
+    for (const [surface, geometry] of createVehicleWheelGeometry(side)) {
       geometry.translate(side * .86, -.34, z); parts.add(surface, geometry);
     }
   }
@@ -340,7 +340,7 @@ export function createCar() {
   for (const z of [1.33, -1.33]) for (const side of [-1, 1]) {
     const pivot = new THREE.Group(); pivot.position.set(side * .86, -.34, z); group.add(pivot);
     const spin = new THREE.Group(); pivot.add(spin);
-    for (const [surface, geometry] of wheelGeometry(side)) {
+    for (const [surface, geometry] of createVehicleWheelGeometry(side)) {
       const mesh = new THREE.Mesh(geometry, materials[surface]); mesh.castShadow = true; spin.add(mesh);
     }
     wheels.push({ pivot, spin });
