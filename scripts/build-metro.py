@@ -197,7 +197,7 @@ def main():
  data={'origin':{'xFeet':40000,'yFeet':50000,'longitude':lon,'latitude':lat},'bounds':world_bounds,'coverage':outlines,'spawn':spawn,'sources':SOURCES,
   'elevation':{**grid.header(),'file':'elevation.bin','scale':.01,'encoding':'int16-gzip'},
   'tiles':{'size':TILE,'directory':'tiles','keys':tile_keys,'far':'far.bin','buildingCount':len(buildings)},
-  'landmarkBuildings':[{k:v for k,v in b.items() if k in LANDMARK_FIELDS} for b in buildings if b.get('landmark') or b['id'] in KEY_BUILDING_IDS],
+  'landmarkBuildings':[{k:v for k,v in b.items() if k in LANDMARK_FIELDS} for b in buildings if b.get('landmark') or b['id'] in KEY_BUILDING_IDS or b['id'] in FACADE_BUILDING_IDS],
   'roads':roads,'signals':signals,'landmarks':landmarks,'neighborhoods':neighborhoods,'parks':[{**p,'rings':[[rounded(v) for v in ring] for ring in p['rings']]} for p in parks],'water':water}
  (out/'city.json').write_text(json.dumps(data,separators=(',',':'))+'\n')
  for stale in ['city.glb']:
@@ -689,6 +689,7 @@ PLACES=[
  ('huntington-mfa','Huntington · Museum of Fine Arts',-71.09550693,42.33770361,'Green Line E and Route 39 · surface transit beside the Museum of Fine Arts'),
  ('fenway-park','Fenway Park',-71.0972,42.3467,'Fenway · historic ballpark at Lansdowne Street'),
  ('kenmore-square','Kenmore Square',-71.0953,42.3489,'Fenway · Beacon Street meets Commonwealth Avenue'),
+ ('symphony-hall','Symphony Hall',-71.08573,42.34290,'Fenway · McKim, Mead & White concert hall at Massachusetts and Huntington avenues'),
  ('state-house','Massachusetts State House',-71.0638351,42.358597,'Beacon Hill · gold dome above Boston Common'),
  ('downtown-crossing','Downtown Crossing',-71.0604,42.3555,'Downtown · Washington and Summer streets'),
  ('chinatown-gate','Chinatown Gate',-71.0597,42.3512,'Chinatown · Beach Street and Hudson Street'),
@@ -733,6 +734,14 @@ PLACES=[
  ('bellingham-square','Bellingham Square',-71.03414,42.39275,'Chelsea · Broadway, Washington Avenue and Hawthorn Street near City Hall'),
  ('mary-omalley-park','Mary O’Malley Waterfront Park',-71.051014255,42.388567290,'Chelsea · Commandants Way and the Mystic River waterfront west of the Tobin Bridge'),
 ]
+# Places whose surveyed building the renderer dresses by id (src/render/symphony-hall.ts)
+# without a landmark tag, so tiles and far hulls stay byte-identical; the building is
+# listed in city.landmarkBuildings for the facade module before its tile streams in.
+PLACE_BUILDINGS={'symphony-hall':'BOS-383I7-LINV0-9U4AI'}
+FACADE_BUILDING_IDS=set(PLACE_BUILDINGS.values())
+# Arrivals that should frame a facade instead of stopping at the nearest kerb:
+# the carriageway to arrive on and the point (metres) to approach.
+ARRIVALS={'symphony-hall':('9276-0-0',[-893.5,909.3])}
 DETACHED={'maverick-square':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport','logan-airport':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport'}
 
 def build_landmarks(roads,buildings,grid,landmark_hits):
@@ -750,25 +759,32 @@ def build_landmarks(roads,buildings,grid,landmark_hits):
  if not parker:raise RuntimeError('Coverage lacks Parker Hill Avenue')
  peak=max(parker,key=lambda p:p[0])
  landmarks.extend([{'id':'brigham-circle','name':'Brigham Circle','position':rounded(xy(-71.10475,42.3342)),'description':'Huntington Avenue at the heart of Mission Hill'},{'id':'mission-hill','name':'Mission Hill · Parker Hill','position':rounded(peak[1]),'driveStart':{'x':-2856.597333,'z':2034.765611,'yaw':-.006376513},'description':f'Parker Hill Avenue · {peak[0]:.0f}m above the Back Bay starting datum'}])
- centers=np.asarray([b['center'] for b in buildings]);ids=[b['id'] for b in buildings]
- for identifier,name,longitude,latitude,description in PLACES:
-  position=rounded(xy(longitude,latitude))
-  near=np.flatnonzero(np.hypot(centers[:,0]-position[0],centers[:,1]-position[1])<600)
-  local_buildings=[buildings[i] for i in near]
-  arrival_roads=[r for r in roads if r['name']=='Huntington Avenue'] if identifier=='huntington-mfa' else [r for r in roads if any(abs(p[0]-position[0])<700 and abs(p[1]-position[1])<700 for p in r['points'][::max(1,len(r['points'])//4)])]
-  if identifier=='longfellow-bridge':arrival_roads=[r for r in arrival_roads if r['name'].startswith('Longfellow') and r.get('elevations')] or arrival_roads
-  try:arrival=central.safe_arrival(position,arrival_roads,local_buildings)
-  except RuntimeError:log('No arrival for',identifier);arrival=None
-  entry={'id':identifier,'name':name,'position':position,'description':description}
-  if arrival:
-   entry['driveStart']=arrival
-   road=nearest_road(arrival_roads,[arrival['x'],arrival['z']])
-   if road and road.get('elevations'):entry['driveStart']['roadId']=road['id']
-  if identifier in DETACHED:entry['detached']=DETACHED[identifier]
-  for key,building_id in landmark_hits.items():
-   if key==identifier or key.replace('-monument','')==identifier.replace('-monument',''):entry['buildingId']=building_id
-  landmarks.append(entry)
+ centers=np.asarray([b['center'] for b in buildings])
+ for place in PLACES:landmarks.append(place_landmark(place,roads,buildings,landmark_hits,centers))
  return landmarks
+
+def place_landmark(place,roads,buildings,landmark_hits,centers=None):
+ """One PLACES destination with its safe arrival; shared with install-places.py."""
+ identifier,name,longitude,latitude,description=place
+ position=rounded(xy(longitude,latitude))
+ if centers is None:centers=np.asarray([b['center'] for b in buildings])
+ near=np.flatnonzero(np.hypot(centers[:,0]-position[0],centers[:,1]-position[1])<600)
+ local_buildings=[buildings[i] for i in near];target=position
+ arrival_roads=[r for r in roads if r['name']=='Huntington Avenue'] if identifier=='huntington-mfa' else [r for r in roads if any(abs(p[0]-position[0])<700 and abs(p[1]-position[1])<700 for p in r['points'][::max(1,len(r['points'])//4)])]
+ if identifier=='longfellow-bridge':arrival_roads=[r for r in arrival_roads if r['name'].startswith('Longfellow') and r.get('elevations')] or arrival_roads
+ if identifier in ARRIVALS:road_id,target=ARRIVALS[identifier];arrival_roads=[r for r in roads if r['id']==road_id]
+ try:arrival=central.safe_arrival(target,arrival_roads,local_buildings)
+ except RuntimeError:log('No arrival for',identifier);arrival=None
+ entry={'id':identifier,'name':name,'position':position,'description':description}
+ if arrival:
+  entry['driveStart']=arrival
+  road=nearest_road(arrival_roads,[arrival['x'],arrival['z']])
+  if road and road.get('elevations'):entry['driveStart']['roadId']=road['id']
+ if identifier in DETACHED:entry['detached']=DETACHED[identifier]
+ if identifier in PLACE_BUILDINGS:entry['buildingId']=PLACE_BUILDINGS[identifier]
+ for key,building_id in landmark_hits.items():
+  if key==identifier or key.replace('-monument','')==identifier.replace('-monument',''):entry['buildingId']=building_id
+ return entry
 
 def nearest_road(roads,point):
  best=None
