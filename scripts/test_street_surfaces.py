@@ -136,6 +136,27 @@ class SidewalkTest(unittest.TestCase):
   self.assertEqual(ss.sidewalk_polygons(features[:1],lambda x,y:(x,y),Polygon([[-10,-10],[400,-10],[400,100],[-10,100]]))[0][0].area,1600,'without parks nothing is reduced')
 
 
+class StaleTest(unittest.TestCase):
+ def test_sidewalks_of_removed_roadways_go_with_their_curbs(self):
+  explained=ss.STRtree([LineString([(0,0),(100,0)]).buffer(17)]);parks=ss.STRtree([ss.box(0,40,100,80).buffer(3)]);stale=ss.STRtree([LineString([(10,60),(90,60)])])
+  strip=ss.box(10,60,90,63);cut,parts=ss.cut_stale_sidewalk(strip,explained,parks,stale);self.assertTrue(cut.is_empty);self.assertEqual(parts,1)
+  far=ss.STRtree([LineString([(10,75),(90,75)])]);self.assertEqual(ss.cut_stale_sidewalk(strip,explained,parks,far)[1],0,'a park path 12 m from the stale curb stays')
+  self.assertEqual(ss.cut_stale_sidewalk(ss.box(10,5,90,8),explained,parks,ss.STRtree([LineString([(10,9),(90,9)])]))[1],0,'within a street\'s reach nothing is cut')
+  self.assertEqual(ss.cut_stale_sidewalk(ss.box(10,90,90,93),explained,parks,ss.STRtree([LineString([(10,90),(90,90)])]))[1],0,'outside parkland nothing is cut')
+  mixed=ss.box(10,14,90,63);kept,parts=ss.cut_stale_sidewalk(mixed,explained,parks,stale);self.assertEqual(parts,0,'a part only half in parkland is not the removed roadway\'s sidewalk')
+
+ def test_centerlines_inside_a_curbed_park_edge_keep_the_nominal_width(self):
+  r=road('p',[[0,0],[100,0]],10);park=lambda z0,z1:[{'name':'Edge','rings':[[[-10,z0],[110,z0],[110,z1],[-10,z1]]]}]
+  # The park's curbed edge 1.5 m from the centerline, the far curb 12 m away across the lawn: the station is inside the park with that near curb on its boundary.
+  edges=ss.cast_edges([r],[LineString([(0,-1.5),(100,-1.5)]),LineString([(0,12),(100,12)])]);masked=ss.mask_park_edges(edges,[r],park(-1.5,20))
+  self.assertEqual(masked,len(edges[ss.road_key(r)][0]));rec=ss.pavement_records([r],edges)[ss.road_key(r)];self.assertNotIn('pavedWidth',rec)
+  np.testing.assert_allclose(np.abs(rec['left'][:,1]),5,atol=.01);np.testing.assert_allclose(np.abs(rec['right'][:,1]),5,atol=.01)
+  # A narrow one-way street a park polygon merely covers keeps its 4.4 m roadway: its curbs lie well inside the park.
+  edges=ss.cast_edges([r],[LineString([(0,-2.2),(100,-2.2)]),LineString([(0,2.2),(100,2.2)])]);self.assertEqual(ss.mask_park_edges(edges,[r],park(-10,20)),0)
+  self.assertEqual(ss.pavement_records([r],edges)[ss.road_key(r)]['pavedWidth'],4.4)
+  edges=ss.cast_edges([r],[LineString([(0,-1.5),(100,-1.5)]),LineString([(0,12),(100,12)])]);self.assertEqual(ss.mask_park_edges(edges,[r],park(5,20)),0,'outside the park nothing changes')
+
+
 class InstallTest(unittest.TestCase):
  def test_install_is_idempotent_and_measures_the_roadway(self):
   with tempfile.TemporaryDirectory() as temporary:
@@ -150,16 +171,19 @@ class InstallTest(unittest.TestCase):
    curbs0=[[[0,493],[1000,493]],[[0,507],[400,507],[400,512],[403,512],[403,507],[1000,507]],rect_curb(500,520,520,530),rect_curb(600,520,640,530),[[150,700],[350,700]],[[600,700],[800,700]]]
    write_tile(data/'tiles/t_0_0.bin',{'tx':0,'tz':0,'size':1000,'buildings':[],'curbs':curbs0,'parkPaths':[],'roads':['b-1','deck']},[])
    write_tile(data/'tiles/t_1_0.bin',{'tx':1,'tz':0,'size':1000,'buildings':[],'curbs':[c for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))],'parkPaths':[],'roads':['osm-1-0','osm-2-0']},[])
-   (source/'layer-0.json').write_text(json.dumps({'features':[{'attributes':{'MATERIAL':'CC'},'geometry':{'rings':[[[0,493],[0,490],[1000,490],[1000,493],[0,493]]]}}]}))
+   # The inventory: a concrete sidewalk along the street, and the 3 m strip that followed the removed roadway's curb through the park.
+   (source/'layer-0.json').write_text(json.dumps({'features':[{'attributes':{'MATERIAL':'CC'},'geometry':{'rings':[[[0,493],[0,490],[1000,490],[1000,493],[0,493]]]}},{'attributes':{'MATERIAL':'CC','SWK_WIDTH':'9.8'},'geometry':{'rings':[[[150,703],[150,700],[350,700],[350,703],[150,703]]]}}]}))
+   (source/'layer-6.json').write_text(json.dumps({'features':[{'attributes':{'TYPE':'CURB'},'geometry':{'paths':curbs0}}]}))
    # A service road enters the curbed pull-off at (600..640, 520..530); the island at 500 stays bare.
    (source/'osm-metro-driveways.json').write_text(json.dumps({'elements':[{'type':'way','id':1,'tags':{'highway':'service'},'geometry':[{'lon':620,'lat':506.5},{'lon':620,'lat':525}]}]}))
    first=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None);snapshot={p.name:p.read_bytes() for p in data.rglob('*') if p.is_file()}
    second=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None)
    self.assertEqual({p.name:p.read_bytes() for p in data.rglob('*') if p.is_file()},snapshot,'a rerun rewrites identical bytes')
-   self.assertEqual({**first,'changedTiles':0,'staleCurbs':0,'staleCurbMetres':0},second);self.assertEqual(first['changedTiles'],2)
+   self.assertEqual({**first,'changedTiles':0},second,'the rerun finds the same stale stretches on the raw survey');self.assertEqual(first['changedTiles'],2)
    header=ss.unpack(data/'tiles/t_0_0.bin')[0];record=next(p for p in header['pavements'] if p['road']=='b-1')
    self.assertEqual([p['road'] for p in header['pavements']],['b-1'],'decks keep their ribbons');self.assertEqual(record['walk'],[0,1])
    self.assertEqual(first['staleCurbs'],1);self.assertEqual(first['staleCurbMetres'],200);self.assertNotIn([[150,700],[350,700]],header['curbs']);self.assertIn([[600,700],[800,700]],header['curbs'],'beyond reach but outside parkland')
+   self.assertEqual(first['staleSidewalks'],1);self.assertTrue(all(max(z for x,z in w['rings'][0])<600 for w in header['sidewalks']),'the removed roadway\'s sidewalk strip goes with its curb');self.assertEqual(first['parkEdgeStations'],0)
    edges=np.array(record['edges']).reshape(-1,4)/100;np.testing.assert_allclose(edges[:,1],507,atol=.011);np.testing.assert_allclose(edges[:,3],493,atol=.011)
    self.assertLess(len(edges),6,'straight edges compress; the driveway tongue is suppressed');self.assertEqual(len(header['islands']),1);self.assertEqual(len(header['sidewalks']),1)
    # The paved face (40 m by 10 m) plus the untagged 4.5 m service ribbon approaching it from the curb (no curb within reach of its stations), dissolved into one surface.

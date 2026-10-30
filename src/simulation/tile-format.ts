@@ -57,20 +57,47 @@ export function pavementEdges(tile: Pick<CityTile, 'tx' | 'tz' | 'size'>, paveme
   return { left, right };
 }
 
+/** The crossing of an edge polyline with the perpendicular through `at`, a station along the unit direction (tx, tz),
+ * nearest to `at`: its signed offset across that direction and how closely the edge runs with the road there (|cos|). */
+function edgeCrossing(edge: Point2[], at: Point2, tx: number, tz: number): [number, number] | undefined {
+  let best: [number, number] | undefined;
+  for (let i = 1; i < edge.length; i++) {
+    const s0 = (edge[i - 1][0] - at[0]) * tx + (edge[i - 1][1] - at[1]) * tz, s1 = (edge[i][0] - at[0]) * tx + (edge[i][1] - at[1]) * tz;
+    if ((s0 <= 0) === (s1 <= 0)) continue;
+    const t = s0 / (s0 - s1), x = edge[i - 1][0] + (edge[i][0] - edge[i - 1][0]) * t, z = edge[i - 1][1] + (edge[i][1] - edge[i - 1][1]) * t, offset = (z - at[1]) * tx - (x - at[0]) * tz;
+    if (best && Math.abs(best[0]) <= Math.abs(offset)) continue;
+    const dx = edge[i][0] - edge[i - 1][0], dz = edge[i][1] - edge[i - 1][1], len = Math.hypot(dx, dz) || 1;
+    best = [offset, Math.abs(dx * tx + dz * tz) / len];
+  }
+  return best;
+}
+
 /** Where a pavement's edges cross the perpendicular through `at`, a station along the unit direction (tx, tz):
  * the signed offsets across that direction, lower first, or undefined where an edge does not reach the station. */
 export function pavementSpan(edges: { left: Point2[]; right: Point2[] }, at: Point2, tx: number, tz: number): [number, number] | undefined {
-  const across = (edge: Point2[]) => {
-    for (let i = 1; i < edge.length; i++) {
-      const s0 = (edge[i - 1][0] - at[0]) * tx + (edge[i - 1][1] - at[1]) * tz, s1 = (edge[i][0] - at[0]) * tx + (edge[i][1] - at[1]) * tz;
-      if ((s0 <= 0) === (s1 <= 0)) continue;
-      const t = s0 / (s0 - s1), x = edge[i - 1][0] + (edge[i][0] - edge[i - 1][0]) * t, z = edge[i - 1][1] + (edge[i][1] - edge[i - 1][1]) * t;
-      return (z - at[1]) * tx - (x - at[0]) * tz;
+  const l = edgeCrossing(edges.left, at, tx, tz), r = edgeCrossing(edges.right, at, tx, tz);
+  return l === undefined || r === undefined ? undefined : [Math.min(l[0], r[0]), Math.max(l[0], r[0])];
+}
+
+/** `own` widened across every other record whose edges run with the road at this station (alignment at least .8, a span
+ * under 40 m) and overlap or touch it within .5 m: where two one-way centerlines share one roadway (the Riverway at
+ * Longwood, Huntington Avenue off the reservation) a crosswalk stripes the whole asphalt instead of stopping at the
+ * record of the road that owns it. A reservation or median wider than .5 m keeps the spans apart. */
+export function roadwaySpan(own: [number, number], others: { left: Point2[]; right: Point2[] }[], at: Point2, tx: number, tz: number): [number, number] {
+  let [lo, hi] = own, grew = true;
+  const spans = others.map(e => {
+    const l = edgeCrossing(e.left, at, tx, tz), r = edgeCrossing(e.right, at, tx, tz);
+    return l && r && l[1] >= .8 && r[1] >= .8 && Math.abs(l[0] - r[0]) <= 40 ? [Math.min(l[0], r[0]), Math.max(l[0], r[0])] as [number, number] : undefined;
+  });
+  while (grew) {
+    grew = false;
+    for (const s of spans) {
+      if (!s || s[0] > hi + .5 || s[1] < lo - .5) continue;
+      if (s[0] < lo) { lo = s[0]; grew = true; }
+      if (s[1] > hi) { hi = s[1]; grew = true; }
     }
-    return undefined;
-  };
-  const l = across(edges.left), r = across(edges.right);
-  return l === undefined || r === undefined ? undefined : [Math.min(l, r), Math.max(l, r)];
+  }
+  return [lo, hi];
 }
 
 /** Inflate a gzip-compressed tile or elevation file with the platform stream API. */

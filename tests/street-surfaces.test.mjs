@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {TriangleWriter} from '../src/render/geometry-writer.ts';
 import {drapedStripInto,drapedRibbonInto} from '../src/render/terrain-ground.ts';
-import {pavementEdges,pavementSpan} from '../src/simulation/tile-format.ts';
+import {pavementEdges,pavementSpan,roadwaySpan} from '../src/simulation/tile-format.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
 import {hasMetroData,loadMetroCity} from './helpers/metro-city.mjs';
@@ -21,6 +21,14 @@ test('a crosswalk spans the pavement edges at its own station, wherever the cent
   assert.equal(pavementSpan(edges,[45,0],1,0),undefined,'no span beyond the recorded edges');
   const offset={left:[[0,8],[40,8]],right:[[0,-2],[40,-2]]};
   assert.deepEqual(pavementSpan(offset,[20,0],1,0),[-2,8]);assert.deepEqual(pavementSpan(offset,[20,0],-1,0),[-8,2],'offsets flip with the direction, lower first');
+});
+
+test('a crosswalk completes across a neighbouring record that shares the roadway, not across a gap or a slanting edge',()=>{
+  const own=[-5,5],beside={left:[[0,15],[40,15]],right:[[0,4.8],[40,4.8]]},third={left:[[0,24],[40,24]],right:[[0,15.2],[40,15.2]]};
+  const apart={left:[[0,-8],[40,-8]],right:[[0,-14],[40,-14]]},slant={left:[[0,-20],[40,20]],right:[[6,-20],[46,20]]},short={left:[[0,3],[10,3]],right:[[0,-3],[10,-3]]};
+  assert.deepEqual(roadwaySpan(own,[third,beside,apart,slant,short],[20,0],1,0),[-5,24],'chained across both adjacent records; the 3 m gap, the 45 degree edges and a record ending before the station are ignored');
+  assert.deepEqual(roadwaySpan(own,[],[20,0],1,0),own);
+  assert.deepEqual(roadwaySpan([-5,5],[beside],[20,0],-1,0),[-15,5],'seen from the far end the neighbour lies on the other side');
 });
 
 test('Boylston Street\'s crosswalks follow the curbs where the roadway narrows and shifts off the centerline',{skip:!hasMetroData()},async()=>{
@@ -59,7 +67,18 @@ test('the Brookline Avenue island keeps its lawn and loses the curbs of the road
   // The inventory records a 9.5 ft sidewalk around the whole 2,200 m2 island: only that strip stays concrete.
   const contains=(p,rings)=>pointInside(p,rings[0])&&!rings.slice(1).some(h=>pointInside(p,h)),walks=tile.sidewalks.map(w=>w.rings);
   assert.ok(!walks.some(r=>contains([-2285,815],r)),'the island centre is lawn, not the inventory outline');
+  assert.ok(!walks.some(r=>contains([-2282,838],r))&&!walks.some(r=>contains([-2292,850],r)),'the sidewalk strips of the removed roadway south of the island went with its curbs');
   assert.ok(walks.some(r=>contains([-2317.86,829.61],r)),'a sidewalk strip remains along Brookline Avenue');
+});
+
+test('Riverway northbound keeps its nominal width where its centerline runs inside the splitter island, and its crosswalk spans both carriageways',{skip:!hasMetroData()},async()=>{
+  const city=await loadMetroCity({bounds:{minX:-2600,maxX:-2300,minZ:650,maxZ:850}}),road=city.roads.find(r=>r.id==='28373-0-0');
+  assert.ok(road&&road.pavedWidth===undefined,'no measured width: most of its stations lie inside the park');
+  const tile=city.loadedTiles.get('-3_0'),record=tile.pavements.find(p=>p.road===road.id),edges=pavementEdges(tile,record);
+  const a=road.points[0],b=road.points[1],len=Math.hypot(b[0]-a[0],b[1]-a[1]),tx=(b[0]-a[0])/len,tz=(b[1]-a[1])/len;
+  const inside=pavementSpan(edges,[a[0]+tx*30,a[1]+tz*30],tx,tz);assert.ok(inside&&Math.abs(inside[0]+5)<.3&&Math.abs(inside[1]-5)<.3,`the nominal 10 m inside the island, not 17 m across it (${inside})`);
+  const at=[a[0]+tx*8,a[1]+tz*8],own=pavementSpan(edges,at,tx,tz),whole=roadwaySpan(own,tile.pavements.map(p=>pavementEdges(tile,p)),at,tx,tz);
+  assert.ok(own[1]-own[0]<13&&whole[1]-whole[0]>18,`the crosswalk grows from the record (${own}) across the southbound carriageway (${whole})`);
 });
 
 test('the shipped package carries curb-bounded roadways, inventory sidewalks, islands and driveways',{skip:!hasMetroData()},async()=>{
