@@ -229,3 +229,27 @@ html,body{height:100dvh}
   #interface.touch-enabled .speed-value{font-size:27px}
   #interface.touch-enabled .speed-unit{font-size:9px;margin-left:4px}
 }
+
+/* Controller tips: Xbox-style badges replace key caps while a controller is the active device. */
+.pad-only{display:none}
+#interface.gamepad .pad-only{display:inline-flex;align-items:center}
+#interface.gamepad kbd,#interface.gamepad .key{display:none}
+.pad-glyph{display:inline-flex;align-items:center;justify-content:center;flex:none;height:17px;min-width:17px;padding:0 4px;border:1px solid #fff6;border-radius:9px;font:700 8px/1 'Avenir Next',system-ui,sans-serif;letter-spacing:.03em;color:inherit;vertical-align:middle}
+.pad-glyph+.pad-glyph{margin-left:3px}
+.pad-glyph.face{width:17px;padding:0;border:0;color:#fff;font-size:9.5px;letter-spacing:0}
+.pad-glyph.pad-a{background:#4b9a2b}.pad-glyph.pad-b{background:#d0473a}.pad-glyph.pad-x{background:#2f74c8}.pad-glyph.pad-y{background:#e0aa16;color:#1d2626}
+.pad-glyph.shoulder{min-width:21px;border-radius:4px 4px 8px 8px}
+.pad-glyph.stick{width:17px;padding:0;border-radius:50%;border-width:1.5px;font-size:6.5px}
+.pad-glyph.stick.click{box-shadow:inset 0 -3px 0 -1px currentColor}
+.pad-glyph.icon{width:17px;padding:0;border-radius:50%}
+.pad-glyph.icon svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
+.pad-glyph.dpad{width:17px;padding:0;border:0}
+.pad-glyph.dpad svg{width:17px;height:17px;fill:currentColor}
+.controls-grid .pad-glyph:not(.face),.map-header .pad-glyph:not(.face){border-color:#233b3b40;color:#50655f}
+.pad-keys{display:inline-flex;align-items:center;justify-content:flex-end}
+.tool-btn .pad-glyph{margin-left:5px;opacity:.75}
+.map-caption .pad-glyph{margin-left:6px}
+.travel-switch .pad-switch{padding:0 7px 0 5px;color:#f5f1e4a3}
+.welcome-start .pad-only{margin:0 -12px}.welcome-start .pad-glyph{width:24px;height:24px;font-size:12px}
+#interface.gamepad button:focus,#interface.gamepad a:focus{outline:2px solid var(--orange);outline-offset:5px}
+#interface.gamepad .welcome-start:focus{outline-color:var(--accent)}
