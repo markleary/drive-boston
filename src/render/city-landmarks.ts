@@ -4,6 +4,7 @@ import type { CityData } from '../types';
 import { sampleElevation } from '../simulation/terrain';
 import { addFenwayPark } from './fenway-park';
 import {addStateHouseFacade} from './state-house';
+import {addSymphonyHallFacade} from './symphony-hall';
 import { landmarkBuildings } from '../simulation/city-tiles.ts';
 
 /** Original landmark accents. Dome profile follows the actual Boston source
@@ -12,8 +13,10 @@ import { landmarkBuildings } from '../simulation/city-tiles.ts';
 export function addCityLandmarkDetails(scene:THREE.Scene,city:CityData){
   addFenwayPark(scene,city);
   const stateHouse=addStateHouseFacade(scene,city);
+  const symphonyHall=addSymphonyHallFacade(scene,city);
   const group=new THREE.Group();group.name='Central Boston landmark accents';
   if(stateHouse)group.userData.stateHouse=stateHouse.userData;
+  if(symphonyHall)group.userData.symphonyHall=symphonyHall.userData;
   const gold=new THREE.MeshStandardMaterial({color:'#dcb643',metalness:.76,roughness:.29});
   const limestone=new THREE.MeshStandardMaterial({color:'#d5d0bd',roughness:.78});
   const green=new THREE.MeshStandardMaterial({color:'#2d6d54',metalness:.12,roughness:.52});
