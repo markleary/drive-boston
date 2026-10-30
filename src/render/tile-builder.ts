@@ -32,6 +32,7 @@ import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
 import { isStateHouse, createStateHouseShellMaterials, splitStateHouseShell } from './state-house';
 import { isSymphonyHall, createSymphonyHallMaterials, splitSymphonyHallShell } from './symphony-hall';
+import { isSouthStation, createSouthStationMaterials, splitSouthStationShell } from './south-station';
 import { createPrudentialPenthouseMaterial, isPrudential, splitPrudentialShell } from './prudential';
 import { createMissionChurchMaterials, isMissionChurch, splitMissionChurchShell } from './mission-church';
 import { landmarkShellMaterial } from './metro-landmarks';
@@ -76,7 +77,7 @@ export function createTileBuilder(ctx: TileContext) {
   const { city, physics, materials, scene } = ctx;
   const fenwayMaterials = createFenwayShellMaterials(), stateHouseMaterials = createStateHouseShellMaterials(), prudentialPenthouse = createPrudentialPenthouseMaterial();
   const missionChurchMaterials=createMissionChurchMaterials();
-  const symphonyHallMaterials=createSymphonyHallMaterials();
+  const symphonyHallMaterials=createSymphonyHallMaterials(), southStationMaterials=createSouthStationMaterials();
   const parkStone = new THREE.MeshStandardMaterial({ color: '#a5a397', roughness: .9 });
   const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
   const chelseaLiftSteel = new THREE.MeshStandardMaterial({ color: '#9ea7a3', roughness: .72, metalness: .3 });
@@ -308,6 +309,7 @@ export function createTileBuilder(ctx: TileContext) {
           if (isMissionChurch(b)) { for (const part of splitMissionChurchShell(geometry,b,isRoof)) bucket(missionChurchMaterials[part.kind],part.geometry,b.center[0],b.center[1],'mission-church'); geometry.dispose(); continue; }
           if (isStateHouse(b)) { for (const part of splitStateHouseShell(geometry, isRoof)) bucket(stateHouseMaterials[part.kind], part.geometry, 0, 0, 'state-house'); geometry.dispose(); continue; }
           if (isSymphonyHall(b)) { for (const part of splitSymphonyHallShell(geometry, b, isRoof)) bucket(symphonyHallMaterials[part.kind], part.geometry, b.center[0], b.center[1], 'symphony-hall'); geometry.dispose(); continue; }
+          if (isSouthStation(b)) { for (const part of splitSouthStationShell(geometry, isRoof)) bucket(part.kind === 'other' ? choose(isRoof) : southStationMaterials[part.kind], part.geometry, b.center[0], b.center[1], part.kind === 'other' ? '' : 'south-station'); geometry.dispose(); continue; }
           const material = choose(isRoof), parts = !isRoof && isPrudential(b) ? splitPrudentialShell(geometry, b) : [{ kind: 'facade', geometry }];
           for (const part of parts) bucket(part.kind === 'penthouse' ? prudentialPenthouse : material, part.geometry, b.center[0], b.center[1]);
           if (parts[0].geometry !== geometry) geometry.dispose();

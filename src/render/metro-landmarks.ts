@@ -34,8 +34,9 @@ export function landmarkShellMaterial(building: Building | undefined, isRoof: bo
 
 export interface MetroLandmarkDetails { group: THREE.Group; collisions: { id: string; vertices: Float32Array; indices: Uint32Array }[]; setNight(night: boolean): void; }
 
-const SIGNS: Record<string, string> = { 'south-station': 'SOUTH STATION', 'td-garden': 'TD GARDEN', 'quincy-market': 'QUINCY MARKET', 'museum-of-science': 'MUSEUM OF SCIENCE', 'harvard-stadium': 'HARVARD STADIUM', 'jfk-library': 'JOHN F. KENNEDY LIBRARY', 'convention-center': 'BOSTON CONVENTION & EXHIBITION CENTER', 'logan-terminal': 'LOGAN AIRPORT' };
-const CROWNS = new Set(['custom-house', 'millennium-tower', 'stata-center', 'td-garden', 'convention-center', 'south-station']);
+// South Station's headhouse carries its own lettering and lamps (south-station.ts).
+const SIGNS: Record<string, string> = { 'td-garden': 'TD GARDEN', 'quincy-market': 'QUINCY MARKET', 'museum-of-science': 'MUSEUM OF SCIENCE', 'harvard-stadium': 'HARVARD STADIUM', 'jfk-library': 'JOHN F. KENNEDY LIBRARY', 'convention-center': 'BOSTON CONVENTION & EXHIBITION CENTER', 'logan-terminal': 'LOGAN AIRPORT' };
+const CROWNS = new Set(['custom-house', 'millennium-tower', 'stata-center', 'td-garden', 'convention-center']);
 const MONUMENTS: Record<string, { kind: 'obelisk' | 'tower' | 'round'; height: number; width: number; color: string; minimumSurveyed: number }> = {
   'bunker-hill-monument': { kind: 'obelisk', height: 67, width: 9.1, color: '#a09e96', minimumSurveyed: 40 },
   'dorchester-heights-monument': { kind: 'tower', height: 35, width: 7.5, color: '#e8e6df', minimumSurveyed: 20 },
