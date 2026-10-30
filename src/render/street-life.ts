@@ -5,8 +5,9 @@ import type { DrivingPhysics } from '../physics/vehicle';
 import { closestRoad, pointInside } from '../simulation/roads.ts';
 import { isMetroCity } from '../simulation/city-tiles.ts';
 import { coverageTester } from '../simulation/coverage.ts';
-import { createVehicleGeometry, createVehiclePlateGeometry, createMassachusettsPlateMaterial } from './car.ts';
-import type { VehicleSurface } from './car.ts';
+import {createNPCVehicleBatches} from './npc-vehicles.ts';
+import {NPC_BODY_LIFT,NPC_VEHICLES,npcVehicleAt,npcPaint,type NPCVehicleType} from '../simulation/npc-vehicle-specs.ts';
+import {createNPCVehicleColliders} from '../physics/npc-vehicle.ts';
 import { sampleElevation, sampleTerrainNormal, terrainRotation } from '../simulation/terrain.ts';
 import { inTransitCorridor } from '../simulation/transit-corridors.ts';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
@@ -26,7 +27,7 @@ export interface StreetPedestrian {
   /** Offset from the sidewalk route where a walker got back up; it fades out while walking. */
   rejoin?:{dx:number;dz:number;t:number};
 }
-export interface ParkedVehicle { id: number; road: string; x: number; y: number; z: number; yaw: number; meter: Point2 | null; }
+export interface ParkedVehicle { registration?:string; type:NPCVehicleType; mass:number; id: number; road: string; x: number; y: number; z: number; yaw: number; meter: Point2 | null; }
 /** The moving vehicle a walker can be struck by: its yaw and box are needed for the hit test. */
 export interface WalkerThreat { x:number; z:number; y?:number; speed?:number; yaw?:number; halfLength?:number; halfWidth?:number; }
 /** Player speed (m/s) below which touching a walker only makes them stop and wait. */
@@ -221,48 +222,50 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     const { x, z, yaw, segment, side } = candidate;
     if (Math.hypot(x - city.spawn.x, z - city.spawn.z) < 42 || parked.some(vehicle => Math.hypot(vehicle.x - x, vehicle.z - z) < 42)) continue;
     const forward: Point2 = [Math.sin(yaw), Math.cos(yaw)], right: Point2 = [-forward[1], forward[0]];
+    const spec=npcVehicleAt(parked.length),halfWidth=spec.width/2+.12,halfLength=spec.length/2+.16;
     const samples: Point2[] = [[x, z]];
-    for (const width of [-1.08, 1.08]) for (const length of [-2.32, 0, 2.32]) samples.push([x + right[0] * width + forward[0] * length, z + right[1] * width + forward[1] * length]);
+    for (const width of [-halfWidth, halfWidth]) for (const length of [-halfLength, 0, halfLength]) samples.push([x + right[0] * width + forward[0] * length, z + right[1] * width + forward[1] * length]);
     if (!samples.every(p => inBounds(p, 12) && !inTunnelApproach(city,...p) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > paved(other.road) / 2 + 2))) continue;
     const meterOffset = side * (paved(segment.road) / 2 + .65);
     const meter: Point2 = [segment.a[0] + segment.tx * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) - segment.tz * meterOffset,
       segment.a[1] + segment.tz * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) + segment.tx * meterOffset];
-    parked.push({ id: parked.length, road: segment.road.name, x, y:sampleElevation(city,x,z), z, yaw, meter: sidewalkClear(meter, .25) ? meter : null });
+    parked.push({ type:spec.type,mass:spec.mass,id: parked.length, road: segment.road.name, x, y:sampleElevation(city,x,z), z, yaw, meter: sidewalkClear(meter, .25) ? meter : null });
   }
-  const vehicleMaterials: Record<VehicleSurface, THREE.MeshStandardMaterial> = {
-    paint: new THREE.MeshPhysicalMaterial({ color: 0xffffff, metalness: .35, roughness: .3, clearcoat: .65, clearcoatRoughness: .23 }),
-    trim: new THREE.MeshStandardMaterial({ color: 0x182023, roughness: .5, metalness: .25, side: THREE.DoubleSide }),
-    rubber: new THREE.MeshStandardMaterial({ color: 0x181c1e, roughness: .94 }),
-    chrome: new THREE.MeshStandardMaterial({ color: 0xaeb9bc, roughness: .23, metalness: .86 }),
-    glass: new THREE.MeshStandardMaterial({ color: 0x142b36, roughness: .12, metalness: .42, side: THREE.DoubleSide }),
-    headlight: new THREE.MeshStandardMaterial({ color: 0xcbd8d9, roughness: .22, metalness: .22 }),
-    taillight: new THREE.MeshStandardMaterial({ color: 0x951f1c, roughness: .26, metalness: .12 }),
-    amber: new THREE.MeshStandardMaterial({ color: 0xa66b24, roughness: .3 }),
-    plate: new THREE.MeshStandardMaterial({ color: 0xd8dacf, roughness: .5 }),
-  };
-  Object.values(vehicleMaterials).forEach(material => ownedMaterials.add(material));
-  const dummy = new THREE.Object3D();
-  const carColors = [0x7a8d92, 0x515d61, 0xa7a695, 0x7d4740, 0xb4b9b1, 0x34525b, 0x8f806d, 0x384447];
-  const parkedGeometry=createVehicleGeometry('sedan');
-  if(typeof document!=='undefined'){
-    const plateMaterial=createMassachusettsPlateMaterial('4BB 826');ownedMaterials.add(plateMaterial);vehicleMaterials.plate=plateMaterial;
-    parkedGeometry.get('plate')?.dispose();parkedGeometry.set('plate',createVehiclePlateGeometry('sedan'));
+  const parkedFleet=createNPCVehicleBatches(parkedGroup,Math.max(1,parked.length));
+  const parkedBodies:(RAPIER.RigidBody|undefined)[]=[],colliders:RAPIER.Collider[]=[],parkedColors:THREE.Color[]=[];
+  const dummy=new THREE.Object3D(),parkedLift=new THREE.Vector3();
+  for(const [i,vehicle] of parked.entries()){
+    const spec=NPC_VEHICLES.find(spec=>spec.type===vehicle.type)!,normal=sampleTerrainNormal(city,vehicle.x,vehicle.z),q=terrainRotation(city,vehicle.x,vehicle.z,vehicle.yaw);
+    parkedFleet.bind(i,spec.type);vehicle.registration=parkedFleet.registration(i);parkedColors.push(new THREE.Color(npcPaint(spec)));
+    dummy.position.set(vehicle.x+normal.x*NPC_BODY_LIFT,vehicle.y+normal.y*NPC_BODY_LIFT,vehicle.z+normal.z*NPC_BODY_LIFT);dummy.quaternion.set(q.x,q.y,q.z,q.w);
+    if(physics){
+      const body=physics.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(...dummy.position.toArray()).setRotation(q).setLinearDamping(.6).setAngularDamping(.8).setCanSleep(true));
+      colliders.push(...createNPCVehicleColliders(physics.world,body,spec));body.sleep();parkedBodies.push(body);
+    }else parkedBodies.push(undefined);
   }
-  if (parked.length) for (const [surface, geometry] of parkedGeometry) {
-    const mesh = new THREE.InstancedMesh(geometry, vehicleMaterials[surface], parked.length);
-    mesh.name = `Parked sedan ${surface}`; mesh.castShadow = true; mesh.receiveShadow = true;
-    parked.forEach((vehicle, i) => {
-      const normal=sampleTerrainNormal(city,vehicle.x,vehicle.z),rotation=terrainRotation(city,vehicle.x,vehicle.z,vehicle.yaw);
-      dummy.position.set(vehicle.x+normal.x*.69,vehicle.y+normal.y*.69,vehicle.z+normal.z*.69); dummy.quaternion.set(rotation.x,rotation.y,rotation.z,rotation.w); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix);
-      if (surface === 'paint') mesh.setColorAt(i, new THREE.Color(carColors[i % carColors.length]));
-    });
-    parkedGroup.add(mesh);
-  }
-  const colliders: RAPIER.Collider[] = [];
-  if (physics) for (const vehicle of parked) {
-    const normal=sampleTerrainNormal(city,vehicle.x,vehicle.z);
-    colliders.push(physics.world.createCollider(RAPIER.ColliderDesc.cuboid(.91, .79, 2.16)
-      .setTranslation(vehicle.x+normal.x*.82,vehicle.y+normal.y*.82,vehicle.z+normal.z*.82).setRotation(terrainRotation(city,vehicle.x,vehicle.z,vehicle.yaw)).setFriction(.6).setRestitution(.05)));
+  const parkedPoses=parkedBodies.map(body=>body?{position:body.translation(),rotation:body.rotation()}:undefined),parkedSuspended=new Set<number>();
+  function updateParked(observer?:{x:number;z:number}){
+    for(const [i,vehicle] of parked.entries()){
+      const body=parkedBodies[i];
+      if(body&&physics?.streaming){
+        const p=body.translation(),ground=sampleElevation(city,p.x,p.z);
+        const support=physics.world.castRay(new RAPIER.Ray({x:p.x,y:ground+2,z:p.z},{x:0,y:-1,z:0}),4,true,undefined,undefined,undefined,body,c=>physics.terrainColliders.has(c.handle));
+        // Tile disposal wakes sleeping bodies. Freeze at the last supported
+        // pose until physical ground returns; sampled elevation alone cannot
+        // keep a dynamic car from falling through an unloaded neighborhood.
+        if(!support&&!parkedSuspended.has(i)){
+          const pose=parkedPoses[i]!;body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased,true);body.setTranslation(pose.position,false);body.setRotation(pose.rotation,false);
+          body.setLinvel({x:0,y:0,z:0},false);body.setAngvel({x:0,y:0,z:0},false);body.setNextKinematicTranslation(pose.position);body.setNextKinematicRotation(pose.rotation);parkedSuspended.add(i);
+        }else if(support&&parkedSuspended.delete(i)){body.setBodyType(RAPIER.RigidBodyType.Dynamic,true);body.sleep();}
+        if(support)parkedPoses[i]={position:body.translation(),rotation:body.rotation()};
+      }
+      if(body){const p=body.translation(),q=body.rotation();dummy.position.set(p.x,p.y,p.z);dummy.quaternion.set(q.x,q.y,q.z,q.w);}
+      else{const n=sampleTerrainNormal(city,vehicle.x,vehicle.z),q=terrainRotation(city,vehicle.x,vehicle.z,vehicle.yaw);dummy.position.set(vehicle.x+n.x*NPC_BODY_LIFT,vehicle.y+n.y*NPC_BODY_LIFT,vehicle.z+n.z*NPC_BODY_LIFT);dummy.quaternion.set(q.x,q.y,q.z,q.w);}
+      parkedLift.set(0,NPC_BODY_LIFT,0).applyQuaternion(dummy.quaternion);dummy.position.sub(parkedLift);dummy.updateMatrix();
+      vehicle.x=dummy.position.x;vehicle.y=dummy.position.y;vehicle.z=dummy.position.z;
+      parkedFleet.draw(i,dummy.matrix,parkedColors[i],observer?Math.hypot(vehicle.x-observer.x,vehicle.z-observer.z):0);
+    }
+    parkedFleet.flush();
   }
   const meters = parked.filter(vehicle => vehicle.meter);
   if (meters.length) {
@@ -358,6 +361,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     person.position.copy(k.hip).add(halfBody);person.orientation=k.orientation;
   }
   function update(dt: number, time?: number,observer?:{x:number;z:number;y?:number},player?:WalkerThreat) {
+    updateParked(observer);
     elapsed = time ?? elapsed + Math.max(0, Math.min(.1, dt));
     relocationTime+=Math.max(0,dt);
     if(observer&&relocationTime>.3){
@@ -404,9 +408,10 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     takeHits(){return hits.splice(0,hits.length);},
     /** Collider handles of the kerbside parked cars, so an impact can be classified as a vehicle. */
     parkedColliders:new Set(colliders.map(collider=>collider.handle)),
+    setNight:parkedFleet.setNight,
     dispose() {
-      pedestrianModel.dispose();
-      if (physics) for (const collider of colliders) physics.world.removeCollider(collider, true);
+      pedestrianModel.dispose();parkedFleet.dispose();
+      if (physics) for (const body of parkedBodies) if(body)physics.world.removeRigidBody(body);
       group.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
       ownedMaterials.forEach(material => {if(material instanceof THREE.MeshStandardMaterial)material.map?.dispose();material.dispose();}); scene.remove(group);
     },

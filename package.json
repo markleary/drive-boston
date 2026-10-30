@@ -9,7 +9,8 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "playwright test",
     "test:physics": "node --test tests/*.test.mjs",
-    "validate:data": ".venv-data/bin/python scripts/validate-city.py"
+    "validate:data": ".venv-data/bin/python scripts/validate-city.py",
+    "build:traffic": "node scripts/build-traffic-fleet.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",
@@ -22,6 +23,7 @@
     "@playwright/test": "1.64.1",
     "@types/three": "0.186.0",
     "typescript": "7.0.2",
-    "vite": "8.3.5"
+    "vite": "8.3.5",
+    "meshoptimizer": "1.1.1"
   }
 }

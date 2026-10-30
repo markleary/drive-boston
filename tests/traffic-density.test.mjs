@@ -1,3 +1,4 @@
+import './helpers/npc-fleet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -12,20 +13,20 @@ test('busy districts get a visible local fleet while explicit teleports preserve
   const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);
   try{
     const initial=traffic.population(city.spawn);
-    assert.equal(initial.total,64);
+    assert.equal(initial.total,77);
     assert.equal(initial.level,'busy');
-    assert.ok(initial.local>=48,'Back Bay needs a populated surrounding street network');
+    assert.ok(initial.local>=58,'Back Bay needs a populated surrounding street network');
     assert.ok(initial.nearby>=16,'cars must be visible on nearby blocks, not all distant reserve vehicles');
     assert.ok(initial.forward>=5,'the opening street view must contain cars ahead of the camera, not just behind nearby buildings');
     const forward=traffic.snapshot().map(car=>({along:(car.x-city.spawn.x)*Math.sin(city.spawn.yaw)+(car.z-city.spawn.z)*Math.cos(city.spawn.yaw),across:(car.x-city.spawn.x)*Math.cos(city.spawn.yaw)-(car.z-city.spawn.z)*Math.sin(city.spawn.yaw)})).filter(car=>car.along>35&&car.along<200&&Math.abs(car.across)<12);
     assert.ok(Math.max(...forward.map(car=>car.across))-Math.min(...forward.map(car=>car.across))>3,'wide one-way Boylston should use both travel lanes, rather than hide every car behind one convoy');
-    for(const [id,level,target] of [['downtown-crossing','busy',48],['mission-hill','residential',18]]){
+    for(const [id,level,target] of [['downtown-crossing','busy',58],['mission-hill','residential',22]]){
       const destination=city.landmarks.find(place=>place.id===id).driveStart;
       const before=traffic.snapshot();
       const bus={x:destination.x+Math.sin(destination.yaw)*80,z:destination.z+Math.cos(destination.yaw)*80,y:0,halfLength:6,halfWidth:1.3};
       traffic.populateAt(destination,destination,[bus]);
       const after=traffic.snapshot(),population=traffic.population(destination);
-      assert.equal(population.total,64,'moving between districts must not allocate more physics bodies');
+      assert.equal(population.total,77,'moving between districts must not allocate more physics bodies');
       assert.equal(population.level,level);
       assert.equal(population.target,target);
       assert.ok(population.local>=target,'teleport should arrive in an already populated neighborhood');

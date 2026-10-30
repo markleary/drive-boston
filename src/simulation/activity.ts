@@ -10,9 +10,9 @@ export interface ActivityProfile {
 // Game population targets, not measured traffic counts. These use the same
 // official Boston neighborhood polygons as the atlas and neighborhood HUD.
 export const ACTIVITY:Record<ActivityProfile['level'],Readonly<ActivityProfile>>={
-  busy:{level:'busy',traffic:48,pedestrians:72},
-  mixed:{level:'mixed',traffic:32,pedestrians:44},
-  residential:{level:'residential',traffic:18,pedestrians:26},
+  busy:{level:'busy',traffic:58,pedestrians:72},
+  mixed:{level:'mixed',traffic:38,pedestrians:44},
+  residential:{level:'residential',traffic:22,pedestrians:26},
 };
 
 export function createActivityProfile(city:CityData){
