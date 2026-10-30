@@ -74,7 +74,10 @@ export function roadGraph(city: CityData) {
   for(const [index,{road,points,length,start,end}]of candidates.entries()){
     if(removed.has(index))continue;
     const add = (ps: Point2[], a: number, b: number) => {
-      const lanes:(number|undefined)[]=road.bridge?.id==='tobin'&&road.oneway!==0?[-road.width/3,0,road.width/3]:road.oneway!==0&&road.width>=12?[-Math.min(3,road.width*.17),Math.min(3,road.width*.17)]:[undefined];
+      // Lane offsets follow the measured roadway, not the class width: a one-way class avenue carries two lanes only where the curbs leave room for them
+      // (Huntington Avenue's carriageways beside the Green Line reservation measure 7.5 m against a 15 m class width; its Copley Place lane 5.3 m).
+      const paved=road.pavedWidth??road.width;
+      const lanes:(number|undefined)[]=road.bridge?.id==='tobin'&&road.oneway!==0?[-road.width/3,0,road.width/3]:road.oneway!==0&&road.width>=12&&paved>=6.5?[-Math.min(3,paved*.17),Math.min(3,paved*.17)]:[undefined];
       for(const laneOffset of lanes){
         const edge={ id: edges.length, start: a, end: b, points: ps, length, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
         if(city.coverage?.length&&!lane(edge).every(p=>covered(p[0],p[1])))continue;
@@ -87,8 +90,9 @@ export function roadGraph(city: CityData) {
   return { nodes, edges };
 }
 
-function lane(edge: Edge): Point2[] {
-  const offset = edge.laneOffset ?? (edge.oneway ? Math.min(2, edge.width * .14) : Math.min(3, edge.width * .23));
+/** The lane centerline an edge's traffic follows: offset from the road centerline within the measured roadway. */
+export function lane(edge: Edge): Point2[] {
+  const paved = edge.road.pavedWidth ?? edge.width, offset = edge.laneOffset ?? (edge.oneway ? Math.min(2, paved * .14) : Math.min(3, paved * .23));
   return edge.points.map((p, i, points) => {
     const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
     const dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz) || 1;
@@ -267,7 +271,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       for(let d=8;d<limit;d+=5){
         if(pathRoad(path,d).name!==edge.name)continue;
         const p=at(path,d),{along,across}=aheadOf(p,observer);
-        if(along>=38&&along<=185&&Math.abs(across)<Math.max(8,edge.width/2+2))placements.push({path,d,p,laneOffset:edge.laneOffset});
+        if(along>=38&&along<=185&&Math.abs(across)<Math.max(8,(edge.road.pavedWidth??edge.width)/2+2))placements.push({path,d,p,laneOffset:edge.laneOffset});
       }
     }
     return placements;
@@ -357,13 +361,19 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
    * or will reach within KNOCK_LOOKAHEAD. Rapier lists a contact pair only after the
    * step that brings two shapes together, so without the sweep a fast hit often
    * lands on the still-kinematic car: the striker stops dead and the struck car,
-   * knocked a step later, is left with nothing to carry. */
+   * knocked a step later, is left with nothing to carry. The pair list also holds
+   * every collider whose bounding box merely overlaps, so a listed pair counts only
+   * with a manifold contact within 5 cm (a car passing 4 m away is no hit). */
   function detectKnocks(){
     const struck=new Set<Actor>(),pv=physics.body.linvel(),lane={x:0,y:0,z:0};
     const closing=(v:{x:number;z:number},actor:Actor)=>Math.hypot(v.x-Math.sin(actor.yaw)*actor.speed,v.z-Math.cos(actor.yaw)*actor.speed);
     const sweep=(collider:RAPIER.Collider,v:RAPIER.Vector,threshold:number,self?:Actor)=>{
       const p=collider.translation();
-      physics.world.contactPairsWith(collider,other=>{const hit=byCollider.get(other.handle);if(hit&&!hit.knocked&&closing(v,hit)>threshold)struck.add(hit);});
+      physics.world.contactPairsWith(collider,other=>{
+        const hit=byCollider.get(other.handle);if(!hit||hit.knocked||closing(v,hit)<=threshold)return;
+        let touching=false;physics.world.contactPair(collider,other,manifold=>{for(let i=0;i<manifold.numContacts();i++)if(manifold.contactDist(i)<=.05)touching=true;});
+        if(touching)struck.add(hit);
+      });
       for(const hit of actors){
         if(hit===self||hit.knocked||struck.has(hit)||Math.hypot(hit.x-p.x,hit.z-p.z)>15||closing(v,hit)<=threshold)continue;
         lane.x=Math.sin(hit.yaw)*hit.speed;lane.z=Math.cos(hit.yaw)*hit.speed;
