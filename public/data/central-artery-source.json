@@ -42,7 +42,11 @@
         "lateralFitMeters": 8,
         "fitLengthMeters": 80
       },
-      "surveyLateralFit": -8
+      "surveyLateralFit": -8,
+      "surfaceUnderpasses": [
+        "9755-0-0",
+        "10341-0-0"
+      ]
     },
     {
       "id": "central-artery-southbound",
@@ -76,7 +80,20 @@
         "roadElevation": 12.5367,
         "lateralFitMeters": 8,
         "fitLengthMeters": 80
-      }
+      },
+      "surfaceUnderpasses": [
+        "10341-0-0",
+        "10369-0-0"
+      ],
+      "profileDips": [
+        [
+          650,
+          810,
+          -12.8,
+          80
+        ]
+      ],
+      "profileNote": "Estimated mainline dip preserves independent clearance beneath the Government Center exit while that exit remains below North Street."
     },
     {
       "id": "central-artery-new-chardon-south-on",
@@ -89,7 +106,10 @@
       "role": "ramp",
       "width": 6.4,
       "surfaceStart": true,
-      "matchParentPavement": true
+      "matchParentPavement": true,
+      "surfaceUnderpasses": [
+        "10320-0-0"
+      ]
     },
     {
       "id": "central-artery-cross-street-north-on",
@@ -111,7 +131,11 @@
         "roadElevation": 11.3058,
         "lateralFitMeters": 0,
         "description": "Separate existing surveyed northbound auxiliary bridge lane"
-      }
+      },
+      "surfaceUnderpasses": [
+        "9755-0-0",
+        "10325-0-0"
+      ]
     },
     {
       "id": "central-artery-government-center-south-off",
@@ -123,7 +147,14 @@
       ],
       "role": "ramp",
       "width": 6.4,
-      "surfaceEnd": true
+      "surfaceEnd": true,
+      "matchParentPavement": true,
+      "surfaceUnderpasses": [
+        "10435-0-0",
+        "10434-0-0",
+        "13160-0-0",
+        "13159-0-0"
+      ]
     },
     {
       "id": "central-artery-north-end-north-off",
@@ -136,7 +167,8 @@
       ],
       "role": "ramp",
       "width": 6.4,
-      "surfaceEnd": true
+      "surfaceEnd": true,
+      "matchParentPavement": true
     },
     {
       "id": "central-artery-government-center-north-off",
@@ -146,7 +178,8 @@
       ],
       "role": "ramp",
       "width": 6.4,
-      "surfaceEnd": true
+      "surfaceEnd": true,
+      "matchParentPavement": true
     },
     {
       "id": "central-artery-purchase-east-south-off",
@@ -184,7 +217,10 @@
           -14
         ]
       ],
-      "profileNote": "Estimated lower west barrel stays below the crossing Purchase east exit after its coplanar mainline fork."
+      "profileNote": "Estimated lower west barrel stays below the crossing Purchase east exit after its coplanar mainline fork.",
+      "surfaceUnderpasses": [
+        "16430-0-0"
+      ]
     },
     {
       "id": "central-artery-purchase-south-on",
@@ -226,7 +262,8 @@
           10438,
           -7.5
         ]
-      ]
+      ],
+      "matchParentPavement": true
     },
     {
       "id": "central-artery-atlantic-north-on",
@@ -250,8 +287,8 @@
       "width": 6.4,
       "surfaceStart": true,
       "matchParentPavement": true,
-      "mergeMatchLimit": 45,
-      "profileNote": "The surface entrance crosses above the same bore before approaching from its shoulder. Match only the final vehicle merge; retain the independent upper crossing and exact street level."
+      "mergeMatchLimit": 100,
+      "profileNote": "The entrance initially crosses above the southbound bore, then reaches its elevation before the final shared pavement. The independent crossing keeps its street height; a local single-lane narrowing preserves separation during the descent."
     }
   ],
   "features": [
