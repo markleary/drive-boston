@@ -62,6 +62,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   // These survey layers are only centimeters apart. Explicit order plus a bias
   // away from the camera prevents the underlay overwriting roads at altitude.
   materials.sidewalk.polygonOffset=true;materials.sidewalk.polygonOffsetFactor=1;materials.sidewalk.polygonOffsetUnits=2;
+  materials.brick.polygonOffset=true;materials.brick.polygonOffsetFactor=1;materials.brick.polygonOffsetUnits=2;
   for(const paint of [materials.paint,materials.yellow]){paint.polygonOffset=true;paint.polygonOffsetUnits=-1;}
   materials.sidewalk.map?.repeat.set(1,1);
   const iron=new THREE.MeshStandardMaterial({color:'#34443f',metalness:.45,roughness:.55});

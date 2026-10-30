@@ -112,11 +112,24 @@ assert set(far_counts)<=set(keys),'far hull tiles must be manifest tiles (tiles 
 policies={'catalog-metres-and-source-floor','source-floor-no-catalog-ground','legacy-backbay-feet','cambridge-catalog-feet-and-source-floor','osm-type-default','osm-levels','osm-height-tag'}
 west,north,east,south=provenance['legacyCoreBounds']
 buildings={};footprints_by_tile=defaultdict(list);curbs=0;park_paths=0;triangles=0;grounded=0;supported=[];scaled=0
+pavements=0;sidewalks=0;bricks=0;islands=0;driveways=0;measured_roads={r['id'] for r in city['roads'] if r.get('pavedWidth')};road_ids={r['id'] for r in city['roads']}
 clearance_index=RoadClearanceIndex(city['roads'])
 for key in keys:
  tx,tz=map(int,key.split('_'));reproducible(f'{tiles["directory"]}/{tileformat.tile_name(tx,tz)}');header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
  assert (header['tx'],header['tz'],header['size'])==(tx,tz,size) and len(entries)==far_counts.get(key,0)
  curbs+=len(header['curbs']);park_paths+=len(header['parkPaths']);assert all(isinstance(r,str) for r in header['roads'])
+ # Curb-bounded roadways, inventory sidewalks and islands (build-street-surfaces.py).
+ for record in header['pavements']:
+  e=record['edges'];assert record['road'] in road_ids and len(e)>=8 and len(e)%4==0 and all(isinstance(v,int) for v in e),f"{key}: malformed pavement record for {record.get('road')}"
+  assert all(2.3<=math.hypot(e[i]-e[i+2],e[i+1]-e[i+3])/100<=60 for i in range(0,len(e),4)),f"{key}: implausible roadway width on {record['road']}"
+  assert set(record.get('walk',[0,0]))<={0,1} and len(record.get('walk',[0,0]))==2
+  pavements+=1
+ for walk in header['sidewalks']:
+  assert walk['rings'] and all(len(ring)>=3 for ring in walk['rings']) and walk.get('material','concrete') in ('concrete','brick');sidewalks+=1;bricks+=walk.get('material')=='brick'
+ for rings in header['islands']:
+  assert rings and all(len(ring)>=3 for ring in rings) and Polygon(rings[0]).area<=2600,f'{key}: island exceeds the closed-face limit';islands+=1
+ for rings in header['driveways']:
+  assert rings and all(len(ring)>=3 for ring in rings) and Polygon(rings[0]).area<=size*size,f'{key}: driveway part exceeds its tile';driveways+=1
  for ordinal,b in enumerate(entries):
   assert b['id'] not in buildings,f"duplicate building {b['id']}";buildings[b['id']]=b
   x,z=b['center'];assert tx*size<=x<(tx+1)*size and tz*size<=z<(tz+1)*size,'building filed in the wrong tile'
@@ -161,6 +174,11 @@ structures=[b for b in buildings.values() if b.get('structure')];assert {b['id']
 assert {'BOS-2TDFM-6RXRJ-7SQZ9','BOS-P19FP-VQY0E-MMBXS'}<=set(buildings),'original Back Bay churches were lost'
 assert sum(b['district']=='Back Bay' for b in buildings.values())>=160,'original Back Bay coverage was lost'
 assert curbs>10000 and park_paths>1000 and len(city['signals'])>1000
+surface_roads=[r for r in city['roads'] if not r.get('elevations') and not r.get('tunnel')]
+assert pavements==len(surface_roads),f'{pavements} roadway records for {len(surface_roads)} surface roads; run build-street-surfaces.py'
+assert all(1.5<=r['pavedWidth']<=45 for r in city['roads'] if r.get('pavedWidth')) and len(measured_roads)>len(surface_roads)*.7,'measured paved widths'
+assert sidewalks>20000 and bricks>500 and islands>100 and driveways>100,'sidewalk inventory, curb islands and driveway fills were not installed'
+street_surfaces=provenance.get('streetSurfaces');assert street_surfaces and street_surfaces['pavements']==pavements and street_surfaces['sidewalkParts']==sidewalks and street_surfaces['islandParts']==islands and street_surfaces['drivewayParts']==driveways,'provenance must describe the installed street surfaces'
 
 def point_in_polygon(x,z,poly):
  inside=False

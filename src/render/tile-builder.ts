@@ -7,6 +7,8 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
+import { pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
+import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
 import { inTransitCorridor, shareTransitCorridors } from '../simulation/transit-corridors.ts';
@@ -15,7 +17,7 @@ import { usesExactBuildingCollision } from '../simulation/building-collisions.ts
 import { pointInside } from '../simulation/roads.ts';
 import { type createMaterials, facadeStyleIndex, hash, seeded } from './materials';
 import { tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
-import { drapedRibbonInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurface } from './terrain-ground';
+import { drapedRibbonInto, drapedStripInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurface } from './terrain-ground';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
 import { spatialInstances } from './spatial-batches';
 import { PartBatches, box } from './geometry-writer';
@@ -36,7 +38,7 @@ import { sourceWallSampler, facadeDetailSteps } from './facade-details';
 import { streetscapeSteps } from './streetscape';
 import { rooftopDetailSteps } from './rooftops';
 import { neighborhoodDetailSteps } from './neighborhood-architecture';
-import { cityParkDetailSteps, areaBoundsOf, type Bounds } from './city-parks';
+import { cityParkDetailSteps, areaBoundsOf, parkSurface, type Bounds } from './city-parks';
 import type { TreeField } from './foliage';
 
 export interface TileContext {
@@ -153,7 +155,11 @@ export function createTileBuilder(ctx: TileContext) {
     }
     yield 'terrain';
 
-    // Roads owned by this tile (their midpoint lies inside it), exactly as the survey build drew them.
+    // Roads owned by this tile (their midpoint lies inside it). The asphalt
+    // follows the roadway measured between the curbs (tile.pavements, from
+    // scripts/street_surfaces.py) with a sidewalk band only on the sides the
+    // Boston sidewalk inventory does not cover; a road without a record keeps
+    // the constant-width ribbons of the survey build.
     {
       const batches = ctx.mobile ? new SurfaceBatches(500) : new PartBatches(500), crossingKeys = new Set<string>();
       const ribbon = (material: THREE.Material, points: Point2[], width: number, y: number) => {
@@ -161,11 +167,35 @@ export function createTileBuilder(ctx: TileContext) {
         drapedRibbonInto(sink, city, points, width, y);
         if (sink instanceof IndexedSurfaceWriter) sink.clearLookup();
       };
+      const strip = (material: THREE.Material, left: Point2[], right: Point2[], y: number) => {
+        const sink = batches.at(material, left[0][0], left[0][1]);
+        drapedStripInto(sink, city, left, right, y);
+        if (sink instanceof IndexedSurfaceWriter) sink.clearLookup();
+      };
+      const pavements = new Map<string, TilePavement[]>();
+      for (const p of tile.pavements) { const list = pavements.get(p.road); if (list) list.push(p); else pavements.set(p.road, [p]); }
+      // A few town ways share an id; the record starting nearest the road's first point is its own.
+      const pavementOf = (road: Road) => {
+        const list = pavements.get(road.id); if (!list || list.length === 1) return list?.[0];
+        let best: TilePavement | undefined, bestDistance = Infinity;
+        for (const p of list) { const d = Math.hypot(x0 + (p.edges[0] + p.edges[2]) / 200 - road.points[0][0], z0 + (p.edges[1] + p.edges[3]) / 200 - road.points[0][1]); if (d < bestDistance) { bestDistance = d; best = p; } }
+        return best;
+      };
+      // The band outside a curb edge: each station pushed away from the opposite edge by the sidewalk allowance.
+      const band = (edge: Point2[], other: Point2[]) => edge.map((p, i): Point2 => { const dx = p[0] - other[i][0], dz = p[1] - other[i][1], l = Math.hypot(dx, dz) || 1; return [p[0] + dx / l * WALK, p[1] + dz / l * WALK]; });
       for (const road of ownedRoads) {
         if (road.elevations) continue; stats.roads++;
         if (due(pace)) yield 'roads';
-        ribbon(materials.sidewalk, road.points, road.width + 5.8, .012);
-        ribbon(materials.asphalt, road.points, road.width, .045);
+        const pavement = pavementOf(road), width = road.pavedWidth ?? road.width;
+        if (pavement && pavement.edges.length >= 8) {
+          const { left, right } = pavementEdges(tile, pavement);
+          if (!pavement.walk?.[0]) strip(materials.sidewalk, band(left, right), left, .012);
+          if (!pavement.walk?.[1]) strip(materials.sidewalk, right, band(right, left), .012);
+          strip(materials.asphalt, left, right, .045);
+        } else {
+          ribbon(materials.sidewalk, road.points, road.width + 5.8, .012);
+          ribbon(materials.asphalt, road.points, road.width, .045);
+        }
         for (let i = 1; i < road.points.length; i++) {
           const a = road.points[i - 1], b = road.points[i], dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz); if (len < 8) continue;
           const tx = dx / len, tz = dz / len;
@@ -177,13 +207,26 @@ export function createTileBuilder(ctx: TileContext) {
           const len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 18) continue;
           const tx = (b[0] - a[0]) / len, tz = (b[1] - a[1]) / len, crossing = `${Math.round(a[0] / 3)},${Math.round(a[1] / 3)},${Math.round(Math.atan2(tx, tz) * 2)}`;
           if (crossingKeys.has(crossing)) continue; crossingKeys.add(crossing);
-          for (let side = -road.width / 2 + .8; side < road.width / 2 - .5; side += 1.35) {
+          for (let side = -width / 2 + .8; side < width / 2 - .5; side += 1.35) {
             const x = a[0] + tx * 8 - tz * side, z = a[1] + tz * 8 + tx * side;
             ribbon(materials.paint, [[x, z], [x + tx * 3, z + tz * 3]], .65, .068);
           }
         }
       }
       addBatches(batches);
+      // Surveyed sidewalks (above the lawn decals, below the asphalt, so a
+      // disagreement with the curb line hides under the roadway), asphalt
+      // driveway faces (above the lawn and the sidewalks they were cut around,
+      // below the street asphalt) and concrete curb islands, merged per material.
+      const paved: [THREE.BufferGeometry[], THREE.Material, string, Point2[][][], number][] = [[[], materials.sidewalk, 'Sidewalks', tile.sidewalks.filter(w => w.material !== 'brick').map(w => w.rings), .03], [[], materials.brick, 'Brick sidewalks', tile.sidewalks.filter(w => w.material === 'brick').map(w => w.rings), .03], [[], materials.asphalt, 'Driveways', tile.driveways, .035], [[], materials.sidewalk, 'Curb islands', tile.islands, .05]];
+      for (const [list, , , rings, y] of paved) for (const polygon of rings) {
+        if (due(pace)) yield 'roads';
+        const geometry = clipPortalSurface(city, parkSurface(city, polygon, y)); if (geometry.attributes.position?.count) list.push(geometry); else geometry.dispose();
+      }
+      for (const [list, material, name] of paved) {
+        if (!list.length) continue;
+        const mesh = new THREE.Mesh(mergeGeometries(list), material); mesh.name = name; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh); for (const g of list) g.dispose();
+      }
     }
     yield 'roads';
 
@@ -281,7 +324,7 @@ export function createTileBuilder(ctx: TileContext) {
       const occupied = (x: number, z: number) => inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
       const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
       for (const road of roads.filter(r=>!r.tunnel)) for (let i = 1; i < road.points.length; i++) {
-        const a = road.points[i - 1], b = road.points[i], radius = road.width / 2 + .8, segment = { a, b, radius };
+        const a = road.points[i - 1], b = road.points[i], radius = (road.pavedWidth ?? road.width) / 2 + .8, segment = { a, b, radius };
         for (let x = Math.floor((Math.min(a[0], b[0]) - radius) / 64); x <= Math.floor((Math.max(a[0], b[0]) + radius) / 64); x++) for (let z = Math.floor((Math.min(a[1], b[1]) - radius) / 64); z <= Math.floor((Math.max(a[1], b[1]) + radius) / 64); z++) {
           const k = `${x},${z}`, list = segmentCells.get(k) ?? []; list.push(segment); segmentCells.set(k, list);
         }
@@ -294,12 +337,13 @@ export function createTileBuilder(ctx: TileContext) {
       for (const road of ownedRoads) {
         if (road.elevations || road.width < 7 || /alley|unnamed/i.test(road.name)) continue;
         if (due(pace)) yield 'props';
+        const verge = (road.pavedWidth ?? road.width) / 2 + 2;
         for (let i = 1; i < road.points.length; i++) {
           const a = road.points[i - 1], b = road.points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .1) continue;
           const tx = dx / length, tz = dz / length;
           for (let d = 14; d < length - 8; d += 25) {
             for (const side of [-1, 1]) {
-              const x = a[0] + tx * d - tz * (road.width / 2 + 2) * side, z = a[1] + tz * d + tx * (road.width / 2 + 2) * side;
+              const x = a[0] + tx * d - tz * verge * side, z = a[1] + tz * d + tx * verge * side;
               const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (occupied(x, z) || inRoad(x, z) || taken.has(k)) continue; taken.add(k);
               if (!/Boylston/.test(road.name) || random() > .5) treePositions.push(new THREE.Vector3(x, height(x, z), z));
               if (side === 1 && !inRoad(x - tx * 5, z - tz * 5) && !occupied(x - tx * 5, z - tz * 5)) lamps.push(new THREE.Vector3(x - tx * 5, height(x - tx * 5, z - tz * 5), z - tz * 5));

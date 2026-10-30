@@ -33,6 +33,8 @@ export interface WalkerThreat { x:number; z:number; y?:number; speed?:number; ya
 export const PEDESTRIAN_HIT_SPEED = 1.5;
 const HIP = .9, LYING = .32;
 const gap = (a: Point2, b: Point2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+/** Half of this is the curb offset: the roadway measured between the curbs where the package has it. */
+const paved = (road: Road) => road.pavedWidth ?? road.width;
 const lerp = THREE.MathUtils.lerp, smooth = (t: number) => t * t * (3 - 2 * t);
 const UP = new THREE.Vector3(0, 1, 0), tumbleAxis = new THREE.Vector3(), tumbleStep = new THREE.Quaternion(), halfBody = new THREE.Vector3(), candidate = new THREE.Quaternion();
 /** The flat pose nearest to `orientation`: on the back or the front, head pointing where the body's up axis leans. */
@@ -99,7 +101,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   for (const segment of segments) {
     if (segment.road.width < 8) continue;
     for (let d = 14; d < segment.length - 8; d += 25) for (const side of [-1, 1]) {
-      const offset = side * (segment.road.width / 2 + 2);
+      const offset = side * (paved(segment.road) / 2 + 2);
       const x = segment.a[0] + segment.tx * d - segment.tz * offset;
       const z = segment.a[1] + segment.tz * d + segment.tx * offset;
       streetObstacles.push([x, z]);
@@ -114,7 +116,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   }));
   // A metro answers from its hull index whether or not the tile is loaded.
   const nearFootprints: (p: Point2) => Footprint[] = metro ? p => metro.index.query(p[0] - 3, p[0] + 3, p[1] - 3, p[1] + 3).map(b => ({ points: b.footprint, minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ })) : spatialIndex(footprints,p=>[p.minX,p.minZ,p.maxX,p.maxZ],3);
-  const nearSegments=spatialIndex(segments,s=>[Math.min(s.a[0],s.b[0])-s.road.width/2,Math.min(s.a[1],s.b[1])-s.road.width/2,Math.max(s.a[0],s.b[0])+s.road.width/2,Math.max(s.a[1],s.b[1])+s.road.width/2],3);
+  const nearSegments=spatialIndex(segments,s=>[Math.min(s.a[0],s.b[0])-paved(s.road)/2,Math.min(s.a[1],s.b[1])-paved(s.road)/2,Math.max(s.a[0],s.b[0])+paved(s.road)/2,Math.max(s.a[1],s.b[1])+paved(s.road)/2],3);
   const nearObstacles=spatialIndex(streetObstacles,p=>[p[0],p[1],p[0],p[1]],1);
   const inBounds = ([x, z]: Point2, margin = 5) => x > city.bounds.minX + margin && x < city.bounds.maxX - margin && z > city.bounds.minZ + margin && z < city.bounds.maxZ - margin && covered(x, z);
   function buildingClear(p: Point2, clearance: number) {
@@ -124,7 +126,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     });
   }
   function sidewalkClear(p: Point2, clearance = .42) {
-    return !inTransitCorridor(city,...p) && !inTunnelApproach(city,...p) && inBounds(p) && buildingClear(p, clearance) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > segment.road.width / 2 + clearance);
+    return !inTransitCorridor(city,...p) && !inTunnelApproach(city,...p) && inBounds(p) && buildingClear(p, clearance) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > paved(segment.road) / 2 + clearance);
   }
 
   // Sidewalk stretches are verified per segment the first time a neighborhood
@@ -138,7 +140,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       let best: WalkRoute[] = [], bestLength=0;
       for (const setback of [1.1, 1.65, 2.2]) {
         const stretches:WalkRoute[]=[];
-        const offset = side * (segment.road.width / 2 + setback);
+        const offset = side * (paved(segment.road) / 2 + setback);
         let start: Point2 | undefined, previous: Point2 | undefined;
         const finish = () => {
           if (start && previous && gap(start, previous) >= 8) {
@@ -206,7 +208,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   for (const segment of segmentsNear(city.spawn.x, city.spawn.z, metro ? 700 : Infinity)) {
     if (!parkable(segment.road)) continue;
     for (let d = 21; d < segment.length - 21; d += 18) for (const side of [-1, 1]) {
-      const offset = side * (segment.road.width / 2 - 1.1);
+      const offset = side * (paved(segment.road) / 2 - 1.1);
       const x = segment.a[0] + segment.tx * d - segment.tz * offset, z = segment.a[1] + segment.tz * d + segment.tx * offset;
       const direction = segment.road.oneway || side;
       const yaw = Math.atan2(segment.tx * direction, segment.tz * direction);
@@ -221,8 +223,8 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     const forward: Point2 = [Math.sin(yaw), Math.cos(yaw)], right: Point2 = [-forward[1], forward[0]];
     const samples: Point2[] = [[x, z]];
     for (const width of [-1.08, 1.08]) for (const length of [-2.32, 0, 2.32]) samples.push([x + right[0] * width + forward[0] * length, z + right[1] * width + forward[1] * length]);
-    if (!samples.every(p => inBounds(p, 12) && !inTunnelApproach(city,...p) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > other.road.width / 2 + 2))) continue;
-    const meterOffset = side * (segment.road.width / 2 + .65);
+    if (!samples.every(p => inBounds(p, 12) && !inTunnelApproach(city,...p) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > paved(other.road) / 2 + 2))) continue;
+    const meterOffset = side * (paved(segment.road) / 2 + .65);
     const meter: Point2 = [segment.a[0] + segment.tx * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) - segment.tz * meterOffset,
       segment.a[1] + segment.tz * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) + segment.tx * meterOffset];
     parked.push({ id: parked.length, road: segment.road.name, x, y:sampleElevation(city,x,z), z, yaw, meter: sidewalkClear(meter, .25) ? meter : null });
