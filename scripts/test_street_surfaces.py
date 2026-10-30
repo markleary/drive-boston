@@ -3,7 +3,7 @@ fillets and an idempotent install into a small synthetic package.
 
   PYTHONPATH=scripts .venv-data/bin/python -m unittest scripts/test_street_surfaces.py
 """
-import importlib.util,json,pathlib,tempfile,types,unittest
+import importlib.util,json,math,pathlib,tempfile,types,unittest
 import numpy as np
 from shapely.geometry import LineString,Polygon
 from shapely.ops import unary_union
@@ -182,6 +182,15 @@ class StaleTest(unittest.TestCase):
   self.assertAlmostEqual(at(rec['left'],20)[1],7,delta=.01);self.assertAlmostEqual(at(rec['right'],80)[1],-7,delta=.01)
   self.assertEqual(rec['pavedWidth'],14,'the placed stations do not count as measured')
   plain=ss.pavement_records([r],edges)[ss.road_key(r)];self.assertAlmostEqual(at(plain['right'],50)[1],-1.2,delta=.01,msg='without the mask the floor pulls the right edge back across the centerline')
+
+ def test_crosswalk_stations_walk_the_line_as_the_renderer_does(self):
+  # A short first segment at a bend: the station lies 8 m along the line on the diagonal, with that segment's direction, not 8 m out along the first segment's bearing.
+  bent=[[0,0],[1,0],[2,.3],[3,.9],[4,1.8],[14,11.8],[30,27.8]];(first,t0),(last,t1)=ss.crosswalk_stations(bent)
+  self.assertAlmostEqual(first[0],6.436,3);self.assertAlmostEqual(first[1],4.236,3);self.assertAlmostEqual(t0[0],math.sqrt(.5),9);self.assertAlmostEqual(t0[1],math.sqrt(.5),9)
+  self.assertAlmostEqual(last[0],30-8*math.sqrt(.5),6);self.assertAlmostEqual(last[1],27.8-8*math.sqrt(.5),6);self.assertAlmostEqual(t1[0],-math.sqrt(.5),9)
+  self.assertEqual(ss.crosswalk_stations([[0,0],[5,0]]),[],'no station beyond the line')
+  self.assertTrue(ss.stripes_crosswalks(road('a',[[0,0],[20,0]],7)))
+  for r in (road('b',[[0,0],[17,0]],10),road('c',[[0,0],[30,0]],6),road('d',[[0,0],[30,0]],10,'Back Alley'),road('e',[[0,0],[30,0]],10,'Unnamed road')):self.assertFalse(ss.stripes_crosswalks(r),r['id'])
 
  def test_border_records_copy_a_neighbouring_carriageway_across_the_tile_line(self):
   # Two one-way carriageways 9 m apart crossing x=1000; each tile owns one midpoint, and each crosswalk station (8 m from an end) looks across the other's edges.
