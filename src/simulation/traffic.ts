@@ -9,7 +9,7 @@ import { sampleElevation } from './terrain.ts';
 import {headOnThreat,advanceEvasion,type Evasion} from './traffic-evasion.ts';
 import { pointInside } from './roads.ts';
 import { coverageTester } from './coverage.ts';
-import { sampleRoadElevation,roadNormal,roadRotation,sampleDriveSurface,roadProjection } from './road-surfaces.ts';
+import { sampleRoadElevation,roadNormal,roadRotation,sampleDriveSurface,roadProjection,roadWidthAt } from './road-surfaces.ts';
 import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
@@ -393,9 +393,12 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   /** Keep the whole footprint inside the measured roadway, with curb clearance.
    * Test the sweep too: a clear endpoint beyond a parked car is not a clear way. */
   function evasionClear(actor:Actor,s:number,offset:number,includePlayer:boolean,yaw?:number){
-    const point=evasionPoint(actor,s,offset),heading=yaw??point.yaw,fx=Math.sin(heading),fz=Math.cos(heading),width=(point.road.pavedWidth??point.road.width)/2;
+    const point=evasionPoint(actor,s,offset),heading=yaw??point.yaw,fx=Math.sin(heading),fz=Math.cos(heading);
     for(const along of [-actor.spec.length/2,0,actor.spec.length/2])for(const across of [-actor.spec.width/2-.2,actor.spec.width/2+.2]){
       const x=point.x+fx*along+fz*across,z=point.z+fz*along-fx*across;
+      // A taper can narrow beneath the front bumper before the center reaches
+      // it. Deck widths override a road-wide pavement estimate at each sample.
+      const width=(point.road.deckWidths?roadWidthAt(point.road,x,z):point.road.pavedWidth??point.road.width)/2;
       if(x<city.bounds.minX||x>city.bounds.maxX||z<city.bounds.minZ||z>city.bounds.maxZ||roadProjection(point.road,x,z).distance>width)return false;
     }
     const h=sampleRoadElevation(city,point.road,point.x,point.z)+NPC_BODY_LIFT,from=actor.body.translation(),pose=roadRotation(city,point.road,point.x,point.z,heading);

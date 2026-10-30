@@ -6,6 +6,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import {headOnThreat,advanceEvasion} from '../src/simulation/traffic-evasion.ts';
 import {createTraffic} from '../src/simulation/traffic.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
+import {roadWidthAt} from '../src/simulation/road-surfaces.ts';
 
 test('head-on prediction distinguishes a collision course from ordinary passing and other levels',()=>{
   const car={x:0,y:.65,z:0,yaw:0,speed:6,halfLength:2.4,halfWidth:.95};
@@ -25,13 +26,13 @@ test('lateral evasion accelerates smoothly and never slides a stopped vehicle si
   assert.ok(Math.abs(state.offset)<.02,'the car returns without overshooting its lane');
 });
 
-async function fixture(){
-  const city={bounds:{minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},buildings:[],roads:[{id:'straight',name:'Test Street',width:14,oneway:0,points:[[-400,0],[400,0]]}],spawn:{x:-150,z:0,yaw:Math.PI/2}};
-  const physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics),far={x:700,y:.65,z:700,yaw:0,speed:0,steering:0};
+async function fixture(road={},options={}){
+  const city={bounds:{minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},buildings:[],roads:[{id:'straight',name:'Test Street',width:14,oneway:0,points:[[-400,0],[400,0]],...road}],spawn:{x:-150,z:0,yaw:Math.PI/2}};
+  const physics=await DrivingPhysics.create(city,options),traffic=createTraffic(new THREE.Scene(),city,physics),far={x:700,y:.65,z:700,yaw:0,speed:0,steering:0};
   physics.body.setTranslation(far,true);
   for(let i=0;i<180;i++){traffic.update(1/60,far,far);physics.world.step();}
   const index=traffic.snapshot().findIndex(a=>a.speed>4&&a.type==='compact'&&Math.sin(a.yaw)>.99),actor=traffic.snapshot()[index];assert.ok(actor,'a rolling compact is available');
-  return{physics,traffic,far,index,actor,dispose(){traffic.dispose();physics.dispose();}};
+  return{physics,traffic,far,index,actor,road:city.roads[0],dispose(){traffic.dispose();physics.dispose();}};
 }
 
 test('an NPC steers away from a predicted head-on, stays on pavement, then rejoins its lane',async()=>{
@@ -63,5 +64,21 @@ test('an NPC brakes instead of swerving through a blocked escape corridor',async
       const now=f.traffic.snapshot()[f.index];peak=Math.max(peak,Math.abs(now.evasion));minSpeed=Math.min(minSpeed,now.speed);
     }
     assert.ok(peak<.05,`the walls prevent an unsafe escape (${peak} m)`);assert.ok(minSpeed<actor.speed-1,'braking remains active');
+  }finally{f.dispose();}
+});
+
+test('evasion keeps every corner on the local tapered deck even before its barriers stream in',async()=>{
+  const f=await fixture({width:16,pavedWidth:16,points:[[-400,0],[-320,0],[320,0],[400,0]],elevations:[8,8,8,8],deckWidths:[16,10,10,16]},{streaming:true});
+  try{
+    const {actor}=f,player={...f.far,x:actor.x+42,y:8.65,z:actor.z,yaw:actor.yaw+Math.PI,speed:14};let peak=0;
+    for(let i=0;i<360;i++){
+      f.traffic.update(1/60,player,f.far);f.physics.world.step();player.x-=14/60;
+      const car=f.traffic.snapshot()[f.index],fx=Math.sin(car.yaw),fz=Math.cos(car.yaw);peak=Math.max(peak,Math.abs(car.evasion));
+      for(const along of [-car.halfLength,0,car.halfLength])for(const across of [-car.halfWidth-.18,car.halfWidth+.18]){
+        const x=car.x+fx*along+fz*across,z=car.z+fz*along-fx*across;
+        assert.ok(Math.abs(z)<=roadWidthAt(f.road,x,z)/2,`car footprint leaves the tapered deck at (${x}, ${z})`);
+      }
+    }
+    assert.ok(peak>.3,'a safe partial swerve is still attempted');
   }finally{f.dispose();}
 });
