@@ -48,6 +48,20 @@ test('a strip between measured edges covers the quads a ribbon would, following 
   for(let k=0;k<strip.count;k++)for(let c=0;c<3;c++)assert.ok(Math.abs(strip.position[k*3+c]-ribbon.position[k*3+c])<1e-9,'vertex for vertex the ribbon');
 });
 
+test('the Brookline Avenue island keeps its lawn and loses the curbs of the roadway the Muddy River restoration removed',{skip:!hasMetroData()},async()=>{
+  const city=await loadMetroCity({bounds:{minX:-2500,maxX:-2000,minZ:600,maxZ:1000}}),tile=city.loadedTiles.get('-3_0'),curbs=tile.curbs.filter(c=>c.length>=2);
+  const distance=([x,z],c)=>{let best=Infinity;for(let i=1;i<c.length;i++){const [ax,az]=c[i-1],[bx,bz]=c[i],dx=bx-ax,dz=bz-az,t=Math.max(0,Math.min(1,((x-ax)*dx+(z-az)*dz)/(dx*dx+dz*dz||1)));best=Math.min(best,Math.hypot(x-ax-t*dx,z-az-t*dz));}return best;};
+  const nearest=p=>Math.min(...curbs.map(c=>distance(p,c)));
+  // The streets' own curbs along the island stay (the survey's ring was one polyline).
+  assert.ok(nearest([-2319.3,828.82])<.1,'Brookline Avenue keeps its curb along the island');assert.ok(nearest([-2253.09,828.68])<.1,'Park Drive keeps its curb along the island');
+  // The curved south edge and the corridor south of it were a roadway until 2016; no street explains them now.
+  for(const p of [[-2264.76,843.28],[-2291.21,838.27],[-2288,846]])assert.ok(nearest(p)>5,`no curb remains at ${p}, the removed roadway's edge`);
+  // The inventory records a 9.5 ft sidewalk around the whole 2,200 m2 island: only that strip stays concrete.
+  const contains=(p,rings)=>pointInside(p,rings[0])&&!rings.slice(1).some(h=>pointInside(p,h)),walks=tile.sidewalks.map(w=>w.rings);
+  assert.ok(!walks.some(r=>contains([-2285,815],r)),'the island centre is lawn, not the inventory outline');
+  assert.ok(walks.some(r=>contains([-2317.86,829.61],r)),'a sidewalk strip remains along Brookline Avenue');
+});
+
 test('the shipped package carries curb-bounded roadways, inventory sidewalks, islands and driveways',{skip:!hasMetroData()},async()=>{
   const city=await loadMetroCity({bounds:{minX:-2500,maxX:-1500,minZ:600,maxZ:1500}}),roadsById=new Map();
   for(const road of city.roads)roadsById.set(road.id,[...roadsById.get(road.id)??[],road]);
