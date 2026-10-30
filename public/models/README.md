@@ -10,6 +10,9 @@ Regenerate with `npm run build:traffic`. The editable artwork lives in
 material, simplifies with meshoptimizer, preserves registration UVs, and writes
 both the GLB and `traffic-fleet-stats.json`. Units are meters, +Z is forward, and
 Y=0 is the tire contact patch. Nodes use `<type>-near` and `<type>-far` names.
+Each has four wheel pivots, identified by `extras.npcWheel` (front left/right,
+rear left/right). Their mesh coordinates are local to the axle centers; the box
+truck’s rear dual tires share each rear pivot.
 The normal detail switches to the simpler version at 110 m, back at 90 m.
 Moving and parked pools share their immutable model buffers. Material batches
 contain all five silhouettes, so more types do not require
@@ -20,6 +23,10 @@ and parked vehicle gets a unique random fictional Massachusetts registration
 (excluding the player's number), shared by its front and rear plate faces. A
 padded texture atlas keeps the plates crisp without a material/draw call per
 vehicle; registrations and paint remain stable through impacts and recovery.
+Wheel phase follows signed distance traveled divided by the model’s tire radius,
+including reverse motion and parked cars pushed by collisions. Front wheels
+steer with the route and evasive maneuver; rear wheels only roll. Both LODs
+share the same phase, and teleports do not spin through the intervening distance.
 
 ## Physics
 
@@ -48,7 +55,12 @@ pickup bed is open above its sides; the cargo box is tall and solid. Vertical
 bumper and rocker collision faces prevent the lower body acting as a ramp.
 CCD is enabled. AI lane keepers become dynamic before an impact, retain their
 compound shape/mass during the collision, apply axle tire forces while upright,
-then recover to their lane when clear. Parked cars are sleeping dynamic bodies
+then recover to their lane when clear. Lane keepers predict imminent head-on
+collisions with the player, brake, and attempt a bounded swerve toward clear
+pavement. Full-footprint road checks and Rapier sweeps protect curbs, parked
+vehicles, buildings, and other traffic. They hold their escape side while the
+player passes, then ease back into their lane; blocked escape routes retain
+braking. Parked cars are sleeping dynamic bodies
 and can be moved by an impact. While their streamed ground is absent they stay
 at their last supported pose, resuming dynamic collisions when it returns.
 These are rigid-body approximations, with no

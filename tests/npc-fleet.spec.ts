@@ -13,6 +13,18 @@ test('approved fleet keeps unique matching MA registrations, paint, and both LOD
     return {width:plate.material.map.image.width,height:plate.material.map.image.height,plateCount:plate.instanceCount,paintCount:paint.instanceCount,atlas:plate.material.map.image.toDataURL()};
   });
   expect(atlas.plateCount).toBe(77);expect(atlas.paintCount).toBe(77);expect(atlas.width).toBe(2048);expect(atlas.height).toBe(1280);
+  const wheelPhases=()=>page.evaluate(()=>{
+    const g=(window as any).__backbay,s=g.snapshot(),group=g.scene.getObjectByName('AmbientTraffic'),body=group.children.find((m:any)=>m.name==='NPC near paint'),rubber=group.children.find((m:any)=>m.name==='NPC near rubber');
+    return s.traffic.map((v:any,i:number)=>{
+      const b=body.matrixWorld.clone(),w=b.clone();body.getMatrixAt(body.userData.npcInstances[i][0],b);rubber.getMatrixAt(rubber.userData.npcInstances[i][3],w);
+      const dot=(column:number)=>b.elements[column*4]*w.elements[4]+b.elements[column*4+1]*w.elements[5]+b.elements[column*4+2]*w.elements[6];
+      return{type:v.type,speed:v.speed,angle:Math.atan2(dot(2),dot(1))};
+    });
+  });
+  await expect.poll(async()=>new Set((await wheelPhases()).filter((v:any)=>v.speed>2).map((v:any)=>v.type)).size).toBe(5);
+  const wheelsBefore=await wheelPhases();await page.waitForTimeout(200);const wheelsAfter=await wheelPhases();
+  const rolling=new Set(wheelsBefore.flatMap((v:any,i:number)=>v.speed>2&&Math.abs(Math.atan2(Math.sin(wheelsAfter[i].angle-v.angle),Math.cos(wheelsAfter[i].angle-v.angle)))>.04?[v.type]:[]));expect(rolling.size).toBe(5);
+  await page.keyboard.press('Escape');const pausedWheels=await wheelPhases();await page.waitForTimeout(200);expect(await wheelPhases()).toEqual(pausedWheels);await page.locator('#resume-drive').click();
   const plateView=await page.context().newPage();await plateView.setContent(`<img src="${atlas.atlas}">`);await testInfo.attach('massachusetts-registration-atlas.png',{body:await plateView.locator('img').screenshot(),contentType:'image/png'});await plateView.close();
   for(const light of ['night','day','golden']){await page.keyboard.press('Escape');await page.locator(`[data-light="${light}"]`).click();await page.locator('#resume-drive').click();await page.waitForTimeout(250);}
   await page.evaluate(()=>{const game=(window as any).__backbay;const p=game.city.landmarks.find((p:any)=>p.id==='mission-hill').driveStart;return game.travelTo(p.x,p.z,p.yaw);});

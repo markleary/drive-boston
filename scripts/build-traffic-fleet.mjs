@@ -20,11 +20,16 @@ function material(name){if(!materials.has(name)){materials.set(name,gltf.materia
 const stats={};
 for(let model=0;model<sourceFleet.length;model++){
  const source=createTrafficVehicleSource(model),buckets=new Map();source.updateMatrixWorld(true);
- source.traverse(mesh=>{if(!mesh.isMesh)return;const name=mesh.material.name,g=mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);if(name!=='registration')g.deleteAttribute('uv');const flat=g.index?g.toNonIndexed():g;if(flat!==g)g.dispose();const parts=buckets.get(name)??[];parts.push(flat);buckets.set(name,parts);});
+ source.traverse(mesh=>{
+  if(!mesh.isMesh)return;const name=mesh.material.name,wheel=mesh.parent.name.startsWith('wheel-')?mesh.parent:null,part=wheel?.name??'body';
+  const transform=wheel?wheel.matrixWorld.clone().invert().multiply(mesh.matrixWorld):mesh.matrixWorld,g=mesh.geometry.clone().applyMatrix4(transform);
+  if(name!=='registration')g.deleteAttribute('uv');const flat=g.index?g.toNonIndexed():g;if(flat!==g)g.dispose();
+  const key=`${part}/${name}`,bucket=buckets.get(key)??{name,part,pivot:wheel?.position.toArray(),parts:[]};bucket.parts.push(flat);buckets.set(key,bucket);
+ });
  stats[source.name]={};
  for(const lod of ['near','far']){
-  const root=gltf.nodes.push({name:`${source.name}-${lod}`,children:[]})-1;gltf.scenes[0].nodes.push(root);let triangles=0;
-  for(const [name,parts] of buckets){
+  const root=gltf.nodes.push({name:`${source.name}-${lod}`,children:[]})-1;gltf.scenes[0].nodes.push(root);let triangles=0;const wheelNodes=new Map();
+  for(const {name,part,pivot,parts} of buckets.values()){
    const merged=mergeGeometries(parts,false),g=mergeVertices(merged,.00002);merged.dispose();
    const p=g.attributes.position,n=g.attributes.normal,uv=g.attributes.uv,indices=new Uint32Array(g.index.array),attributes=new Float32Array(p.count*(uv?5:3));
    for(let i=0;i<p.count;i++){attributes.set([n.getX(i),n.getY(i),n.getZ(i)],i*(uv?5:3));if(uv)attributes.set([uv.getX(i),uv.getY(i)],i*5+3);}
@@ -34,11 +39,12 @@ for(let model=0;model<sourceFleet.length;model++){
    for(let i=0;i<remap.length;i++)if(remap[i]!==0xffffffff){const j=remap[i];position.set(p.array.slice(i*3,i*3+3),j*3);normal.set(n.array.slice(i*3,i*3+3),j*3);if(uv)texcoord.set(uv.array.slice(i*2,i*2+2),j*2);}
    const attrs={POSITION:accessor(position,'VEC3',5126,34962),NORMAL:accessor(normal,'VEC3',5126,34962)};if(texcoord)attrs.TEXCOORD_0=accessor(texcoord,'VEC2',5126,34962);
    const mesh=gltf.meshes.push({name,primitives:[{attributes:attrs,indices:accessor(reduced,'SCALAR',5125,34963),material:material(name)}]})-1;
-   gltf.nodes[root].children.push(gltf.nodes.push({name,mesh})-1);triangles+=reduced.length/3;if(lod==='near')console.log(' ',name,indices.length/3,'->',reduced.length/3);g.dispose();
+   let parent=root;if(part!=='body'){if(!wheelNodes.has(part)){wheelNodes.set(part,gltf.nodes.push({name:part,translation:pivot,extras:{npcWheel:Number(part.slice(6))},children:[]})-1);gltf.nodes[root].children.push(wheelNodes.get(part));}parent=wheelNodes.get(part);}
+   gltf.nodes[parent].children.push(gltf.nodes.push({name,mesh})-1);triangles+=reduced.length/3;if(lod==='near')console.log(' ',name,indices.length/3,'->',reduced.length/3);g.dispose();
   }
   stats[source.name][lod]=triangles;
  }
- source.traverse(o=>{o.geometry?.dispose();});for(const parts of buckets.values())parts.forEach(g=>g.dispose());
+ source.traverse(o=>{o.geometry?.dispose();});for(const {parts} of buckets.values())parts.forEach(g=>g.dispose());
  console.log(source.name,stats[source.name]);
 }
 gltf.buffers.push({byteLength:bytes});

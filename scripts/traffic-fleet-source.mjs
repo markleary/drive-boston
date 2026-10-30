@@ -3,7 +3,7 @@
 import * as T from 'three';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
 import {mergeVertices} from 'three/addons/utils/BufferGeometryUtils.js';
-import {createVehicleWheelsGeometry,createMassachusettsPlateMaterial} from '../src/render/car.ts';
+import {createVehicleWheelGeometry,createMassachusettsPlateMaterial} from '../src/render/car.ts';
 const S={};
 function mat(color,roughness=.5,metalness=0){return new T.MeshStandardMaterial({color,roughness,metalness,side:T.DoubleSide});}
 function add(g,m,group=S.car){const a=new T.Mesh(g,m);a.castShadow=true;a.receiveShadow=false;group.add(a);return a;}
@@ -295,20 +295,15 @@ function details(c,m,profile){
 }
 
 function wheels(c,m){
- if(c.id!=='box'){
-  const surfaces={rubber:m.rubber,trim:m.black,chrome:m.chrome};
-  for(const [surface,g] of createVehicleWheelsGeometry()){
-   const a=g.attributes.position,scale=c.r/.34;
-   for(let i=0;i<a.count;i++){
-    const x=a.getX(i),y=a.getY(i),z=a.getZ(i),side=Math.sign(x),axle=z>0?c.front:c.rear;
-    a.setXYZ(i,side*(c.W/2-.14)+(x-side*.86)*scale,c.r+(y+.34)*scale,axle+(z-Math.sign(z)*1.33)*scale);
-   }
-   add(g,surfaces[surface]||m.rim);
+ const car=S.car,surfaces={rubber:m.rubber,trim:m.black,chrome:m.chrome};
+ for(const [axle,z] of [c.front,c.rear].entries())for(const [side,s] of [-1,1].entries()){
+  const pivot=new T.Group();pivot.name=`wheel-${axle*2+side}`;pivot.position.set(s*(c.W/2-.14),c.r,z);car.add(pivot);
+  if(c.id!=='box'){
+   for(const [surface,g] of createVehicleWheelGeometry(s)){g.scale(c.r/.34,c.r/.34,c.r/.34);add(g,surfaces[surface]||m.rim,pivot);}
+   continue;
   }
-  return;
- }
- for(const z of [c.front,c.rear])for(const s of [-1,1]){
-  const dual=c.id==='box'&&z===c.rear;
+  S.car=pivot;
+  const dual=z===c.rear;
   for(let wheel=0;wheel<(dual?2:1);wheel++){
    const center=s*(c.W/2-.14-(dual?wheel*.25:0)),r=c.r,depth=c.id==='pickup'?.275:.225;
    const points=[[r*.69,-depth*.50],[r*.82,-depth*.55],[r*.95,-depth*.45],[r,-depth*.24],[r,depth*.24],[r*.95,depth*.45],[r*.82,depth*.55],[r*.69,depth*.50]].map(p=>new T.Vector2(...p));
@@ -334,6 +329,10 @@ function wheels(c,m){
     const a=j/42*Math.PI*2;const block=box(m.rubber,[depth*.78,.011,.032],[center,r+Math.cos(a)*r,z+Math.sin(a)*r],.004);block.rotation.x=a;
    }
   }
+  // Box-truck authoring above uses vehicle coordinates; keep the pair of rear
+  // tires on one local axle pivot so both spin together.
+  for(const mesh of pivot.children)mesh.position.sub(pivot.position);
+  S.car=car;
  }
 }
 function cargo(c,m){
