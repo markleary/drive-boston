@@ -123,6 +123,17 @@ class SidewalkTest(unittest.TestCase):
   features=[{'attributes':{'MATERIAL':'BR'},'geometry':{'rings':[outer,hole]}},{'attributes':{'MATERIAL':'CC'},'geometry':{'rings':[[[20,0],[20,5],[25,5],[25,0],[20,0]]]}},{'attributes':{'MATERIAL':' '},'geometry':{'rings':[[[200,0],[200,5],[205,5],[205,0],[200,0]]]}}]
   out=ss.sidewalk_polygons(features,lambda x,y:(x,y),Polygon([[-1,-1],[100,-1],[100,100],[-1,100]]))
   self.assertEqual([m for _,m in out],['brick','concrete']);self.assertAlmostEqual(out[0][0].area,96);self.assertEqual(len(out[0][0].interiors),1)
+ def test_island_outlines_keep_only_the_declared_sidewalk_width(self):
+  square=lambda x0:[[x0,0],[x0,40],[x0+40,40],[x0+40,0],[x0,0]]
+  # The same 40 m island outline with a 9.5 ft sidewalk: reduced inside parkland, kept whole outside it; a declared 40 ft plaza in parkland is kept.
+  features=[{'attributes':{'MATERIAL':'CC','SWK_WIDTH':'9.5'},'geometry':{'rings':[square(0)]}},{'attributes':{'MATERIAL':'CC','SWK_WIDTH':'9.5'},'geometry':{'rings':[square(100)]}},{'attributes':{'MATERIAL':'CC','SWK_WIDTH':'40'},'geometry':{'rings':[square(200)]}},{'attributes':{'MATERIAL':'CC','SWK_WIDTH':' '},'geometry':{'rings':[square(300)]}}]
+  parks=[{'rings':[[[-5,-5],[45,-5],[45,45],[-5,45]]]},{'rings':[[[195,-5],[245,-5],[245,45],[195,45]]]},{'rings':[[[295,-5],[345,-5],[345,45],[295,45]]]}]
+  stats={};out=ss.sidewalk_polygons(features,lambda x,y:(x,y),Polygon([[-10,-10],[400,-10],[400,100],[-10,100]]),parks,stats)
+  self.assertEqual(stats['outlines'],2);self.assertEqual(len(out),4)
+  width=9.5*.3048;self.assertAlmostEqual(out[0][0].area,1600-(40-2*width)**2,delta=.01);self.assertEqual(len(out[0][0].interiors),1)
+  self.assertAlmostEqual(out[1][0].area,1600);self.assertAlmostEqual(out[2][0].area,1600)
+  self.assertAlmostEqual(out[3][0].area,1600-(40-2*ss.WALK_FALLBACK)**2,delta=.01,msg='a blank width falls back to the plain band width')
+  self.assertEqual(ss.sidewalk_polygons(features[:1],lambda x,y:(x,y),Polygon([[-10,-10],[400,-10],[400,100],[-10,100]]))[0][0].area,1600,'without parks nothing is reduced')
 
 
 class InstallTest(unittest.TestCase):
@@ -131,11 +142,12 @@ class InstallTest(unittest.TestCase):
    data=pathlib.Path(temporary);source=data/'source';source.mkdir();(data/'tiles').mkdir()
    roads=[road('b-1',[[100,500],[900,500]],10,'Boston Street'),road('osm-1-0',[[1100,100],[1100,900]],8,'Town Street'),road('osm-2-0',[[1010,500],[1190,500]],8,'Cross Street'),road('deck',[[100,100],[400,100]],10,'Deck')]
    roads[3]['elevations']=[8,8]
-   city={'roads':roads,'neighborhoods':[{'name':'Boston','rings':[[[0,0],[1000,0],[1000,1000],[0,1000]]],'town':False},{'name':'Town','rings':[[[1000,0],[2000,0],[2000,1000],[1000,1000]]],'town':True}],'coverage':[[[0,0],[2000,0],[2000,1000],[0,1000]]],'parks':[],'sources':[],'tiles':{'size':1000,'directory':'tiles','keys':['0_0','1_0']}}
+   city={'roads':roads,'neighborhoods':[{'name':'Boston','rings':[[[0,0],[1000,0],[1000,1000],[0,1000]]],'town':False},{'name':'Town','rings':[[[1000,0],[2000,0],[2000,1000],[1000,1000]]],'town':True}],'coverage':[[[0,0],[2000,0],[2000,1000],[0,1000]]],'parks':[{'name':'Old Loop','rings':[[[100,650],[400,650],[400,750],[100,750]]]}],'sources':[],'tiles':{'size':1000,'directory':'tiles','keys':['0_0','1_0']}}
    (data/'city.json').write_text(json.dumps(city));(data/'provenance.json').write_text('{}')
    legacy=ss.legacy_town_curbs(roads,{'Town':Polygon(city['neighborhoods'][1]['rings'][0])})
    # Boston: a survey curb pair 7 m from the centerline (wider than the 5 m guess) with a short driveway tongue on the left (+z) side, an inventory sidewalk on the right; a closed island; the town has legacy mitred curbs.
-   curbs0=[[[0,493],[1000,493]],[[0,507],[400,507],[400,512],[403,512],[403,507],[1000,507]],rect_curb(500,520,520,530),rect_curb(600,520,640,530)]
+   # Two curbs 200 m from any street: the one in the park is a removed roadway's remnant, the other is kept.
+   curbs0=[[[0,493],[1000,493]],[[0,507],[400,507],[400,512],[403,512],[403,507],[1000,507]],rect_curb(500,520,520,530),rect_curb(600,520,640,530),[[150,700],[350,700]],[[600,700],[800,700]]]
    write_tile(data/'tiles/t_0_0.bin',{'tx':0,'tz':0,'size':1000,'buildings':[],'curbs':curbs0,'parkPaths':[],'roads':['b-1','deck']},[])
    write_tile(data/'tiles/t_1_0.bin',{'tx':1,'tz':0,'size':1000,'buildings':[],'curbs':[c for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))],'parkPaths':[],'roads':['osm-1-0','osm-2-0']},[])
    (source/'layer-0.json').write_text(json.dumps({'features':[{'attributes':{'MATERIAL':'CC'},'geometry':{'rings':[[[0,493],[0,490],[1000,490],[1000,493],[0,493]]]}}]}))
@@ -144,9 +156,10 @@ class InstallTest(unittest.TestCase):
    first=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None);snapshot={p.name:p.read_bytes() for p in data.rglob('*') if p.is_file()}
    second=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None)
    self.assertEqual({p.name:p.read_bytes() for p in data.rglob('*') if p.is_file()},snapshot,'a rerun rewrites identical bytes')
-   self.assertEqual({**first,'changedTiles':0},second);self.assertEqual(first['changedTiles'],2)
+   self.assertEqual({**first,'changedTiles':0,'staleCurbs':0,'staleCurbMetres':0},second);self.assertEqual(first['changedTiles'],2)
    header=ss.unpack(data/'tiles/t_0_0.bin')[0];record=next(p for p in header['pavements'] if p['road']=='b-1')
    self.assertEqual([p['road'] for p in header['pavements']],['b-1'],'decks keep their ribbons');self.assertEqual(record['walk'],[0,1])
+   self.assertEqual(first['staleCurbs'],1);self.assertEqual(first['staleCurbMetres'],200);self.assertNotIn([[150,700],[350,700]],header['curbs']);self.assertIn([[600,700],[800,700]],header['curbs'],'beyond reach but outside parkland')
    edges=np.array(record['edges']).reshape(-1,4)/100;np.testing.assert_allclose(edges[:,1],507,atol=.011);np.testing.assert_allclose(edges[:,3],493,atol=.011)
    self.assertLess(len(edges),6,'straight edges compress; the driveway tongue is suppressed');self.assertEqual(len(header['islands']),1);self.assertEqual(len(header['sidewalks']),1)
    # The paved face (40 m by 10 m) plus the untagged 4.5 m service ribbon approaching it from the curb (no curb within reach of its stations), dissolved into one surface.
@@ -155,6 +168,7 @@ class InstallTest(unittest.TestCase):
    self.assertEqual([s['name'] for s in installed['sources']],['Boston Sidewalk Inventory','OpenStreetMap service roads and parking areas (driveway fills)'])
    town=ss.unpack(data/'tiles/t_1_0.bin')[0];self.assertFalse({json.dumps(c) for c in town['curbs']}&{json.dumps(c) for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))},'legacy mitred curbs are replaced')
    self.assertEqual(len(town['curbs']),first['townCurbs']);self.assertGreater(len(town['curbs']),0)
+   self.assertEqual(first['surveyCurbs']+first['townCurbs'],len(header['curbs'])+len(town['curbs']),'the two counts partition the curbs in the tiles')
    provenance=json.loads((data/'provenance.json').read_text());self.assertEqual(provenance['streetSurfaces']['measuredRoads'],3,'the Boston street and both town streets')
 
 
