@@ -243,9 +243,22 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       colliders.push(...createNPCVehicleColliders(physics.world,body,spec));body.sleep();parkedBodies.push(body);
     }else parkedBodies.push(undefined);
   }
+  const parkedPoses=parkedBodies.map(body=>body?{position:body.translation(),rotation:body.rotation()}:undefined),parkedSuspended=new Set<number>();
   function updateParked(observer?:{x:number;z:number}){
     for(const [i,vehicle] of parked.entries()){
       const body=parkedBodies[i];
+      if(body&&physics?.streaming){
+        const p=body.translation(),ground=sampleElevation(city,p.x,p.z);
+        const support=physics.world.castRay(new RAPIER.Ray({x:p.x,y:ground+2,z:p.z},{x:0,y:-1,z:0}),4,true,undefined,undefined,undefined,body,c=>physics.terrainColliders.has(c.handle));
+        // Tile disposal wakes sleeping bodies. Freeze at the last supported
+        // pose until physical ground returns; sampled elevation alone cannot
+        // keep a dynamic car from falling through an unloaded neighborhood.
+        if(!support&&!parkedSuspended.has(i)){
+          const pose=parkedPoses[i]!;body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased,true);body.setTranslation(pose.position,false);body.setRotation(pose.rotation,false);
+          body.setLinvel({x:0,y:0,z:0},false);body.setAngvel({x:0,y:0,z:0},false);body.setNextKinematicTranslation(pose.position);body.setNextKinematicRotation(pose.rotation);parkedSuspended.add(i);
+        }else if(support&&parkedSuspended.delete(i)){body.setBodyType(RAPIER.RigidBodyType.Dynamic,true);body.sleep();}
+        if(support)parkedPoses[i]={position:body.translation(),rotation:body.rotation()};
+      }
       if(body){const p=body.translation(),q=body.rotation();dummy.position.set(p.x,p.y,p.z);dummy.quaternion.set(q.x,q.y,q.z,q.w);}
       else{const n=sampleTerrainNormal(city,vehicle.x,vehicle.z),q=terrainRotation(city,vehicle.x,vehicle.z,vehicle.yaw);dummy.position.set(vehicle.x+n.x*NPC_BODY_LIFT,vehicle.y+n.y*NPC_BODY_LIFT,vehicle.z+n.z*NPC_BODY_LIFT);dummy.quaternion.set(q.x,q.y,q.z,q.w);}
       parkedLift.set(0,NPC_BODY_LIFT,0).applyQuaternion(dummy.quaternion);dummy.position.sub(parkedLift);dummy.updateMatrix();

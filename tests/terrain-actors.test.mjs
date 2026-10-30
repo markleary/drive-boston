@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { DrivingPhysics } from '../src/physics/vehicle.ts';
 import { createTraffic } from '../src/simulation/traffic.ts';
 import { createStreetLife } from '../src/render/street-life.ts';
-import { sampleElevation } from '../src/simulation/terrain.ts';
+import { sampleElevation,buildTerrainGeometryData } from '../src/simulation/terrain.ts';
 
 import {loadCentralCity} from './helpers/metro-city.mjs';
 const ground=(x,z)=>8+.06*x+.035*z;
@@ -58,6 +58,33 @@ test('ambient actors and collision bodies share the measured road grade',async()
       for(const person of life.pedestrians)assert.ok(Math.abs(person.position.y-ground(person.position.x,person.position.z)-.035)<1e-5,'walking feet must track the terrain throughout their route');
     }
   }finally{life.dispose();traffic.dispose();physics.dispose();}
+});
+
+test('parked cars survive missing streamed ground and remain movable after it reloads',async()=>{
+  const city=slopedDistrict(),scene=new THREE.Scene(),physics=await DrivingPhysics.create(city,{streaming:true}),life=createStreetLife(scene,city,physics);
+  const raw=buildTerrainGeometryData(city),bodies=[...new Set([...life.parkedColliders].map(h=>physics.world.getCollider(h).parent()))];
+  const step=(frames)=>{for(let i=0;i<frames;i++){physics.world.step();life.update(1/60);}};
+  const registrations=life.parked.map(v=>v.registration),initial=bodies.map(b=>b.translation());
+  try{
+    assert.ok(bodies.length>0,'fixture must have parked cars');
+    // Startup can place the fleet before the supporting tile has arrived.
+    step(240);
+    bodies.forEach((b,i)=>assert.ok(Math.abs(b.translation().y-initial[i].y)<.05,'missing initial terrain must not let parked cars fall'));
+    for(let cycle=0;cycle<2;cycle++){
+      const terrain=physics.addTerrainTile(raw.vertices,raw.indices);step(90);
+      assert.ok(bodies.every(b=>b.isDynamic()),'loaded terrain must restore collision response');
+      const body=bodies[0],start=body.translation(),mass=body.mass();
+      body.applyImpulse({x:mass*2,y:0,z:0},true);step(30);
+      assert.ok(body.translation().x-start.x>.15,'a restored parked car must still respond to an impact');
+      const supported=bodies.map(b=>b.translation());
+      physics.removeColliders([terrain]);
+      // Render updates follow physics and may follow several substeps.
+      physics.world.step();physics.world.step();step(240);
+      bodies.forEach((b,i)=>assert.ok(Math.abs(b.translation().y-supported[i].y)<.05,'unloading support must preserve the last supported pose'));
+      assert.deepEqual(life.parked.map(v=>v.registration),registrations);
+      assert.ok(Math.abs(body.mass()-mass)<.01,'suspension must retain the vehicle mass');
+    }
+  }finally{life.dispose();physics.dispose();}
 });
 
 test('the fixed traffic fleet follows a distant neighborhood outside a protected nearby area',async()=>{

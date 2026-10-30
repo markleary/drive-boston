@@ -4,7 +4,7 @@ test('approved fleet keeps unique matching MA registrations, paint, and both LOD
   test.setTimeout(180000);const errors:string[]=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|Shader Error/.test(m.text()))errors.push(m.text());});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:120000});await page.getByTestId('start-drive').click();
-  const initial=await page.evaluate(()=>{const s=(window as any).__backbay.snapshot();return {traffic:s.traffic,parked:s.parkedVehicles};});
+  const initial=await page.evaluate(()=>{const s=(window as any).__backbay.snapshot();return {traffic:s.traffic,parked:s.parkedVehicles,tileSize:s.tiles.tileSize};});
   expect(initial.traffic).toHaveLength(77);expect(new Set(initial.traffic.map((v:any)=>v.type)).size).toBe(5);
   const registrations=[...initial.traffic,...initial.parked].map((v:any)=>v.registration);
   expect(new Set(registrations).size).toBe(registrations.length);for(const number of registrations)expect(number).toMatch(/^[1-9][A-Z]{2} \d{3}$/);
@@ -19,5 +19,19 @@ test('approved fleet keeps unique matching MA registrations, paint, and both LOD
   const after=await page.evaluate(()=>(window as any).__backbay.snapshot());
   expect(after.traffic.map((v:any)=>v.registration)).toEqual(initial.traffic.map((v:any)=>v.registration));expect(after.traffic.map((v:any)=>v.color)).toEqual(initial.traffic.map((v:any)=>v.color));
   expect(after.population.traffic.target).toBe(22);
-  await page.screenshot({path:testInfo.outputPath('new-fleet-mission-hill.png')});expect(errors).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('new-fleet-mission-hill.png')});
+  // A distant trip must actually unload every supporting spawn-area tile.
+  const parkedTiles=initial.parked.map((v:any)=>`${Math.floor(v.x/initial.tileSize)}_${Math.floor(v.z/initial.tileSize)}`);
+  await page.evaluate(()=>{const game=(window as any).__backbay,p=game.city.landmarks.find((p:any)=>p.id==='logan-airport').driveStart;return game.travelTo(p.x,p.z,p.yaw);});
+  await expect.poll(()=>page.evaluate((keys:string[])=>{const loaded=(window as any).__backbay.snapshot().tiles.keys;return keys.every(key=>!loaded.includes(key));},parkedTiles),{timeout:30000}).toBe(true);
+  await page.waitForTimeout(2000);
+  const checkParked=async()=>{
+    const parked=await page.evaluate(()=>(window as any).__backbay.snapshot().parkedVehicles);
+    expect(parked.map((v:any)=>v.registration)).toEqual(initial.parked.map((v:any)=>v.registration));
+    for(const [i,v] of parked.entries())expect(Math.abs(v.y-initial.parked[i].y)).toBeLessThan(.3);
+  };
+  await checkParked();
+  await page.evaluate(()=>{const game=(window as any).__backbay,p=game.city.spawn;return game.travelTo(p.x,p.z,p.yaw);});
+  await page.waitForTimeout(1000);await checkParked();
+  expect(errors).toEqual([]);
 });

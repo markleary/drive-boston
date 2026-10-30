@@ -49,7 +49,9 @@ bumper and rocker collision faces prevent the lower body acting as a ramp.
 CCD is enabled. AI lane keepers become dynamic before an impact, retain their
 compound shape/mass during the collision, apply axle tire forces while upright,
 then recover to their lane when clear. Parked cars are sleeping dynamic bodies
-and can be moved by an impact. These are rigid-body approximations, with no
+and can be moved by an impact. While their streamed ground is absent they stay
+at their last supported pose, resuming dynamic collisions when it returns.
+These are rigid-body approximations, with no
 crumpling or separately simulated wheel suspension on NPCs.
 
 Traffic keeps a fixed pool of 77 vehicles (previously 64). Local population
