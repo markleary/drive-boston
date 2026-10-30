@@ -12,7 +12,7 @@ function interiorStation(road:Road){
 }
 async function arrive(page:Page,road:Road,station:number,reverse=false){
   const p=tunnelPointAt(road,station);await page.evaluate(async p=>{await (window as any).__backbay.travelTo(p.x,p.z,p.yaw,p.roadId);},{...p,yaw:p.yaw+(reverse?Math.PI:0),roadId:road.id});
-  await page.waitForTimeout(900);return p;
+  await page.keyboard.down('Space');await page.waitForTimeout(900);await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);await page.keyboard.up('Space');return p;
 }
 async function follow(page:Page,road:Road,start:number,end:number){
   await arrive(page,road,start);const stations=tunnelStations(road),began=Date.now();let current=start,state=(await snapshot(page)).state;
@@ -82,4 +82,45 @@ test.describe('mobile tunnel view',()=>{
     await page.locator('#open-settings').tap();await page.locator('#settings-modal [data-travel="bike"]').tap();await page.locator('#resume-drive').tap();await page.waitForTimeout(900);
     s=await snapshot(page);expect(s.travelMode).toBe('bike');expect(s.state.y).toBeLessThan(p.y+2);expect(s.cameraPosition.y).toBeLessThan(p.y+road.tunnel!.clearance+.2);await page.screenshot({path:testInfo.outputPath('central-artery-bike-mobile.png')});expect(errors).toEqual([]);
   });
+});
+
+test('reported tunnel junctions, portal edges and reverse-facing signs',async({page,request},testInfo)=>{
+  test.setTimeout(180000);await page.setViewportSize({width:1600,height:1000});const errors:string[]=[];
+  page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(m.text()))errors.push(m.text());});
+  const locations=[
+    {name:'north-street-surface-merge',x:1615.40,z:-1272.73,yaw:-1.0177,roadId:undefined,y:.97},
+    {name:'haymarket-junction-roof',x:1360.24,z:-1543.36,yaw:-2.0711,roadId:'central-artery-southbound',y:-7.84},
+    {name:'government-center-sign-rear',x:1339.78,z:-1573.02,yaw:-2.3482,roadId:'central-artery-southbound',y:-6.07},
+    {name:'mercantile-portal-edge',x:1799.67,z:-1194.68,yaw:-2.1767,roadId:undefined,y:.05},
+  ];
+  await page.addInitScript(s=>localStorage.setItem('backbay-drive-v1',JSON.stringify(s)),locations[0]);
+  await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
+  for(const place of locations){
+    await page.evaluate(async p=>{await (window as any).__backbay.travelTo(p.x,p.z,p.yaw,p.roadId);},place);await page.keyboard.down('Space');await page.waitForTimeout(1400);await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);
+    const state=await snapshot(page);expect(state.tiles.failed).toBe(0);expect(state.graphicsContext.losses).toBe(0);
+    expect(Math.abs(state.state.y-place.y),'reported position remains supported without falling through the roadway').toBeLessThan(1.5);
+    await page.screenshot({path:testInfo.outputPath(`${place.name}.png`)});await page.keyboard.up('Space');
+  }
+  // The same exit sign is approached in the legal traffic direction as well
+  // as from its back in the user report; only its front should carry text.
+  const roads=(await(await request.get('/data/central-artery.json')).json()).roads as Road[],south=roads.find(r=>r.id==='central-artery-southbound')!;
+  await arrive(page,south,270);await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);await page.screenshot({path:testInfo.outputPath('government-center-sign-front.png')});
+  expect(errors).toEqual([]);
+});
+
+test('North Street exit continues onto its surface street beyond the ramp endpoint',async({page,request},testInfo)=>{
+  test.setTimeout(150000);const data=await(await request.get('/data/central-artery.json')).json(),ramp=(data.roads as Road[]).find(r=>r.id==='central-artery-government-center-north-off')!;
+  const length=tunnelStations(ramp).at(-1)!,end=tunnelPointAt(ramp,length),p=tunnelPointAt(ramp,length-45);
+  const surface=((await(await request.get('/data/city.json')).json()).roads as Road[]).find(r=>r.id==='13160-0-0')!;
+  const continuation=surface.points.slice(0,-1).reverse();
+  const continued:Road={...ramp,points:[...ramp.points,...continuation],elevations:[...ramp.elevations!,...continuation.map(()=>end.y)]};
+  await page.addInitScript(s=>{
+    localStorage.setItem('backbay-drive-v1',JSON.stringify(s));(window as any).__tunnelSteer=0;
+    Object.defineProperty(navigator,'getGamepads',{value:()=>[{axes:[-(window as any).__tunnelSteer],buttons:Array.from({length:8},()=>({value:0,pressed:false}))}]});
+  },{x:p.x,z:p.z,yaw:p.yaw,roadId:ramp.id});
+  await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
+  const state=await follow(page,continued,length-45,length+15);
+  expect((state.x-end.x)*Math.sin(end.yaw)+(state.z-end.z)*Math.cos(end.yaw),'drive onto the street, beyond merely reaching the ramp endpoint').toBeGreaterThan(9);
+  expect(1-2*(state.rotation.x**2+state.rotation.z**2),'exit without riding over a barrier').toBeGreaterThan(.97);
+  await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.screenshot({path:testInfo.outputPath('north-street-exit-onto-surface.png')});
 });

@@ -213,6 +213,10 @@ if city.get('tunnels'):
  assert sum(bool(r['tunnel'].get('capStart'))+bool(r['tunnel'].get('capEnd')) for r in tunnels['roads'])==2,'both southern bore ends must close'
  for r in tunnels['roads']:
   assert len(r['points'])==len(r['elevations'])>=2 and r['oneway']==1 and r['traffic'] is False
+  if r.get('deckEdgeElevations'):
+   assert len(r['deckEdgeElevations'])==len(r['points']) and all(len(pair)==2 and all(math.isfinite(y) for y in pair) for pair in r['deckEdgeElevations']),f"invalid tunnel crossfall: {r['id']}"
+  if r.get('deckWidths'):
+   assert len(r['deckWidths'])==len(r['points']) and all(math.isfinite(w) and 3<=w<=20 for w in r['deckWidths']),f"invalid tunnel width profile: {r['id']}"
   assert 4<=r['tunnel']['clearance']<=7 and 3<=r['width']<=20
   assert all(math.isfinite(v) for p in r['points'] for v in p) and all(math.isfinite(y) for y in r['elevations'])
   assert all(covered.covers(Point(*p)) for p in r['points']),f"tunnel escapes coverage: {r['id']}"
