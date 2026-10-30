@@ -1,7 +1,8 @@
 """Source alignment, reproducibility and independent tunnel-level regressions."""
 import gzip,importlib.util,itertools,json,math,pathlib,unittest
 import numpy as np
-from shapely.geometry import LineString,Point
+from shapely.geometry import LineString,Point,Polygon
+from shapely.strtree import STRtree
 from road_structure_clearance import crossing_points,road_height
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
@@ -23,9 +24,10 @@ class CentralArterySourceTest(unittest.TestCase):
     f=self.features[fid]
     for endpoint in f['geometry']['paths'][0][::len(f['geometry']['paths'][0])-1]:
      p=module.xy(endpoint)
-     if route.get('surveyLateralFit'):
-      feature=self.features[route['featureIds'][-1 if route.get('direction')=='north' else 0]]
-      anchor=module.xy(feature['geometry']['paths'][0][-1 if route.get('direction')=='north' else 0])
+     if route.get('surveyLateralFit') or route.get('surfaceRoadFit'):
+      north_end=route.get('direction')=='north' or route.get('surfaceStart')
+      feature=self.features[route['featureIds'][-1 if north_end else 0]]
+      anchor=module.xy(feature['geometry']['paths'][0][-1 if north_end else 0])
       if math.dist(p,anchor)<max(80,route.get('surfaceRoadFit',{}).get('endMetersFromNorth',0)):continue
      self.assertIn(tuple(p),points,(route['id'],fid,p))
  def test_surface_landings_use_actual_triangle_terrain_and_existing_streets(self):
@@ -78,6 +80,61 @@ class CentralArterySourceTest(unittest.TestCase):
      self.assertAlmostEqual(road['elevations'][i],road_height(parent,point,lambda x,z:0),delta=.005,msg=f"{road['id']} slab edge crosses its parent lane")
      checked+=1
   self.assertGreater(checked,20)
+ def test_full_width_pavement_meets_or_has_independent_headroom(self):
+  # Independent triangle/triangle intersections catch oblique slab steps and
+  # side overlaps that a centerline graph or centerline drive cannot reveal.
+  decks={}
+  for road in self.roads:
+   sections=module.deck_sections(road);triangles=[]
+   for a,b in zip(sections,sections[1:]):
+    for vertices in [(a[0],a[1],b[0]),(a[1],b[1],b[0])]:
+     p,q,r=vertices;dx1,dz1=q[0]-p[0],q[2]-p[2];dx2,dz2=r[0]-p[0],r[2]-p[2];det=dx1*dz2-dx2*dz1
+     if abs(det)<1e-8:continue
+     gx=((q[1]-p[1])*dz2-(r[1]-p[1])*dz1)/det;gz=(dx1*(r[1]-p[1])-dx2*(q[1]-p[1]))/det
+     triangles.append((Polygon([(v[0],v[2]) for v in vertices]),(p[0],p[1],p[2],gx,gz)))
+   decks[road['id']]=triangles
+  checked=0
+  for a,b in itertools.combinations(self.roads,2):
+   ta,tb=decks[a['id']],decks[b['id']];tree=STRtree([t[0] for t in tb])
+   for polygon,plane in ta:
+    for j in tree.query(polygon):
+     other,other_plane=tb[j];overlap=polygon.intersection(other)
+     if overlap.area<.001:continue
+     height=lambda v,p:v[1]+v[3]*(p[0]-v[0])+v[4]*(p[1]-v[2])
+     for point in overlap.exterior.coords:
+      difference=abs(height(plane,point)-height(other_plane,point))
+      self.assertTrue(difference<=.08 or difference>=6.2,(a['id'],b['id'],point,difference))
+      checked+=1
+  self.assertGreater(checked,2000)
+ def test_all_surface_lips_match_terrain_across_the_lane(self):
+  for spec,road in zip(self.source['routes'],self.roads):
+   for index,flag in [(0,'surfaceStart'),(-1,'surfaceEnd')]:
+    if not spec.get(flag):continue
+    for x,y,z in module.deck_sections(road)[index]:
+     ground=module.sample_grid(self.city['elevation'],self.heights,[x,z])
+     self.assertAlmostEqual(y,ground,delta=.0001,msg=road['id'])
+ def test_local_width_tapers_leave_usable_lanes(self):
+  narrowed=0
+  for road in self.roads:
+   if 'deckWidths' not in road:continue
+   narrowed+=1;widths=road['deckWidths'];self.assertGreaterEqual(min(widths),10 if road['kind']=='motorway' else 3.8)
+   self.assertLessEqual(max(widths),road['width'])
+   for p,q,a,b in zip(road['points'],road['points'][1:],widths,widths[1:]):self.assertLessEqual(abs(b-a)/math.dist(p,q),.1001)
+  self.assertGreater(narrowed,2)
+ def test_surface_crossings_keep_intact_roadways_above_the_tunnel(self):
+  checked=0
+  for record in self.data['provenance']['routes']:
+   road=self.by_id[record['id']]
+   for crossing in record.get('surfaceUnderpasses',[]):
+    for station in np.linspace(crossing['start'],crossing['end'],11):
+     self.assertTrue(any(a-.001<=station<=b+.001 for a,b in road['tunnel']['covered']),(road['id'],crossing['street'],station,'surface street must not be excavated'))
+     checked+=1
+  self.assertGreater(checked,100)
+ def test_covered_roof_fits_beneath_surface_at_both_edges(self):
+  for road in self.roads:
+   for station,section in zip(module.stations(road['points']),module.deck_sections(road)):
+    if not any(a-.001<=station<=b+.001 for a,b in road['tunnel']['covered']):continue
+    for x,y,z in section:self.assertLessEqual(y+6,module.sample_grid(self.city['elevation'],self.heights,[x,z])+.0001,road['id'])
  def test_overlapping_opposing_bores_have_independent_clearance(self):
   north,south=self.roads[:2];south_line=LineString(south['points']);checked=0
   for point,y in zip(north['points'],north['elevations']):

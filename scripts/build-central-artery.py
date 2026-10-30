@@ -29,13 +29,122 @@ def interpolate(controls,d):
   if d<=b:return y+(z-y)*max(0,min(1,(d-a)/max(.001,b-a)))
  return controls[-1][1]
 
-def projected_profile(road,point):
- best=(math.inf,0.)
- for a,b,ya,yb in zip(road['points'],road['points'][1:],road['elevations'],road['elevations'][1:]):
+def projection(road,point):
+ best=(math.inf,0,0.)
+ for i,(a,b) in enumerate(zip(road['points'],road['points'][1:])):
   dx,dz=b[0]-a[0],b[1]-a[1];t=max(0,min(1,((point[0]-a[0])*dx+(point[1]-a[1])*dz)/max(.000001,dx*dx+dz*dz)))
   distance=math.hypot(point[0]-a[0]-dx*t,point[1]-a[1]-dz*t)
-  if distance<best[0]:best=(distance,ya+(yb-ya)*t)
+  if distance<best[0]:best=(distance,i,t)
  return best
+
+def projected_profile(road,point):
+ distance,i,t=projection(road,point)
+ return distance,road['elevations'][i]+(road['elevations'][i+1]-road['elevations'][i])*t
+
+def deck_sections(road):
+ sections=[];ps=road['points']
+ for i,p in enumerate(ps):
+  a,b=ps[max(0,i-1)],ps[min(len(ps)-1,i+1)];dx,dz=b[0]-a[0],b[1]-a[1];n=math.hypot(dx,dz);half=road.get('deckWidths',[road['width']]*len(ps))[i]/2
+  ys=road.get('deckEdgeElevations',[[y,y] for y in road['elevations']])[i]
+  sections.append([(p[0]+dz/n*half,ys[0],p[1]-dx/n*half),(p[0]-dz/n*half,ys[1],p[1]+dx/n*half)])
+ return sections
+
+def deck_height(road,point):
+ # Evaluate the exact ribbon triangle, including the parent's crossfall. The
+ # closest plane is extended just outside the pavement to make a coplanar fork.
+ _,index,_=projection(road,point);sections=deck_sections(road);choices=[]
+ for i in range(max(0,index-1),min(len(sections)-1,index+2)):
+  for a,b,c in [(sections[i][0],sections[i][1],sections[i+1][0]),(sections[i][1],sections[i+1][1],sections[i+1][0])]:
+   dx1,dz1=b[0]-a[0],b[2]-a[2];dx2,dz2=c[0]-a[0],c[2]-a[2];det=dx1*dz2-dx2*dz1
+   if abs(det)<1e-8:continue
+   u=((point[0]-a[0])*dz2-(point[1]-a[2])*dx2)/det;v=(dx1*(point[1]-a[2])-dz1*(point[0]-a[0]))/det
+   height=a[1]+(b[1]-a[1])*u+(c[1]-a[1])*v
+   if min(u,v,1-u-v)>=-1e-8:return height
+   choices.append((max(-u,-v,u+v-1),height))
+ return min(choices)[1]
+
+def fit_surface_underpasses(city,route,points,ys,ground):
+ if not route.get('surfaceUnderpasses'):return ys,[]
+ line=LineString(points);ss=stations(points);streets={r['id']:r for r in city['roads']};crossings=[]
+ for road_id in route['surfaceUnderpasses']:
+  street=streets[road_id];corridor=LineString(street['points']).buffer(street['width']/2+route['width']/2+1)
+  intersection=line.intersection(corridor)
+  if intersection.is_empty:continue
+  for part in intersection.geoms if hasattr(intersection,'geoms') else [intersection]:
+   if part.geom_type!='LineString':continue
+   lo,hi=sorted([line.project(Point(part.coords[0])),line.project(Point(part.coords[-1]))])
+   # The ramp's actual at-grade entrance/exit remains open to its parent street.
+   if route.get('surfaceStart') and lo<20 or route.get('surfaceEnd') and hi>line.length-20:continue
+   samples=[]
+   for d in np.linspace(lo,hi,max(2,math.ceil((hi-lo)/2)+1)):
+    p=line.interpolate(d);a=line.interpolate(max(0,d-.1));b=line.interpolate(min(line.length,d+.1));dx,dz=b.x-a.x,b.y-a.y;n=math.hypot(dx,dz)
+    for side in [-1,0,1]:samples.append(ground([p.x+dz/n*(route['width']/2+.4)*side,p.y-dx/n*(route['width']/2+.4)*side]))
+   floor=min(samples)-6.2
+   crossings.append({'roadId':road_id,'street':street['name'],'start':round(lo,4),'end':round(hi,4),'floor':round(floor,4)})
+ for crossing in crossings:
+  lo,hi,floor=crossing['start']-8,crossing['end']+8,crossing['floor']
+  for i,s in enumerate(ss):ys[i]=min(ys[i],floor+.115*max(lo-s,0,s-hi))
+ # The retained survey's first50m is an observed lane; profiles may not pull it
+ # down to fix a surface conflict farther into the city.
+ if route.get('northDeck') is not None:
+  for s,y in zip(ss,ys):
+   edge=line.length-s if route.get('direction')=='north' or route.get('surfaceStart') else s
+   if edge<=50 and y<route['northDeck']-.061*edge-.002:raise ValueError(f"Underpass changes surveyed bridge lip on {route['id']}")
+ return ys,crossings
+
+def fit_deck_widths(roads):
+ # The source is a graph of road axes. Full-width independent ribbons can
+ # overlap sideways while their centerlines never cross. Keep the modeled
+ # lanes separate during the vertical transition, with gradual width tapers.
+ widths={r['id']:[r['width']]*len(r['points']) for r in roads}
+ for a in roads:
+  for b in roads:
+   if a is b:continue
+   for i,(point,y) in enumerate(zip(a['points'],a['elevations'])):
+    distance,j,t=projection(b,point);height=b['elevations'][j]+(b['elevations'][j+1]-b['elevations'][j])*t
+    if not .18<abs(y-height)<6.5 or distance>=(a['width']+b['width'])/2+.3:continue
+    wa,wb=a['width'],b['width'];minimum=lambda r:10. if r['kind']=='motorway' else 3.8
+    excess=wa+wb-2*(distance-.25)
+    # Single-lane ramp shoulders narrow first, preserving mainline lanes.
+    order=[a,b] if a['kind']!='motorway' else [b,a]
+    values={a['id']:wa,b['id']:wb}
+    for r in order:
+     reduce=min(max(0,excess),values[r['id']]-minimum(r));values[r['id']]-=reduce;excess-=reduce
+    if excess>.15:continue # A true overlapping merge is handled by its profile.
+    widths[a['id']][i]=min(widths[a['id']][i],values[a['id']])
+    for k in [j,j+1]:widths[b['id']][k]=min(widths[b['id']][k],values[b['id']])
+ for road in roads:
+  values=widths[road['id']];ss=stations(road['points'])
+  # Limit edge convergence to 1:20 (total width slope 1:10).
+  for i in range(1,len(values)):values[i]=min(values[i],values[i-1]+.1*(ss[i]-ss[i-1]))
+  for i in range(len(values)-2,-1,-1):values[i]=min(values[i],values[i+1]+.1*(ss[i+1]-ss[i]))
+  if min(values)<road['width']-.001:road['deckWidths']=[round(v,4) for v in values]
+
+def fit_deck_edges(roads,records,specs,ground):
+ by_id={r['id']:r for r in roads}
+ for road,record,spec in zip(roads,records,specs):
+  sections=deck_sections(road);ss=stations(road['points']);edges=[[y,y] for y in road['elevations']]
+  for join in record['joins']:
+   parent=by_id[join['roadId']];indexes=list(range(len(ss)) if join['pointIndex']==0 else range(len(ss)-1,-1,-1));matched=[]
+   for i in indexes:
+    distance,_=projected_profile(parent,road['points'][i]);matched.append(i)
+    if distance>(road['width']+parent['width'])/2+.5 or abs(ss[i]-ss[join['pointIndex']])>spec.get('mergeMatchLimit',math.inf):break
+   last=matched[-1];span=abs(ss[last]-ss[join['pointIndex']])
+   for i in indexes:
+    beyond=abs(ss[i]-ss[join['pointIndex']])-span;weight=1 if beyond<=0 else max(0,1-beyond/24)
+    if weight==0:break
+    for side,p in enumerate(sections[i]):
+     center=deck_height(parent,road['points'][i]);difference=deck_height(parent,(p[0],p[2]))-center
+     edges[i][side]+=difference*weight
+  for at_start,flag in [(True,'surfaceStart'),(False,'surfaceEnd')]:
+   if not spec.get(flag):continue
+   indexes=range(len(ss)) if at_start else range(len(ss)-1,-1,-1);origin=ss[0] if at_start else ss[-1]
+   for i in indexes:
+    weight=max(0,1-abs(ss[i]-origin)/24)
+    if not weight:break
+    p=road['points'][i];center=ground(p)
+    for side,q in enumerate(sections[i]):edges[i][side]+=(ground([q[0],q[2]])-center)*weight
+  road['deckEdgeElevations']=[[round(v,4) for v in pair] for pair in edges]
 
 def profile_points(features):
  points=[];ground_nodes=[];anchors=set()
@@ -60,34 +169,32 @@ def profile_points(features):
  return points,set(ground_nodes)
 
 def surface_landings(city,points,width,route):
- """Keep the whole ramp ribbon outside the adjoining street's driving lanes.
+ """Keep the full ramp ribbon at grade through the connected street junction.
 
- GIS endpoints are intersection centerlines, not the start of a retaining cut.
- Include the ramp half-width and concrete thickness when finding the first
- clear section; rounded street ends also protect the junction between ways.
+ Neighboring source ways can meet just past the ramp endpoint; include their
+ contiguous pavement too, rather than protecting only ways touching the node.
  """
- line=LineString(points);length=line.length;intervals=[];streets=[]
+ if not (route.get('surfaceStart') or route.get('surfaceEnd')):return [],[]
+ line=LineString(points);length=line.length;intervals=[];streets=[];overlaps=[]
+ min_x,min_z,max_x,max_z=line.bounds
+ for road in city['roads']:
+  if road.get('elevations'):continue
+  radius=(road['width']+width)/2+.4;xs=[p[0] for p in road['points']];zs=[p[1] for p in road['points']]
+  if max(xs)+radius<min_x or min(xs)-radius>max_x or max(zs)+radius<min_z or min(zs)-radius>max_z:continue
+  street=LineString(road['points'])
+  if line.distance(street)>radius:continue
+  overlap=line.intersection(street.buffer(radius))
+  for part in getattr(overlap,'geoms',[overlap]):
+   if part.geom_type!='LineString' or part.is_empty:continue
+   lo,hi=sorted([line.project(Point(part.coords[0])),line.project(Point(part.coords[-1]))]);overlaps.append((lo,hi,road['id']))
  for index,flag in [(0,'surfaceStart'),(-1,'surfaceEnd')]:
   if not route.get(flag):continue
-  endpoint=Point(points[index]);extent=0.
-  for road in city['roads']:
-   if road.get('elevations'):continue
-   radius=(road['width']+width)/2+.4
-   # Avoid constructing buffers for the rest of the metropolitan road graph.
-   xs=[p[0] for p in road['points']];zs=[p[1] for p in road['points']];x,z=points[index]
-   if x<min(xs)-radius or x>max(xs)+radius or z<min(zs)-radius or z>max(zs)+radius:continue
-   street=LineString(road['points'])
-   if street.distance(endpoint)>radius:continue
-   overlap=line.intersection(street.buffer(radius))
-   for part in getattr(overlap,'geoms',[overlap]):
-    if part.geom_type!='LineString' or part.is_empty:continue
-    ss=[line.project(Point(p)) for p in part.coords];lo,hi=min(ss),max(ss)
-    if (lo<.001 if index==0 else hi>length-.001):
-     extent=max(extent,hi if index==0 else length-lo);streets.append(road['id'])
-  # Land on a real profile vertex so the slab, opening and walls meet exactly.
-  ss=stations(points)
-  if index==0:intervals.append([0,next(s for s in ss if s>=extent)])
-  else:intervals.append([next(s for s in reversed(ss) if s<=length-extent),length])
+  extent=0.
+  for lo,hi,id in sorted(overlaps,key=lambda v:v[0] if index==0 else -v[1]):
+   start,end=(lo,hi) if index==0 else (length-hi,length-lo)
+   if start>extent+.001:break
+   extent=max(extent,end);streets.append(id)
+  intervals.append([0,extent] if index==0 else [length-extent,length])
  return intervals,sorted(set(streets))
 
 def clear_surface_crossings(city,points,ss,width,ys,landings,ground):
@@ -119,21 +226,24 @@ def clear_surface_crossings(city,points,ss,width,ys,landings,ground):
     if not lo-6<=s<=hi+6:continue
     q=other.interpolate(other.project(Point(p)))
     if above:lower[i]=max(lower[i],ground([q.x,q.y])+5.2)
-    else:upper[i]=min(upper[i],ground(p)-6.2,ground([q.x,q.y])-6.2)
+    else:
+     a,b=points[max(0,i-1)],points[min(len(points)-1,i+1)];dx,dz=b[0]-a[0],b[1]-a[1];n=math.hypot(dx,dz)
+     surface=min(ground([p[0]+dz/n*(width/2+.4)*side,p[1]-dx/n*(width/2+.4)*side]) for side in [-1,0,1])
+     upper[i]=min(upper[i],surface-6.2,ground([q.x,q.y])-6.2)
  fixed={0,len(points)-1}|{i for i,s in enumerate(ss) if any(a-.001<=s<=b+.001 for a,b in landings)}
  for i in fixed:lower[i]=max(lower[i],ys[i]);upper[i]=min(upper[i],ys[i])
  # Propagate clearance bounds at a playable grade before choosing a profile.
  # This also detects an impossible source plan instead of moving its joins.
  for indexes in [range(1,len(points)),range(len(points)-2,-1,-1)]:
   for i in indexes:
-   j=i-1 if indexes.step>0 else i+1;rise=.115*abs(ss[i]-ss[j])
+   j=i-1 if indexes.step>0 else i+1;rise=.1195*abs(ss[i]-ss[j])
    lower[i]=max(lower[i],lower[j]-rise);upper[i]=min(upper[i],upper[j]+rise)
  for i in range(len(points)):
   if lower[i]>upper[i]+.001:raise ValueError(f"Surface clearance cannot meet fixed junction at {points[i]}")
  result=[max(lo,min(hi,y)) for lo,hi,y in zip(lower,upper,ys)]
  for indexes in [range(1,len(points)),range(len(points)-2,-1,-1)]:
   for i in indexes:
-   j=i-1 if indexes.step>0 else i+1;rise=.115*abs(ss[i]-ss[j])
+   j=i-1 if indexes.step>0 else i+1;rise=.1195*abs(ss[i]-ss[j])
    result[i]=max(lower[i],min(upper[i],max(result[j]-rise,min(result[j]+rise,result[i]))))
  return result,sorted(set(crossings))
 
@@ -164,13 +274,23 @@ def build(city,source,heights):
   ss=stations(points);length=ss[-1]
   is_main=route['role']=='mainline';joins=[]
   landings,landing_streets=surface_landings(city,points,route['width'],route)
+  # Add the exact clearance boundary instead of rounding the landing up by a
+  # whole 6m profile section, which can unnecessarily steepen a short ramp.
+  if landings:
+   refined=[points[0]];boundaries=sorted({s for interval in landings for s in interval})
+   for i in range(1,len(points)):
+    a,b=points[i-1],points[i]
+    for s in boundaries:
+     if ss[i-1]+.001<s<ss[i]-.001:
+      t=(s-ss[i-1])/(ss[i]-ss[i-1]);refined.append([round(a[k]+(b[k]-a[k])*t,4) for k in (0,1)])
+    refined.append(b)
+   points=refined;ss=stations(points);length=ss[-1]
+   landings=[[min(ss,key=lambda s:abs(s-a)),min(ss,key=lambda s:abs(s-b))] for a,b in landings]
   if is_main:
    ys=[]
    for s in ss:
     edge=length-s if route['direction']=='north' else s
-    # The south bore also needs lining separation below the Government Center
-    # exit after that ramp is fitted beneath North Street's through lanes.
-    floor=-24 if route['direction']=='north' else -12.6
+    floor=-24 if route['direction']=='north' else -12
     # Match the measured 6.1% survey deck grade across its full overlap,
     # then a Hermite transition reaches the underground bore with zero grade.
     if edge<=50:y=route['northDeck']-.061*edge
@@ -210,19 +330,15 @@ def build(city,source,heights):
    for p,s in zip(points,ss):
     if any(a-.001<=s<=b+.001 for a,b in landings):controls.append([s,ground(p)])
    controls=sorted(dict(controls).items());ys=[interpolate(controls,s) for s in ss]
+  for lo,hi,floor,taper in route.get('profileDips',[]):
+   for i,s in enumerate(ss):
+    t=min(1,max(lo-s,0,s-hi)/taper);weight=t*t*(3-2*t)
+    ys[i]=min(ys[i],floor+(ys[i]-floor)*weight)
+  ys,underpasses=fit_surface_underpasses(city,route,points,ys,ground)
   ys,surface_crossings=clear_surface_crossings(city,points,ss,route['width'],ys,landings,ground)
   ys=[round(y,4) for y in ys]
-  # A real underground roof begins only after its complete soffit and slab
-  # fit under the intact city surface. Open portions become retaining cuts.
-  covered=[];inside=False;start=0
-  for i,(p,y,s) in enumerate(zip(points,ys,ss)):
-   ok=y+6.0<=ground(p)
-   if ok and not inside:start=s;inside=True
-   if inside and (not ok or i==len(points)-1):
-    end=ss[max(0,i-1)] if not ok else s
-    if end-start>=6:covered.append([round(start,4),round(end,4)])
-    inside=False
-  tunnel={'clearance':5.2,'covered':covered}
+  # Full-width burial is calculated after merge crossfall and width fitting.
+  tunnel={'clearance':5.2,'covered':[]}
   if landings:tunnel['surfaceLandings']=[[round(a,4),round(b,4)] for a,b in landings]
   for flag in ['capStart','capEnd']:
    if route.get(flag):tunnel[flag]=True
@@ -231,7 +347,20 @@ def build(city,source,heights):
   for p,y in zip(points,ys):known[tuple(p)]=(y,road['id'])
   max_grade=max(abs(a-b)/max(.001,math.dist(p,q)) for p,q,a,b in zip(points,points[1:],ys,ys[1:]))
   if max_grade>.13:raise ValueError(f"{road['id']} grade {max_grade:.1%}")
-  records.append({'id':road['id'],'sourceFeatureIds':route['featureIds'],'role':route['role'],'lengthMeters':round(length,3),'maxGrade':round(max_grade,4),'joins':joins,'crossedSurfaceStreetIds':surface_crossings,**({'surfaceStreetIds':landing_streets} if landings else {}),**({'surveyJoin':route['surveyJoin']} if 'surveyJoin' in route else {})})
+  records.append({'id':road['id'],'sourceFeatureIds':route['featureIds'],'role':route['role'],'lengthMeters':round(length,3),'maxGrade':round(max_grade,4),'joins':joins,'crossedSurfaceStreetIds':surface_crossings,**({'surfaceStreetIds':landing_streets} if landings else {}),**({'surfaceUnderpasses':underpasses} if underpasses else {}),**({'surveyJoin':route['surveyJoin']} if 'surveyJoin' in route else {})})
+ fit_deck_widths(roads)
+ fit_deck_edges(roads,records,source['routes'],ground)
+ for road,record in zip(roads,records):
+  covered=[];start=None;ss=stations(road['points'])
+  for i,(point,y,section,station) in enumerate(zip(road['points'],road['elevations'],deck_sections(road),ss)):
+   buried=y+6<=ground(point) and all(q[1]+6<=ground([q[0],q[2]]) for q in section)
+   if buried and start is None:start=station
+   if start is not None and (not buried or i==len(ss)-1):
+    end=ss[max(0,i-1)] if not buried else station
+    if end-start>=6:covered.append([round(start,4),round(end,4)])
+    start=None
+  road['tunnel']['covered']=covered
+  if 'deckWidths' in road:record['modeledWidthMeters']=[round(min(road['deckWidths']),3),road['width']]
  landmarks=[]
  for id,name,description in [
   ('central-artery-new-chardon-south-on','Big Dig · I-93 South entrance','New Chardon Street · descend beneath the Greenway toward South Station'),
@@ -240,7 +369,7 @@ def build(city,source,heights):
  ]:
   r=next(r for r in roads if r['id']==id);p,q=r['points'][:2]
   landmarks.append({'id':id,'name':name,'position':p,'description':description,'driveStart':{'x':p[0],'z':p[1],'yaw':math.atan2(q[0]-p[0],q[1]-p[1]),'roadId':id}})
- return {'version':1,'roads':roads,'landmarks':landmarks,'sources':[{'name':'Boston GIS Central Artery and tunnel ramp centerlines; estimated underground profiles','url':source['url'],'license':source['license']},{'name':'CTPS Central Artery ramp connectivity reference','url':source['reference'],'license':'Boston Region MPO / CTPS public transportation reference'}],'provenance':{'sourceSHA256':hashlib.sha256(json.dumps(source,sort_keys=True).encode()).hexdigest(),'profiles':'Original estimated road elevations; 5.2m playable clearance, no civil-engineering vertical survey claim','routes':records}}
+ return {'version':1,'roads':roads,'landmarks':landmarks,'sources':[{'name':'Boston GIS Central Artery and tunnel ramp centerlines; estimated underground profiles','url':source['url'],'license':source['license']},{'name':'CTPS Central Artery ramp connectivity reference','url':source['reference'],'license':'Boston Region MPO / CTPS public transportation reference'}],'provenance':{'sourceSHA256':hashlib.sha256(json.dumps(source,sort_keys=True).encode()).hexdigest(),'profiles':'Estimated elevations with coplanar merge crossfall and local lane-width tapers; 5.2m playable clearance, no civil-engineering vertical survey claim','routes':records}}
 
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');p.add_argument('--source-file',type=pathlib.Path);args=p.parse_args()

@@ -143,3 +143,44 @@ test('survey clearance clipping opens only a finite tunnel aperture and retains 
     assert.ok(collider.castRay(new Ray({x:9,y:2,z:-5},{x:0,y:0,z:1}),10,true)>=0,'facade beside the portal remains');
   }finally{p.dispose();}
 });
+
+test('a rising merge keeps its roof sealed outside the exact adjoining roof footprint',async()=>{
+  const main={...bore,id:'main',points:[[0,-100],[0,400]],elevations:[-12,-12],width:20,tunnel:{clearance:5.2}};
+  const branch={id:'branch',name:'Exit',points:[[0,0],[7,250]],elevations:[-12,-2],width:8,oneway:1,tunnel:{clearance:5.2}};
+  const c={...city,bounds:{minX:-250,maxX:250,minZ:-250,maxZ:500},roads:[main,branch]},p=await DrivingPhysics.create(c);
+  try{
+    // The old clearance-volume subtraction removed 0.4m more roof than the
+    // adjoining branch actually covered, exposing a strip of sky at this edge.
+    const outside=3.08+4.2,height=rayHeight(p,outside,110,-10,false);
+    assert.ok(Math.abs(height+6.8)<.01,`mainline ceiling remains over the merge perimeter: ${height}`);
+    const side=p.world.castRay(new Ray({x:3.08,y:-3.6,z:110},{x:1,y:0,z:0}),20,true,undefined,undefined,p.chassisCollider,p.body);
+    assert.ok(side&&side.timeOfImpact<4.2,'rising branch retains the wall above the lower mainline ceiling');
+  }finally{p.dispose();}
+});
+
+test('the back of a deep open portal has a surface parapet without closing its driving mouth',async()=>{
+  const p=await DrivingPhysics.create(city);try{
+    const cast=y=>p.world.castRay(new Ray({x:0,y,z:-5},{x:0,y:0,z:1}),10,true,undefined,undefined,p.chassisCollider,p.body);
+    assert.ok(cast(.4)?.timeOfImpact<6,'surface approach cannot fall over the unguarded excavation lip');
+    assert.ok(cast(-3)?.timeOfImpact<6,'retaining header seals the earth between the roof and surface');
+    assert.equal(cast(-10),null,'the full vehicle opening beneath the ceiling stays open');
+  }finally{p.dispose();}
+});
+
+test('at-grade ramp terminals allow angled street access while retaining deep excavation guards',async()=>{
+  const p=await DrivingPhysics.create(city);try{
+    const side=(z)=>p.world.castRay(new Ray({x:10,y:.5,z},{x:-1,y:0,z:0}),12,true,undefined,undefined,p.chassisCollider,p.body);
+    assert.equal(side(-99),null,'surface street can enter across the tapered final metre');
+    assert.ok(side(-85),'the side of the descending excavation remains guarded at surface height');
+  }finally{p.dispose();}
+});
+
+test('banked tunnel roofs and walls use the same edge heights as their pavement',async()=>{
+  const banked={...bore,points:[[0,0],[0,100]],elevations:[-12,-12],deckEdgeElevations:[[-11.5,-12.5],[-11.5,-12.5]],tunnel:{clearance:5.2}};
+  const c={...city,roads:[banked]},p=await DrivingPhysics.create(c);try{
+    for(const x of [-5,0,5]){
+      const floor=sampleDriveSurface(c,x,50,-10).height,roof=rayHeight(p,x,50,floor+1,false);
+      assert.ok(Math.abs(roof-floor-5.2)<.01,`constant clearance across the banked ribbon at ${x}: ${roof-floor}`);
+    }
+  }finally{p.dispose();}
+});

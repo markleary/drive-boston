@@ -17,11 +17,13 @@ export function roadProjection(road:Road,x:number,z:number){
 /** Elevations are road-specific: crossing paths may occupy independent levels. */
 export function sampleRoadElevation(city:CityData,road:Road,x:number,z:number){
   if(!road.elevations)return sampleElevation(city,x,z);
+  const plane=road.deckEdgeElevations&&deckPlaneAt(road,x,z);if(plane)return plane.height;
   const hit=roadProjection(road,x,z),a=road.elevations[hit.index],b=road.elevations[hit.index+1]??a;
   return a+(b-a)*hit.t;
 }
 export function roadNormal(city:CityData,road:Road,x:number,z:number){
   if(!road.elevations)return sampleTerrainNormal(city,x,z);
+  const plane=road.deckEdgeElevations&&deckPlaneAt(road,x,z);if(plane){const n=Math.hypot(plane.gx,1,plane.gz);return{x:-plane.gx/n,y:1/n,z:-plane.gz/n};}
   const hit=roadProjection(road,x,z),a=road.points[hit.index],b=road.points[hit.index+1]??a;
   const dx=b[0]-a[0],dz=b[1]-a[1],slope=((road.elevations[hit.index+1]??road.elevations[hit.index])-road.elevations[hit.index])/(dx*dx+dz*dz||1);
   const gx=dx*slope,gz=dz*slope,n=Math.hypot(gx,1,gz);return{x:-gx/n,y:1/n,z:-gz/n};
@@ -87,6 +89,29 @@ function deckDirection(road:Road,i:number){
   if(override)return override;const a=road.points[Math.max(0,i-1)],b=road.points[Math.min(road.points.length-1,i+1)];return[b[0]-a[0],b[1]-a[1]];
 }
 
+export function deckEdgeElevation(road:Road,index:number,side:number){return road.deckEdgeElevations?.[index]?.[side<0?0:1]??road.elevations?.[index]??0;}
+
+/** Match the rendered/collidable ribbon plane, including crossfall at merges.
+ * Centerline projection alone gives the wrong support on a banked ramp or a
+ * sloping bend. Only adjacent segments are needed after the road projection. */
+function deckPlaneAt(road:Road,x:number,z:number){
+  const hit=roadProjection(road,x,z);let best:{height:number;gx:number;gz:number;outside:number}|undefined;
+  for(let i=Math.max(0,hit.index-1);i<Math.min(road.points.length-1,hit.index+2);i++){
+    const points=[deckEdge(road,i,-1),deckEdge(road,i,1),deckEdge(road,i+1,-1),deckEdge(road,i+1,1)];
+    const heights=[deckEdgeElevation(road,i,-1),deckEdgeElevation(road,i,1),deckEdgeElevation(road,i+1,-1),deckEdgeElevation(road,i+1,1)];
+    for(const [ia,ib,ic]of [[0,1,2],[1,3,2]]){
+      const a=points[ia],b=points[ib],c=points[ic],dx=b[0]-a[0],dz=b[1]-a[1],ex=c[0]-a[0],ez=c[1]-a[1],det=dx*ez-ex*dz;
+      if(Math.abs(det)<1e-8)continue;
+      const u=((x-a[0])*ez-ex*(z-a[1]))/det,v=(dx*(z-a[1])-(x-a[0])*dz)/det;
+      const outside=Math.max(0,-u,-v,u+v-1),gx=((heights[ib]-heights[ia])*ez-(heights[ic]-heights[ia])*dz)/det,gz=(dx*(heights[ic]-heights[ia])-ex*(heights[ib]-heights[ia]))/det;
+      const plane={height:heights[ia]+gx*(x-a[0])+gz*(z-a[1]),gx,gz,outside};
+      if(outside<1e-7)return plane;
+      if(!best||outside<best.outside)best=plane;
+    }
+  }
+  return best;
+}
+
 /** Shared exact deck ribbon for rendering and Rapier. Width may include parapets. */
 export function roadDeckGeometry(city:CityData,road:Road,width=road.width,offset=0){
   const vertices:number[]=[],indices:number[]=[],uv:number[]=[];let along=0;
@@ -95,7 +120,7 @@ export function roadDeckGeometry(city:CityData,road:Road,width=road.width,offset
     if(i)along+=Math.hypot(p[0]-road.points[i-1][0],p[1]-road.points[i-1][1]);
     const y=(road.elevations?.[i]??sampleElevation(city,...p))+offset;
     const sectionWidth=(road.deckWidths?.[i]??road.width)+(width-road.width);
-    for(const side of [-1,1]){vertices.push(p[0]-dz/length*sectionWidth/2*side,y,p[1]+dx/length*sectionWidth/2*side);uv.push((side+1)*sectionWidth/10,along/5);}
+    for(const side of [-1,1]){const edgeY=road.deckEdgeElevations?.[i]?.[side<0?0:1];vertices.push(p[0]-dz/length*sectionWidth/2*side,edgeY===undefined?y:edgeY+offset,p[1]+dx/length*sectionWidth/2*side);uv.push((side+1)*sectionWidth/10,along/5);}
     if(i){const j=(i-1)*2;indices.push(j,j+1,j+2,j+1,j+3,j+2);}
   }
   return{vertices:new Float32Array(vertices),indices:new Uint32Array(indices),uv:new Float32Array(uv)};
@@ -207,12 +232,13 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
   if(!road.elevations)return[];
   const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number}[]=[];
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
-    const a=deckEdge(road,i-1,side,inset),b=deckEdge(road,i,side,inset),ya=road.elevations[i-1],yb=road.elevations[i];
+    const a=deckEdge(road,i-1,side,inset),b=deckEdge(road,i,side,inset),ya=road.deckEdgeElevations?sampleRoadElevation(city,road,...a):deckEdgeElevation(road,i-1,side),yb=road.deckEdgeElevations?sampleRoadElevation(city,road,...b):deckEdgeElevation(road,i,side);
     const outsideA=deckEdge(road,i-1,side,probeInset),outsideB=deckEdge(road,i,side,probeInset);
+    const probeYa=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideA):ya,probeYb=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideB):yb;
     const candidates=new Set<DeckTriangle>();
     for(let x=Math.floor(Math.min(outsideA[0],outsideB[0])/DECK_CELL);x<=Math.floor(Math.max(outsideA[0],outsideB[0])/DECK_CELL);x++)for(let z=Math.floor(Math.min(outsideA[1],outsideB[1])/DECK_CELL);z<=Math.floor(Math.max(outsideA[1],outsideB[1])/DECK_CELL);z++)for(const triangle of cells.get(`${x},${z}`)??[])if(triangle.road!==road)candidates.add(triangle);
     const covered:[number,number][]=[];
-    for(const triangle of candidates){const interval=coveredDeckInterval(outsideA,outsideB,ya,yb,triangle,levelTolerance);if(interval)covered.push(interval);}
+    for(const triangle of candidates){const interval=coveredDeckInterval(outsideA,outsideB,probeYa,probeYb,triangle,levelTolerance);if(interval)covered.push(interval);}
     covered.sort((a,b)=>a[0]-b[0]);
     const exposed:[number,number][]=[];let cursor=0;
     for(const [low,high]of covered){if(low>cursor)exposed.push([cursor,low]);cursor=Math.max(cursor,high);}
