@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {TriangleWriter} from '../src/render/geometry-writer.ts';
 import {drapedStripInto,drapedRibbonInto} from '../src/render/terrain-ground.ts';
-import {pavementEdges,pavementSpan,roadwaySpan} from '../src/simulation/tile-format.ts';
+import {pavementEdges,pavementSpan,polylineLength,roadwaySpan,stationAlong} from '../src/simulation/tile-format.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
 import {hasMetroData,loadMetroCity} from './helpers/metro-city.mjs';
@@ -23,12 +23,26 @@ test('a crosswalk spans the pavement edges at its own station, wherever the cent
   assert.deepEqual(pavementSpan(offset,[20,0],1,0),[-2,8]);assert.deepEqual(pavementSpan(offset,[20,0],-1,0),[-8,2],'offsets flip with the direction, lower first');
 });
 
-test('a crosswalk completes across a neighbouring record that shares the roadway, not across a gap or a slanting edge',()=>{
+test('a crosswalk completes across a twin carriageway that adjoins its roadway, not across a gap, a slanting edge, a junction mouth or a chain of records',()=>{
   const own=[-5,5],beside={left:[[0,15],[40,15]],right:[[0,4.8],[40,4.8]]},third={left:[[0,24],[40,24]],right:[[0,15.2],[40,15.2]]};
   const apart={left:[[0,-8],[40,-8]],right:[[0,-14],[40,-14]]},slant={left:[[0,-20],[40,20]],right:[[6,-20],[46,20]]},short={left:[[0,3],[10,3]],right:[[0,-3],[10,-3]]};
-  assert.deepEqual(roadwaySpan(own,[third,beside,apart,slant,short],[20,0],1,0),[-5,24],'chained across both adjacent records; the 3 m gap, the 45 degree edges and a record ending before the station are ignored');
+  assert.deepEqual(roadwaySpan(own,[third,beside,apart,slant,short],[20,0],1,0),[-5,15],'across the adjoining record only; the record touching just that one, the 3 m gap, the 45 degree edges and a record ending before the station are ignored');
   assert.deepEqual(roadwaySpan(own,[],[20,0],1,0),own);
   assert.deepEqual(roadwaySpan([-5,5],[beside],[20,0],-1,0),[-15,5],'seen from the far end the neighbour lies on the other side');
+  // A wider street's record running alongside (its edge dipping into this road's junction mouth, as Faneuil Street's does at Bothwell Road) would add more than one roadway of this width: the stripes stay on the own roadway.
+  const mouth={left:[[0,5.3],[40,5.3]],right:[[0,-28],[40,-28]]},twin={left:[[0,-5.2],[40,-5.2]],right:[[0,-16.5],[40,-16.5]]};
+  assert.deepEqual(roadwaySpan(own,[mouth],[20,0],1,0),own,'a record adding 23 m beside a 10 m roadway is a junction mouth, not a twin');
+  assert.deepEqual(roadwaySpan(own,[twin],[20,0],1,0),[-16.5,5],'a record adding up to the own width plus 2 m is a twin carriageway');
+});
+
+test('a crosswalk station follows the centerline, not the bearing of a short first segment',()=>{
+  const line=[[0,0],[1,0],[2,.3],[3,.9],[4,1.8],[14,11.8],[30,27.8]];
+  assert.equal(polylineLength(line).toFixed(2),'41.33');
+  const station=stationAlong(line,8);
+  assert.ok(Math.abs(station.at[0]-6.436)<.005&&Math.abs(station.at[1]-4.236)<.005,`8 m along the line sits on the diagonal (${station.at})`);
+  assert.ok(Math.abs(station.tx-Math.SQRT1_2)<1e-9&&Math.abs(station.tz-Math.SQRT1_2)<1e-9,'with the direction of the segment it lies on');
+  assert.deepEqual(stationAlong(line,0),{at:[0,0],tx:1,tz:0});
+  assert.equal(stationAlong(line,50),undefined,'beyond the line there is no station');
 });
 
 test('Boylston Street\'s crosswalks follow the curbs where the roadway narrows and shifts off the centerline',{skip:!hasMetroData()},async()=>{
@@ -78,12 +92,23 @@ test('Riverway northbound was moved out of the splitter island onto the roadway,
   assert.ok(road.sourcePoints&&road.sourcePoints.length>=2&&road.points.some((p,i)=>!road.sourcePoints[i]||p[0]!==road.sourcePoints[i][0]||p[1]!==road.sourcePoints[i][1]),'the installer kept the source line beside the moved one');
   assert.deepEqual([road.points[0],road.points[road.points.length-1]],[road.sourcePoints[0],road.sourcePoints[road.sourcePoints.length-1]],'the junction ends stay');
   assert.deepEqual(road.points[0].map(Math.round),[-2524,787],'it starts at the Longwood junction');
-  const along=t=>{let left=t;for(let i=1;i<road.points.length;i++){const [x0,z0]=road.points[i-1],[x1,z1]=road.points[i],l=Math.hypot(x1-x0,z1-z0);if(left<=l)return{at:[x0+(x1-x0)*left/l,z0+(z1-z0)*left/l],tx:(x1-x0)/l,tz:(z1-z0)/l};left-=l;}return undefined;};
+  const along=t=>stationAlong(road.points,t);
+  assert.ok(Math.hypot(road.points[1][0]-road.points[0][0],road.points[1][1]-road.points[0][1])<18&&polylineLength(road.points)>100,'the taper starts with a short segment on a long road, so the crosswalk station must follow the line');
   for(const s of [30,60,90])assert.ok(!pointInside(along(s).at,island.rings[0]),`the moved centerline at ${s} m runs outside the island`);
   const tile=city.loadedTiles.get('-3_0'),record=tile.pavements.find(p=>p.road===road.id),edges=pavementEdges(tile,record),mid=along(30),inside=pavementSpan(edges,mid.at,mid.tx,mid.tz);
   assert.ok(inside&&inside[0]<-2&&inside[1]>2&&inside[1]-inside[0]<16,`measured from the island curb across the roadway around the moved line (${inside})`);
   const foot=along(8),own=pavementSpan(edges,foot.at,foot.tx,foot.tz),whole=roadwaySpan(own,tile.pavements.map(p=>pavementEdges(tile,p)),foot.at,foot.tx,foot.tz);
   assert.ok(whole[1]-whole[0]>own[1]-own[0]+4&&whole[1]-whole[0]>18,`the crosswalk at the nose grows from the record (${own}) across the southbound carriageway (${whole})`);
+});
+
+test('Bothwell Road\'s crosswalk stays on its own roadway beside Faneuil Street and Arlington Street',{skip:!hasMetroData()},async()=>{
+  // Faneuil Street's record runs alongside the first metres of Bothwell Road with its edge dipping into the junction mouth, and Arlington Street's adjoins that one: both edges are aligned, so alignment and overlap alone chained the stripes to 49.8 m.
+  const city=await loadMetroCity({bounds:{minX:-7300,maxX:-6900,minZ:-450,maxZ:-200}}),road=city.roads.find(r=>r.id==='7736-0-0'),tile=city.loadedTiles.get('-8_-1'),record=tile.pavements.find(p=>p.road===road.id);
+  assert.ok(road&&record,'Bothwell Road and its record in the tile that owns it');
+  const {at,tx,tz}=stationAlong(road.points,8),own=pavementSpan(pavementEdges(tile,record),at,tx,tz),all=[...tile.pavements,...tile.borderPavements].map(p=>pavementEdges(tile,p)),whole=roadwaySpan(own,all,at,tx,tz);
+  assert.ok(own[1]-own[0]<9,`a 7.7 m side street (${own})`);
+  assert.deepEqual(whole,own,`the crosswalk does not reach Faneuil Street's far curb or Arlington Street (${whole})`);
+  const present=new Set([...tile.pavements,...tile.borderPavements].map(p=>p.road));assert.ok(present.has('7735-0-0')&&present.has('14199-0-0'),'with both neighbouring records present in the tile');
 });
 
 test('Edwin H. Land Boulevard crosswalks span the carriageway another tile owns through its border record',{skip:!hasMetroData()},async()=>{

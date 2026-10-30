@@ -79,25 +79,44 @@ export function pavementSpan(edges: { left: Point2[]; right: Point2[] }, at: Poi
   return l === undefined || r === undefined ? undefined : [Math.min(l[0], r[0]), Math.max(l[0], r[0])];
 }
 
-/** `own` widened across every other record whose edges run with the road at this station (alignment at least .8, a span
- * under 40 m) and overlap or touch it within .5 m: where two one-way centerlines share one roadway (the Riverway at
- * Longwood, Huntington Avenue off the reservation) a crosswalk stripes the whole asphalt instead of stopping at the
- * record of the road that owns it. A reservation or median wider than .5 m keeps the spans apart. */
+/** `own` widened across the records of twin carriageways: a record whose edges run with the road at this station
+ * (alignment at least .8, a span under 40 m), overlaps or touches `own` within .5 m, and adds at most one roadway of
+ * the own width (plus 2 m) beyond it. Where two one-way centerlines share one roadway (the Riverway at Longwood,
+ * Huntington Avenue off the reservation, Edwin H. Land Boulevard) a crosswalk stripes the whole asphalt instead of
+ * stopping at the record of the road that owns it. A reservation or median wider than .5 m keeps the spans apart; a
+ * cross street's junction mouth, a much wider street running alongside, or a record touching only a widened span
+ * (Bothwell Road's start beside Faneuil and Arlington Streets) does not stretch the stripes. */
 export function roadwaySpan(own: [number, number], others: { left: Point2[]; right: Point2[] }[], at: Point2, tx: number, tz: number): [number, number] {
-  let [lo, hi] = own, grew = true;
-  const spans = others.map(e => {
+  let [lo, hi] = own;
+  const allowance = own[1] - own[0] + 2;
+  for (const e of others) {
     const l = edgeCrossing(e.left, at, tx, tz), r = edgeCrossing(e.right, at, tx, tz);
-    return l && r && l[1] >= .8 && r[1] >= .8 && Math.abs(l[0] - r[0]) <= 40 ? [Math.min(l[0], r[0]), Math.max(l[0], r[0])] as [number, number] : undefined;
-  });
-  while (grew) {
-    grew = false;
-    for (const s of spans) {
-      if (!s || s[0] > hi + .5 || s[1] < lo - .5) continue;
-      if (s[0] < lo) { lo = s[0]; grew = true; }
-      if (s[1] > hi) { hi = s[1]; grew = true; }
-    }
+    if (!l || !r || l[1] < .8 || r[1] < .8 || Math.abs(l[0] - r[0]) > 40) continue;
+    const s0 = Math.min(l[0], r[0]), s1 = Math.max(l[0], r[0]);
+    if (s0 > own[1] + .5 || s1 < own[0] - .5 || Math.max(0, own[0] - s0) + Math.max(0, s1 - own[1]) > allowance) continue;
+    lo = Math.min(lo, s0); hi = Math.max(hi, s1);
   }
   return [lo, hi];
+}
+
+/** The length of a polyline. */
+export function polylineLength(points: Point2[]): number {
+  let length = 0;
+  for (let i = 1; i < points.length; i++) length += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+  return length;
+}
+
+/** The point `distance` along a polyline from its first vertex and the unit direction of the segment it lies on, or
+ * undefined where the polyline is shorter: a crosswalk station on a line whose first segment is short (a moved park-edge
+ * centerline tapers through close vertices) follows the line instead of the first segment's bearing. */
+export function stationAlong(points: Point2[], distance: number): { at: Point2; tx: number; tz: number } | undefined {
+  let left = distance;
+  for (let i = 1; i < points.length; i++) {
+    const [x0, z0] = points[i - 1], [x1, z1] = points[i], l = Math.hypot(x1 - x0, z1 - z0);
+    if (left <= l && l > 0) return { at: [x0 + (x1 - x0) * left / l, z0 + (z1 - z0) * left / l], tx: (x1 - x0) / l, tz: (z1 - z0) / l };
+    left -= l;
+  }
+  return undefined;
 }
 
 /** Inflate a gzip-compressed tile or elevation file with the platform stream API. */
