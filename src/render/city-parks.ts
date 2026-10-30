@@ -58,7 +58,12 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3);
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
   const paths=(city.parkPaths??[]).filter(p=>options.pathOwned?options.pathOwned(p):true);
-  parkMaterials??={lawn:createGrassMaterial('#c7cfb0'),gardenLawn:createGrassMaterial('#ccd5b6'),pathMaterial:new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96}),
+  // Lawns and plazas lie a few centimetres above the terrain (depth bias 4) and
+  // below the surveyed sidewalks (bias 2). The same slope factor lets those
+  // heights decide at grazing angles; an unbiased lawn would overwrite the
+  // concrete of a paved island the parks layer also lists as parkway land.
+  const ground=<T extends THREE.Material>(m:T)=>{m.polygonOffset=true;m.polygonOffsetFactor=1;m.polygonOffsetUnits=3;return m;};
+  parkMaterials??={lawn:ground(createGrassMaterial('#c7cfb0')),gardenLawn:ground(createGrassMaterial('#ccd5b6')),pathMaterial:ground(new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96})),
     waterMaterial:createWaterMaterial(),
     iron:new THREE.MeshStandardMaterial({color:'#303f36',metalness:.35,roughness:.65}),wood:new THREE.MeshStandardMaterial({color:'#876b45',roughness:.91}),stone:new THREE.MeshStandardMaterial({color:'#baaf96',roughness:.91}),
     lampGlass:new THREE.MeshStandardMaterial({color:'#f4e9ca',emissive:'#ffdba1',emissiveIntensity:.25,roughness:.35})};

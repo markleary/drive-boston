@@ -58,6 +58,10 @@ DRIVEWAY_AREA=6000.0
 """Curb faces up to this area are paved when a service road or parking area explains them."""
 DRIVEWAY_INSET=.5
 """A service road must reach this far inside a face to pave it, not just graze its curb."""
+OUTLINE_DIAMETER=12.0
+"""An inventory polygon lying in parkland that holds a disc this wide (and wider than four declared sidewalk widths) outlines a whole island or mall, not its pavement."""
+STALE_LENGTH=8.0
+"""A Boston curb stretch at least this long that lies in parkland beyond the measuring reach of every street, service road and lot is the remnant of a removed roadway."""
 SERVICE_WIDTHS={'parking_aisle':5.5,'driveway':4.0,'alley':4.5,'drive-through':4.0,'emergency_access':4.0}
 """Ribbon widths in metres by OSM `service` value when the way carries no `width`."""
 SERVICE_WIDTH=4.5
@@ -364,11 +368,70 @@ def curb_islands(curb_lines,roads,parks,building_centers,walks_tree=None,drivewa
  return out,drives,stats
 
 
-def sidewalk_polygons(features,xy,coverage):
+def explained_region(roads,lines,lots):
+ """Spatial index of everything a curb can belong to: each street within its
+ measuring reach (half the nominal width plus CAP_EXTRA), OpenStreetMap service
+ roads within 8 m and surface lots within 4 m."""
+ return STRtree([LineString(r['points']).buffer(r.get('width',10)/2+CAP_EXTRA) for r in roads if len(r['points'])>=2]+[l.buffer(8) for l in lines]+[l.buffer(4) for l in lots])
+
+
+def prune_stale_curbs(curbs,explained,park_tree,window,survey=lambda curb:True):
+ """Curb polylines with their stale stretches cut out, in their original order.
+ The Boston curb layer and the 2011 sidewalk inventory still trace roadways that
+ have since been removed (the Brookline Avenue island at Park Drive before the
+ Muddy River restoration, the Central Artery ramps at North End Park, the Casey
+ Overpass approaches): a stretch of STALE_LENGTH or more that no street, service
+ road or lot could have produced, lying in parkland (parks grown 3 m), is dropped
+ and the rest of the polyline kept. Curbs failing `survey` (town fillets) pass
+ through untouched, and a remnant that `survey` rejects (its midpoint now across
+ the town line) is dropped, as the next run would. Returns (curbs, stretches
+ dropped, metres dropped)."""
+ if park_tree is None:return curbs,0,0.0
+ region=unary_union([explained.geometries[i] for i in explained.query(window,predicate='intersects')]);out=[];count=0;length=0.0
+ for c in curbs:
+  if not survey(c):out.append(c);continue
+  line=LineString(c);beyond=line.difference(region);stale=[]
+  for part in (beyond.geoms if beyond.geom_type=='MultiLineString' else [beyond]):
+   if part.is_empty or part.length<STALE_LENGTH:continue
+   hit=park_tree.query(part,predicate='intersects')
+   if len(hit) and sum(part.intersection(park_tree.geometries[i]).length for i in hit)>=.8*part.length:stale.append(part)
+  if not stale:out.append(c);continue
+  count+=len(stale);length+=sum(p.length for p in stale);kept=line.difference(unary_union([p.buffer(.02) for p in stale]))
+  for part in (kept.geoms if kept.geom_type=='MultiLineString' else [kept]):
+   piece=[[round(x,3),round(z,3)] for x,z in part.coords]
+   if not part.is_empty and part.length>=1 and survey(piece):out.append(piece)
+ return out,count,length
+
+
+def declared_width(attributes):
+ """`SWK_WIDTH` in metres (the inventory records feet); 0 when blank or unreadable."""
+ try:return max(0.0,float(attributes.get('SWK_WIDTH') or 0))*.3048
+ except (TypeError,ValueError):return 0.0
+
+
+def outline_strip(shell,width,park_tree):
+ """The inventory draws some parkway islands and malls (the Brookline Avenue
+ island at Park Drive, the Columbia Road mall, the Arborway) as one polygon
+ around the entire parcel while recording a sidewalk a few feet wide. Such a
+ polygon, mostly in parkland and holding a disc OUTLINE_DIAMETER across (wider
+ than four declared widths), keeps only the declared width (WALK_FALLBACK when
+ blank) along its boundary; the lawn inside stays lawn. Returns (polygon, reduced)."""
+ if park_tree is None or shell.area<=150:return shell,False
+ largest=max(polygon_parts(shell),key=lambda p:p.area);disc=2*shapely.maximum_inscribed_circle(largest,.5).length
+ if disc<OUTLINE_DIAMETER or (width and disc<=4*width):return shell,False
+ hit=park_tree.query(shell,predicate='intersects')
+ if not len(hit) or sum(shell.intersection(park_tree.geometries[i]).area for i in hit)<=.5*shell.area:return shell,False
+ return shell.difference(shell.buffer(-(width or WALK_FALLBACK))),True
+
+
+def sidewalk_polygons(features,xy,coverage,parks=(),stats=None):
  """Boston Sidewalk Inventory polygons in world metres, clipped to the package
  coverage: (polygon, material) with 'brick' for brick (BR) and 'concrete' otherwise.
- Esri rings run clockwise for exteriors and counter-clockwise for holes."""
- covered=prep(coverage);out=[]
+ Esri rings run clockwise for exteriors and counter-clockwise for holes. With the
+ park polygons, whole-island outlines are reduced to their sidewalk strip
+ (`outline_strip`); `stats['outlines']` counts them."""
+ covered=prep(coverage);out=[];outlines=0
+ park_tree=STRtree(polygon_parts(unary_union([Polygon(p['rings'][0],p['rings'][1:]).buffer(0) for p in parks]))) if parks else None
  for f in features:
   rings=[r for r in f['geometry'].get('rings',[]) if len(r)>=4];
   if not rings:continue
@@ -376,8 +439,10 @@ def sidewalk_polygons(features,xy,coverage):
   shell=unary_union([Polygon([xy(*v) for v in r]).buffer(0) for r in exterior])
   if holes:shell=shell.difference(unary_union([Polygon([xy(*v) for v in r]).buffer(0) for r in holes]))
   if shell.is_empty or not covered.intersects(shell):continue
-  shell=shell.intersection(coverage);material='brick' if (f['attributes'].get('MATERIAL') or '').strip()=='BR' else 'concrete'
+  shell,reduced=outline_strip(shell.intersection(coverage),declared_width(f['attributes']),park_tree);outlines+=reduced
+  material='brick' if (f['attributes'].get('MATERIAL') or '').strip()=='BR' else 'concrete'
   for part in polygon_parts(shell):out.append((part,material))
+ if stats is not None:stats['outlines']=outlines
  return out
 
 
@@ -416,13 +481,20 @@ def install(data_dir,source_dir,xy,log=print):
  for key,tile in headers.items():
   kept=[c for c in tile['curbs'] if len(c)>=2 and json.dumps(c) not in legacy and not town_prep.contains(Point(c[len(c)//2]))];survey+=len(kept);added+=len(fillets.get(key,[]))
   tile['curbs']=kept+fillets.get(key,[])
- log('Curbs: survey',survey,'town fillets',added,flush=True)
+ lines,widths,lots=driveway_features(json.loads((source_dir/'osm-metro-driveways.json').read_text())['elements'],xy);log('Driveway features: service roads',len(lines),'parking lots',len(lots),flush=True)
+ explained=explained_region(city['roads'],lines,lots);park_tree=STRtree(polygon_parts(unary_union([Polygon(p['rings'][0],p['rings'][1:]).buffer(0) for p in city['parks']]).buffer(3))) if city['parks'] else None
+ stale=0;stale_length=0.0;is_survey=lambda c:len(c)>=2 and not town_prep.contains(Point(c[len(c)//2]))
+ for key,tile in headers.items():
+  if not any(is_survey(c) for c in tile['curbs']):continue
+  tx,tz=tile['tx'],tile['tz'];pruned,count,length=prune_stale_curbs(tile['curbs'],explained,park_tree,box(tx*size-30,tz*size-30,(tx+1)*size+30,(tz+1)*size+30),is_survey)
+  if count:tile['curbs']=pruned;stale+=count;stale_length+=length
+ survey=sum(1 for tile in headers.values() for c in tile['curbs'] if is_survey(c))
+ log('Curbs: survey',survey,'town fillets',added,'stale stretches dropped',stale,f'({stale_length:.0f} m)',flush=True)
  curb_lines=[LineString(c) for t in headers.values() for c in t['curbs'] if len(c)>=2]
- walks=sidewalk_polygons(json.loads((source_dir/'layer-0.json').read_text())['features'],xy,coverage);walks_tree=STRtree([w for w,_ in walks])
- log('Sidewalk inventory polygons',len(walks),flush=True)
+ walk_stats={};walks=sidewalk_polygons(json.loads((source_dir/'layer-0.json').read_text())['features'],xy,coverage,city['parks'],walk_stats);walks_tree=STRtree([w for w,_ in walks])
+ log('Sidewalk inventory polygons',len(walks),'island outlines reduced to strips',walk_stats['outlines'],flush=True)
  edges=cast_edges(surface,curb_lines);log('Cast',len(edges),'roads',flush=True)
  records=pavement_records(surface,edges,walks_tree);log('Pavement records',len(records),flush=True)
- lines,widths,lots=driveway_features(json.loads((source_dir/'osm-metro-driveways.json').read_text())['elements'],xy);log('Driveway features: service roads',len(lines),'parking lots',len(lots),flush=True)
  islands,faces,stats=curb_islands(curb_lines,surface,city['parks'],[b['center'] for t in headers.values() for b in t['buildings']],walks_tree,(lines,lots));log('Islands',stats,flush=True)
  drives=driveway_surfaces(lines,widths,lots,faces,coverage,walks_tree,curb_lines);log('Driveway surfaces',len(drives),flush=True)
  for tile in headers.values():tile['pavements']=[];tile['sidewalks']=[];tile['islands']=[];tile['driveways']=[]
@@ -459,8 +531,9 @@ def install(data_dir,source_dir,xy,log=print):
  for entry in [source,osm]:
   if entry not in city['sources']:city['sources'].append(entry)
  city_path.write_text(json.dumps(city,separators=(',',':'))+'\n')
- summary={'surveyCurbs':survey,'townCurbs':added,'sidewalkPolygons':len(walks),'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'faces':stats}
+ summary={'surveyCurbs':survey,'townCurbs':added,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'faces':stats}
  pp=data_dir/'provenance.json';provenance=json.loads(pp.read_text())
- provenance['streetSurfaces']={**summary,'source':source['url'],'method':f'Roadway edges measured every {STEP:g} m from each surface centerline to the nearest curb within half the nominal width plus {CAP_EXTRA:g} m, driveway tongues under 7 m suppressed, gaps to 40 m interpolated, unmeasured stretches ramped to the nominal width; sidewalk inventory polygons grown {SIDEWALK_TUCK} m and clipped to tiles; OpenStreetMap service roads measured to the surveyed curbs within half their tagged or class width ({SERVICE_WIDTH:g} m default) plus {DRIVEWAY_REACH:g} m, an unmeasured side completed to the median curb-to-curb width of that line, with surface parking lots and the closed curb faces a service road enters or a lot covers (up to {DRIVEWAY_AREA:g} m2), dissolved and cut around inventory sidewalks; other closed curb faces without a centerline or building filled with concrete when outside parks and inventory sidewalks and under {ISLAND_AREA:g} m2 or {ISLAND_WIDTH} m wide; town curbs regenerated from the pavement union with {FILLET:g} m fillets.'}
+ provenance['streetSurfaces']={**summary,'source':source['url'],'method':f'Roadway edges measured every {STEP:g} m from each surface centerline to the nearest curb within half the nominal width plus {CAP_EXTRA:g} m, driveway tongues under 7 m suppressed, gaps to 40 m interpolated, unmeasured stretches ramped to the nominal width; sidewalk inventory polygons grown {SIDEWALK_TUCK} m and clipped to tiles, a polygon mostly in parkland that holds a disc {OUTLINE_DIAMETER:g} m across (wider than four declared widths) reduced to its declared width ({WALK_FALLBACK} m when blank) along the boundary; OpenStreetMap service roads measured to the surveyed curbs within half their tagged or class width ({SERVICE_WIDTH:g} m default) plus {DRIVEWAY_REACH:g} m, an unmeasured side completed to the median curb-to-curb width of that line, with surface parking lots and the closed curb faces a service road enters or a lot covers (up to {DRIVEWAY_AREA:g} m2), dissolved and cut around inventory sidewalks; other closed curb faces without a centerline or building filled with concrete when outside parks and inventory sidewalks and under {ISLAND_AREA:g} m2 or {ISLAND_WIDTH} m wide; town curbs regenerated from the pavement union with {FILLET:g} m fillets; Boston curb stretches of {STALE_LENGTH:g} m or more lying in parkland (parks grown 3 m) beyond the measuring reach of every street, service road (8 m) and lot (4 m) dropped as remnants of removed roadways.'}
  pp.write_text(json.dumps(provenance,separators=(',',':'))+'\n')
- return {**summary,'changedTiles':len(changed)}
+ # The stale count is this run's work, not a property of the package: a rerun finds nothing left to drop, so it stays out of the manifest.
+ return {**summary,'changedTiles':len(changed),'staleCurbs':stale,'staleCurbMetres':round(stale_length)}
