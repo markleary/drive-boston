@@ -77,14 +77,16 @@ test('at 50 mph a head-on shoves the struck car back and lifts the player\'s tai
     const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);
     try{
       const {index}=await launchAt(physics,traffic,kind,speed),label=`${kind==='head'?'head-on':'T-bone'} at ${(speed/.44704).toFixed(0)} mph`;
-      let hit,minUp=1;
+      // `rest` is where the struck car lay last while still knocked: once settled it may ease back
+      // onto its lane, or respawn elsewhere when a wall blocks the way, before the five seconds end.
+      let hit,rest,minUp=1;
       for(let i=0;i<60*5;i++){
         const state=physics.getState();traffic.update(1/60,state,state,[]);physics.step(released,1/60);physics.takeImpacts();
-        const now=traffic.snapshot()[index];if(!hit&&now.knocked)hit={x:now.x,z:now.z,yaw:now.yaw,player:physics.getState()};
+        const now=traffic.snapshot()[index];if(now.knocked){rest={x:now.x,z:now.z,yaw:now.yaw};if(!hit)hit={...rest,player:physics.getState()};}
         if(hit)minUp=Math.min(minUp,upY(physics.getState()));
       }
       assert.ok(hit,`${label}: the struck car is knocked`);
-      const now=traffic.snapshot()[index],moved=Math.hypot(now.x-hit.x,now.z-hit.z),sideways=Math.abs((now.x-hit.x)*Math.cos(hit.yaw)-(now.z-hit.z)*Math.sin(hit.yaw));
+      const now=rest,moved=Math.hypot(now.x-hit.x,now.z-hit.z),sideways=Math.abs((now.x-hit.x)*Math.cos(hit.yaw)-(now.z-hit.z)*Math.sin(hit.yaw));
       const spin=Math.abs(Math.atan2(Math.sin(now.yaw-hit.yaw),Math.cos(now.yaw-hit.yaw)))*180/Math.PI,end=physics.getState();
       if(kind==='head'){
         const ux=Math.sin(hit.player.yaw),uz=Math.cos(hit.player.yaw),back=(now.x-hit.x)*ux+(now.z-hit.z)*uz;
@@ -109,7 +111,9 @@ test('a struck traffic car is shoved as a dynamic body, then eases back into its
       if(i===240)park(physics,before.x-fx*60,before.z-fz*60);
       const state=physics.getState();traffic.update(1/60,state,state,[]);physics.step({...released,brake:i>30?1:0},1/60);
       impacts.push(...physics.takeImpacts());
-      const now=traffic.snapshot()[index];
+      const all=traffic.snapshot(),now=all[index];
+      // Saint James Avenue traffic passes the parked player 4 m away here; a bounding-box overlap is no hit.
+      if(i>240)assert.ok(!all.some((a,k)=>k!==index&&a.knocked),`cars passing the parked player are not knocked (step ${i})`);
       if(now.knocked&&knockedAt<0){knockedAt=i;assert.equal(now.dynamic,true,'a knocked car runs on Rapier');}
       if(now.knocked)peakSpeed=Math.max(peakSpeed,now.speed);
       if(knockedAt>=0&&restoredAt<0&&!now.knocked&&!now.rejoining){restoredAt=i;assert.equal(now.dynamic,false,'the lane keeper is kinematic again');}

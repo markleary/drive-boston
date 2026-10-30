@@ -26,8 +26,58 @@ export function clipPortalSurface(city:CityData,geometry:THREE.BufferGeometry){
  * ribbon is collected first and written with the face normals of coincident
  * vertices averaged, as an indexed mesh would shade. */
 export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[],width:number,offset:number,surface?:(x:number,z:number)=>number){
+  const section=(i:number)=>{
+    const p=points[i],before=points[Math.max(0,i-1)],after=points[Math.min(points.length-1,i+1)];
+    const dx=after[0]-before[0],dz=after[1]-before[1],length=Math.hypot(dx,dz)||1;
+    return[-dz/length,dx/length];
+  };
+  let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  for(const [x,z]of points){minX=Math.min(minX,x-width);maxX=Math.max(maxX,x+width);minZ=Math.min(minZ,z-width);maxZ=Math.max(maxZ,z+width);}
+  drapedSurfaceInto(sink,city,offset,surface,[minX,maxX,minZ,maxZ],(corner,quad)=>{
+    let distance=0;
+    for(let i=1;i<points.length;i++){
+      const a=points[i-1],b=points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.01)continue;
+      const na=section(i-1),nb=section(i),along=Math.max(1,Math.ceil(length/2)),across=Math.max(1,Math.ceil(width/2));
+      const vertex=(slot:number,t:number,v:number)=>{
+        const nx=na[0]+(nb[0]-na[0])*t,nz=na[1]+(nb[1]-na[1])*t;
+        corner(slot,a[0]+dx*t+nx*width*(v-.5),a[1]+dz*t+nz*width*(v-.5),v*width/5,(distance+t*length)/5);
+      };
+      for(let j=0;j<along;j++)for(let k=0;k<across;k++){vertex(0,j/along,k/across);vertex(5,(j+1)/along,k/across);vertex(10,j/along,(k+1)/across);vertex(15,(j+1)/along,(k+1)/across);quad();}
+      distance+=length;
+    }
+  });
+}
+/** A surface between two measured edge polylines (station pairs `left[i]`,
+ * `right[i]`, left being the ribbon's +normal side, [-dz, dx] of the direction
+ * of travel): the curb-bounded roadway of scripts/street_surfaces.py and its
+ * sidewalk bands. Draped, wound and shaded exactly like a ribbon. */
+export function drapedStripInto(sink:TriangleSink,city:CityData,left:Point2[],right:Point2[],offset:number,surface?:(x:number,z:number)=>number){
+  let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  for(const edge of [left,right])for(const [x,z]of edge){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}
+  drapedSurfaceInto(sink,city,offset,surface,[minX,maxX,minZ,maxZ],(corner,quad)=>{
+    let distance=0;
+    for(let i=1;i<Math.min(left.length,right.length);i++){
+      const l0=left[i-1],l1=left[i],r0=right[i-1],r1=right[i];
+      const length=Math.hypot((l1[0]+r1[0]-l0[0]-r0[0])/2,(l1[1]+r1[1]-l0[1]-r0[1])/2);if(length<.01)continue;
+      const width=Math.max(Math.hypot(l0[0]-r0[0],l0[1]-r0[1]),Math.hypot(l1[0]-r1[0],l1[1]-r1[1]));
+      const along=Math.max(1,Math.ceil(length/2)),across=Math.max(1,Math.ceil(width/2));
+      const vertex=(slot:number,t:number,v:number)=>{
+        const lx=l0[0]+(l1[0]-l0[0])*t,lz=l0[1]+(l1[1]-l0[1])*t,rx=r0[0]+(r1[0]-r0[0])*t,rz=r0[1]+(r1[1]-r0[1])*t;
+        corner(slot,rx+(lx-rx)*v,rz+(lz-rz)*v,v*width/5,(distance+t*length)/5);
+      };
+      for(let j=0;j<along;j++)for(let k=0;k<across;k++){vertex(0,j/along,k/across);vertex(5,(j+1)/along,k/across);vertex(10,j/along,(k+1)/across);vertex(15,(j+1)/along,(k+1)/across);quad();}
+      distance+=length;
+    }
+  });
+}
+/** Shared draping: `fill` places each quad's four corners (slots 0, 5, 10, 15:
+ * near-left, far-left, near-right, far-right, as x, z, u, v) and calls `quad`;
+ * the corners are lifted onto the ground, split where the ground bends more
+ * than 7 mm between them, clipped out of tunnel portals and written with the
+ * averaged normals of coincident vertices. */
+function drapedSurfaceInto(sink:TriangleSink,city:CityData,offset:number,surface:((x:number,z:number)=>number)|undefined,extent:[number,number,number,number],fill:(corner:(slot:number,x:number,z:number,u:number,v:number)=>void,quad:()=>void)=>void){
   const heightAt=surface??((x:number,z:number)=>sampleElevation(city,x,z));
-  let distance=0;const v:number[]=[];
+  const v:number[]=[];
   // Vertices travel as plain numbers (x, y, z, u, v): no objects per vertex or midpoint.
   const emit=(ax:number,ay:number,az:number,au:number,av:number,bx:number,by:number,bz:number,bu:number,bv:number,cx:number,cy:number,cz:number,cu:number,cv:number,depth:number)=>{
     const abx=(ax+bx)/2,abz=(az+bz)/2,aby=heightAt(abx,abz)+offset,abu=(au+bu)/2,abv=(av+bv)/2;
@@ -40,30 +90,11 @@ export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[]
     }
     v.push(ax,ay,az,au,av,bx,by,bz,bu,bv,cx,cy,cz,cu,cv);
   };
-  const section=(i:number)=>{
-    const p=points[i],before=points[Math.max(0,i-1)],after=points[Math.min(points.length-1,i+1)];
-    const dx=after[0]-before[0],dz=after[1]-before[1],length=Math.hypot(dx,dz)||1;
-    return[-dz/length,dx/length];
-  };
   const q=new Float64Array(20);
-  for(let i=1;i<points.length;i++){
-    const a=points[i-1],b=points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.01)continue;
-    const na=section(i-1),nb=section(i),along=Math.max(1,Math.ceil(length/2)),across=Math.max(1,Math.ceil(width/2));
-    const vertex=(slot:number,t:number,v:number)=>{
-      const nx=na[0]+(nb[0]-na[0])*t,nz=na[1]+(nb[1]-na[1])*t;
-      const x=a[0]+dx*t+nx*width*(v-.5),z=a[1]+dz*t+nz*width*(v-.5);
-      q[slot]=x;q[slot+1]=heightAt(x,z)+offset;q[slot+2]=z;q[slot+3]=v*width/5;q[slot+4]=(distance+t*length)/5;
-    };
-    for(let j=0;j<along;j++)for(let k=0;k<across;k++){
-      vertex(0,j/along,k/across);vertex(5,(j+1)/along,k/across);vertex(10,j/along,(k+1)/across);vertex(15,(j+1)/along,(k+1)/across);
-      emit(q[0],q[1],q[2],q[3],q[4],q[10],q[11],q[12],q[13],q[14],q[5],q[6],q[7],q[8],q[9],0);
-      emit(q[10],q[11],q[12],q[13],q[14],q[15],q[16],q[17],q[18],q[19],q[5],q[6],q[7],q[8],q[9],0);
-    }
-    distance+=length;
-  }
-  let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
-  if(!surface)for(const [x,z]of points){minX=Math.min(minX,x-width);maxX=Math.max(maxX,x+width);minZ=Math.min(minZ,z-width);maxZ=Math.max(maxZ,z+width);}
-  if(!surface&&tunnelPortalBoundsIntersect(city,minX,maxX,minZ,maxZ)){
+  const corner=(slot:number,x:number,z:number,u:number,w:number)=>{q[slot]=x;q[slot+1]=heightAt(x,z)+offset;q[slot+2]=z;q[slot+3]=u;q[slot+4]=w;};
+  const quad=()=>{emit(q[0],q[1],q[2],q[3],q[4],q[10],q[11],q[12],q[13],q[14],q[5],q[6],q[7],q[8],q[9],0);emit(q[10],q[11],q[12],q[13],q[14],q[15],q[16],q[17],q[18],q[19],q[5],q[6],q[7],q[8],q[9],0);};
+  fill(corner,quad);
+  if(!surface&&tunnelPortalBoundsIntersect(city,extent[0],extent[1],extent[2],extent[3])){
     const vertices=new Float32Array(v.length/5*3);for(let i=0;i<v.length/5;i++)vertices.set(v.slice(i*5,i*5+3),i*3);
     const clipped=clipTunnelPortals(city,vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
     if(clipped.vertices!==vertices){v.length=0;for(const i of clipped.indices){const x=clipped.vertices[i*3],y=clipped.vertices[i*3+1],z=clipped.vertices[i*3+2];v.push(x,y,z,x/5,z/5);}}

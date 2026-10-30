@@ -2,7 +2,8 @@
 """Download the public sources for the Greater Boston build: official Boston
 neighborhood and surrounding-town polygons, Boston GIS streets/curbs/signals,
 regional hydro and park polygons, Boston and Cambridge OBJ model tiles, OSM
-extracts for Cambridge, Somerville, Brookline and Chelsea, and the USGS 3DEP terrain.
+extracts for Cambridge, Somerville, Brookline and Chelsea, metro-wide OSM paths,
+water, landmarks, service roads and parking lots, and the USGS 3DEP terrain.
 Everything lands in the ignored source cache; nothing is fetched at runtime.
 """
 from __future__ import annotations
@@ -165,6 +166,10 @@ def osm_extracts(cache,bounds):
  jobs.append(('metro-water',['way["natural"="water"]({bbox});','relation["natural"="water"]({bbox});','way["natural"="coastline"]({bbox});'],full))
  jobs.append(('metro-paths',['way["highway"~"^(footway|path|pedestrian|steps|cycleway)$"]({bbox});'],full))
  jobs.append(('metro-landmarks',['node["historic"="monument"]({bbox});','node["tourism"="attraction"]({bbox});','way["tourism"="attraction"]({bbox});','node["man_made"="obelisk"]({bbox});'],full))
+ # Driveways, parking aisles and lots: the surveyed curbs enclose them but
+ # neither Boston Segments nor the town road classes carry them, so
+ # build-street-surfaces.py uses this extract to pave the curb faces they cross.
+ jobs.append(('metro-driveways',['way["highway"="service"]({bbox});','way["amenity"="parking"]({bbox});'],full))
  for job in jobs:overpass(cache,*job)
 
 def main():
@@ -176,7 +181,7 @@ def main():
  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
   futures=[]
   if not args.skip_gis:
-   futures+=[pool.submit(gis_layer,cache,n,bbox) for n in [8,12,6]]
+   futures+=[pool.submit(gis_layer,cache,n,bbox) for n in [8,12,6,0]]
    futures+=[pool.submit(basemap_layer,cache,n,bbox) for n in [12,14]]
   if not args.skip_models:
    futures.append(pool.submit(boston_tiles,cache,bounds));futures.append(pool.submit(cambridge_tiles,cache))

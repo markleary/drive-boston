@@ -274,6 +274,19 @@ function paving() {
   return new THREE.MeshStandardMaterial({ map, roughness: .98 });
 }
 
+/** Running-bond brick paving (Boston sidewalk inventory material BR): about
+ * 20 by 10 cm bricks at the seven-metre repeat of parkSurface UVs. */
+function brickPaving(){
+  const {canvas,ctx}=makeCanvas(),random=seeded(523),bw=512/35,bh=bw/2;
+  ctx.fillStyle='#b4a894';ctx.fillRect(0,0,512,512);
+  for(let row=0;row*bh<512;row++)for(let col=-1;col*bw<512;col++){
+    const x=col*bw+(row%2?bw/2:0),y=row*bh,v=random();
+    ctx.fillStyle=`rgb(${Math.round(136+v*34)},${Math.round(82+v*22)},${Math.round(64+v*16)})`;ctx.fillRect(x+.8,y+.8,bw-1.6,bh-1.6);
+  }
+  for(let i=0;i<6000;i++){ctx.fillStyle=random()>.5?'#f0e3c814':'#2a201c16';ctx.fillRect(random()*512,random()*512,1,1);}
+  return new THREE.MeshStandardMaterial({map:canvasTexture(canvas,true),roughness:.95});
+}
+
 function roofFinish(){
   const {canvas,ctx:c}=makeCanvas(),{canvas:relief,ctx:b}=makeCanvas(),random=seeded(861);
   c.fillStyle='#62635d';c.fillRect(0,0,512,512);b.fillStyle='#808080';b.fillRect(0,0,512,512);
@@ -321,10 +334,11 @@ export function createMaterials(mobile=false) {
   }
   const asphalt = new THREE.MeshStandardMaterial({ map: canvasTexture(asphaltCanvas, true), roughness: .97 });
   const sidewalk = paving();
+  const brick = brickPaving();
   const curb = new THREE.MeshStandardMaterial({ color: '#a9a89b', roughness: .94 });
   const paint = new THREE.MeshStandardMaterial({ color: '#dbd7c4', roughness: .94 });
   const yellow = new THREE.MeshStandardMaterial({ color: '#c6a850', roughness: .94 });
-  return { facades, glass, library, church, roof, asphalt, sidewalk, curb, paint, yellow,
+  return { facades, glass, library, church, roof, asphalt, sidewalk, brick, curb, paint, yellow,
     setLighting(mode: LightingMode) { setInteriorLighting(mode); for (const m of facades) m.emissiveIntensity = mode === 'night' ? .78 : .008; },
     interiors() { const v = interiorLighting.value; return { styles: facades.filter(m => m.userData.windowInteriors).length, glow: v.x, litFraction: v.y, daylight: v.z }; },
   };
