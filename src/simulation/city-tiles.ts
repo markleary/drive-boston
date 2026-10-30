@@ -1,6 +1,7 @@
 import type { Building, CityData, Point2 } from '../types';
 import { decodeElevation, gunzip, parseTile, tileFile, tileKey, tileOf, type CityTile, type TileBuilding } from './tile-format.ts';
 import { parseFar, type FarBuilding, type FarCity } from './far-format.ts';
+import {prepareBuildingTunnelPassage} from './tunnel-passages.ts';
 
 /** A metro city streams its buildings from 1 km tiles. `city.buildings` holds
  * the currently loaded detailed set; `far` holds every building's hull. */
@@ -35,18 +36,27 @@ export type Reader = (name: string) => Promise<ArrayBuffer>;
 export async function resolveCity(city: CityData, read: Reader): Promise<CityData> {
   const elevation = city.elevation as (CityData['elevation'] & { file?: string; scale?: number }) | undefined;
   const tiles = (city as Partial<MetroCity>).tiles;
-  const [heights, far] = await Promise.all([
+  const [heights, far, tunnels] = await Promise.all([
     elevation?.file ? read(elevation.file).then(gunzip).then(buffer => decodeElevation(buffer, elevation.scale ?? .01)) : undefined,
     tiles ? read(tiles.far).then(gunzip).then(parseFar) : undefined,
+    city.tunnels ? read(city.tunnels.file).then(buffer=>JSON.parse(new TextDecoder().decode(buffer)) as Pick<CityData,'roads'|'landmarks'|'sources'>) : undefined,
   ]);
   if (elevation && heights) elevation.heights = heights;
+  if(tunnels){
+    const roadIds=new Set(tunnels.roads.map(r=>r.id)),landmarkIds=new Set(tunnels.landmarks.map(l=>l.id));
+    city.roads=[...city.roads.filter(r=>!roadIds.has(r.id)),...tunnels.roads];
+    city.landmarks=[...city.landmarks.filter(l=>!landmarkIds.has(l.id)),...tunnels.landmarks];
+    city.sources=[...city.sources,...tunnels.sources.filter(s=>!city.sources.some(existing=>existing.url===s.url))];
+  }
   if (!tiles || !far) return city;
   const metro = city as MetroCity; metro.far = far; metro.landmarkBuildings ??= []; metro.buildings = []; metro.curbs ??= []; metro.parkPaths ??= []; metro.index = new BuildingIndex(far);
   return metro;
 }
 
 export async function loadTile(city: MetroCity, tx: number, tz: number, read: Reader): Promise<CityTile> {
-  return parseTile(await gunzip(await read(`${city.tiles.directory}/${tileFile(tx, tz)}`)));
+  const tile=parseTile(await gunzip(await read(`${city.tiles.directory}/${tileFile(tx, tz)}`)));
+  for(const building of tile.buildings){const data=tile.geometry.get(building.id);if(data)tile.geometry.set(building.id,prepareBuildingTunnelPassage(city,building,data));}
+  return tile;
 }
 export const hasTile = (city: MetroCity, tx: number, tz: number) => tileKeys(city).has(tileKey(tx, tz));
 const keySets = new WeakMap<TileManifest, Set<string>>();

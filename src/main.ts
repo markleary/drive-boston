@@ -12,6 +12,7 @@ import { prepareRoadTerrain, type RoadGradingStats } from './simulation/road-gra
 import { buildingAt, isMetroCity, resolveCity } from './simulation/city-tiles.ts';
 import { addMetroLandmarkDetails } from './render/metro-landmarks';
 import { sampleDriveSurface } from './simulation/road-surfaces';
+import { tunnelAt } from './simulation/tunnels';
 import { createWorld } from './render/world';
 import { addLandmarkDetails } from './render/landmarks';
 import { addStreetscape } from './render/streetscape';
@@ -89,7 +90,8 @@ async function boot(){
       const landmark=city.landmarks.find(l=>l.id===id);if(!landmark||!physics)return;
       if(travelMode!=='helicopter'&&landmark.driveStart){const start=landmark.driveStart;void travelTo(start.x,start.z,()=>physics!.reset(start.x,start.z,start.yaw,start.roadId));return;}
       const arrival:Record<string,[number,number]>={library:[-195,57],trinity:[-155,52]};
-      const road=closestRoad(city,...(arrival[id]??landmark.position),true);
+      const destination=arrival[id]??landmark.position;
+      const road=closestRoad(city,...destination,true,{height:sampleElevation(city,...destination),accept:p=>!p.road.tunnel});
       const rightX=-Math.cos(road.yaw),rightZ=Math.sin(road.yaw);
       let x=road.x+rightX*1.7,z=road.z+rightZ*1.7;
       if(buildingAt(city,x,z)){x=road.x;z=road.z;}
@@ -157,9 +159,10 @@ async function boot(){
         const saved=JSON.parse(localStorage.getItem('backbay-drive-v1')??'null');
         if(!saved||![saved.x,saved.z,saved.yaw].every(Number.isFinite))return;
         const occupant=buildingAt(city,saved.x,saved.z);
-        const blocked=occupant&&('id' in occupant?!usesExactBuildingCollision(occupant):!occupant.exactMesh);
+        const tunnel=typeof saved.roadId==='string'&&!!sampleDriveSurface(city,saved.x,saved.z,undefined,saved.roadId).road?.tunnel;
+        const blocked=!tunnel&&occupant&&('id' in occupant?!usesExactBuildingCollision(occupant):!occupant.exactMesh);
         const footbridge=typeof saved.roadId==='string'&&saved.roadId.startsWith('footbridge:');
-        if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&(footbridge||closestRoad(city,saved.x,saved.z).distance<10)&&!blocked)
+        if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&(tunnel||footbridge||closestRoad(city,saved.x,saved.z).distance<10)&&!blocked)
           return {x:saved.x as number,z:saved.z as number,yaw:saved.yaw as number,roadId:typeof saved.roadId==='string'?saved.roadId:undefined};
       }catch{/* Storage is optional. */}
     })();
@@ -310,8 +313,9 @@ async function boot(){
       // 60 Hz ticks makes a moving aircraft bob against the smoothed camera.
       if(flying&&!paused){flight!.update(dt,flightControls);distance+=flight!.state.speed*dt;}
       const carState=physics!.getState(),riding=carState.vehicle==='ultrabee';
-      if(!riding)car.update(carState,lighting==='night',paused?0:dt);car.group.visible=!riding&&(flying||cameraMode!=='hood');
-      if(riding)bike.update(carState,lighting==='night',cameraMode==='hood'&&!flying);bike.group.visible=riding;
+      const interior=!flying?tunnelAt(city,carState.x,carState.z,carState.y):undefined;
+      if(!riding)car.update(carState,lighting==='night'||!!interior?.covered,paused?0:dt);car.group.visible=!riding&&(flying||cameraMode!=='hood');
+      if(riding)bike.update(carState,lighting==='night'||!!interior?.covered,cameraMode==='hood'&&!flying);bike.group.visible=riding;
       helicopter.update(flight!.state,paused?0:dt,flying);helicopter.group.visible=flying&&cameraMode!=='hood';
       const state=flying?{...flight!.state,steering:0}:carState;
       const yaw=state.yaw+lookOffset;target.set(state.x,state.y+.5,state.z);
@@ -321,7 +325,7 @@ async function boot(){
       if(cameraMode==='hood'){
         desired.set(state.x+Math.sin(yaw)*.5,state.y+(riding&&!flying?1.02:.9),state.z+Math.cos(yaw)*.5);look.set(state.x+Math.sin(yaw)*40,state.y+(flying?-7-(orbitPitch-.3)*35:.7),state.z+Math.cos(yaw)*40);camera.fov=65;
         if(riding&&!flying){desired.set(0,1.02,-.15).applyQuaternion(bike.group.quaternion).add(bike.group.position);look.set(Math.sin(lookOffset),-.22,Math.cos(lookOffset)).applyQuaternion(bike.group.quaternion).multiplyScalar(40).add(desired);camera.up.applyQuaternion(bike.group.quaternion);camera.fov=78;}
-      }else if(cameraMode==='aerial'){
+      }else if(cameraMode==='aerial'&&!interior?.covered){
         desired.set(state.x,state.y+(flying?65:150)*zoom,state.z+(flying?.01:20*zoom));look.copy(target);camera.fov=52;
         cameraDirection.subVectors(desired,target);const aerialDistance=cameraDirection.length();cameraDirection.normalize();
         if(physics!.world.castRay(cameraRay,aerialDistance,true,undefined,undefined,physics!.chassisCollider,physics!.body,collider=>collider.parent()===null))desired.set(state.x,state.y+150*zoom,state.z+.01);
@@ -339,7 +343,7 @@ async function boot(){
       camera.position.lerp(desired,cameraSnap||(riding&&!flying&&cameraMode==='hood')?1:1-Math.exp(-7*dt));
       // Pull the chase camera forward when a façade blocks its view. Query the
       // static collision world so orbiting alongside buildings stays readable.
-      if(cameraMode==='chase'){
+      if(cameraMode==='chase'||interior?.covered){
         cameraDirection.subVectors(camera.position,target);const cameraDistance=cameraDirection.length();cameraDirection.normalize();
         const obstruction=physics!.world.castRay(cameraRay,cameraDistance,true,undefined,undefined,physics!.chassisCollider,physics!.body,collider=>collider.parent()===null);
         if(obstruction)camera.position.copy(target).addScaledVector(cameraDirection,Math.max(.6,obstruction.timeOfImpact-.4));
@@ -367,7 +371,7 @@ async function boot(){
     };
     const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),touchInput:ui.getTouchInput(),flightTouchInput:ui.getFlightTouchInput(),camera:cameraMode,carBodyVisible:car.bodyVisible,vehicleScreenBounds:cameraMode==='hood'||(travelMode==='drive'&&!car.bodyVisible)?null:vehicleScreenBounds(travelMode==='helicopter'?helicopter.group:travelMode==='bike'?bike.group:car.group,camera,innerWidth,innerHeight),cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},shadows:world!.shadowCoverage,farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,walkers:streetLife.pedestrians.map(p=>({x:p.position.x,y:p.position.y,z:p.position.z,yaw:p.yaw,knocked:p.knocked?.phase??null})),audio:audio.getStatus(),distance}),city,
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
-      travelTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>physics!.reset(x,z,yaw)),
+      travelTo:(x:number,z:number,yaw=0,roadId?:string)=>travelTo(x,z,()=>physics!.reset(x,z,yaw,roadId)),
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
       flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw)),
       /** Browser specs: the live scene graph and renderer, for attributing resource growth to its owner group. */

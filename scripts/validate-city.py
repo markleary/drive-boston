@@ -8,6 +8,7 @@ destination. Needs the data virtualenv (numpy, shapely):
   .venv-data/bin/python scripts/validate-city.py [--data-dir public/data]
 """
 import argparse, gzip, heapq, json, math, pathlib, struct, sys
+import hashlib
 from collections import defaultdict
 import numpy as np
 from shapely.geometry import Polygon, Point
@@ -201,6 +202,24 @@ for r in city['roads']:
 assert any(r['name']=='Newbury Street' for r in city['roads']) and any(r['name']=='Massachusetts Avenue' for r in city['roads'])
 # Boston centerlines drop every limited-access name; the OSM towns keep surface trunks such as Concord Turnpike (Route 2) but never motorways.
 assert not any((r['name'].startswith('Interstate ') or 'Expressway' in r['name'] or 'Massachusetts Turnpike' in r['name'] or ('Turnpike' in r['name'] and not r['id'].startswith('osm-'))) for r in city['roads']),'highway or tunnel flattened into street network'
+# Tunnels remain separately profiled instead of entering the terrain-grading
+# street graph. Validate their shipped sidecar and retained source provenance.
+if city.get('tunnels'):
+ tunnels=json.loads((data_dir/city['tunnels']['file']).read_text());source=json.loads((data_dir/'central-artery-source.json').read_text())
+ assert tunnels['provenance']['sourceSHA256']==hashlib.sha256(json.dumps(source,sort_keys=True).encode()).hexdigest(),'tunnel source fixture changed without regeneration'
+ ids={r['id'] for r in tunnels['roads']};assert len(ids)==len(tunnels['roads'])==13
+ assert not ids.intersection(r['id'] for r in city['roads']),'tunnel sidecar duplicates a surface road'
+ assert len(tunnels['landmarks'])==3 and all(l['driveStart']['roadId'] in ids for l in tunnels['landmarks'])
+ assert sum(bool(r['tunnel'].get('capStart'))+bool(r['tunnel'].get('capEnd')) for r in tunnels['roads'])==2,'both southern bore ends must close'
+ for r in tunnels['roads']:
+  assert len(r['points'])==len(r['elevations'])>=2 and r['oneway']==1 and r['traffic'] is False
+  assert 4<=r['tunnel']['clearance']<=7 and 3<=r['width']<=20
+  assert all(math.isfinite(v) for p in r['points'] for v in p) and all(math.isfinite(y) for y in r['elevations'])
+  assert all(covered.covers(Point(*p)) for p in r['points']),f"tunnel escapes coverage: {r['id']}"
+  length=sum(math.dist(a,b) for a,b in zip(r['points'],r['points'][1:]))
+  assert all(0<=a<b<=length+.01 for a,b in r['tunnel']['covered']),f"invalid tunnel roof interval: {r['id']}"
+  assert all(abs(yb-ya)/max(.001,math.dist(a,b))<.131 for a,b,ya,yb in zip(r['points'],r['points'][1:],r['elevations'],r['elevations'][1:])),f"excessive tunnel grade: {r['id']}"
+ print(f"Validated {len(ids)} underground roads and {len(tunnels['landmarks'])} tunnel entrances.")
 def roadway_depth(point):
  i,j=int(point[0]//250),int(point[1]//250);best=math.inf
  for di in (-1,0,1):

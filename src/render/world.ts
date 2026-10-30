@@ -32,6 +32,8 @@ import { addHarvardBridgeDetails } from './harvard-bridge';
 import { addTobinBridgeDetails } from './tobin-bridge';
 import { updateWater } from './water-material';
 import { updateSunShadow } from './shadows';
+import { addTunnels } from './tunnels';
+import { tunnelAt } from '../simulation/tunnels.ts';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; }
 
@@ -91,6 +93,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   roadStructures.userData.longfellow=charlesBridges.group.userData;
   const harvardBridge=addHarvardBridgeDetails(scene,city);buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
   const tobinBridge=addTobinBridgeDetails(scene,city);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
+  const tunnels=addTunnels(scene,city);roadStructures.userData.tunnels=tunnels.group.userData;
 
   /** The original single-survey build: every road, curb, building and prop at once. */
   async function buildWholeCity(){
@@ -267,7 +270,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   // nothing but still costs a loop iteration in every lit fragment.
   const localLights:THREE.PointLight[]=[];for(let i=0;i<8;i++){const light=new THREE.PointLight(0xffcc89,0,21,2);light.visible=false;scene.add(light);localLights.push(light);}
   const nearLamps=new Int32Array(localLights.length),nearDistances=new Float64Array(localLights.length);
-  let mode:LightingMode='golden';
+  let mode:LightingMode='golden',underground=false;
   const direction=new THREE.Vector3(-270,255,330);
   function setLighting(next:LightingMode){
     mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);
@@ -292,6 +295,12 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   await options.waitForContext?.();setLighting('golden');
   function update(position:THREE.Vector3,time:number,stream=true,flightShadows=false){
     updateWater(time);
+    underground=!!tunnelAt(city,position.x,position.z,position.y)?.covered;
+    tunnels.update?.(position);
+    const fog=scene.fog as THREE.Fog;
+    fog.color.set(underground?'#171c1d':mode==='night'?'#162536':mode==='golden'?'#b5b7b2':'#b6c9d5');fog.near=underground?55:250;fog.far=underground?230:1050;
+    sky.visible=!underground&&mode!=='night';
+    sun.intensity=underground?.08:mode==='night'?.16:mode==='golden'?3.6:3.4;hemi.intensity=underground?.38:mode==='night'?.24:.68;
     const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);
     updateSunShadow(sun,position,groundY,direction,flightShadows);sky.position.copy(position);
     if(stream)streamer?.update(position,altitude);far?.update(position,altitude);
@@ -332,7 +341,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     if(!probe||!probeTarget||!sun.shadow.map)return;
     if(probeFace<0){
       if(!reflectionDirty&&(!highQuality||time-lastProbeTime<2.5||probePosition.distanceToSquared(position)<144))return;
-      probe.position.copy(position);probe.position.y=Math.max(height(position.x,position.z)+2.1,position.y);
+      probe.position.copy(position);probe.position.y=underground?position.y:Math.max(height(position.x,position.z)+2.1,position.y);
       probePosition.copy(position);lastProbeTime=time;probeFace=0;
       // The first capture and lighting changes render all six faces now so the
       // new environment shows at once. Travel refreshes spread the six faces

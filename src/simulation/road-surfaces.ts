@@ -2,6 +2,7 @@ import type {CityData,Point2,Road} from '../types';
 import {isHarvardBridgeRoad} from './harvard-bridge.ts';
 import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
 import {inTransitClearance} from './transit-corridors.ts';
+import {inTunnelPortal,tunnelAt} from './tunnels.ts';
 
 export function roadProjection(road:Road,x:number,z:number){
   let best={distance:Infinity,index:0,t:0,x:road.points[0]?.[0]??x,z:road.points[0]?.[1]??z};
@@ -63,13 +64,16 @@ function elevatedNear(city:CityData,x:number,z:number){
 export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
   const registered=streamedSurfaces.get(city),chosen=roadId?city.roads?.find(r=>r.id===roadId)??registered?.get(roadId)?.road:undefined;
   if(chosen&&roadProjection(chosen,x,z).distance<=roadWidthAt(chosen,x,z)/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
-  let height=sampleElevation(city,x,z),normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
+  const ground=sampleElevation(city,x,z),below=tunnelAt(city,x,z,yReference),portal=inTunnelPortal(city,x,z);
+  let height=(portal||below&&ground>yReference+.4)?-Infinity:ground,normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
   for(const candidate of [...elevatedNear(city,x,z),...[...(registered?.values()??[])].map(s=>s.road)]){
     if(!candidate.elevations)continue;
     const hit=roadProjection(candidate,x,z);if(hit.distance>roadWidthAt(candidate,x,z)/2+.05)continue;
     const h=sampleRoadElevation(city,candidate,x,z);
     if(h>height&&h<=yReference+.4){height=h;normal=roadNormal(city,candidate,x,z);road=candidate;}
   }
+  // A point outside every road footprint still has a stable terrain fallback.
+  if(!Number.isFinite(height))height=ground;
   return{height,normal,road};
 }
 
@@ -174,7 +178,7 @@ function deckIndex(city:CityData){
   deckIndexes.set(city,cells);return cells;
 }
 
-function coveredDeckInterval(a:Point2,b:Point2,ya:number,yb:number,triangle:DeckTriangle):[number,number]|undefined{
+function coveredDeckInterval(a:Point2,b:Point2,ya:number,yb:number,triangle:DeckTriangle,tolerance=.8):[number,number]|undefined{
   let low=0,high=1;
   // Clip against a linear inequality: value + rate*t >= 0.
   const clip=(value:number,rate:number)=>{
@@ -192,14 +196,14 @@ function coveredDeckInterval(a:Point2,b:Point2,ya:number,yb:number,triangle:Deck
   // their independently estimated profiles differ by a few decimetres. Use
   // the full 0.76m rail height plus 4cm clearance, not a coplanarity epsilon.
   // Actual upper/lower crossings remain separate by several metres.
-  const rate=yb-ya-triangle.gx*dx-triangle.gz*dz,tolerance=.8;
+  const rate=yb-ya-triangle.gx*dx-triangle.gz*dz;
   if(!clip(tolerance-difference,-rate)||!clip(tolerance+difference,rate))return;
   return[low,high];
 }
 
 /** Exposed edge intervals at the requested inset. Markings test their actual
  * centerline; rails probe outside the deck to retain coincident outer edges. */
-export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset=inset){
+export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset=inset,levelTolerance=.8){
   if(!road.elevations)return[];
   const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number}[]=[];
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
@@ -208,7 +212,7 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
     const candidates=new Set<DeckTriangle>();
     for(let x=Math.floor(Math.min(outsideA[0],outsideB[0])/DECK_CELL);x<=Math.floor(Math.max(outsideA[0],outsideB[0])/DECK_CELL);x++)for(let z=Math.floor(Math.min(outsideA[1],outsideB[1])/DECK_CELL);z<=Math.floor(Math.max(outsideA[1],outsideB[1])/DECK_CELL);z++)for(const triangle of cells.get(`${x},${z}`)??[])if(triangle.road!==road)candidates.add(triangle);
     const covered:[number,number][]=[];
-    for(const triangle of candidates){const interval=coveredDeckInterval(outsideA,outsideB,ya,yb,triangle);if(interval)covered.push(interval);}
+    for(const triangle of candidates){const interval=coveredDeckInterval(outsideA,outsideB,ya,yb,triangle,levelTolerance);if(interval)covered.push(interval);}
     covered.sort((a,b)=>a[0]-b[0]);
     const exposed:[number,number][]=[];let cursor=0;
     for(const [low,high]of covered){if(low>cursor)exposed.push([cursor,low]);cursor=Math.max(cursor,high);}

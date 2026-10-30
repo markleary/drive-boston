@@ -13,7 +13,7 @@ export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:TH
   asphalt??=new THREE.MeshStandardMaterial({color:'#50565a',roughness:.94});
   const decks:THREE.BufferGeometry[]=[],slabs:THREE.BufferGeometry[]=[],markings:THREE.BufferGeometry[]=[],rails:THREE.BufferGeometry[]=[],piers:THREE.BufferGeometry[]=[];
   for(const road of structures){
-    if(!road.elevations)continue;
+    if(!road.elevations||road.tunnel)continue;
     const deck=roadDeckGeometry(city,road,road.width,.025),top=new THREE.BufferGeometry();
     top.setAttribute('position',new THREE.BufferAttribute(deck.vertices,3));top.setAttribute('uv',new THREE.BufferAttribute(deck.uv,2));top.setIndex(new THREE.BufferAttribute(deck.indices,1));top.computeVertexNormals();decks.push(top);
     const slab=roadSlabGeometry(city,road),base=new THREE.BufferGeometry();base.setAttribute('position',new THREE.BufferAttribute(slab.vertices,3));base.setIndex(new THREE.BufferAttribute(slab.indices,1));base.computeVertexNormals();slabs.push(base);

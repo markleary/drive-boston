@@ -12,7 +12,7 @@ test('real concave source wall bottoms ground to terrain without filling streets
   const generated=new Map(),scene=new THREE.Scene(),a=new THREE.Vector3(),b=new THREE.Vector3(),c=new THREE.Vector3(),normal=new THREE.Vector3();
   for(const id of meshBuildingIds){
     const building=city.buildings.find(x=>x.id===id),data=city.geometry.get(id);
-    if(!building){assert.ok(city.metro.landmarkBuildings.some(b=>b.id===id),`${id} must at least be a landmark building`);continue;}
+    if(!building){const outside=city.metro.buildings.find(b=>b.id===id)??city.metro.landmarkBuildings.find(b=>b.id===id);assert.ok(outside,`${id} must exist in the source package`);assert.ok(outside.center[0]<city.bounds.minX||outside.center[0]>city.bounds.maxX||outside.center[1]<city.bounds.minZ||outside.center[1]>city.bounds.maxZ,`${id} is outside this test window`);continue;}
     assert.ok(data,`${id} must be in the central tiles`);
     const source=tileSourceGeometry(data),before=source.attributes.position.array.slice();
     const edges=[],p=source.attributes.position,index=source.index,base=building.baseElevation??0;

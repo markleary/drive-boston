@@ -9,6 +9,7 @@ test('spatial road lookup returns the exact nearest drivable segment across the 
     const x=city.bounds.minX-200+(city.bounds.maxX-city.bounds.minX+400)*((i*.61803398875)%1),z=city.bounds.minZ-200+(city.bounds.maxZ-city.bounds.minZ+400)*((i*.41421356237)%1);
     let distance=Infinity;
     for(const road of city.roads){
+      if(road.tunnel)continue;
       if(majorOnly&&(road.width<7||/alley|public|unnamed/i.test(road.name)))continue;
       for(let k=1;k<road.points.length;k++){
         const a=road.points[k-1],b=road.points[k],dx=b[0]-a[0],dz=b[1]-a[1],len2=dx*dx+dz*dz;if(len2<1)continue;
@@ -17,4 +18,10 @@ test('spatial road lookup returns the exact nearest drivable segment across the 
     }
     assert.ok(Math.abs(closestRoad(city,x,z,majorOnly).distance-distance)<1e-8,`incorrect nearest road at ${x},${z}`);
   }
+});
+
+test('surface destinations ignore buried roads while underground recovery can select them',()=>{
+ const surface={id:'street',name:'Surface Street',points:[[10,-50],[10,50]],width:8,oneway:0},tunnel={id:'bore',name:'I-93',points:[[0,-50],[0,50]],width:12,oneway:1,elevations:[-20,-20],tunnel:{clearance:5.2}};
+ const city={roads:[surface,tunnel],spawn:{x:10,z:0,yaw:0},bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100}};
+ assert.equal(closestRoad(city,0,0).road.id,'street');assert.equal(closestRoad(city,0,0,false,{height:-19}).road.id,'bore');
 });

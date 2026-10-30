@@ -1,6 +1,6 @@
 export type Point2 = [number, number];
 /** `kind` is the OpenStreetMap highway class of a town street (Cambridge, Somerville, Brookline, Chelsea); Boston centerlines carry a surveyed width instead. */
-export interface Road { id: string; name: string; points: Point2[]; width: number; oneway: number; kind?: string; /** False for drivable survey patches whose continuation has no traffic graph. */ traffic?:boolean; elevations?:number[]; deckWidths?:number[]; deckTangents?:{start?:Point2;end?:Point2}; startLevel?:number; endLevel?:number; bridge?:{id:string;thickness:number;clearanceEstimated:boolean;sourceLayer?:number;/** Metre stations where surveyed lower structures must remain free of generated piers. */supportExclusions?:[number,number][]}; }
+export interface Road { id: string; name: string; points: Point2[]; width: number; oneway: number; kind?: string; /** False for drivable survey patches whose continuation has no traffic graph. */ traffic?:boolean; elevations?:number[]; deckWidths?:number[]; deckTangents?:{start?:Point2;end?:Point2}; startLevel?:number; endLevel?:number; /** Covered intervals in metres along the road; omitted means fully covered. */ tunnel?:{clearance:number;covered?:[number,number][];capStart?:boolean;capEnd?:boolean}; bridge?:{id:string;thickness:number;clearanceEstimated:boolean;sourceLayer?:number;/** Metre stations where surveyed lower structures must remain free of generated piers. */supportExclusions?:[number,number][]}; }
 /** `kind` is the OpenStreetMap building tag of a town extrusion (house, apartments, retail...). */
 export interface Building { id: string; name: string; center: Point2; height: number; /** Generated wall height above base, excluding the pitched roof. */ eaveHeight?: number; footprint: Point2[]; landmark?: string; baseElevation?: number; kind?: string; amenity?: string; sourceName?: string; /** Preserve surveyed openings where the convex footprint crosses a road. */ collision?: 'mesh'; }
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
@@ -25,6 +25,8 @@ export interface CityData {
   /** Present on metro builds: buildings stream from 1 km tiles (see simulation/city-tiles.ts). */
   tiles?: { size:number; directory:string; keys:string[]; far:string; buildingCount:number };
   landmarkBuildings?: Building[];
+  /** Source-aligned underground roads are loaded before any terrain or actor indexes. */
+  tunnels?: {file:string};
   /** Tobin landmarks use metre stations on the northbound lower-deck spine. */
   tobinBridge?: { lowerRoadId:string; upperRoadId:string; mainSpan:[number,number]; mainPiers:[number,number]; littleSpan:[number,number]; };
 }

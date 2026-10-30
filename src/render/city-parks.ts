@@ -7,7 +7,7 @@ import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {roadSlabGeometry,deckEdge} from '../simulation/road-surfaces.ts';
 import { canvasTexture, seeded } from './materials';
 import { createStreetTrees, type TreeField } from './foliage';
-import { drapedRibbonInto } from './terrain-ground';
+import { drapedRibbonInto,clipPortalSurface } from './terrain-ground';
 import { PartBatches, box, type Part } from './geometry-writer';
 import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
@@ -18,6 +18,7 @@ import {createWaterMaterial} from './water-material.ts';
 import {applyWaterMotion,waterMotion} from './water-motion.ts';
 export {parkSurface} from './area-surfaces.ts';
 import {waterHeight} from '../simulation/water-level.ts';
+import {inTunnelPortal} from '../simulation/tunnels.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -70,7 +71,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     if(due(pace))yield;
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
     const list=/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
-    const geometry=parkSurface(city,park.rings,.024,undefined,bounds);if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
+    const geometry=clipPortalSurface(city,parkSurface(city,park.rings,.024,undefined,bounds));if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
   }
   for(const water of waters){
     if(due(pace))yield;
@@ -125,7 +126,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       const k=`${x},${z}`,items=segments.get(k)??[];items.push({a,b,clearance});segments.set(k,items);
     }
   }
-  for(const r of city.roads)for(let i=1;i<r.points.length;i++)segment(r.points[i-1],r.points[i],r.width/2+3.4);
+  for(const r of city.roads){if(r.tunnel)continue;for(let i=1;i<r.points.length;i++)segment(r.points[i-1],r.points[i],r.width/2+3.4);}
   for(const p of paths)for(let i=1;i<p.points.length;i++)segment(p.points[i-1],p.points[i],p.width/2+1.7);
   for(const b of city.buildings){
     const p=b.footprint;if(p.length<3)continue;
@@ -135,7 +136,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   const waterBounds=waters.map(w=>({area:w,...areaBounds(w)}));
   const wet=(p:Point2)=>waterBounds.some(w=>p[0]>=w.minX-2&&p[0]<=w.maxX+2&&p[1]>=w.minZ-2&&p[1]<=w.maxZ+2&&insideArea(p,w.area));
-  const safe=(p:Point2)=>!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
+  const safe=(p:Point2)=>!inTunnelPortal(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
   const treePoints:THREE.Vector3[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
