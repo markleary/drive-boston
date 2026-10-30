@@ -34,6 +34,7 @@ import { createGroundCover } from './render/ground-cover';
 import { addRooftopDetails } from './render/rooftops';
 import { createStreetLife } from './render/street-life';
 import { createInterface } from './ui/interface';
+import { createGamepadReader, padDriveInput, padFlightInput } from './ui/gamepad';
 import { closestRoad } from './simulation/roads';
 import { createTraffic } from './simulation/traffic';
 import { createTransit, type TransitData } from './simulation/transit';
@@ -59,6 +60,9 @@ async function boot(){
   let prudential:ReturnType<typeof addPrudentialCrown>|undefined;let metroLandmarks:ReturnType<typeof addMetroLandmarkDetails>|undefined;
   let populateNeighborhood=()=>{};
   const keys=new Set<string>(),audio=new DriveAudio();let cameraSnap=true,lookOffset=0,orbitPitch=.3,zoom=1;
+  // One poll per frame: the interface takes menu presses first, then driving, flight and camera read the same frame.
+  const gamepad=createGamepadReader();let pad=gamepad.idle(),padLook=0,padLookBack=false;
+  const readGamepads=()=>{try{return navigator.getGamepads?.()??null;}catch{return null;}};
   let cancelCameraDrag=()=>{};
   const journal=createSessionJournal((()=>{try{return localStorage;}catch{try{return sessionStorage;}catch{return undefined;}}})());
   let captureSession=()=>{};
@@ -261,7 +265,7 @@ async function boot(){
       const touch=ui.getTouchInput();let throttle=(keys.has('KeyW')||keys.has('ArrowUp')?1:0)-(keys.has('KeyS')||keys.has('ArrowDown')?1:0)+touch.throttle;
       let steer=(keys.has('KeyA')||keys.has('ArrowLeft')?1:0)-(keys.has('KeyD')||keys.has('ArrowRight')?1:0)+touch.steer;
       let brake=touch.brake,handbrake=keys.has('Space')||touch.handbrake,wheelie=keys.has('KeyX')||!!touch.wheelie;
-      const pad=navigator.getGamepads?.()[0];if(pad){if(Math.abs(pad.axes[0])>.13)steer=-pad.axes[0];throttle+=pad.buttons[7]?.value??0;brake=Math.max(brake,pad.buttons[6]?.value??0);if(pad.buttons[0]?.pressed)handbrake=true;if(pad.buttons[1]?.pressed)throttle=-1;if(pad.buttons[2]?.pressed)wheelie=true;}
+      const gamepadInput=padDriveInput(pad,physics!.getState().speed);throttle+=gamepadInput.throttle;steer+=gamepadInput.steer;brake=Math.max(brake,gamepadInput.brake);handbrake||=gamepadInput.handbrake;wheelie||=!!gamepadInput.wheelie;
       return {throttle:THREE.MathUtils.clamp(throttle,-1,1),steer:THREE.MathUtils.clamp(steer,-1,1),brake,handbrake,wheelie};
     }
     function flightInput():FlightInput{
@@ -270,7 +274,7 @@ async function boot(){
       let strafe=Number(keys.has('KeyD')||keys.has('ArrowRight'))-Number(keys.has('KeyA')||keys.has('ArrowLeft'))+touch.strafe;
       let turn=Number(keys.has('KeyE'))-Number(keys.has('KeyQ'))+touch.yaw;
       let lift=Number(keys.has('Space'))-Number(keys.has('ShiftLeft')||keys.has('ShiftRight'))+touch.lift;
-      const pad=navigator.getGamepads?.()[0];if(pad){const dead=(n:number)=>Math.abs(n)>.13?n:0;strafe+=dead(pad.axes[0]??0);forward-=dead(pad.axes[1]??0);turn+=dead(pad.axes[2]??0);lift+=(pad.buttons[7]?.value??0)-(pad.buttons[6]?.value??0);}
+      const gamepadInput=padFlightInput(pad);forward+=gamepadInput.forward;strafe+=gamepadInput.strafe;turn+=gamepadInput.turn;lift+=gamepadInput.lift;
       const clamp=(n:number)=>THREE.MathUtils.clamp(n,-1,1);
       return{forward:clamp(forward),strafe:clamp(strafe),turn:clamp(turn),lift:clamp(lift)};
     }
@@ -299,12 +303,15 @@ async function boot(){
       ].join('\n'));
     };
     const tick=(now:number,scheduleNext=true)=>{
-      const raw=(now-previous)/1000;previous=now;const dt=Math.min(.05,Math.max(0,raw));const paused=ui.isPaused()||document.hidden;
+      const raw=(now-previous)/1000;previous=now;const dt=Math.min(.05,Math.max(0,raw));
+      if(!document.hidden){pad=gamepad.poll(now,readGamepads());ui.handleGamepad(pad);}
+      const paused=ui.isPaused()||document.hidden;
       if(contextLost||!graphics){accumulator=0;if(scheduleNext)requestAnimationFrame(tick);return;}
       // Mobile background tabs should not rebuild foliage or draw frames. The
       // one-shot startup renders still run so opening a background tab can finish loading.
       if(document.hidden&&scheduleNext){accumulator=0;requestAnimationFrame(tick);return;}
       const flying=travelMode==='helicopter';
+      if(!paused&&travelMode==='drive'&&pad.pressed.has('LS'))audio.horn();
       const controls=paused||flying?{throttle:0,brake:flying?1:0,steer:0,handbrake:flying}:input();
       const flightControls=paused||!flying?{forward:0,strafe:0,turn:0,lift:0}:flightInput();
       if(!paused){accumulator+=dt;while(accumulator>=1/60){const before=physics!.getState(),observer=flying?flight!.state:before;transit!.update(1/60,before,observer,traffic!.obstacles());traffic!.update(1/60,before,observer,transit!.obstacles());physics!.step(controls,1/60);elapsed+=1/60;accumulator-=1/60;if(!flying)distance+=Math.abs(before.speed)/60;}}else accumulator=0;
@@ -318,13 +325,20 @@ async function boot(){
       if(riding)bike.update(carState,lighting==='night'||!!interior?.covered,cameraMode==='hood'&&!flying);bike.group.visible=riding;
       helicopter.update(flight!.state,paused?0:dt,flying);helicopter.group.visible=flying&&cameraMode!=='hood';
       const state=flying?{...flight!.state,steering:0}:carState;
-      const yaw=state.yaw+lookOffset;target.set(state.x,state.y+.5,state.z);
+      // Right stick: look around while driving (eases back when released), press it to look back; in flight it tilts the orbit.
+      if(!paused){
+        const back=!flying&&pad.held.has('RS');if(back!==padLookBack){padLookBack=back;cameraSnap=true;}
+        padLook+=((flying||back?0:-pad.rx*1.4)-padLook)*(1-Math.exp(-9*dt));
+        if(flying)orbitPitch=THREE.MathUtils.clamp(orbitPitch+pad.ry*dt*1.3,-.15,1.4);
+      }
+      const turned=padLookBack?Math.PI:0,heading=state.yaw+turned,viewOffset=lookOffset+padLook;
+      const yaw=heading+viewOffset;target.set(state.x,state.y+.5,state.z);
       const portraitInset=cameraMode==='chase'?portraitChaseInset(ui.isTouchEnabled(),innerWidth,innerHeight):0;
       applyChaseViewOffset(camera,innerWidth,innerHeight,portraitInset);
       camera.up.set(0,1,0);
       if(cameraMode==='hood'){
         desired.set(state.x+Math.sin(yaw)*.5,state.y+(riding&&!flying?1.02:.9),state.z+Math.cos(yaw)*.5);look.set(state.x+Math.sin(yaw)*40,state.y+(flying?-7-(orbitPitch-.3)*35:.7),state.z+Math.cos(yaw)*40);camera.fov=65;
-        if(riding&&!flying){desired.set(0,1.02,-.15).applyQuaternion(bike.group.quaternion).add(bike.group.position);look.set(Math.sin(lookOffset),-.22,Math.cos(lookOffset)).applyQuaternion(bike.group.quaternion).multiplyScalar(40).add(desired);camera.up.applyQuaternion(bike.group.quaternion);camera.fov=78;}
+        if(riding&&!flying){desired.set(0,1.02,-.15).applyQuaternion(bike.group.quaternion).add(bike.group.position);look.set(Math.sin(viewOffset+turned),-.22,Math.cos(viewOffset+turned)).applyQuaternion(bike.group.quaternion).multiplyScalar(40).add(desired);camera.up.applyQuaternion(bike.group.quaternion);camera.fov=78;}
       }else if(cameraMode==='aerial'&&!interior?.covered){
         desired.set(state.x,state.y+(flying?65:150)*zoom,state.z+(flying?.01:20*zoom));look.copy(target);camera.fov=52;
         cameraDirection.subVectors(desired,target);const aerialDistance=cameraDirection.length();cameraDirection.normalize();
@@ -334,8 +348,8 @@ async function boot(){
         desired.set(state.x-Math.sin(yaw)*Math.cos(orbitPitch)*follow,state.y+Math.sin(orbitPitch)*follow+2,state.z-Math.cos(yaw)*Math.cos(orbitPitch)*follow);
         look.set(state.x+Math.sin(state.yaw)*3,state.y+.3,state.z+Math.cos(state.yaw)*3);camera.fov=58;
       }else{
-        const framing=groundChaseFraming(riding,state.speed,zoom,lookOffset,portraitInset>0);
-        const lookYaw=portraitInset>0?yaw:state.yaw;
+        const framing=groundChaseFraming(riding,state.speed,zoom,viewOffset,portraitInset>0);
+        const lookYaw=portraitInset>0?yaw:heading;
         desired.set(state.x-Math.sin(yaw)*framing.follow,state.y+framing.height,state.z-Math.cos(yaw)*framing.follow);look.set(state.x+Math.sin(lookYaw)*framing.ahead,state.y+framing.lookHeight,state.z+Math.cos(lookYaw)*framing.ahead);camera.fov=55+Math.min(5,Math.abs(state.speed)*.13);
       }
       // First person is attached to the rider. Chase smoothing would leave the

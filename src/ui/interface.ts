@@ -12,6 +12,7 @@ import {HELICOPTER} from '../simulation/helicopter';
 import {createMinimapLabeler} from './minimap-labels';
 import {createTouchDrivingControls, TOUCH_DRIVING_MARKUP, type TouchDrivingMode} from './touch-driving';
 import {createFlightTouchControls} from './touch-flight';
+import {padGlyph as g,spatialNeighbor,type PadButton,type PadDirection,type PadFrame} from './gamepad';
 
 export interface InterfaceCallbacks {
   onReset(): void;
@@ -69,13 +70,13 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   host.innerHTML = `
     <div class="hud brand"><div class="brand-symbol" aria-hidden="true">B</div><div><div class="brand-name">BOSTON</div><div class="brand-subtitle" id="neighborhood-label">Back Bay, Massachusetts</div></div></div>
     <div class="hud location-pill"><span class="location-dot"></span><span class="location-text"><span id="location-label">Copley Square</span><span class="next-street hidden" id="next-street"><span class="next-prefix">Next</span><span id="next-street-label"></span></span></span></div>
-    <nav class="hud travel-switch" aria-label="Travel mode"><button data-travel="drive" data-testid="mode-drive" class="active" aria-pressed="true" aria-label="Drive mode">Drive <kbd>1</kbd></button><button data-travel="bike" data-testid="mode-bike" aria-pressed="false" aria-label="Ultra Bee bike mode">Ultra Bee <kbd>2</kbd></button><button data-travel="helicopter" data-testid="mode-helicopter" aria-pressed="false" aria-label="Helicopter mode">Helicopter <kbd>3</kbd></button></nav>
+    <nav class="hud travel-switch" aria-label="Travel mode"><button data-travel="drive" data-testid="mode-drive" class="active" aria-pressed="true" aria-label="Drive mode">Drive <kbd>1</kbd></button><button data-travel="bike" data-testid="mode-bike" aria-pressed="false" aria-label="Ultra Bee bike mode">Ultra Bee <kbd>2</kbd></button><button data-travel="helicopter" data-testid="mode-helicopter" aria-pressed="false" aria-label="Helicopter mode">Helicopter <kbd>3</kbd></button><span class="pad-only pad-switch">${g('DpadLR')}</span></nav>
     <nav class="hud toolbar" aria-label="Drive controls">
-      <button class="tool-btn wide" id="open-map" aria-label="Open map" title="Map · M">${svg('map')}<span>Map <span class="key">M</span></span></button>
+      <button class="tool-btn wide" id="open-map" aria-label="Open map" title="Map · M">${svg('map')}<span>Map <span class="key">M</span><span class="pad-only">${g('View')}</span></span></button>
       <button class="tool-btn" id="cycle-camera" aria-label="Change camera" title="Change camera · C">${svg('camera')}</button>
       <button class="tool-btn" id="open-settings" aria-label="Pause and open settings" title="Pause · Esc">${svg('menu')}</button>
     </nav>
-    <div class="hud minimap-wrap"><button class="minimap-button" id="minimap-button" aria-label="Open Boston map"><canvas id="minimap" aria-label="Your position in Boston"></canvas></button><span class="minimap-north">N</span><div class="map-caption">Explore Boston <kbd>M</kbd></div></div>
+    <div class="hud minimap-wrap"><button class="minimap-button" id="minimap-button" aria-label="Open Boston map"><canvas id="minimap" aria-label="Your position in Boston"></canvas></button><span class="minimap-north">N</span><div class="map-caption">Explore Boston <kbd>M</kbd><span class="pad-only">${g('View')}</span></div></div>
     <div class="hud speed-cluster" aria-label="Vehicle instruments"><div class="speed-label"><span id="gear" class="gear">D</span><span id="journey-label">AFTERNOON DRIVE</span></div><div><span class="speed-value" id="speed-value">0</span><span class="speed-unit">MPH</span></div><div class="altitude-readout hidden" id="altitude-readout"><div class="altitude-number"><span id="altitude-value">0</span><span class="altitude-unit">FT</span></div><div class="altitude-caption">Above ground <span id="vertical-speed">LEVEL</span></div></div><div class="speed-line"><div class="speed-fill" id="speed-fill"></div></div><div class="camera-label" id="camera-label">Chase camera</div></div>
     <div class="hud hint" id="drive-hint"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Drive</span><span><kbd>Space</kbd> Handbrake</span><span><kbd>R</kbd> Reset</span></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -84,8 +85,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       <div class="welcome-top">${EMBLEM}<div class="welcome-wordmark"><span>BOSTON</span><span class="welcome-slash">/</span><span class="welcome-accent">FREE DRIVE</span></div></div>
       <div class="welcome-content"><div class="welcome-eyebrow">NO MISSIONS. NO TIMER.</div><h1>Boston.</h1><p class="welcome-description">Just the city, from the Pike to the Tobin. Pick a direction and drive.</p>
         <div class="welcome-loader"><div class="loading-row"><span class="loading-copy" id="loading-copy" role="status">${LOAD_STEPS[0][1]}</span><span class="loading-pct" id="loading-pct" aria-hidden="true">0%</span></div><div class="loading-track" id="loading-track" role="progressbar" aria-label="Loading Boston" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="loading-progress" id="loading-progress"></div></div>
-          <div class="ready-row"><span class="ready-copy">Your car is ready.</span><button class="welcome-start" id="start-drive" disabled data-testid="start-drive">Start driving ${svg('arrow')}</button></div></div>
-        <div class="welcome-foot">Single player / Keyboard, touch or gamepad</div>
+          <div class="ready-row"><span class="ready-copy">Your car is ready.</span><button class="welcome-start" id="start-drive" disabled data-testid="start-drive">Start driving <span class="pad-only">${g('A')}</span>${svg('arrow')}</button></div></div>
+        <div class="welcome-foot" id="welcome-foot">Single player / Keyboard, touch or gamepad</div>
         <div class="previous-session hidden" id="previous-session"><button type="button" class="text-btn" id="copy-session-report">Copy previous session report</button><span id="session-copy-status" role="status"></span><textarea class="hidden" id="session-report" readonly rows="3" aria-label="Previous session report"></textarea></div></div>
       <div class="welcome-tip"><span class="welcome-tip-count" id="welcome-tip-count">TIP 01 / 05</span><p id="welcome-tip">${LOAD_TIPS[0]}</p></div>
       <div class="welcome-coordinate">42.3499° N &nbsp; 71.0773° W</div>
@@ -104,7 +105,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       </div>
     </section>
     <section class="modal-scrim hidden" id="credits-modal" role="dialog" aria-modal="true" aria-labelledby="credits-title"><div class="panel"><button class="close-btn" id="close-credits" aria-label="Back to settings">${svg('close')}</button><div class="eyebrow">An independent prototype</div><h2 id="credits-title">A real place.</h2><div class="credits-copy"><p>Built around Boston’s real streets, building shapes, and hills. Façades and street details are artistic interpretations; this is an exploration game, not a navigation service.</p><ul id="source-list"></ul><p>Original game implementation with Three.js and Rapier.</p></div></div></section>
-    <section class="map-modal hidden" id="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-header"><div><div class="eyebrow">The Boston atlas</div><h2 id="map-title">Find your next turn.</h2></div><button class="close-map" id="close-map">Back to driving <kbd>M</kbd></button></div><canvas id="fullmap" aria-label="Interactive map of Boston streets, buildings and landmarks"></canvas><div class="map-tools"><button id="map-zoom-in" aria-label="Zoom map in">+</button><button id="map-zoom-out" aria-label="Zoom map out">−</button><button id="map-center" aria-label="Center map on car">${svg('target')}</button><button id="map-overview" aria-label="Show all Boston destinations" title="Show all destinations">${svg('map')}</button></div><aside class="map-places" id="map-places"><div class="map-places-heading">Places to explore<span>Choose a place to start nearby</span></div><div class="map-destinations" id="map-destinations" role="navigation" aria-label="Landmark destinations"></div></aside><div class="map-note">Drag to explore · Scroll to zoom</div></section>
+    <section class="map-modal hidden" id="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-header"><div><div class="eyebrow">The Boston atlas</div><h2 id="map-title">Find your next turn.</h2></div><button class="close-map" id="close-map">Back to driving <kbd>M</kbd><span class="pad-only">${g('B')}</span></button></div><canvas id="fullmap" aria-label="Interactive map of Boston streets, buildings and landmarks"></canvas><div class="map-tools"><button id="map-zoom-in" aria-label="Zoom map in">+</button><button id="map-zoom-out" aria-label="Zoom map out">−</button><button id="map-center" aria-label="Center map on car">${svg('target')}</button><button id="map-overview" aria-label="Show all Boston destinations" title="Show all destinations">${svg('map')}</button></div><aside class="map-places" id="map-places"><div class="map-places-heading">Places to explore<span>Choose a place to start nearby</span></div><div class="map-destinations" id="map-destinations" role="navigation" aria-label="Landmark destinations"></div></aside><div class="map-note">Drag to explore · Scroll to zoom</div></section>
     ${TOUCH_DRIVING_MARKUP}
     <div class="flight-touch suspended" id="flight-touch" aria-label="Touch helicopter controls"><div class="flight-movement"><span class="touch-control-caption">Move</span><div class="flight-pad"><button class="touch-btn" data-touch="accelerate" aria-label="Fly forward">↑</button><button class="touch-btn" data-touch="reverse" aria-label="Fly backward">↓</button><button class="touch-btn" data-touch="left" aria-label="Move helicopter left">←</button><button class="touch-btn" data-touch="right" aria-label="Move helicopter right">→</button></div></div><div class="flight-actions"><span class="touch-control-caption">Turn / altitude</span><div class="flight-pad"><button class="touch-btn" data-touch="yaw-left" aria-label="Rotate helicopter left">↶</button><button class="touch-btn" data-touch="yaw-right" aria-label="Rotate helicopter right">↷</button><button class="touch-btn" data-touch="descend" aria-label="Descend">⇩</button><button class="touch-btn" data-touch="ascend" aria-label="Ascend">⇧</button></div></div></div>
     <section class="modal-scrim hidden" id="graphics-modal" role="dialog" aria-modal="true" aria-labelledby="graphics-title">
@@ -139,6 +140,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   let mapCenter: Point2 = [(city.bounds.minX + city.bounds.maxX) / 2, (city.bounds.minZ + city.bounds.maxZ) / 2];
   let mapZoom = 1;
   let previousFocus: HTMLElement | null = null;
+  // Tips follow the last device used: a controller once one is detected or touched, the keyboard again on a key press.
+  let inputMode: 'keyboard' | 'gamepad' = 'keyboard', padConnected = false;
   const flightTouch=createFlightTouchControls(el('flight-touch'),()=>!isPaused()&&travelMode==='helicopter');
   const touchMedia = matchMedia('(any-pointer: coarse)');
   let touchSeen = false;
@@ -152,7 +155,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(persist)try{localStorage.setItem('boston-touch-controls-v1',mode);}catch{/* Optional preferences. */}
   }
   setTouchMode(touchMode);
-  function updateTouchAvailability(){const touch=touchMedia.matches||touchSeen;host.classList.toggle('touch-enabled',touch);host.querySelector('.map-note')!.textContent=touch?'Drag to explore · Pinch to zoom':'Drag to explore · Scroll to zoom';resize();}
+  function updateTouchAvailability(){const touch=touchMedia.matches||touchSeen;host.classList.toggle('touch-enabled',touch);host.querySelector('.map-note')!.textContent=mapNote();resize();}
   on(touchMedia,'change',updateTouchAvailability);
   on(document,'pointerdown',event=>{if((event as PointerEvent).pointerType==='touch'&&!touchSeen){touchSeen=true;updateTouchAvailability();}},{capture:true,passive:true});
   for(const type of ['selectstart','contextmenu'])on(host,type,event=>{
@@ -253,10 +256,21 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     el('resume-drive').innerHTML = `${flying ? 'Keep flying' : 'Keep driving'} ${svg('arrow')}`;
     el('reset-drive').textContent = flying ? 'Reset helicopter' : riding ? 'Reset bike' : 'Reset car';
     el('close-settings').setAttribute('aria-label', flying ? 'Resume flying' : 'Resume driving');
-    el('close-map').innerHTML = `Back to ${flying ? 'flying' : 'driving'} <kbd>M</kbd>`;
+    el('close-map').innerHTML = `Back to ${flying ? 'flying' : 'driving'} <kbd>M</kbd><span class="pad-only">${g('B')}</span>`;
     el('map-center').setAttribute('aria-label', flying ? 'Center map on helicopter' : riding ? 'Center map on bike' : 'Center map on car');
     host.querySelector('.toolbar')?.setAttribute('aria-label', flying ? 'Flight controls' : 'Drive controls');
     host.querySelector<HTMLButtonElement>('[data-camera="hood"]')!.textContent = flying ? 'Cockpit' : riding ? 'Rider' : 'Hood';
+    renderControlTips();
+    host.querySelectorAll<HTMLButtonElement>('[data-destination]').forEach(button => { const name = button.querySelector('strong')?.textContent; button.setAttribute('aria-label', `${flying ? 'Fly' : 'Start driving'} near ${name}`); });
+    setCamera(camera);
+    // A deliberate mode switch brings a hidden HUD back so the new mode's instruments show.
+    if (notify && changed) { setHudHidden(false); callbacks.onTravelMode?.(mode); toast(flying ? (host.classList.contains('touch-enabled') ? 'Left: move · Right: turn and altitude' : (inputMode==='gamepad'?'Helicopter · RT to rise, LT to descend':'Helicopter · Space to rise, Shift to descend')) : riding ? (host.classList.contains('touch-enabled')?'Ultra Bee · Accelerate, then tap Wheelie':'Ultra Bee · Accelerate, then X for a 3-second wheelie') : 'Back behind the wheel.'); }
+  }
+  /** HUD hint and settings reference for the current vehicle and input device. */
+  function renderControlTips(){
+    const flying=travelMode==='helicopter',riding=travelMode==='bike';
+    host.querySelector('.map-note')!.textContent=mapNote();
+    if(inputMode==='gamepad'){renderGamepadTips(flying,riding);return;}
     el('drive-hint').innerHTML = flying
       ? '<span><kbd>W</kbd><kbd>S</kbd> Forward / back</span><span><kbd>A</kbd><kbd>D</kbd> Strafe</span><span><kbd>Q</kbd><kbd>E</kbd> Turn</span><span><kbd>Space</kbd> Up</span><span><kbd>Shift</kbd> Down</span>'
       : riding ? '<span><kbd>W</kbd><kbd>S</kbd> Ride / brake</span><span><kbd>A</kbd><kbd>D</kbd> Steer / lean</span><span><kbd>Space</kbd> Brake</span><span><kbd>X</kbd> Wheelie · 3s</span>'
@@ -264,12 +278,79 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     el('controls-help').innerHTML = flying
       ? '<span>Forward / backward</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Move left / right</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Turn left / right</span><span><kbd>Q</kbd> <kbd>E</kbd></span><span>Rise / descend</span><span><kbd>Space</kbd> <kbd>Shift</kbd></span><span>Car / Ultra Bee / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Reset helicopter / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Mute sound</span><kbd>N</kbd><span>Pause</span><kbd>Esc</kbd>'
       : '<span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Car / Ultra Bee / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd>';
-    if(riding)el('controls-help').innerHTML='<span>Throttle / brake & reverse assist</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Lean / steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Both brakes</span><kbd>Space</kbd><span>Wheelie · up to 3 seconds while accelerating</span><kbd>X</kbd><span>Gamepad wheelie</span><span>X / Square</span><span>Car / Ultra Bee / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / camera / reset</span><span><kbd>M</kbd> <kbd>C</kbd> <kbd>R</kbd></span><span>Hide interface / mute / pause</span><span><kbd>H</kbd> <kbd>N</kbd> <kbd>Esc</kbd></span>';
+    if(riding)el('controls-help').innerHTML='<span>Throttle / brake & reverse assist</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Lean / steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Both brakes</span><kbd>Space</kbd><span>Wheelie · up to 3 seconds while accelerating</span><kbd>X</kbd><span>Car / Ultra Bee / helicopter</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>Map / camera / reset</span><span><kbd>M</kbd> <kbd>C</kbd> <kbd>R</kbd></span><span>Hide interface / mute / pause</span><span><kbd>H</kbd> <kbd>N</kbd> <kbd>Esc</kbd></span>';
     el('controls-help').insertAdjacentHTML('beforeend',statsHelp);
-    host.querySelectorAll<HTMLButtonElement>('[data-destination]').forEach(button => { const name = button.querySelector('strong')?.textContent; button.setAttribute('aria-label', `${flying ? 'Fly' : 'Start driving'} near ${name}`); });
-    setCamera(camera);
-    // A deliberate mode switch brings a hidden HUD back so the new mode's instruments show.
-    if (notify && changed) { setHudHidden(false); callbacks.onTravelMode?.(mode); toast(flying ? (host.classList.contains('touch-enabled') ? 'Left: move · Right: turn and altitude' : 'Helicopter · Space to rise, Shift to descend') : riding ? (host.classList.contains('touch-enabled')?'Ultra Bee · Accelerate, then tap Wheelie':'Ultra Bee · Accelerate, then X for a 3-second wheelie') : 'Back behind the wheel.'); }
+  }
+  /** Controller tips follow the keyboard layout, mode by mode, with Xbox button names. */
+  function renderGamepadTips(flying:boolean,riding:boolean){
+    const vehicle=flying?'helicopter':riding?'bike':'car';
+    el('drive-hint').innerHTML=flying
+      ?`<span>${g('LS')} Move</span><span>${g('RS')} Turn</span><span>${g('RT')} Up</span><span>${g('LT')} Down</span>`
+      :riding?`<span>${g('LS')} Steer / lean</span><span>${g('RT')}${g('LT')} Ride / brake</span><span>${g('A')} Brake</span><span>${g('X')} Wheelie · 3s</span>`
+      :`<span>${g('LS')} Steer</span><span>${g('RT')} Accelerate</span><span>${g('LT')} Brake / reverse</span><span>${g('A')} Handbrake</span><span>${g('DpadDown')} Reset</span>`;
+    const rows:[string,string][]=flying
+      ?[['Fly forward, back and sideways',g('LS')],['Turn / tilt camera',g('RS')],['Turn with the bumpers',g('LB')+g('RB')],['Rise / descend',g('RT')+g('LT')]]
+      :riding?[['Throttle / brake & reverse assist',g('RT')+g('LT')],['Lean / steer',g('LS')],['Both brakes',g('A')],['Wheelie · up to 3 seconds while accelerating',g('X')],['Look around / look back',g('RS')+g('R3')]]
+      :[['Accelerate / brake & reverse',g('RT')+g('LT')],['Steer',g('LS')],['Handbrake',g('A')],['Horn · press the left stick',g('L3')],['Look around / look back',g('RS')+g('R3')]];
+    rows.push(['Change camera',g('Y')],['Car / Ultra Bee / helicopter',g('DpadLR')],[`Reset ${vehicle}`,g('DpadDown')],['Map / pause',g('View')+g('Menu')],['Menus: move / select / back',g('Dpad')+g('A')+g('B')]);
+    el('controls-help').innerHTML=rows.map(([label,buttons])=>`<span>${label}</span><span class="pad-keys">${buttons}</span>`).join('');
+  }
+  function mapNote(){return inputMode==='gamepad'?'Left stick to pan · Triggers to zoom · D-pad to choose a place':host.classList.contains('touch-enabled')?'Drag to explore · Pinch to zoom':'Drag to explore · Scroll to zoom';}
+  function setInputMode(mode:'keyboard'|'gamepad'){
+    if(inputMode===mode)return;
+    inputMode=mode;host.classList.toggle('gamepad',mode==='gamepad');renderControlTips();
+  }
+  // Menus take controller focus from the D-pad (or left stick) and A presses the focused button.
+  const padTargets=(surface:HTMLElement)=>Array.from(surface.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]')).filter(item=>item.getClientRects().length>0&&getComputedStyle(item).visibility!=='hidden');
+  function padFocus(surface:HTMLElement,direction:PadDirection,fallback:HTMLElement){
+    const items=padTargets(surface),current=items.find(item=>item===document.activeElement);
+    if(!current){(items.includes(fallback)?fallback:items[0])?.focus();return;}
+    const next=spatialNeighbor(current.getBoundingClientRect(),items.map(item=>item.getBoundingClientRect()),direction);
+    if(next>=0)items[next].focus();
+  }
+  function padMenu(frame:PadFrame,surface:HTMLElement,fallback:HTMLElement,nav=frame.nav){
+    if(nav)padFocus(surface,nav,fallback);
+    if(frame.pressed.has('A')){const current=padTargets(surface).find(item=>item===document.activeElement);if(current)current.click();else fallback.focus();}
+  }
+  /** One controller frame from the render loop. Driving and flight read the same frame in main.ts. */
+  function handleGamepad(frame:PadFrame){
+    // Losing the controller in use pauses, even when an idle or virtual device stays connected.
+    if(frame.lost){setInputMode('keyboard');if(started){toast('Controller disconnected');if(!isPaused())setSettings(true);}}
+    if(frame.connected!==padConnected){
+      padConnected=frame.connected;
+      el('welcome-foot').textContent=frame.connected?'Single player / Controller connected':'Single player / Keyboard, touch or gamepad';
+      if(frame.connected){setInputMode('gamepad');if(started)toast('Controller connected');}
+    }
+    if(!frame.connected)return;
+    if(frame.active)setInputMode('gamepad');
+    const pressed=(button:PadButton)=>frame.pressed.has(button);
+    if(graphicsInterrupted){padMenu(frame,el('graphics-modal'),el('resume-graphics'));return;}
+    if(!started){
+      if(!ready)return;
+      // Menu, or A with nothing in the title screen focused, starts the drive.
+      if(pressed('Menu')||(pressed('A')&&!padTargets(el('welcome')).some(item=>item===document.activeElement)))start();else padMenu(frame,el('welcome'),el('start-drive'));
+      return;
+    }
+    if(creditsOpen){if(pressed('B')||pressed('Menu'))el('close-credits').click();else padMenu(frame,el('credits-modal'),el('close-credits'));return;}
+    if(mapOpen){
+      if(pressed('B')||pressed('View')){setMap(false);return;}
+      if(pressed('Menu')){setSettings(true);return;}
+      if(pressed('Y'))el('map-center').click();else if(pressed('X'))el('map-overview').click();
+      // The left stick pans about 700 screen pixels a second; the D-pad picks places.
+      if(frame.lx||frame.ly){const step=frame.dt*700/fullScale();mapCenter=[mapCenter[0]+frame.lx*step,mapCenter[1]+frame.ly*step];drawFullMap();}
+      if(frame.rt||frame.lt)zoom(Math.exp((frame.rt-frame.lt)*frame.dt*2.2));
+      padMenu(frame,el('map-modal'),el('close-map'),frame.lx||frame.ly?null:frame.nav);return;
+    }
+    if(settingsOpen){
+      if(pressed('B')||pressed('Menu'))setSettings(false);else if(pressed('View'))setMap(true);
+      else padMenu(frame,el('settings-modal'),el(host.classList.contains('touch-enabled')?'close-settings':'resume-drive'));
+      return;
+    }
+    if(pressed('Menu'))setSettings(true);
+    else if(pressed('View'))setMap(true);
+    else if(pressed('Y'))cycleCamera();
+    else if(pressed('Left')||pressed('Right')){const modes:TravelMode[]=['drive','bike','helicopter'];setTravelMode(modes[(modes.indexOf(travelMode)+(pressed('Right')?1:2))%3],true);}
+    else if(pressed('Down'))reset();
   }
   function toast(message: string) {
     el('toast').textContent = message; el('toast').classList.add('visible'); window.clearTimeout(toastTimer);
@@ -488,6 +569,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   on(window,'keydown',event=>{
     const e=event as KeyboardEvent;
     if(e.repeat||e.ctrlKey||e.metaKey||e.altKey)return;
+    setInputMode('keyboard');
     if(e.code==='Tab'&&isPaused()){
       const active=graphicsInterrupted?el('graphics-modal'):mapOpen?el('map-modal'):creditsOpen?el('credits-modal'):settingsOpen?el('settings-modal'):el('welcome');
       const focusable=Array.from(active.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], textarea:not(.hidden)'));const first=focusable[0],last=focusable[focusable.length-1];
@@ -541,7 +623,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   }
   updateTouchAvailability();updatePause();
   return {
-    update,isPaused,isMapOpen:()=>mapOpen,isTouchEnabled:()=>host.classList.contains('touch-enabled'),
+    update,isPaused,isMapOpen:()=>mapOpen,handleGamepad,isTouchEnabled:()=>host.classList.contains('touch-enabled'),
     getTouchInput:():DriveInput=>touchDriving.getInput(),
     getFlightTouchInput:()=>flightTouch.getInput(),
     setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},
