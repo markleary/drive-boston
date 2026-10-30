@@ -41,8 +41,10 @@ export interface Impact { severity: number; speed: number; colliders: number[]; 
 /** Velocity change per step that counts as an impact rather than a bump. The
  * suspension cannot exceed about .7 m/s per step, so curbs stay silent. */
 export const IMPACT_THRESHOLD = 1.2;
-/** Crumple lever above the chassis contacts (m), share of the stopping torque applied, and its cap (N m s). */
-export const CRASH_KICK = { lift: .35, scale: .9, limit: 15000 };
+/** Crumple lever above the chassis contacts (m), share of the stopping torque applied, and its cap (N m s).
+ * At 50 mph a head-on into a car lifts the tail about 45 degrees and an offset or side hit spins the car
+ * 50 to 70; the cap keeps a full stop against a wall to a nose-stand rather than an end-over-end flip. */
+export const CRASH_KICK = { lift: .35, scale: 2.2, limit: 18000 };
 
 let initialization: Promise<void> | undefined;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));

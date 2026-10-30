@@ -288,8 +288,13 @@ test('the raycast car follows a raised slope and collides with buildings at thei
     assert.ok(climbing.z > 18 && climbing.y > start.y + 1.5, 'driving uphill must gain real elevation');
     assert.ok(climbing.rotation.x < -.025, 'wheel support must pitch the car uphill');
     assert.ok(Math.abs(climbing.y - sampleElevation(city, climbing.x, climbing.z) - .67) < .15);
-    const stopped = advance(physics, 5, { ...released, throttle: 1 });
-    assert.ok(stopped.z > 35 && stopped.z < 39 && Math.abs(stopped.speed) < 1, 'the foundation below a level base at 108 m must stop the car on ground at 104 m');
+    // Full throttle until the hit, then brake: the crash kick may stand the car on its nose and
+    // land it turned, and a held throttle would then scrape it along the wall.
+    let hit = null, maxZ = -Infinity;
+    for (let i = 0; i < 60 * 5; i++) { physics.step({ ...released, ...(hit ? { brake: 1 } : { throttle: 1 }) }, 1 / 60); maxZ = Math.max(maxZ, physics.getState().z); hit ??= physics.takeImpacts()[0] ?? null; }
+    const stopped = physics.getState();
+    assert.ok(hit && hit.colliders.length, 'the car strikes the foundation');
+    assert.ok(maxZ < 39.5 && stopped.z > 35 && stopped.z < 39 && Math.abs(stopped.speed) < 1, `the foundation below a level base at 108 m must stop the car on ground at 104 m (max z ${maxZ.toFixed(2)}, stopped at ${stopped.z.toFixed(2)})`);
     physics.reset(4, -20, Math.PI);
     const reset = advance(physics, 2, { ...released, brake: 1 });
     assert.ok(Math.abs(reset.y - sampleElevation(city, reset.x, reset.z) - .67) < .15, 'reset must preserve terrain alignment at another elevation');
