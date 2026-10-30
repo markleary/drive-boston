@@ -1,6 +1,6 @@
 import type {CityData,Point2,Road} from '../types';
 import {deckEdge,deckEdgeElevation,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
-import {sampleElevation} from './terrain.ts';
+import {sampleElevation,terrainGrid} from './terrain.ts';
 
 export interface TunnelMesh {vertices:Float32Array;indices:Uint32Array;}
 type Vertex=[number,number,number];
@@ -12,6 +12,8 @@ export function tunnelStations(road:Road){
   stationCache.set(road,distances);return distances;
 }
 export function tunnelCoveredAt(road:Road,station:number){return !!road.tunnel&&(road.tunnel.covered===undefined||road.tunnel.covered.some(([a,b])=>station>=a-.001&&station<=b+.001));}
+/** Street-centerline junctions need an intact, wall-free surface landing. */
+export function tunnelSurfaceLandingAt(road:Road,station:number){return !!road.tunnel?.surfaceLandings?.some(([a,b])=>station>=a-.001&&station<=b+.001);}
 export function tunnelPointAt(road:Road,station:number){
   const distances=tunnelStations(road);let i=1;while(i<distances.length-1&&distances[i]<station)i++;
   const a=road.points[i-1],b=road.points[i],t=Math.max(0,Math.min(1,(station-distances[i-1])/(distances[i]-distances[i-1]||1)));
@@ -26,6 +28,38 @@ type TunnelIndex={roads:Map<string,Road[]>;portals:Map<string,Portal[]>;portalLi
 const emptyRoads:Road[]=[];
 const indexes=new WeakMap<Road[],TunnelIndex>();
 const key=(x:number,z:number)=>`${Math.floor(x/CELL)},${Math.floor(z/CELL)}`;
+/** Intersect the approach with the actual terrain triangles before testing
+ * grade. Corner samples alone miss a crest inside the ramp ribbon and leave
+ * a physical wedge under one wheel, especially beside graded surface roads. */
+function gradeOpenings(city:TunnelCity,quad:Point2[],heights:number[]){
+  const grid=terrainGrid(city as CityData),groundTriangles:Vertex[][]=[];
+  if(grid){
+    const {originX,originZ,cellSize:cs,width,height,heights:h}=grid;
+    const x0=Math.max(0,Math.floor((Math.min(...quad.map(p=>p[0]))-originX)/cs)),x1=Math.min(width-2,Math.floor((Math.max(...quad.map(p=>p[0]))-originX)/cs));
+    const z0=Math.max(0,Math.floor((Math.min(...quad.map(p=>p[1]))-originZ)/cs)),z1=Math.min(height-2,Math.floor((Math.max(...quad.map(p=>p[1]))-originZ)/cs));
+    for(let z=z0;z<=z1;z++)for(let x=x0;x<=x1;x++){
+      const at=(i:number,j:number):Vertex=>[originX+i*cs,h[j*width+i],originZ+j*cs],a=at(x,z),b=at(x+1,z),c=at(x,z+1),d=at(x+1,z+1);
+      groundTriangles.push([a,c,b],[b,c,d]);
+    }
+  }
+  const plane=([a,b,c]:Vertex[])=>{
+    const dx=b[0]-a[0],dz=b[2]-a[2],ex=c[0]-a[0],ez=c[2]-a[2],det=dx*ez-dz*ex;
+    const gx=((b[1]-a[1])*ez-(c[1]-a[1])*dz)/det,gz=(dx*(c[1]-a[1])-ex*(b[1]-a[1]))/det;
+    return(x:number,z:number)=>a[1]+gx*(x-a[0])+gz*(z-a[2]);
+  };
+  const result:Point2[][]=[];
+  for(const ids of [[0,1,2],[0,2,3]]){
+    const triangle=ids.map(i=>quad[i]),floor=plane(ids.map(i=>[quad[i][0],heights[i],quad[i][1]]));
+    if(!grid){const p=clipField(triangle,(x,z)=>.3-floor(x,z));if(p.length>=3)result.push(p);continue;}
+    for(const ground of groundTriangles){
+      const footprint=ground.map(p=>[p[0],p[2]] as Point2),sign=polygonSign(footprint);let polygon=triangle;
+      for(let i=0;i<3&&polygon.length>=3;i++){const a=footprint[i],b=footprint[(i+1)%3];polygon=clipField(polygon,(x,z)=>sign*((b[0]-a[0])*(z-a[1])-(b[1]-a[1])*(x-a[0])));}
+      if(polygon.length<3)continue;const surface=plane(ground);polygon=clipField(polygon,(x,z)=>surface(x,z)+.3-floor(x,z));
+      if(polygon.length>=3&&polygonArea(polygon.map(([x,z])=>[x,0,z]))>1e-7)result.push(polygon);
+    }
+  }
+  return result;
+}
 function index(city:TunnelCity){
   const source=city.roads??emptyRoads,cached=indexes.get(source);if(cached&&cached.elevation===city.elevation)return cached;
   const roads=new Map<string,Road[]>(),portals=new Map<string,Portal[]>(),portalList:Portal[]=[],volumes=new Map<string,TunnelVolume[]>(),shellVolumes=new Map<string,TunnelVolume[]>(),wallVolumes=new Map<string,TunnelVolume[]>();
@@ -54,30 +88,23 @@ function index(city:TunnelCity){
           insert(cells,volume,volume.minX,volume.maxX,volume.minZ,volume.maxZ);
         }
       }
-      const lo=stations[i-1],hi=stations[i],steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...(road.tunnel.covered??[]).flat().filter(v=>v>lo&&v<hi)].sort((a,b)=>a-b);
+      const lo=stations[i-1],hi=stations[i],steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(v=>v>lo&&v<hi)].sort((a,b)=>a-b);
       for(let j=1;j<breaks.length;j++){
-        const start=breaks[j-1],end=breaks[j];if(end-start<.001)continue;if(tunnelCoveredAt(road,(start+end)/2))continue;
+        const start=breaks[j-1],end=breaks[j];if(end-start<.001)continue;if(tunnelCoveredAt(road,(start+end)/2)||tunnelSurfaceLandingAt(road,(start+end)/2))continue;
         const leftA=deckEdge(road,i-1,-1,-.3),rightA=deckEdge(road,i-1,1,-.3),leftB=deckEdge(road,i,-1,-.3),rightB=deckEdge(road,i,1,-.3);
         const lerp=(p:Point2,q:Point2,s:number):Point2=>[p[0]+(q[0]-p[0])*(s-lo)/(hi-lo),p[1]+(q[1]-p[1])*(s-lo)/(hi-lo)];
         const quad=[lerp(leftA,leftB,start),lerp(rightA,rightB,start),lerp(rightA,rightB,end),lerp(leftA,leftB,end)];
         const floor=(station:number,side:number)=>deckEdgeElevation(road,i-1,side)+(deckEdgeElevation(road,i,side)-deckEdgeElevation(road,i-1,side))*(station-lo)/(hi-lo);
         const heights=[floor(start,-1),floor(start,1),floor(end,1),floor(end,-1)];
-        // An open approach high above ground is a bridge, not an excavation.
-        // Clip the opening at its actual grade crossing; short intervals also
-        // follow terrain changes beneath the approach instead of cutting a
-        // single broad hole under the whole Zakim viaduct.
-        const polygon:Point2[]=[];let previous=quad.at(-1)!,dp=(city.elevation?sampleElevation(city as CityData,...previous):0)+.3-heights.at(-1)!;
-        for(let k=0;k<quad.length;k++){
-          const current=quad[k],dc=(city.elevation?sampleElevation(city as CityData,...current):0)+.3-heights[k];
-          if((dp>=0)!==(dc>=0)){const t=dp/(dp-dc);polygon.push([previous[0]+(current[0]-previous[0])*t,previous[1]+(current[1]-previous[1])*t]);}
-          if(dc>=0)polygon.push(current);previous=current;dp=dc;
-        }
-        if(polygon.length<3)continue;
-        // A road strip is split into convex triangles, including tight bend miters.
-        for(let k=1;k<polygon.length-1;k++){
-          const polygonPart=[polygon[0],polygon[k],polygon[k+1]];
-          const p={polygon:polygonPart,minX:Math.min(...polygonPart.map(p=>p[0])),maxX:Math.max(...polygonPart.map(p=>p[0])),minZ:Math.min(...polygonPart.map(p=>p[1])),maxZ:Math.max(...polygonPart.map(p=>p[1]))};
-          insert(portals,p,p.minX,p.maxX,p.minZ,p.maxZ);portalList.push(p);
+        // Elevated viaduct portions leave the street below intact.
+        for(const polygon of gradeOpenings(city,quad,heights)){
+          // Split the convex intersection into the indexed portal triangles.
+          for(let k=1;k<polygon.length-1;k++){
+            const polygonPart=[polygon[0],polygon[k],polygon[k+1]];
+            const [a,b,c]=polygonPart;if(Math.abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))<1e-7)continue;
+            const p={polygon:polygonPart,minX:Math.min(...polygonPart.map(p=>p[0])),maxX:Math.max(...polygonPart.map(p=>p[0])),minZ:Math.min(...polygonPart.map(p=>p[1])),maxZ:Math.max(...polygonPart.map(p=>p[1]))};
+            insert(portals,p,p.minX,p.maxX,p.minZ,p.maxZ);portalList.push(p);
+          }
         }
       }
     }
@@ -101,6 +128,19 @@ export function tunnelAt(city:CityData,x:number,z:number,y:number){
     if(!best||candidate.floor>best.floor)best=candidate;
   }
   return best;
+}
+
+/** Keep surface decoration out of excavations and level ramp landings, with
+ * clearance for trunks/posts. Intact ground over a covered bore stays usable. */
+export function inTunnelApproach(city:CityData,x:number,z:number){
+  if(inTunnelPortal(city,x,z))return true;
+  const ground=sampleElevation(city,x,z);
+  for(const road of index(city).roads.get(key(x,z))??[]){
+    const hit=roadProjection(road,x,z);if(hit.distance>roadWidthAt(road,x,z)/2+.8)continue;
+    const stations=tunnelStations(road),station=stations[hit.index]+(stations[hit.index+1]-stations[hit.index])*hit.t,floor=sampleRoadElevation(city,road,x,z);
+    if(!tunnelCoveredAt(road,station)&&floor<=ground+.8&&floor+road.tunnel!.clearance>=ground-.2)return true;
+  }
+  return false;
 }
 
 function clipHalfPlane(subject:Vertex[],a:Point2,b:Point2,sign:number,keepInside:boolean){
@@ -294,8 +334,9 @@ export function tunnelGeometry(city:CityData,road:Road){
   const openStart=!road.tunnel.capStart&&surfaceTerminal(0),openEnd=!road.tunnel.capEnd&&surfaceTerminal(total);
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
     const start=deckEdge(road,i-1,side,-.08),end=deckEdge(road,i,side,-.08),ya=deckEdgeElevation(road,i-1,side),yb=deckEdgeElevation(road,i,side),lo=stations[i-1],hi=stations[i];
-    const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...(road.tunnel.covered??[]).flat().filter(s=>s>lo&&s<hi)].sort((a,b)=>a-b);
+    const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(s=>s>lo&&s<hi)].sort((a,b)=>a-b);
     for(let j=1;j<breaks.length;j++){
+      if(tunnelSurfaceLandingAt(road,(breaks[j-1]+breaks[j])/2))continue;
       const covered=tunnelCoveredAt(road,(breaks[j-1]+breaks[j])/2),at=(s:number)=>{
         const t=(s-lo)/(hi-lo),x=start[0]+(end[0]-start[0])*t,z=start[1]+(end[1]-start[1])*t,y=ya+(yb-ya)*t,ground=sampleElevation(city,x,z);
         let top=covered?y+clearance+.45:Math.max(y+.8,ground+.8);

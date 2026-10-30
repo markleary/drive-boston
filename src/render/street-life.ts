@@ -9,6 +9,7 @@ import { createVehicleGeometry, createVehiclePlateGeometry, createMassachusettsP
 import type { VehicleSurface } from './car.ts';
 import { sampleElevation, sampleTerrainNormal, terrainRotation } from '../simulation/terrain.ts';
 import { inTransitCorridor } from '../simulation/transit-corridors.ts';
+import { inTunnelApproach } from '../simulation/tunnels.ts';
 import { createActivityProfile } from '../simulation/activity.ts';
 import { createPedestrianModel } from './pedestrian-model.ts';
 
@@ -123,7 +124,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     });
   }
   function sidewalkClear(p: Point2, clearance = .42) {
-    return !inTransitCorridor(city,...p) && inBounds(p) && buildingClear(p, clearance) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > segment.road.width / 2 + clearance);
+    return !inTransitCorridor(city,...p) && !inTunnelApproach(city,...p) && inBounds(p) && buildingClear(p, clearance) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > segment.road.width / 2 + clearance);
   }
 
   // Sidewalk stretches are verified per segment the first time a neighborhood
@@ -220,7 +221,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     const forward: Point2 = [Math.sin(yaw), Math.cos(yaw)], right: Point2 = [-forward[1], forward[0]];
     const samples: Point2[] = [[x, z]];
     for (const width of [-1.08, 1.08]) for (const length of [-2.32, 0, 2.32]) samples.push([x + right[0] * width + forward[0] * length, z + right[1] * width + forward[1] * length]);
-    if (!samples.every(p => inBounds(p, 12) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > other.road.width / 2 + 2))) continue;
+    if (!samples.every(p => inBounds(p, 12) && !inTunnelApproach(city,...p) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > other.road.width / 2 + 2))) continue;
     const meterOffset = side * (segment.road.width / 2 + .65);
     const meter: Point2 = [segment.a[0] + segment.tx * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) - segment.tz * meterOffset,
       segment.a[1] + segment.tz * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) + segment.tx * meterOffset];

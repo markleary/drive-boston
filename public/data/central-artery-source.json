@@ -10,7 +10,8 @@
     "Elevation profiles, playable widths and five-metre headroom are estimates, not engineering survey or navigation guidance.",
     "North mainline joins match the existing Boston 3D Zakim mesh at source nodes. The original survey mesh remains unchanged.",
     "Southern ends are intentionally blocked near the I-90/south portals. I-90, Callahan and Sumner tunnel continuations are outside this feature.",
-    "At both Zakim lips only, the last/first80m blend an 8m lateral fit into the existing surveyed driving lanes because the official GIS axes cross its parapets; observed bridge support elevations and 6.1% deck grades are matched."
+    "At both Zakim lips only, the last/first80m blend an 8m lateral fit into the existing surveyed driving lanes because the official GIS axes cross its parapets; observed bridge support elevations and 6.1% deck grades are matched.",
+    "The northbound mainline and auxiliary Zakim approaches blend an 11m lateral fit 55\u2013300m south of their surveyed lips to clear parallel Beverly Street while preserving their relative lane separation. Underground junction anchors and the surveyed bridge lips remain unchanged."
   ],
   "routes": [
     {
@@ -46,7 +47,15 @@
       "surfaceUnderpasses": [
         "9755-0-0",
         "10341-0-0"
-      ]
+      ],
+      "surfaceRoadFit": {
+        "startMetersFromNorth": 55,
+        "fullMetersFromNorth": 105,
+        "releaseMetersFromNorth": 240,
+        "endMetersFromNorth": 300,
+        "lateralMeters": -11,
+        "reason": "Keep the playable parallel northbound approach ribbons east of Beverly Street while changing from tunnel to viaduct."
+      }
     },
     {
       "id": "central-artery-southbound",
@@ -135,7 +144,15 @@
       "surfaceUnderpasses": [
         "9755-0-0",
         "10325-0-0"
-      ]
+      ],
+      "surfaceRoadFit": {
+        "startMetersFromNorth": 55,
+        "fullMetersFromNorth": 105,
+        "releaseMetersFromNorth": 240,
+        "endMetersFromNorth": 300,
+        "lateralMeters": -11,
+        "reason": "Keep the playable parallel northbound approach ribbons east of Beverly Street while changing from tunnel to viaduct."
+      }
     },
     {
       "id": "central-artery-government-center-south-off",

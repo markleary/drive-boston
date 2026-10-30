@@ -168,6 +168,85 @@ def profile_points(features):
     points.pop(i);changed=True;break
  return points,set(ground_nodes)
 
+def surface_landings(city,points,width,route):
+ """Keep the full ramp ribbon at grade through the connected street junction.
+
+ Neighboring source ways can meet just past the ramp endpoint; include their
+ contiguous pavement too, rather than protecting only ways touching the node.
+ """
+ if not (route.get('surfaceStart') or route.get('surfaceEnd')):return [],[]
+ line=LineString(points);length=line.length;intervals=[];streets=[];overlaps=[]
+ min_x,min_z,max_x,max_z=line.bounds
+ for road in city['roads']:
+  if road.get('elevations'):continue
+  radius=(road['width']+width)/2+.4;xs=[p[0] for p in road['points']];zs=[p[1] for p in road['points']]
+  if max(xs)+radius<min_x or min(xs)-radius>max_x or max(zs)+radius<min_z or min(zs)-radius>max_z:continue
+  street=LineString(road['points'])
+  if line.distance(street)>radius:continue
+  overlap=line.intersection(street.buffer(radius))
+  for part in getattr(overlap,'geoms',[overlap]):
+   if part.geom_type!='LineString' or part.is_empty:continue
+   lo,hi=sorted([line.project(Point(part.coords[0])),line.project(Point(part.coords[-1]))]);overlaps.append((lo,hi,road['id']))
+ for index,flag in [(0,'surfaceStart'),(-1,'surfaceEnd')]:
+  if not route.get(flag):continue
+  extent=0.
+  for lo,hi,id in sorted(overlaps,key=lambda v:v[0] if index==0 else -v[1]):
+   start,end=(lo,hi) if index==0 else (length-hi,length-lo)
+   if start>extent+.001:break
+   extent=max(extent,end);streets.append(id)
+  intervals.append([0,extent] if index==0 else [length-extent,length])
+ return intervals,sorted(set(streets))
+
+def clear_surface_crossings(city,points,ss,width,ys,landings,ground):
+ """Keep full street ribbons clear above buried bores or below viaducts."""
+ line=LineString(points);crossings=[];intervals=[]
+ for street in city['roads']:
+  if street.get('elevations'):continue
+  other=LineString(street['points']);radius=(street['width']+width)/2+.4
+  if line.distance(other)>radius:continue
+  overlap=line.intersection(other.buffer(radius))
+  for part in getattr(overlap,'geoms',[overlap]):
+   if part.geom_type!='LineString' or part.is_empty:continue
+   lo,hi=sorted([line.project(Point(part.coords[0])),line.project(Point(part.coords[-1]))])
+   if any(a-.001<=lo and hi<=b+.001 for a,b in landings):continue
+   intervals.append((lo,hi,street,other))
+ # A continuous overlap cannot change from a tunnel below a street to a
+ # viaduct above it halfway through that street. Preserve the elevated Zakim
+ # approach over the entire connected crossing, then descend beyond it.
+ groups=[]
+ for item in sorted(intervals,key=lambda v:v[0]):
+  if groups and item[0]<=max(v[1] for v in groups[-1])+12:groups[-1].append(item)
+  else:groups.append([item])
+ lower=[-math.inf]*len(points);upper=[math.inf]*len(points)
+ for group in groups:
+  above=any(ys[i]>ground(p)+5.2 for lo,hi,_,_ in group for i,(p,s) in enumerate(zip(points,ss)) if lo<=s<=hi)
+  for lo,hi,street,other in group:
+   crossings.append(street['id'])
+   for i,(p,s) in enumerate(zip(points,ss)):
+    if not lo-6<=s<=hi+6:continue
+    q=other.interpolate(other.project(Point(p)))
+    if above:lower[i]=max(lower[i],ground([q.x,q.y])+5.2)
+    else:
+     a,b=points[max(0,i-1)],points[min(len(points)-1,i+1)];dx,dz=b[0]-a[0],b[1]-a[1];n=math.hypot(dx,dz)
+     surface=min(ground([p[0]+dz/n*(width/2+.4)*side,p[1]-dx/n*(width/2+.4)*side]) for side in [-1,0,1])
+     upper[i]=min(upper[i],surface-6.2,ground([q.x,q.y])-6.2)
+ fixed={0,len(points)-1}|{i for i,s in enumerate(ss) if any(a-.001<=s<=b+.001 for a,b in landings)}
+ for i in fixed:lower[i]=max(lower[i],ys[i]);upper[i]=min(upper[i],ys[i])
+ # Propagate clearance bounds at a playable grade before choosing a profile.
+ # This also detects an impossible source plan instead of moving its joins.
+ for indexes in [range(1,len(points)),range(len(points)-2,-1,-1)]:
+  for i in indexes:
+   j=i-1 if indexes.step>0 else i+1;rise=.1195*abs(ss[i]-ss[j])
+   lower[i]=max(lower[i],lower[j]-rise);upper[i]=min(upper[i],upper[j]+rise)
+ for i in range(len(points)):
+  if lower[i]>upper[i]+.001:raise ValueError(f"Surface clearance cannot meet fixed junction at {points[i]}")
+ result=[max(lo,min(hi,y)) for lo,hi,y in zip(lower,upper,ys)]
+ for indexes in [range(1,len(points)),range(len(points)-2,-1,-1)]:
+  for i in indexes:
+   j=i-1 if indexes.step>0 else i+1;rise=.1195*abs(ss[i]-ss[j])
+   result[i]=max(lower[i],min(upper[i],max(result[j]-rise,min(result[j]+rise,result[i]))))
+ return result,sorted(set(crossings))
+
 def build(city,source,heights):
  by_id={f['attributes']['OBJECTID']:f for f in source['features']};known={};roads=[];records=[]
  ground=lambda p:float(sample_grid(city['elevation'],heights,p))
@@ -184,8 +263,38 @@ def build(city,source,heights):
     a,b=original[max(0,i-1)],original[min(len(original)-1,i+1)];dx,dz=b[0]-a[0],b[1]-a[1];norm=math.hypot(dx,dz)
     f=1-distance/80;offset=route['surveyLateralFit']*f*f*(3-2*f)
     points[i]=[round(point[0]+dz/norm*offset,4),round(point[1]-dx/norm*offset,4)]
+  if route.get('surfaceRoadFit'):
+   fit=route['surfaceRoadFit'];original=[list(p) for p in points]
+   for i,(p,s) in enumerate(zip(original,ss)):
+    d=ss[-1]-s
+    if not fit['startMetersFromNorth']<d<fit['endMetersFromNorth']:continue
+    f=min(1,(d-fit['startMetersFromNorth'])/(fit['fullMetersFromNorth']-fit['startMetersFromNorth']),(fit['endMetersFromNorth']-d)/(fit['endMetersFromNorth']-fit['releaseMetersFromNorth']))
+    f=f*f*(3-2*f);a,b=original[max(0,i-1)],original[min(len(original)-1,i+1)];dx,dz=b[0]-a[0],b[1]-a[1];norm=math.hypot(dx,dz)
+    points[i]=[round(p[0]+dz/norm*fit['lateralMeters']*f,4),round(p[1]-dx/norm*fit['lateralMeters']*f,4)]
   ss=stations(points);length=ss[-1]
   is_main=route['role']=='mainline';joins=[]
+  landings,landing_streets=surface_landings(city,points,route['width'],route)
+  # Add the exact clearance boundary instead of rounding the landing up by a
+  # whole 6m profile section, which can unnecessarily steepen a short ramp.
+  if landings:
+   refined=[points[0]];boundaries=sorted({s for interval in landings for s in interval})
+   anchors={tuple(xy(path[index])) for id in route['featureIds'] for path in by_id[id]['geometry']['paths'] for index in [0,-1]}
+   for i in range(1,len(points)):
+    a,b=points[i-1],points[i]
+    for s in boundaries:
+     if ss[i-1]+.001<s<ss[i]-.001:
+      t=(s-ss[i-1])/(ss[i]-ss[i-1]);point=[round(a[k]+(b[k]-a[k])*t,4) for k in (0,1)];refined.append(point);anchors.add(tuple(point))
+    refined.append(b)
+   # As in profile_points, remove short non-junction tangency fragments that
+   # would fold a full-width ribbon beside the new exact boundary vertex.
+   changed=True
+   while changed:
+    changed=False
+    for i in range(1,len(refined)-1):
+     if tuple(refined[i]) not in anchors and min(math.dist(refined[i-1],refined[i]),math.dist(refined[i],refined[i+1]))<1.2:
+      refined.pop(i);changed=True;break
+   points=refined;ss=stations(points);length=ss[-1]
+   landings=[[min(ss,key=lambda s:abs(s-a)),min(ss,key=lambda s:abs(s-b))] for a,b in landings]
   if is_main:
    ys=[]
    for s in ss:
@@ -225,15 +334,21 @@ def build(city,source,heights):
       # Include the first outside station: the linear slab section touching
       # the parent lane must remain coplanar across its entire width.
       if distance>threshold or abs(ss[i]-ss[join['pointIndex']])>route.get('mergeMatchLimit',math.inf):break
+   # The surface intersection remains at terrain grade. Start the estimated
+   # descent only after both sides of the ramp have cleared the through lanes.
+   for p,s in zip(points,ss):
+    if any(a-.001<=s<=b+.001 for a,b in landings):controls.append([s,ground(p)])
    controls=sorted(dict(controls).items());ys=[interpolate(controls,s) for s in ss]
   for lo,hi,floor,taper in route.get('profileDips',[]):
    for i,s in enumerate(ss):
     t=min(1,max(lo-s,0,s-hi)/taper);weight=t*t*(3-2*t)
     ys[i]=min(ys[i],floor+(ys[i]-floor)*weight)
   ys,underpasses=fit_surface_underpasses(city,route,points,ys,ground)
+  ys,surface_crossings=clear_surface_crossings(city,points,ss,route['width'],ys,landings,ground)
   ys=[round(y,4) for y in ys]
   # Full-width burial is calculated after merge crossfall and width fitting.
   tunnel={'clearance':5.2,'covered':[]}
+  if landings:tunnel['surfaceLandings']=[[round(a,4),round(b,4)] for a,b in landings]
   for flag in ['capStart','capEnd']:
    if route.get(flag):tunnel[flag]=True
   road={'id':route['id'],'name':route['name'],'kind':'motorway' if is_main else 'motorway_link','points':points,'width':route['width'],'oneway':1,'traffic':False,'elevations':ys,'startLevel':0 if route.get('surfaceStart') else -1,'endLevel':0 if route.get('surfaceEnd') else -1,'tunnel':tunnel}
@@ -241,7 +356,7 @@ def build(city,source,heights):
   for p,y in zip(points,ys):known[tuple(p)]=(y,road['id'])
   max_grade=max(abs(a-b)/max(.001,math.dist(p,q)) for p,q,a,b in zip(points,points[1:],ys,ys[1:]))
   if max_grade>.13:raise ValueError(f"{road['id']} grade {max_grade:.1%}")
-  records.append({'id':road['id'],'sourceFeatureIds':route['featureIds'],'role':route['role'],'lengthMeters':round(length,3),'maxGrade':round(max_grade,4),'joins':joins,**({'surfaceUnderpasses':underpasses} if underpasses else {}),**({'surveyJoin':route['surveyJoin']} if 'surveyJoin' in route else {})})
+  records.append({'id':road['id'],'sourceFeatureIds':route['featureIds'],'role':route['role'],'lengthMeters':round(length,3),'maxGrade':round(max_grade,4),'joins':joins,'crossedSurfaceStreetIds':surface_crossings,**({'surfaceStreetIds':landing_streets} if landings else {}),**({'surfaceUnderpasses':underpasses} if underpasses else {}),**({'surveyJoin':route['surveyJoin']} if 'surveyJoin' in route else {})})
  fit_deck_widths(roads)
  fit_deck_edges(roads,records,source['routes'],ground)
  for road,record in zip(roads,records):

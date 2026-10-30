@@ -5,20 +5,21 @@ import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {ULTRA_BEE} from '../src/physics/bike.ts';
 import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
 import {roadProjection,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
-import {tunnelPointAt,tunnelStations} from '../src/simulation/tunnels.ts';
+import {sampleElevation} from '../src/simulation/terrain.ts';
+import {inTunnelPortal,tunnelPointAt,tunnelStations} from '../src/simulation/tunnels.ts';
 import {loadMetroCity,windowCity,readJson,installExactMeshes} from './helpers/metro-city.mjs';
 
 const source=readJson('central-artery.json'),tunnels=source.roads.filter(r=>r.tunnel);
 const points=tunnels.flatMap(r=>r.points),bounds={minX:Math.min(...points.map(p=>p[0]))-100,maxX:Math.max(...points.map(p=>p[0]))+100,minZ:Math.min(...points.map(p=>p[1]))-100,maxZ:Math.max(...points.map(p=>p[1]))+100};
 const metro=await loadMetroCity({bounds:{...bounds,minX:Math.min(bounds.minX,0),minZ:Math.min(bounds.minZ,-3000)}}),city=windowCity(metro,bounds);city.geometry=metro.geometry;
 const zakim=metro.buildings.find(b=>b.id==='BOS-2E9SM-83L3W-UVT08');assert.ok(zakim,'load the survey bridge from its owning tile');if(!city.buildings.some(b=>b.id===zakim.id))city.buildings.push(zakim);
-let pendingPhysics;
+let pendingPhysics,pendingStreetPhysics;
 const released={throttle:0,brake:0,steer:0,handbrake:false};
 async function physics(){
   pendingPhysics??=DrivingPhysics.create(city,{meshBuildingIds}).then(p=>{const installed=installExactMeshes(p,city);assert.ok(installed.has('BOS-2E9SM-83L3W-UVT08'),'retained Zakim survey shell participates in every drive');p.world.step();return p;});
   return pendingPhysics;
 }
-after(async()=>{if(pendingPhysics)(await pendingPhysics).dispose();});
+after(async()=>{if(pendingPhysics)(await pendingPhysics).dispose();if(pendingStreetPhysics)(await pendingStreetPhysics).dispose();});
 const mainIds=['central-artery-northbound','central-artery-southbound'];
 const auxiliaryId='central-artery-cross-street-north-on';
 const mainlines=mainIds.map(id=>tunnels.find(r=>r.id===id));
@@ -29,6 +30,24 @@ function routeSection(road,start=0,end=tunnelStations(road).at(-1)){
 function nearestJoin(road,atStart){
   const p=atStart?road.points[0]:road.points.at(-1),height=atStart?road.elevations[0]:road.elevations.at(-1);
   return tunnels.filter(r=>r!==road).map(parent=>({parent,distance:roadProjection(parent,...p).distance,dy:Math.abs(sampleRoadElevation(city,parent,...p)-height),station:stationOf(parent,p)})).filter(j=>j.distance<.3&&j.dy<.15).sort((a,b)=>a.distance-b.distance)[0];
+}
+function surfaceLeg(road,atStart){
+  const record=source.provenance.routes.find(r=>r.id===road.id);if(!record.surfaceStreetIds)return[];
+  const mouth=tunnelPointAt(road,atStart?0:tunnelStations(road).at(-1)),candidates=[];
+  for(const id of record.surfaceStreetIds){
+    const street=metro.roads.find(r=>r.id===id),total=tunnelStations(street).at(-1);
+    for(const reverse of [false,true]){
+      if(street.oneway!==0&&(reverse?street.oneway===1:street.oneway===-1))continue;
+      const join=tunnelPointAt(street,atStart?(reverse?0:total):(reverse?total:0));
+      if(Math.hypot(join.x-mouth.x,join.z-mouth.z)>.02)continue;
+      const start=atStart?(reverse?Math.min(30,total):Math.max(0,total-30)):(reverse?total:0),end=atStart?(reverse?0:total):(reverse?Math.max(0,total-30):Math.min(30,total));
+      const route=routeSection(street,start,end).map(p=>({...p,y:sampleElevation(city,p.x,p.z)})),a=route[atStart?route.length-2:0],b=route[atStart?route.length-1:1];
+      const error=Math.atan2(Math.sin(Math.atan2(b.x-a.x,b.z-a.z)-mouth.yaw),Math.cos(Math.atan2(b.x-a.x,b.z-a.z)-mouth.yaw));
+      candidates.push({route,score:Math.abs(error)});
+    }
+  }
+  assert.ok(candidates.length,`${road.id} connects to a legal surface approach`);
+  return candidates.sort((a,b)=>a.score-b.score)[0].route;
 }
 async function drive(route,kind,label){
   const p=await physics();p.setVehicleType(kind);const start=route[0],next=route[1],end=route.at(-1);
@@ -89,8 +108,43 @@ for(const road of tunnels.filter(r=>!mainIds.includes(r.id)))for(const kind of [
   const startJoin=nearestJoin(road,true),endJoin=nearestJoin(road,false),total=tunnelStations(road).at(-1);
   let route=routeSection(road);
   if(startJoin)route=[...routeSection(startJoin.parent,Math.max(0,startJoin.station-28),startJoin.station),...route.slice(1)];
+  else route=[...surfaceLeg(road,true),...route.slice(1)];
   if(endJoin)route=[...route,...routeSection(endJoin.parent,endJoin.station,Math.min(tunnelStations(endJoin.parent).at(-1),endJoin.station+28)).slice(1)];
   if(road.id===auxiliaryId)route=[...route,...await bridgeExtension(road,false)];
-  else assert.ok(startJoin||endJoin,'ramp has a connected bore');
+  else{assert.ok(startJoin||endJoin,'ramp has a connected bore');if(!endJoin)route=[...route,...surfaceLeg(road,false).slice(1)];}
   await drive(route,kind,road.id);
+});
+
+for(const record of source.provenance.routes)test(`${record.id} leaves adjoining and crossed surface lanes supported and free of tunnel obstructions`,async()=>{
+  // Isolate terrain/decks/tunnel shells from unrelated survey-building defects.
+  // The full car/bike drives above separately retain all surveyed collisions.
+  pendingStreetPhysics??=DrivingPhysics.create({...city,buildings:[],roads:city.roads.filter(r=>r.tunnel)});
+  const p=await pendingStreetPhysics,ramp=tunnels.find(r=>r.id===record.id);p.world.step();
+  let samples=0;
+  for(const id of new Set([...(record.surfaceStreetIds??[]),...record.crossedSurfaceStreetIds])){
+    const street=metro.roads.find(r=>r.id===id);assert.ok(street,`load surface street ${id}`);
+    const total=tunnelStations(street).at(-1);
+    for(let s=0;s<=total;s+=1)for(const across of [-street.width/2+1.2,0,street.width/2-1.2]){
+      const q=tunnelPointAt(street,s),x=q.x+Math.cos(q.yaw)*across,z=q.z-Math.sin(q.yaw)*across,ground=sampleElevation(city,x,z);
+      if(roadProjection(ramp,x,z).distance>ramp.width/2+street.width+8)continue;
+      assert.equal(inTunnelPortal(city,x,z),false,`${id} surface lane excavated at ${x},${z}`);
+      const hit=p.world.castRay(new Ray({x,y:ground+2.5,z},{x:0,y:-1,z:0}),3,true,undefined,undefined,p.chassisCollider,p.body);
+      assert.ok(hit,`${id} surface lane loses support at ${x},${z}`);
+      const height=ground+2.5-hit.timeOfImpact;
+      assert.ok(Math.abs(height-ground)<.22,`${id} surface lane blocked at ${x},${z}: collider ${height}, terrain ${ground}`);samples++;
+    }
+  }
+  assert.ok(samples>15,'audit the intersection and adjoining driving lanes');
+});
+
+// These paths cross the pictured intersection, rather than starting a drive
+// already aligned inside a ramp. Exercise both directions, with both vehicles.
+const groundRoute=points=>points.map(([x,z])=>({x,z,y:sampleElevation(city,x,z),road:{id:'surface'}}));
+const throughRoutes=[
+  ['Lincoln Street',groundRoute([[1387.184,-274.217],[1384.843,-259.449],[1383.208,-252.193],[1380.884,-241.374],[1378.688,-233.061],[1377.154,-227.254]])],
+  ['Essex / Surface Road',groundRoute([[1409.059,-269.836],[1396.5,-264.748],[1384.843,-259.449],[1377.283,-257.416],[1371.598,-255.77],[1357.768,-244.076],[1341.031,-229.47]])],
+  ['Essex Street',groundRoute([[1343.819,-260.911],[1371.598,-255.77],[1377.302,-254.715],[1383.208,-252.193],[1397.165,-246.574],[1410.766,-241.099]])],
+];
+for(const [name,route]of throughRoutes)for(const reverse of [false,true])for(const kind of ['car','ultrabee'])test(`${kind} crosses ${name} ${reverse?'reverse':'forward'} past the Lincoln / Essex ramps`,async()=>{
+  await drive(reverse?route.slice().reverse():route,kind,`${name} surface crossing`);
 });

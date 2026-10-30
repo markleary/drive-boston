@@ -16,7 +16,7 @@ import { pointInside } from '../simulation/roads.ts';
 import { type createMaterials, facadeStyleIndex, hash, seeded } from './materials';
 import { tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
 import { drapedRibbonInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurface } from './terrain-ground';
-import { inTunnelPortal } from '../simulation/tunnels.ts';
+import { inTunnelApproach } from '../simulation/tunnels.ts';
 import { spatialInstances } from './spatial-batches';
 import { PartBatches, box } from './geometry-writer';
 import { due, UNPACED, type Pace } from './pacing';
@@ -197,7 +197,7 @@ export function createTileBuilder(ctx: TileContext) {
           const a = points[i - 1], b = points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .05) continue;
           const n = Math.max(1, Math.ceil(length / 3)), part = box(.18, .17, length / n), yaw = Math.atan2(dx, dz);
           for (let j = 0; j < n; j++) {
-            const t = (j + .5) / n, x = a[0] + dx * t, z = a[1] + dz * t;if(inTunnelPortal(city,x,z))continue;
+            const t = (j + .5) / n, x = a[0] + dx * t, z = a[1] + dz * t;if(inTunnelApproach(city,x,z))continue;
             const writer = batches.at(materials.curb, x, z), from = writer.count;
             // Each corner settles onto the ground under it; the faces then take their tilted normals.
             writer.box(part, matrix.makeRotationY(yaw).setPosition(x, .085, z));
@@ -278,7 +278,7 @@ export function createTileBuilder(ctx: TileContext) {
     {
       const treePositions: THREE.Vector3[] = [];
       const random = seeded(342 + hash(key) % 1000);
-      const occupied = (x: number, z: number) => inTransitCorridor(city, x, z) || !!city.index.at(x, z);
+      const occupied = (x: number, z: number) => inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
       const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
       for (const road of roads.filter(r=>!r.tunnel)) for (let i = 1; i < road.points.length; i++) {
         const a = road.points[i - 1], b = road.points[i], radius = road.width / 2 + .8, segment = { a, b, radius };
@@ -300,7 +300,7 @@ export function createTileBuilder(ctx: TileContext) {
           for (let d = 14; d < length - 8; d += 25) {
             for (const side of [-1, 1]) {
               const x = a[0] + tx * d - tz * (road.width / 2 + 2) * side, z = a[1] + tz * d + tx * (road.width / 2 + 2) * side;
-              const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (occupied(x, z) || inRoad(x, z) || inTunnelPortal(city,x,z) || taken.has(k)) continue; taken.add(k);
+              const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (occupied(x, z) || inRoad(x, z) || taken.has(k)) continue; taken.add(k);
               if (!/Boylston/.test(road.name) || random() > .5) treePositions.push(new THREE.Vector3(x, height(x, z), z));
               if (side === 1 && !inRoad(x - tx * 5, z - tz * 5) && !occupied(x - tx * 5, z - tz * 5)) lamps.push(new THREE.Vector3(x - tx * 5, height(x - tx * 5, z - tz * 5), z - tz * 5));
             }

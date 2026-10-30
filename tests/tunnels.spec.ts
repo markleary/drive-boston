@@ -14,7 +14,7 @@ async function arrive(page:Page,road:Road,station:number,reverse=false){
   const p=tunnelPointAt(road,station);await page.evaluate(async p=>{await (window as any).__backbay.travelTo(p.x,p.z,p.yaw,p.roadId);},{...p,yaw:p.yaw+(reverse?Math.PI:0),roadId:road.id});
   await page.keyboard.down('Space');await page.waitForTimeout(900);await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);await page.keyboard.up('Space');return p;
 }
-async function follow(page:Page,road:Road,start:number,end:number){
+async function follow(page:Page,road:Road,start:number,end:number,maxSpeed=9){
   await arrive(page,road,start);const stations=tunnelStations(road),began=Date.now();let current=start,state=(await snapshot(page)).state;
   await page.keyboard.down('w');
   try{while(current<end-4&&Date.now()-began<70000){
@@ -22,7 +22,7 @@ async function follow(page:Page,road:Road,start:number,end:number){
     const target=tunnelPointAt(road,Math.min(end,current+12)),desired=Math.atan2(target.x-state.x,target.z-state.z),error=Math.atan2(Math.sin(desired-state.yaw),Math.cos(desired-state.yaw));
     const steer=Math.atan2(2*2.66*Math.sin(error),Math.max(4,Math.hypot(target.x-state.x,target.z-state.z)))/carSteeringLimit(state.speed);
     await page.evaluate(value=>{(window as any).__tunnelSteer=value;},Math.max(-1,Math.min(1,steer)));
-    if(state.speed<9)await page.keyboard.down('w');else await page.keyboard.up('w');
+    if(state.speed<maxSpeed)await page.keyboard.down('w');else await page.keyboard.up('w');
     await page.waitForTimeout(90);state=(await snapshot(page)).state;
     expect(state.y).toBeLessThan(tunnelPointAt(road,current).y+2.5);
   }}finally{await page.keyboard.up('w');await page.evaluate(()=>{(window as any).__tunnelSteer=0;});await page.keyboard.down('Space');await page.waitForTimeout(500);await page.keyboard.up('Space');}
@@ -61,7 +61,7 @@ test('Central Artery desktop interiors, surface ramp, Zakim connection and south
   // surveyed Zakim deck: a screenshot alone cannot prove that seam is usable.
   await page.keyboard.press('1');
   const north=roads.find(r=>r.id==='central-artery-northbound')!,northLength=tunnelStations(north).at(-1)!;
-  await follow(page,north,northLength-150,northLength-7);await page.screenshot({path:testInfo.outputPath('central-artery-zakim-approach.png')});
+  await follow(page,north,northLength-150,northLength-7,7);await page.screenshot({path:testInfo.outputPath('central-artery-zakim-approach.png')});
   const before=(await snapshot(page)).state;expect(1-2*(before.rotation.x**2+before.rotation.z**2),'Zakim landing must not tip the car onto its median').toBeGreaterThan(.96);await page.keyboard.down('w');await page.waitForTimeout(3200);await page.keyboard.up('w');s=await snapshot(page);
   expect(Math.hypot(s.state.x-before.x,s.state.z-before.z),'cross the tunnel-to-Zakim seam').toBeGreaterThan(8);expect(s.state.y).toBeGreaterThan(8);
   const join=tunnelPointAt(north,northLength),lateral=(s.state.x-join.x)*Math.cos(join.yaw)-(s.state.z-join.z)*Math.sin(join.yaw);
@@ -69,6 +69,50 @@ test('Central Artery desktop interiors, surface ramp, Zakim connection and south
   expect(1-2*(s.state.rotation.x**2+s.state.rotation.z**2),'remain upright across the bridge seam').toBeGreaterThan(.96);
   await page.screenshot({path:testInfo.outputPath('central-artery-zakim-crossed.png')});
   expect(errors).toEqual([]);
+});
+
+test('all surface portals and the Lincoln / Essex through intersection',async({page,request},testInfo)=>{
+  test.setTimeout(240000);await page.setViewportSize({width:1600,height:900});
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+  // Audit fixed roadway geometry without a moving traffic collision steering
+  // the test driver off its prescribed centerline. The other browser tests
+  // retain the normal population.
+  await page.route('**/data/city.json',async route=>{
+    const response=await route.fetch(),city=await response.json();for(const road of city.roads)road.traffic=false;
+    await route.fulfill({response,json:city});
+  });
+  const data=await(await request.get('/data/central-artery.json')).json(),roads=data.roads as Road[];
+  const lincoln:Road={id:'lincoln-through-regression',name:'Lincoln Street',width:7,oneway:1,points:[[1387.184,-274.217],[1384.843,-259.449],[1383.208,-252.193],[1377.154,-227.254]]};
+  const start=tunnelPointAt(lincoln,0);
+  await page.addInitScript(s=>{
+    localStorage.setItem('backbay-drive-v1',JSON.stringify(s));(window as any).__tunnelSteer=0;
+    Object.defineProperty(navigator,'getGamepads',{value:()=>[{axes:[-(window as any).__tunnelSteer],buttons:Array.from({length:8},()=>({value:0,pressed:false}))}]});
+  },{x:start.x,z:start.z,yaw:start.yaw});
+  await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();await page.waitForTimeout(1200);
+  await arrive(page,lincoln,3);await page.screenshot({path:testInfo.outputPath('lincoln-street-clear-through-intersection.png')});
+  await follow(page,lincoln,2,tunnelStations(lincoln).at(-1)!-1);
+  const portals=roads.filter(r=>r.tunnel?.surfaceLandings?.length);expect(portals).toHaveLength(11);
+  for(const ramp of portals){
+    const landing=ramp.tunnel!.surfaceLandings![0],atStart=landing[0]===0,station=atStart?0:tunnelStations(ramp).at(-1)!;
+    await arrive(page,ramp,station,!atStart);
+    const state=(await snapshot(page)).state,p=tunnelPointAt(ramp,station);expect(Math.abs(state.y-p.y)).toBeLessThan(1.3);
+    const trunks=await page.evaluate(()=>{
+      const points:{x:number;z:number}[]=[];(window as any).__backbay.scene.traverse((o:any)=>{
+        if(!o.isInstancedMesh||!o.visible||!o.name.includes('branches LOD'))return;
+        const matrix=o.matrix.clone();for(let i=0;i<o.count;i++){o.getMatrixAt(i,matrix);matrix.premultiply(o.matrixWorld);points.push({x:matrix.elements[12],z:matrix.elements[14]});}
+      });return points;
+    });
+    for(const tree of trunks){
+      const hit=roadProjection(ramp,tree.x,tree.z),stations=tunnelStations(ramp),s=stations[hit.index]+(stations[hit.index+1]-stations[hit.index])*hit.t;
+      expect(hit.distance<ramp.width/2+.5&&s>=landing[0]-.01&&s<=landing[1]+.01,`${ramp.id} landing is free of tree trunks`).toBe(false);
+    }
+    await page.screenshot({path:testInfo.outputPath(`${ramp.id}-surface-junction.png`)});
+  }
+  for(const id of ['central-artery-lincoln-south-on','central-artery-essex-north-on','central-artery-purchase-south-on']){
+    const ramp=roads.find(r=>r.id===id)!;await follow(page,ramp,2,id.includes('essex')?130:85);
+    await page.screenshot({path:testInfo.outputPath(`${id}-entered-from-junction.png`)});
+  }
+  expect((await snapshot(page)).tiles.failed).toBe(0);expect(errors).toEqual([]);
 });
 
 test.describe('mobile tunnel view',()=>{
