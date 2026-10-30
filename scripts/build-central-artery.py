@@ -278,12 +278,21 @@ def build(city,source,heights):
   # whole 6m profile section, which can unnecessarily steepen a short ramp.
   if landings:
    refined=[points[0]];boundaries=sorted({s for interval in landings for s in interval})
+   anchors={tuple(xy(path[index])) for id in route['featureIds'] for path in by_id[id]['geometry']['paths'] for index in [0,-1]}
    for i in range(1,len(points)):
     a,b=points[i-1],points[i]
     for s in boundaries:
      if ss[i-1]+.001<s<ss[i]-.001:
-      t=(s-ss[i-1])/(ss[i]-ss[i-1]);refined.append([round(a[k]+(b[k]-a[k])*t,4) for k in (0,1)])
+      t=(s-ss[i-1])/(ss[i]-ss[i-1]);point=[round(a[k]+(b[k]-a[k])*t,4) for k in (0,1)];refined.append(point);anchors.add(tuple(point))
     refined.append(b)
+   # As in profile_points, remove short non-junction tangency fragments that
+   # would fold a full-width ribbon beside the new exact boundary vertex.
+   changed=True
+   while changed:
+    changed=False
+    for i in range(1,len(refined)-1):
+     if tuple(refined[i]) not in anchors and min(math.dist(refined[i-1],refined[i]),math.dist(refined[i],refined[i+1]))<1.2:
+      refined.pop(i);changed=True;break
    points=refined;ss=stations(points);length=ss[-1]
    landings=[[min(ss,key=lambda s:abs(s-a)),min(ss,key=lambda s:abs(s-b))] for a,b in landings]
   if is_main:

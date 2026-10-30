@@ -3,6 +3,8 @@ import type {CityData,Road} from '../types';
 import {bridgeEdgeSections,roadDeckGeometry,roadProjection,sampleRoadElevation} from '../simulation/road-surfaces.ts';
 import {tunnelGeometry,tunnelStations,tunnelCoveredAt,tunnelAt,tunnelPointAt} from '../simulation/tunnels.ts';
 import {PartBatches,box} from './geometry-writer.ts';
+import {createTunnelCeilingMaterial,tiledTunnelCeiling} from './tunnel-ceiling.ts';
+import {tunnelContinuation,TUNNEL_CONTINUATION_LENGTH} from './tunnel-continuation.ts';
 
 /** Procedural wall tilework is shared by every bore. Metre UVs keep the tile
  * joints and the green guidance band aligned to the local, sloping floor. */
@@ -84,15 +86,14 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
   const tiles=wallTexture(),paving=asphaltTexture();
   const walls=new THREE.MeshStandardMaterial({map:tiles,emissiveMap:tiles,emissive:'#ffffff',emissiveIntensity:.35,roughness:.9});
   const asphalt=new THREE.MeshStandardMaterial({map:paving,emissiveMap:paving,emissive:'#ffffff',emissiveIntensity:.2,roughness:.95});
-  const ceiling=new THREE.MeshStandardMaterial({color:'#414a49',emissive:'#66716e',emissiveIntensity:.22,roughness:.97});
+  const ceiling=createTunnelCeilingMaterial();
   const concrete=new THREE.MeshStandardMaterial({color:'#b1b2a7',emissive:'#999c91',emissiveIntensity:.13,roughness:.96});
-  const black=new THREE.MeshBasicMaterial({color:0x000000,fog:false});
   const white=new THREE.MeshStandardMaterial({color:'#ede9ca',emissive:'#e9e6c9',emissiveIntensity:.25,roughness:.88});
   const amber=new THREE.MeshBasicMaterial({color:'#e7b74b'}),darkMetal=new THREE.MeshStandardMaterial({color:'#394342',roughness:.8,metalness:.3});
   const lightMaterial=new THREE.MeshBasicMaterial({color:'#fff1c9',toneMapped:false}),batches=new PartBatches(180),matrix=new THREE.Matrix4();
   let fixtures=0,signs=0,closures=0,metres=0;
   const mesh=(geometry:THREE.BufferGeometry,material:THREE.Material,name:string)=>{
-    if(!geometry.attributes.position?.count){geometry.dispose();return;}const object=new THREE.Mesh(geometry,material);object.name=name;object.receiveShadow=true;object.castShadow=material!==black;group.add(object);
+    if(!geometry.attributes.position?.count){geometry.dispose();return;}const object=new THREE.Mesh(geometry,material);object.name=name;object.receiveShadow=true;object.castShadow=true;group.add(object);
   };
   const place=(material:THREE.Material,w:number,h:number,d:number,p:{x:number;y:number;z:number;yaw:number},rise=0,across=0,slope=0)=>{
     matrix.makeRotationFromEuler(new THREE.Euler(-slope,p.yaw,0,'YXZ'));matrix.setPosition(p.x+Math.cos(p.yaw)*across,p.y+rise,p.z-Math.sin(p.yaw)*across);batches.part(box(w,h,d),material,matrix);
@@ -107,7 +108,7 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
     return face;
   };
   const sign=(road:Road,s:number,lines:string[],warning=false,backwards=false)=>{
-    const p=tunnelPointAt(road,s),width=Math.min(road.width-1,lines[0]==='BOSTON LURE'?2.6:6.6),height=width/4;
+    const p=tunnelPointAt(road,s),width=Math.min(road.width-1,6.6),height=width/4;
     const object=signPanel(width,height,lines,warning);object.name=lines.join(' / ');
     object.userData.roadId=road.id;object.userData.station=s;object.userData.backwards=backwards;
     object.position.set(p.x,p.y+road.tunnel!.clearance-height/2-.28,p.z);object.rotation.y=p.yaw+(backwards?0:Math.PI);group.add(object);signs++;
@@ -128,8 +129,8 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
   for(const road of roads){
     const length=tunnelStations(road).at(-1)??0;metres+=length;
     const geometry=tunnelGeometry(city,road),deck=roadDeckGeometry(city,road,road.width,.018),floor=buffer(deck);floor.setAttribute('uv',new THREE.BufferAttribute(deck.uv,2));mesh(floor,asphalt,`${road.name} roadway`);
-    mesh(tiledWall(geometry.walls,road,city),walls,`${road.name} tile walls`);mesh(buffer(geometry.roof),ceiling,`${road.name} ceiling`);
-    mesh(buffer(geometry.barriers),concrete,`${road.name} concrete closure`);mesh(buffer(geometry.caps),black,`${road.name} black void`);
+    mesh(tiledWall(geometry.walls,road,city),walls,`${road.name} tile walls`);mesh(tiledTunnelCeiling(geometry.roof,road),ceiling,`${road.name} ceiling`);
+    mesh(buffer(geometry.barriers),concrete,`${road.name} concrete closure`);
     const lanes=Math.max(1,Math.round((road.width-1.4)/3.5));
     // An edge inside a joined carriageway is no longer a road border. Retain
     // exterior lines and independent stacked roads, but leave merges open.
@@ -158,14 +159,16 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
       const face={...p,x:p.x+Math.sin(yaw)*.59,z:p.z+Math.cos(yaw)*.59,yaw};
       sign(road,atStart?19:length-19,['ROAD CLOSED','DO NOT ENTER'],true,atStart);
       for(let side=-p.width/2+.6;side<p.width/2;side+=1.1)place(amber,.5,.12,.025,face,.82,side);
-      const lure=tunnelPointAt(road,atStart?1.2:length-1.2),object=signPanel(2.3,.58,['BOSTON LURE'],true);
-      object.name='Boston Lure easter egg';object.position.set(lure.x+Math.cos(yaw)*(lure.width/2-1.7),lure.y+1.7,lure.z-Math.sin(yaw)*(lure.width/2-1.7));object.rotation.y=yaw;group.add(object);
+      const warning=tunnelPointAt(road,atStart?2.2:length-2.2),object=signPanel(3.4,.95,['BEWARE OF FALLING','CEILING TILES'],true);
+      object.name='Beware of Falling Ceiling Tiles';object.position.set(warning.x+Math.cos(yaw)*(warning.width/2-2),warning.y+2.15,warning.z-Math.sin(yaw)*(warning.width/2-2));object.rotation.y=yaw;group.add(object);
+      for(const offset of [-1.25,1.25])place(darkMetal,.06,1.2,.06,{...warning,yaw},1.3,warning.width/2-2+offset);
+      group.add(tunnelContinuation(road,atStart,{walls,ceiling,asphalt}));
     }
   }
   const exits=tunnelExitSigns(city);for(const exit of exits)sign(exit.road,exit.station,exit.lines);
   for(const object of batches.meshes()){object.name='Tunnel fixtures and markings';object.castShadow=false;object.receiveShadow=true;group.add(object);}
   const fill=new THREE.PointLight('#fff1d3',0,52,1.4);fill.name='Nearby tunnel light';group.add(fill);
-  group.userData={roads:roads.length,metres:Math.round(metres),fixtures,signs,advanceExitSigns:exits.length,closures,alignment:'Boston official surveyed street centerlines',heights:'Estimated drivable profiles; not engineering survey'};
+  group.userData={roads:roads.length,metres:Math.round(metres),fixtures,signs,advanceExitSigns:exits.length,closures,darkContinuations:closures,continuationLength:TUNNEL_CONTINUATION_LENGTH,tiledCeilings:true,alignment:'Boston official surveyed street centerlines',heights:'Estimated drivable profiles; not engineering survey'};
   scene.add(group);
   return{group,update(position:{x:number;y:number;z:number}){const inside=tunnelAt(city,position.x,position.z,position.y);fill.visible=!!inside?.covered;fill.intensity=fill.visible?38:0;fill.position.set(position.x,inside?Math.min(inside.ceiling-.4,position.y+2):position.y,position.z);}};
 }

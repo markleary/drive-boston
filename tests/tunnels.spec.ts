@@ -54,7 +54,7 @@ test('Central Artery desktop interiors, surface ramp, Zakim connection and south
   const length=tunnelStations(main).at(-1)!,capStart=!!main.tunnel!.capStart,capStation=capStart?23:length-23;
   await arrive(page,main,capStation,capStart);await page.screenshot({path:testInfo.outputPath('central-artery-south-closure.png')});
   await page.keyboard.down('w');await page.waitForTimeout(5500);await page.keyboard.up('w');s=await snapshot(page);const capHit=roadProjection(main,s.state.x,s.state.z),capProgress=tunnelStations(main)[capHit.index]+(tunnelStations(main)[capHit.index+1]-tunnelStations(main)[capHit.index])*capHit.t;
-  expect(capStart?capProgress:length-capProgress,'concrete barriers stop the car before the black void').toBeGreaterThan(5.1);
+  expect(capStart?capProgress:length-capProgress,'concrete barriers stop the car before the unlit continuation').toBeGreaterThan(5.1);
   expect(Math.abs(s.state.speed)).toBeLessThan(2);
   await arrive(page,main,station);await page.keyboard.press('2');await page.waitForTimeout(1200);s=await snapshot(page);expect(s.travelMode).toBe('bike');expect(s.state.y).toBeLessThan(p.y+2);await page.screenshot({path:testInfo.outputPath('central-artery-ultrabee.png')});
   // Drive the ascending northern portal and continue onto the unchanged
@@ -167,4 +167,53 @@ test('North Street exit continues onto its surface street beyond the ramp endpoi
   expect((state.x-end.x)*Math.sin(end.yaw)+(state.z-end.z)*Math.cos(end.yaw),'drive onto the street, beyond merely reaching the ramp endpoint').toBeGreaterThan(9);
   expect(1-2*(state.rotation.x**2+state.rotation.z**2),'exit without riding over a barrier').toBeGreaterThan(.97);
   await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.screenshot({path:testInfo.outputPath('north-street-exit-onto-surface.png')});
+});
+
+test('southern tunnel closures have tiled ceilings, a falling-tile warning and dark depth beyond intact barriers',async({page,request},testInfo)=>{
+  test.setTimeout(180000);await page.setViewportSize({width:1600,height:1000});const errors:string[]=[];
+  page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(m.text()))errors.push(m.text());});
+  const roads=((await(await request.get('/data/central-artery.json')).json()).roads as Road[]).filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd);
+  const reported={x:1168.76,z:328.89,yaw:-.2685,roadId:'central-artery-southbound'};
+  await page.addInitScript(s=>localStorage.setItem('backbay-drive-v1',JSON.stringify(s)),reported);
+  await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
+  await page.keyboard.down('Space');await page.waitForTimeout(1400);await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);
+  let state=await snapshot(page);expect(Math.abs(state.state.y+11.34)).toBeLessThan(.8);await page.screenshot({path:testInfo.outputPath('southbound-closure-reported-position.png')});await page.keyboard.up('Space');
+  const appearance=await page.evaluate(routes=>{
+    const scene=(window as any).__backbay.scene,signs:string[]=[];scene.traverse((o:any)=>{if(o.userData.tunnelSignFace)signs.push(o.name);});
+    scene.updateMatrixWorld(true);
+    return{signs,ceilings:routes.map(({name})=>{const ceiling=scene.getObjectByName(`${name} ceiling`);return{name,textured:!!ceiling?.material?.map,uvCount:ceiling?.geometry?.attributes?.uv?.count??0};}),extensions:routes.map(route=>{
+      const group=scene.getObjectByName(`${route.name} unlit continuation`);let depth=0,lights=0;
+      group?.traverse((o:any)=>{if(o.isLight)lights++;const p=o.geometry?.attributes?.position;if(p)for(let i=0;i<p.count;i++){const point=o.localToWorld(o.position.clone().set(p.getX(i),p.getY(i),p.getZ(i)));depth=Math.max(depth,(point.x-route.x)*route.dx+(point.z-route.z)*route.dz);}});
+      return{roadId:group?.userData?.terminalRoadId,depth,lights,darknessDistance:group?.userData?.darknessDistance,oldFlatCap:!!scene.getObjectByName(`${route.name} black void`)};
+    })};
+  },roads.map(r=>{const p=tunnelPointAt(r,r.tunnel!.capStart?0:tunnelStations(r).at(-1)!),yaw=p.yaw+(r.tunnel!.capStart?Math.PI:0);return{name:r.name,x:p.x,z:p.z,dx:Math.sin(yaw),dz:Math.cos(yaw)};}));
+  expect(appearance.signs.some(name=>/BOSTON LURE/i.test(name)),'the old plaque is replaced').toBe(false);
+  expect(appearance.signs.filter(name=>/FALLING CEILING TILES/i.test(name))).toHaveLength(2);
+  for(const ceiling of appearance.ceilings){expect(ceiling.textured,`${ceiling.name} has visible tilework`).toBe(true);expect(ceiling.uvCount).toBeGreaterThan(0);}
+  for(const extension of appearance.extensions){expect(extension.roadId).toBeTruthy();expect(extension.depth,'darkness has real tunnel depth beyond the barrier').toBeGreaterThan(80);expect(extension.darknessDistance).toBeLessThan(extension.depth);expect(extension.lights).toBe(0);expect(extension.oldFlatCap).toBe(false);}
+  for(const road of roads){
+    const total=tunnelStations(road).at(-1)!,atStart=!!road.tunnel!.capStart,station=(distance:number)=>atStart?distance:total-distance;
+    await arrive(page,road,station(35),atStart);await page.screenshot({path:testInfo.outputPath(`${road.id}-dark-closure-approach.png`)});
+    await arrive(page,road,station(12),atStart);await page.keyboard.press('c');await page.waitForTimeout(500);await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);
+    await page.screenshot({path:testInfo.outputPath(`${road.id}-dark-closure-hood.png`)});
+    await page.keyboard.press('c');await page.keyboard.press('c');
+    await arrive(page,road,station(24),atStart);await page.keyboard.down('w');await page.waitForTimeout(5500);await page.keyboard.up('w');state=await snapshot(page);
+    const hit=roadProjection(road,state.state.x,state.state.z),stations=tunnelStations(road),progress=stations[hit.index]+(stations[hit.index+1]-stations[hit.index])*hit.t;
+    expect(atStart?progress:total-progress,'the visual continuation does not let the car bypass concrete barriers').toBeGreaterThan(5.1);
+    expect(Math.abs(state.state.speed)).toBeLessThan(2);expect(1-2*(state.state.rotation.x**2+state.state.rotation.z**2)).toBeGreaterThan(.96);
+    await arrive(page,road,station(45),!atStart);await page.screenshot({path:testInfo.outputPath(`${road.id}-ceiling-facing-interior.png`)});
+  }
+  state=await snapshot(page);expect(state.tiles.failed).toBe(0);expect(state.graphicsContext.losses).toBe(0);expect(errors).toEqual([]);
+});
+
+test.describe('mobile terminal atmosphere',()=>{
+  test.use({viewport:{width:393,height:852},hasTouch:true,isMobile:true,deviceScaleFactor:3});
+  test('dark southern continuation remains visible in portrait',async({page,request},testInfo)=>{
+    test.setTimeout(120000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(m.text()))errors.push(m.text());});
+    const data=await(await request.get('/data/central-artery.json')).json(),roads=data.roads as Road[],road=roads.find(r=>r.id==='central-artery-southbound')!,p=tunnelPointAt(road,tunnelStations(road).at(-1)!-22);
+    await page.addInitScript(s=>localStorage.setItem('backbay-drive-v1',JSON.stringify(s)),{x:p.x,z:p.z,yaw:p.yaw,roadId:road.id});
+    await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').tap();await page.waitForTimeout(1800);await page.locator('#cycle-camera').tap();await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);
+    const state=await snapshot(page);expect(state.mobile).toBe(true);expect(state.camera).toBe('hood');expect(state.bridges.tunnels.darkContinuations).toBe(2);expect(state.graphicsContext.losses).toBe(0);expect(state.state.y).toBeLessThan(-10);
+    await page.screenshot({path:testInfo.outputPath('southbound-dark-closure-mobile.png')});expect(errors).toEqual([]);
+  });
 });
