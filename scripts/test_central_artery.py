@@ -26,7 +26,7 @@ class CentralArterySourceTest(unittest.TestCase):
      if route.get('surveyLateralFit'):
       feature=self.features[route['featureIds'][-1 if route.get('direction')=='north' else 0]]
       anchor=module.xy(feature['geometry']['paths'][0][-1 if route.get('direction')=='north' else 0])
-      if math.dist(p,anchor)<80:continue
+      if math.dist(p,anchor)<max(80,route.get('surfaceRoadFit',{}).get('endMetersFromNorth',0)):continue
      self.assertIn(tuple(p),points,(route['id'],fid,p))
  def test_surface_landings_use_actual_triangle_terrain_and_existing_streets(self):
   endpoints=[p for r in self.city['roads'] if not r.get('elevations') for p in [r['points'][0],r['points'][-1]]]
@@ -37,6 +37,26 @@ class CentralArterySourceTest(unittest.TestCase):
     p=road['points'][index];ground=module.sample_grid(self.city['elevation'],self.heights,p)
     self.assertAlmostEqual(road['elevations'][index],ground,delta=.0001)
     self.assertLess(min(math.dist(p,e) for e in endpoints),.002,(road['id'],p))
+ def test_all_surface_junctions_have_level_landings_outside_the_through_lanes(self):
+  streets={r['id']:r for r in self.city['roads']};checked=0
+  for route in self.source['routes']:
+   if not (route.get('surfaceStart') or route.get('surfaceEnd')):continue
+   road=self.by_id[route['id']];line=LineString(road['points']);ss=module.stations(road['points'])
+   record=next(r for r in self.data['provenance']['routes'] if r['id']==road['id'])
+   self.assertTrue(record['surfaceStreetIds'],road['id'])
+   a,b=road['tunnel']['surfaceLandings'][0]
+   self.assertGreater(b-a,6,road['id'])
+   for p,y,s in zip(road['points'],road['elevations'],ss):
+    if a-.001<=s<=b+.001:self.assertAlmostEqual(y,module.sample_grid(self.city['elevation'],self.heights,p),delta=.0001)
+   for id in record['surfaceStreetIds']:
+    street=streets[id];overlap=line.intersection(LineString(street['points']).buffer((street['width']+road['width'])/2+.3))
+    for part in getattr(overlap,'geoms',[overlap]):
+     if part.geom_type!='LineString':continue
+     stations=[line.project(Point(p)) for p in part.coords];lo,hi=min(stations),max(stations)
+     if (lo<.001 if route.get('surfaceStart') else hi>line.length-.001):
+      self.assertGreaterEqual(lo,a-.001);self.assertLessEqual(hi,b+.001,(road['id'],id))
+   checked+=1
+  self.assertEqual(checked,11)
  def test_source_graph_merges_keep_one_elevation(self):
   for route in self.data['provenance']['routes']:
    road=self.by_id[route['id']]

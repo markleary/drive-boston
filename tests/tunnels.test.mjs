@@ -3,7 +3,7 @@ import test from 'node:test';
 import {Ray} from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {sampleDriveSurface} from '../src/simulation/road-surfaces.ts';
-import {clipTunnelPortals,inTunnelPortal,tunnelAt,tunnelGeometry} from '../src/simulation/tunnels.ts';
+import {clipTunnelPortals,inTunnelPortal,inTunnelApproach,tunnelAt,tunnelGeometry} from '../src/simulation/tunnels.ts';
 
 const bore={id:'tunnel-main',name:'Central Artery',width:12,oneway:1,points:[[0,-100],[0,0],[0,200]],elevations:[0,-12,-12],tunnel:{clearance:5.2,covered:[[100,300]],capEnd:true}};
 const city={bounds:{minX:-250,maxX:250,minZ:-250,maxZ:250},buildings:[],roads:[bore,{id:'surface',name:'Surface Road',width:12,oneway:0,points:[[-200,100],[200,100]]}],spawn:{x:30,z:-180,yaw:0}};
@@ -97,6 +97,25 @@ test('an open elevated Zakim approach preserves the surface below until its grad
     assert.ok(Math.abs(rayHeight(p,0,-80,3))<1e-5,'lower surface stays physically present');
     assert.ok(Math.abs(rayHeight(p,0,40,3)+4)<1e-4,'underground ramp has no terrain lid');
   }finally{p.dispose();}
+});
+
+test('a terrain crest inside an approach ribbon cannot leave a wedge under one wheel',async()=>{
+  const approach={id:'crest-approach',name:'Approach',width:8,oneway:1,points:[[0,-6],[0,6]],elevations:[1,1],tunnel:{clearance:5.2,covered:[]}};
+  const heights=Float32Array.from({length:25},(_,i)=>i%5===2?2:0),c={...city,roads:[approach],elevation:{originX:-6,originZ:-6,width:5,height:5,cellSize:3,heights}};
+  assert.equal(inTunnelPortal(c,0,0),true,'the terrain crest is removed even though both ribbon edges are lower than the deck');
+  assert.equal(inTunnelPortal(c,3,0),false,'the elevated side retains the ground below');
+  const p=await DrivingPhysics.create(c);try{
+    for(const x of [-.8,0,.8])assert.ok(Math.abs(rayHeight(p,x,0,3)-1)<.001,'both wheel tracks meet the same ramp deck');
+  }finally{p.dispose();}
+});
+
+test('surface decoration clears level landings as well as excavations and preserves covered ground',()=>{
+  const ramp={...bore,points:[[0,0],[0,12],[0,60]],elevations:[0,0,-8],width:8,tunnel:{clearance:5.2,covered:[[48,60]],surfaceLandings:[[0,12]]}},c={...city,roads:[ramp]};
+  assert.equal(inTunnelPortal(c,0,6),false,'landing retains its ground');
+  for(const x of [-4.5,0,4.5])assert.equal(inTunnelApproach(c,x,6),true,'trees and posts stay out of the entrance and its shoulders');
+  assert.equal(inTunnelApproach(c,0,30),true,'open descending ramp remains clear');
+  assert.equal(inTunnelApproach(c,0,55),false,'landscaping above a covered tunnel remains');
+  assert.equal(inTunnelApproach(c,15,6),false,'adjoining sidewalks remain usable');
 });
 
 test('a rising branch opens the lower mainline ceiling throughout their shared bore volume',async()=>{

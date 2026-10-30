@@ -10,7 +10,8 @@
     "Elevation profiles, playable widths and five-metre headroom are estimates, not engineering survey or navigation guidance.",
     "North mainline joins match the existing Boston 3D Zakim mesh at source nodes. The original survey mesh remains unchanged.",
     "Southern ends are intentionally blocked near the I-90/south portals. I-90, Callahan and Sumner tunnel continuations are outside this feature.",
-    "At both Zakim lips only, the last/first80m blend an 8m lateral fit into the existing surveyed driving lanes because the official GIS axes cross its parapets; observed bridge support elevations and 6.1% deck grades are matched."
+    "At both Zakim lips only, the last/first80m blend an 8m lateral fit into the existing surveyed driving lanes because the official GIS axes cross its parapets; observed bridge support elevations and 6.1% deck grades are matched.",
+    "The northbound open approach also blends an 11m lateral clearance fit 55\u2013300m south of the Zakim lip, keeping its playable-width ribbon out of parallel Beverly Street. Shared underground junction nodes and the surveyed bridge lip remain unchanged."
   ],
   "routes": [
     {
@@ -42,7 +43,15 @@
         "lateralFitMeters": 8,
         "fitLengthMeters": 80
       },
-      "surveyLateralFit": -8
+      "surveyLateralFit": -8,
+      "surfaceRoadFit": {
+        "startMetersFromNorth": 55,
+        "fullMetersFromNorth": 105,
+        "releaseMetersFromNorth": 240,
+        "endMetersFromNorth": 300,
+        "lateralMeters": -11,
+        "reason": "Keep the playable approach ribbon east of the parallel Beverly Street lanes while it changes from tunnel to viaduct."
+      }
     },
     {
       "id": "central-artery-southbound",

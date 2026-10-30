@@ -33,7 +33,7 @@ import { addTobinBridgeDetails } from './tobin-bridge';
 import { updateWater } from './water-material';
 import { updateSunShadow } from './shadows';
 import { addTunnels } from './tunnels';
-import { tunnelAt } from '../simulation/tunnels.ts';
+import { tunnelAt,inTunnelApproach } from '../simulation/tunnels.ts';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; }
 
@@ -219,7 +219,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
       const key=`${x},${z}`,list=buildingCells.get(key)??[];list.push(b);buildingCells.set(key,list);
     }
   }
-  const occupied=(x:number,z:number)=>inTransitCorridor(city,x,z)||(buildingCells.get(`${Math.floor(x/128)},${Math.floor(z/128)}`)??[]).some(b=>pointInside([x,z],b.footprint));
+  const occupied=(x:number,z:number)=>inTransitCorridor(city,x,z)||inTunnelApproach(city,x,z)||(buildingCells.get(`${Math.floor(x/128)},${Math.floor(z/128)}`)??[]).some(b=>pointInside([x,z],b.footprint));
   const roadCells=new Map<string,{a:Point2;b:Point2;radius:number}[]>();
   for(const road of city.roads)for(let i=1;i<road.points.length;i++){
     const a=road.points[i-1],b=road.points[i],radius=road.width/2+.8,segment={a,b,radius};
