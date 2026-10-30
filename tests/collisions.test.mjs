@@ -127,6 +127,51 @@ test('a struck traffic car is shoved as a dynamic body, then eases back into its
   }finally{traffic.dispose();physics.dispose();}
 });
 
+/** One straight two-way road, at ground level or on an 8 m deck with parapets. The
+ * player is aimed at the first moving lane keeper from `offset` metres beyond the
+ * usual start: across its path (`kind` 't'), head-on, or along the next lane over
+ * with about 25 cm to spare ('miss'). */
+async function straightRun(kind,offset,deck=false,speed=mph(50)){
+  const y0=deck?8:0,road={id:'Straight',name:'Straight',width:12,oneway:0,points:[[-400,0],[400,0]],...(deck?{elevations:[8,8]}:{})};
+  const physics=await DrivingPhysics.create({...flat,roads:[road]}),traffic=createTraffic(new THREE.Scene(),{...flat,roads:[road]},physics);
+  try{
+    const away={...physics.getState(),x:900,z:900};
+    for(let i=0;i<120;i++){traffic.update(1/60,away,away,[]);physics.step(released,1/60);}
+    const index=traffic.snapshot().findIndex(a=>a.speed>4),b=traffic.snapshot()[index],fx=Math.sin(b.yaw),fz=Math.cos(b.yaw),rx=fz,rz=-fx;
+    const [x,z,vx,vz]=kind==='head'?[b.x+fx*(16+offset),b.z+fz*(16+offset),-fx,-fz]:kind==='miss'?[b.x+fx*(30+offset)+rx*2.05,b.z+fz*(30+offset)+rz*2.05,-fx,-fz]:[b.x+fx*b.speed*.45+rx*(7+offset),b.z+fz*b.speed*.45+rz*(7+offset),-rx,-rz];
+    const yaw=Math.atan2(vx,vz);
+    physics.body.setTranslation({x,y:y0+.78,z},true);physics.body.setRotation({x:0,y:Math.sin(yaw/2),z:0,w:Math.cos(yaw/2)},true);physics.body.setLinvel({x:vx*speed,y:0,z:vz*speed},true);
+    const result={knocked:0,kinematicAtImpact:false,moved:0,tyreFriction:false,minY:Infinity};let start;
+    for(let i=0;i<60*3;i++){
+      const state=physics.getState();traffic.update(1/60,state,state,[]);physics.step(released,1/60);
+      for(const impact of physics.takeImpacts())for(const h of impact.colliders)if(traffic.colliders.has(h)&&!physics.world.getCollider(h).parent().isDynamic())result.kinematicAtImpact=true;
+      const all=traffic.snapshot(),now=all[index];result.knocked=Math.max(result.knocked,all.filter(a=>a.knocked).length);
+      if(now.knocked&&!start)start={x:now.x,z:now.z,i};
+      if(start&&now.knocked){const c=[...traffic.colliders].map(h=>physics.world.getCollider(h)).find(c=>c.parent().isDynamic());result.minY=Math.min(result.minY,c.parent().translation().y);if(i===start.i+20)result.tyreFriction=c.friction()<.1;}
+    }
+    if(start){const now=traffic.snapshot()[index];result.moved=Math.hypot(now.x-start.x,now.z-start.z);}
+    return result;
+  }finally{traffic.dispose();physics.dispose();}
+}
+
+test('a fast hit always lands on a struck car that is already dynamic, whatever the 60 Hz step phase, and a close pass knocks nothing',async()=>{
+  for(const [kind,minMoved] of [['t',9],['head',9]])for(const offset of [0,.1,.2,.3]){
+    const r=await straightRun(kind,offset),label=`${kind==='head'?'head-on':'T-bone'} at 50 mph from ${offset} m further back`;
+    assert.equal(r.kinematicAtImpact,false,`${label}: the player never strikes a still-kinematic lane keeper`);
+    assert.ok(r.knocked===1&&r.moved>minMoved,`${label}: the struck car carries the hit (${r.moved.toFixed(1)} m; a late knock left it at 0)`);
+  }
+  for(const offset of [0,.15,.3])assert.equal((await straightRun('miss',offset)).knocked,0,`a pass with 25 cm to spare (${offset}) is not a hit`);
+});
+
+test('a car struck on a bridge deck rolls on its tyres and stays on the deck',async()=>{
+  for(const offset of [0,.2]){
+    const r=await straightRun('t',offset,true);
+    assert.ok(r.knocked===1&&r.moved>1.5,`the struck car is shoved across the deck (${r.moved.toFixed(1)} m before the parapet)`);
+    assert.ok(r.tyreFriction,'upright on the deck counts as on the road, so its tyre model runs instead of the scrape friction');
+    assert.ok(r.minY>7.5,`the parapet keeps it on the deck (lowest centre ${r.minY.toFixed(2)} m)`);
+  }
+});
+
 test('a settled car waits while the player sits in its way back, rejoins once they leave, and respawns elsewhere when a wall blocks the way',async()=>{
   for(const obstruction of ['player','wall']){
     const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);

@@ -7,7 +7,7 @@ import type { VehicleSurface, VehicleStyle } from '../render/car.ts';
 import { sampleElevation } from './terrain.ts';
 import { pointInside } from './roads.ts';
 import { coverageTester } from './coverage.ts';
-import { sampleRoadElevation,roadNormal,roadRotation } from './road-surfaces.ts';
+import { sampleRoadElevation,roadNormal,roadRotation,sampleDriveSurface } from './road-surfaces.ts';
 import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
@@ -23,6 +23,9 @@ const COUNT = 64;
 export const TRAFFIC_CAR_MASS = 1350;
 /** Closing speed (m/s) at which a touch becomes a knock rather than a nudge. */
 export const KNOCK_SPEED = 1.2;
+/** How far ahead (s) a striker is swept against lane keepers, so a struck car turns
+ * dynamic before the contact step instead of after it: two and a half 60 Hz steps. */
+export const KNOCK_LOOKAHEAD = 2.5/60;
 /** How a struck car moves once Rapier has resolved the hit. Box-on-road friction
  * (averaged with the road's 1.0) would stop it at about 1 g in every direction and
  * wipe out its spin within a tenth of a second, so while it is upright on the road
@@ -336,10 +339,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     actor.body.setLinvel({x:0,y:0,z:0},true);actor.body.setAngvel({x:0,y:0,z:0},true);
   }
   const tyreQ=new THREE.Quaternion(),tyreForward=new THREE.Vector3(),tyreRight=new THREE.Vector3();
-  /** Wheel forces for a knocked car that is upright on the road, applied at both
+  /** Wheel forces for a knocked car that is upright on the road (or a bridge deck), applied at both
    * axles so a sideways slide also brakes its spin as real tyres do. */
   function tyreGrip(actor:Actor,dt:number){
-    const r=actor.body.rotation(),t=actor.body.translation(),upright=1-2*(r.x*r.x+r.z*r.z)>.7&&t.y-sampleElevation(city,t.x,t.z)<1.1;
+    const r=actor.body.rotation(),t=actor.body.translation(),upright=1-2*(r.x*r.x+r.z*r.z)>.7&&t.y-sampleDriveSurface(city,t.x,t.z,t.y).height<1.1;
     actor.collider.setFriction(upright?KNOCKED.friction:KNOCKED.scrape);if(!upright)return;
     tyreQ.set(r.x,r.y,r.z,r.w);tyreForward.set(0,0,1).applyQuaternion(tyreQ);tyreRight.set(1,0,0).applyQuaternion(tyreQ);
     const m=TRAFFIC_CAR_MASS/2,g=9.81,along=elapsed-actor.knocked!.since>KNOCKED.brakeAfter?KNOCKED.braking:KNOCKED.rolling;
@@ -350,12 +353,25 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       actor.body.applyImpulseAtPoint({x:tyreForward.x*jl+tyreRight.x*js,y:0,z:tyreForward.z*jl+tyreRight.z*js},point,true);
     }
   }
-  /** Knock every lane keeper the player (or an already knocked car) is pushing into. */
+  /** Knock every lane keeper the player (or an already knocked car) is pushing into
+   * or will reach within KNOCK_LOOKAHEAD. Rapier lists a contact pair only after the
+   * step that brings two shapes together, so without the sweep a fast hit often
+   * lands on the still-kinematic car: the striker stops dead and the struck car,
+   * knocked a step later, is left with nothing to carry. */
   function detectKnocks(){
-    const struck:Actor[]=[],pv=physics.body.linvel();
+    const struck=new Set<Actor>(),pv=physics.body.linvel(),lane={x:0,y:0,z:0};
     const closing=(v:{x:number;z:number},actor:Actor)=>Math.hypot(v.x-Math.sin(actor.yaw)*actor.speed,v.z-Math.cos(actor.yaw)*actor.speed);
-    physics.world.contactPairsWith(physics.chassisCollider,other=>{const actor=byCollider.get(other.handle);if(actor&&!actor.knocked&&closing(pv,actor)>KNOCK_SPEED)struck.push(actor);});
-    for(const actor of actors)if(actor.knocked){const v=actor.body.linvel();physics.world.contactPairsWith(actor.collider,other=>{const hit=byCollider.get(other.handle);if(hit&&!hit.knocked&&closing(v,hit)>KNOCK_SPEED+.3)struck.push(hit);});}
+    const sweep=(collider:RAPIER.Collider,v:RAPIER.Vector,threshold:number,self?:Actor)=>{
+      const p=collider.translation();
+      physics.world.contactPairsWith(collider,other=>{const hit=byCollider.get(other.handle);if(hit&&!hit.knocked&&closing(v,hit)>threshold)struck.add(hit);});
+      for(const hit of actors){
+        if(hit===self||hit.knocked||struck.has(hit)||Math.hypot(hit.x-p.x,hit.z-p.z)>15||closing(v,hit)<=threshold)continue;
+        lane.x=Math.sin(hit.yaw)*hit.speed;lane.z=Math.cos(hit.yaw)*hit.speed;
+        if(collider.castCollider(v,hit.collider,lane,.05,KNOCK_LOOKAHEAD,true))struck.add(hit);
+      }
+    };
+    sweep(physics.chassisCollider,pv,KNOCK_SPEED);
+    for(const actor of actors)if(actor.knocked)sweep(actor.collider,actor.body.linvel(),KNOCK_SPEED+.3,actor);
     for(const actor of struck)knock(actor);
   }
   /** Route distance of the lane point nearest to where the car now lies, within 90 m. */
