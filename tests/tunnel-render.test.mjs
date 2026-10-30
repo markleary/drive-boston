@@ -10,18 +10,24 @@ const road={id:'test-mainline',name:'Central Artery Northbound',points:[[0,0],[0
 const city={roads:[road],bounds:{minX:-200,maxX:200,minZ:-200,maxZ:300},buildings:[],landmarks:[],curbs:[],signals:[],spawn:{x:0,z:0,yaw:0}};
 function dispose(group){const materials=new Set(),textures=new Set();group.traverse(o=>{o.geometry?.dispose();for(const m of Array.isArray(o.material)?o.material:o.material?[o.material]:[])materials.add(m);});for(const m of materials){for(const value of Object.values(m))if(value?.isTexture)textures.add(value);m.dispose();}for(const t of textures)t.dispose();}
 
-test('tunnel render preserves the collision shell, closure and black terminal',()=>{
+test('tunnel render preserves the collision shell and closure while the scenery continues into darkness',()=>{
   const scene=new THREE.Scene(),view=addTunnels(scene,city),physical=tunnelGeometry(city,road);
   try{
-    for(const [label,key]of [['tile walls','walls'],['ceiling','roof'],['concrete closure','barriers'],['black void','caps']]){
+    for(const [label,key]of [['tile walls','walls'],['ceiling','roof'],['concrete closure','barriers']]){
       const object=view.group.getObjectByName(`${road.name} ${label}`);assert.ok(object,`${label} is visible`);
       assert.deepEqual(object.geometry.attributes.position.array,physical[key].vertices,`${label} matches the collider`);
       assert.deepEqual(object.geometry.index.array,physical[key].indices);
     }
-    const back=view.group.getObjectByName(`${road.name} black void`);assert.equal(back.material.color.getHex(),0);assert.equal(back.material.fog,false,'distance haze cannot wash out the black void');
-    assert.equal(view.group.userData.closures,1);assert.ok(view.group.getObjectByName('Boston Lure easter egg'));
+    assert.ok(physical.caps.indices.length,'the existing physical end cap stays intact behind the barrier');
+    assert.equal(view.group.getObjectByName(`${road.name} black void`),undefined,'no flat black plane remains at the road endpoint');
+    assert.equal(view.group.userData.closures,1);assert.ok(view.group.getObjectByName('Beware of Falling Ceiling Tiles'));
+    const extension=view.group.getObjectByName(`${road.name} unlit continuation`);assert.ok(extension);assert.equal(extension.userData.length,90);
+    view.group.updateMatrixWorld(true);
+    const forward=new THREE.Raycaster(new THREE.Vector3(0,-6,221),new THREE.Vector3(0,0,1),0,100).intersectObject(extension,true);
+    assert.equal(forward[0]?.object.name,'Distant tunnel darkness');assert.ok(forward[0].distance>85,'the vanishing passage has real depth beyond the barrier');
+    const back=extension.getObjectByName('Distant tunnel darkness');assert.equal(back.material.fog,false,'daylight haze cannot brighten the distant darkness');
     let count=0;view.group.traverse(o=>{if(o.isMesh){count++;const p=o.geometry.attributes.position;assert.ok(Array.from(p.array).every(Number.isFinite));}});
-    assert.ok(count<35,`fixtures should be spatially batched, got ${count} meshes`);
+    assert.ok(count<40,`fixtures should be spatially batched, got ${count} meshes`);
   }finally{dispose(view.group);}
 });
 
