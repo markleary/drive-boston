@@ -111,6 +111,15 @@ test('Bothwell Road\'s crosswalk stays on its own roadway beside Faneuil Street 
   const present=new Set([...tile.pavements,...tile.borderPavements].map(p=>p.road));assert.ok(present.has('7735-0-0')&&present.has('14199-0-0'),'with both neighbouring records present in the tile');
 });
 
+test('Highland Avenue\'s border record follows the station the renderer walks to, not one extrapolated along a short first segment',{skip:!hasMetroData()},async()=>{
+  // osm-170502324-0 starts with a 1.2 m segment at a bend; 8 m along the line the westbound carriageway osm-170502325-0 (owned by tile -4_-6) adjoins its roadway, so tile -4_-5 needs that record as a border copy.
+  const city=await loadMetroCity({bounds:{minX:-3900,maxX:-3500,minZ:-5200,maxZ:-4800}}),road=city.roads.find(r=>r.id==='osm-170502324-0'),tile=city.loadedTiles.get('-4_-5'),record=tile.pavements.find(p=>p.road===road.id);
+  assert.ok(road&&record&&Math.hypot(road.points[1][0]-road.points[0][0],road.points[1][1]-road.points[0][1])<2,'the eastbound carriageway with a short first segment, owned by tile -4_-5');
+  assert.ok(!tile.pavements.some(p=>p.road==='osm-170502325-0')&&tile.borderPavements.some(p=>p.road==='osm-170502325-0'),'the westbound record reaches the tile as a border record');
+  const {at,tx,tz}=stationAlong(road.points,8),edges=pavementEdges(tile,record),own=pavementSpan(edges,at,tx,tz),whole=roadwaySpan(own,[...tile.pavements,...tile.borderPavements].map(p=>pavementEdges(tile,p)),at,tx,tz);
+  assert.ok(whole[0]<own[0]-4&&whole[1]===own[1],`the crosswalk grows across the westbound carriageway (${own} -> ${whole})`);
+});
+
 test('Edwin H. Land Boulevard crosswalks span the carriageway another tile owns through its border record',{skip:!hasMetroData()},async()=>{
   // Northbound osm-426646441-0 (midpoint in tile -1_-2) and southbound osm-8615699-0 (midpoint in tile 0_-2) share the roadway where it crosses the tile line at x=0.
   const city=await loadMetroCity({bounds:{minX:-200,maxX:200,minZ:-2100,maxZ:-1800}}),north=city.loadedTiles.get('-1_-2'),south=city.loadedTiles.get('0_-2');
