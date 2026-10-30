@@ -71,14 +71,19 @@ test('the Brookline Avenue island keeps its lawn and loses the curbs of the road
   assert.ok(walks.some(r=>contains([-2317.86,829.61],r)),'a sidewalk strip remains along Brookline Avenue');
 });
 
-test('Riverway northbound keeps its nominal width where its centerline runs inside the splitter island, and its crosswalk spans both carriageways',{skip:!hasMetroData()},async()=>{
-  const city=await loadMetroCity({bounds:{minX:-2600,maxX:-2300,minZ:650,maxZ:850}}),road=city.roads.find(r=>r.id==='28373-0-0');
-  assert.ok(road&&road.pavedWidth===undefined,'no measured width: most of its stations lie inside the park');
-  const tile=city.loadedTiles.get('-3_0'),record=tile.pavements.find(p=>p.road===road.id),edges=pavementEdges(tile,record);
-  const a=road.points[0],b=road.points[1],len=Math.hypot(b[0]-a[0],b[1]-a[1]),tx=(b[0]-a[0])/len,tz=(b[1]-a[1])/len;
-  const inside=pavementSpan(edges,[a[0]+tx*30,a[1]+tz*30],tx,tz);assert.ok(inside&&Math.abs(inside[0]+5)<.3&&Math.abs(inside[1]-5)<.3,`the nominal 10 m inside the island, not 17 m across it (${inside})`);
-  const at=[a[0]+tx*8,a[1]+tz*8],own=pavementSpan(edges,at,tx,tz),whole=roadwaySpan(own,tile.pavements.map(p=>pavementEdges(tile,p)),at,tx,tz);
-  assert.ok(own[1]-own[0]<13&&whole[1]-whole[0]>18,`the crosswalk grows from the record (${own}) across the southbound carriageway (${whole})`);
+test('Riverway northbound was moved out of the splitter island onto the roadway, is measured from the island curb, and its crosswalk spans both carriageways',{skip:!hasMetroData()},async()=>{
+  const city=await loadMetroCity({bounds:{minX:-2600,maxX:-2300,minZ:650,maxZ:850}}),road=city.roads.find(r=>r.id==='28373-0-0'),island=city.parks.find(p=>p.name==='Riverway II');
+  assert.ok(road&&island,'the northbound carriageway and the splitter island');
+  // Boston Segments drew this line 1.5 m inside the island; the installer moved its interior onto the roadway, a lane beyond the island curb, with the endpoints fixed.
+  assert.ok(road.sourcePoints&&road.sourcePoints.length>=2&&road.points.some((p,i)=>!road.sourcePoints[i]||p[0]!==road.sourcePoints[i][0]||p[1]!==road.sourcePoints[i][1]),'the installer kept the source line beside the moved one');
+  assert.deepEqual([road.points[0],road.points[road.points.length-1]],[road.sourcePoints[0],road.sourcePoints[road.sourcePoints.length-1]],'the junction ends stay');
+  assert.deepEqual(road.points[0].map(Math.round),[-2524,787],'it starts at the Longwood junction');
+  const along=t=>{let left=t;for(let i=1;i<road.points.length;i++){const [x0,z0]=road.points[i-1],[x1,z1]=road.points[i],l=Math.hypot(x1-x0,z1-z0);if(left<=l)return{at:[x0+(x1-x0)*left/l,z0+(z1-z0)*left/l],tx:(x1-x0)/l,tz:(z1-z0)/l};left-=l;}return undefined;};
+  for(const s of [30,60,90])assert.ok(!pointInside(along(s).at,island.rings[0]),`the moved centerline at ${s} m runs outside the island`);
+  const tile=city.loadedTiles.get('-3_0'),record=tile.pavements.find(p=>p.road===road.id),edges=pavementEdges(tile,record),mid=along(30),inside=pavementSpan(edges,mid.at,mid.tx,mid.tz);
+  assert.ok(inside&&inside[0]<-2&&inside[1]>2&&inside[1]-inside[0]<16,`measured from the island curb across the roadway around the moved line (${inside})`);
+  const foot=along(8),own=pavementSpan(edges,foot.at,foot.tx,foot.tz),whole=roadwaySpan(own,tile.pavements.map(p=>pavementEdges(tile,p)),foot.at,foot.tx,foot.tz);
+  assert.ok(whole[1]-whole[0]>own[1]-own[0]+4&&whole[1]-whole[0]>18,`the crosswalk at the nose grows from the record (${own}) across the southbound carriageway (${whole})`);
 });
 
 test('Edwin H. Land Boulevard crosswalks span the carriageway another tile owns through its border record',{skip:!hasMetroData()},async()=>{
