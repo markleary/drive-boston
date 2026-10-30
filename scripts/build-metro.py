@@ -693,6 +693,7 @@ PLACES=[
  ('state-house','Massachusetts State House',-71.0638351,42.358597,'Beacon Hill · gold dome above Boston Common'),
  ('downtown-crossing','Downtown Crossing',-71.0604,42.3555,'Downtown · Washington and Summer streets'),
  ('chinatown-gate','Chinatown Gate',-71.0597,42.3512,'Chinatown · Beach Street and Hudson Street'),
+ ('south-station','South Station',-71.055242,42.352271,'Downtown · granite railroad terminal of 1899 at Dewey Square'),
  ('boston-common','Boston Common',-71.0657,42.3553,'Historic central park · Tremont Street arrival'),
  ('public-garden','Public Garden',-71.0699,42.3541,'Lagoon, winding paths and formal gardens'),
  ('faneuil-hall','Faneuil Hall · Quincy Market',-71.0567,42.3601,'Downtown · the 1742 meeting hall and the granite market halls'),
@@ -741,7 +742,7 @@ PLACE_BUILDINGS={'symphony-hall':'BOS-383I7-LINV0-9U4AI'}
 FACADE_BUILDING_IDS=set(PLACE_BUILDINGS.values())
 # Arrivals that should frame a facade instead of stopping at the nearest kerb:
 # the carriageway to arrive on and the point (metres) to approach.
-ARRIVALS={'symphony-hall':('9276-0-0',[-893.5,909.3])}
+ARRIVALS={'symphony-hall':('9276-0-0',[-893.5,909.3]),'south-station':('16420-0-0',[1560,-297])}
 DETACHED={'maverick-square':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport','logan-airport':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport'}
 
 def build_landmarks(roads,buildings,grid,landmark_hits):

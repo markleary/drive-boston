@@ -20,9 +20,13 @@ def install(data_dir,identifiers):
  city_path=data_dir/'city.json';city=json.loads(city_path.read_text());keys=city['tiles']['keys']
  tiles={key:header(data_dir/'tiles'/f't_{key}.bin')['buildings'] for key in keys};buildings=[b for key in keys for b in tiles[key]]
  places=[p for p in metro.PLACES if p[0] in identifiers];missing=set(identifiers)-{p[0] for p in places};assert not missing,f'Not in PLACES: {sorted(missing)}'
+ # Landmark-tagged survey buildings name their destination as build_buildings' landmark_hits do.
+ hits={}
+ for b in buildings:
+  if b.get('landmark'):hits.setdefault(b['landmark'],b['id'])
  report={}
  for place in places:
-  entry=metro.place_landmark(place,city['roads'],buildings,{});assert entry.get('driveStart'),f'No safe arrival for {place[0]}'
+  entry=metro.place_landmark(place,city['roads'],buildings,hits);assert entry.get('driveStart'),f'No safe arrival for {place[0]}'
   landmarks=[l for l in city['landmarks'] if l['id']!=entry['id']];ids=[l['id'] for l in landmarks];order=[p[0] for p in metro.PLACES]
   predecessors=[ids.index(i) for i in order[:order.index(entry['id'])] if i in ids];at=max(predecessors)+1 if predecessors else len(ids)
   landmarks.insert(at,entry);city['landmarks']=landmarks;report[entry['id']]={'position':entry['position'],'driveStart':entry['driveStart'],'index':at}
