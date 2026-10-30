@@ -81,10 +81,22 @@ test('Riverway northbound keeps its nominal width where its centerline runs insi
   assert.ok(own[1]-own[0]<13&&whole[1]-whole[0]>18,`the crosswalk grows from the record (${own}) across the southbound carriageway (${whole})`);
 });
 
+test('Edwin H. Land Boulevard crosswalks span the carriageway another tile owns through its border record',{skip:!hasMetroData()},async()=>{
+  // Northbound osm-426646441-0 (midpoint in tile -1_-2) and southbound osm-8615699-0 (midpoint in tile 0_-2) share the roadway where it crosses the tile line at x=0.
+  const city=await loadMetroCity({bounds:{minX:-200,maxX:200,minZ:-2100,maxZ:-1800}}),north=city.loadedTiles.get('-1_-2'),south=city.loadedTiles.get('0_-2');
+  assert.ok(north.pavements.some(p=>p.road==='osm-426646441-0')&&south.pavements.some(p=>p.road==='osm-8615699-0'),'each tile owns one carriageway');
+  assert.ok(!north.pavements.some(p=>p.road==='osm-8615699-0')&&north.borderPavements.some(p=>p.road==='osm-8615699-0'),'the southbound record reaches the northbound tile as a border record');
+  assert.ok(south.borderPavements.some(p=>p.road==='osm-426646441-0'),'and the other way round');
+  const road=city.roads.find(r=>r.id==='osm-426646441-0'),record=north.pavements.find(p=>p.road===road.id),edges=pavementEdges(north,record);
+  const b=road.points[road.points.length-1],a=road.points[road.points.length-2],len=Math.hypot(b[0]-a[0],b[1]-a[1]),tx=(a[0]-b[0])/len,tz=(a[1]-b[1])/len,at=[b[0]+tx*8,b[1]+tz*8];
+  const own=pavementSpan(edges,at,tx,tz),alone=roadwaySpan(own,north.pavements.map(p=>pavementEdges(north,p)),at,tx,tz),whole=roadwaySpan(own,[...north.pavements,...north.borderPavements].map(p=>pavementEdges(north,p)),at,tx,tz);
+  assert.ok(whole[1]-whole[0]>alone[1]-alone[0]+5,`the crosswalk at the far end grows across the southbound carriageway only with the border record (${alone} -> ${whole})`);
+});
+
 test('the shipped package carries curb-bounded roadways, inventory sidewalks, islands and driveways',{skip:!hasMetroData()},async()=>{
   const city=await loadMetroCity({bounds:{minX:-2500,maxX:-1500,minZ:600,maxZ:1500}}),roadsById=new Map();
   for(const road of city.roads)roadsById.set(road.id,[...roadsById.get(road.id)??[],road]);
-  let records=0,sidewalks=0,bricks=0,islands=0,driveways=0,mfa=false;
+  let records=0,sidewalks=0,bricks=0,islands=0,driveways=0,borders=0,mfa=false;
   for(const [key,tile] of city.loadedTiles){
     const x0=tile.tx*tile.size,z0=tile.tz*tile.size,inside=([x,z])=>x>=x0&&x<x0+tile.size&&z>=z0&&z<z0+tile.size;
     const owned=city.roads.filter(r=>!r.elevations&&!r.tunnel&&inside(roadMidpoint(r)));
@@ -106,6 +118,7 @@ test('the shipped package carries curb-bounded roadways, inventory sidewalks, is
       const cx=rings[0].reduce((s,p)=>s+p[0],0)/rings[0].length,cz=rings[0].reduce((s,p)=>s+p[1],0)/rings[0].length;
       for(const road of city.roads)for(const p of road.points)if(Math.hypot(p[0]-cx,p[1]-cz)<30)assert.ok(!pointInside(p,rings[0]),`${key}: island holds no street vertex of ${road.name}`);
     }
+    for(const record of tile.borderPavements){assert.ok(!tile.pavements.some(p=>p.road===record.road)&&roadsById.has(record.road),`border record ${record.road} belongs to another tile`);borders++;}
     for(const rings of tile.driveways){
       assert.ok(rings[0].length>=3);driveways++;
       // The driveway loop at the MFA's Fenway entrance: curbed, inside the park polygon, an OSM service way but no centerline.
@@ -114,7 +127,7 @@ test('the shipped package carries curb-bounded roadways, inventory sidewalks, is
       for(const p of rings[0])assert.ok(p[0]>=x0-.01&&p[0]<=x0+tile.size+.01&&p[1]>=z0-.01&&p[1]<=z0+tile.size+.01,`${key}: driveway part stays inside its tile`);
     }
   }
-  assert.ok(records>500&&sidewalks>500&&bricks>0&&islands>5&&driveways>5,`Fenway window: ${records} roadways, ${sidewalks} sidewalks (${bricks} brick), ${islands} islands, ${driveways} driveways`);
+  assert.ok(records>500&&sidewalks>500&&bricks>0&&islands>5&&driveways>5&&borders>0,`Fenway window: ${records} roadways, ${sidewalks} sidewalks (${bricks} brick), ${islands} islands, ${driveways} driveways, ${borders} border records`);
   assert.ok(mfa,'the MFA Fenway pull-off is paved');
   const ratios=city.roads.filter(r=>r.name==='Riverway'&&r.pavedWidth).map(r=>r.pavedWidth/r.width).sort((a,b)=>a-b);
   assert.ok(ratios.length>10&&ratios[ratios.length>>1]>1.3,'the Riverway parkway is much wider than its class guess');

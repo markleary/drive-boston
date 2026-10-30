@@ -15,7 +15,7 @@ export interface CityTile {
   tx: number; tz: number; size: number; key: string;
   buildings: TileBuilding[]; geometry: Map<string, TileBuildingGeometry>;
   curbs: Point2[][]; parks: CityArea[]; water: (CityArea & { level?: number })[]; parkPaths: ParkPath[]; roads: string[];
-  pavements: TilePavement[]; sidewalks: TileSidewalk[]; /** Closed curb faces filled with concrete (traffic islands, lane dividers, platforms). */ islands: Point2[][][];
+  pavements: TilePavement[]; /** Records of other tiles' roads that run alongside this tile's roads at their crosswalk stations, read by `roadwaySpan` only; the owning tile draws them. */ borderPavements: TilePavement[]; sidewalks: TileSidewalk[]; /** Closed curb faces filled with concrete (traffic islands, lane dividers, platforms). */ islands: Point2[][][];
   /** Closed curb faces an OSM service road or parking area explains (pull-offs, turnarounds, lots), filled with asphalt. */ driveways: Point2[][][];
 }
 export const TILE_SCALE = .01;
@@ -47,7 +47,7 @@ export function parseTile(buffer: ArrayBuffer): CityTile {
   }
   return { tx: header.tx, tz: header.tz, size: header.size, key: tileKey(header.tx, header.tz), buildings: header.buildings, geometry,
     curbs: header.curbs ?? [], parks: header.parks ?? [], water: header.water ?? [], parkPaths: header.parkPaths ?? [], roads: header.roads ?? [],
-    pavements: header.pavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [] };
+    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [] };
 }
 
 /** A pavement record's edges as world-metre left and right polylines. */

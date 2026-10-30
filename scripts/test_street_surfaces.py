@@ -148,21 +148,39 @@ class StaleTest(unittest.TestCase):
  def test_centerlines_inside_a_curbed_park_edge_keep_the_nominal_width(self):
   r=road('p',[[0,0],[100,0]],10);park=lambda z0,z1:[{'name':'Edge','rings':[[[-10,z0],[110,z0],[110,z1],[-10,z1]]]}]
   # The park's curbed edge 1.5 m from the centerline, the far curb 12 m away across the lawn: the station is inside the park with that near curb on its boundary.
-  edges=ss.cast_edges([r],[LineString([(0,-1.5),(100,-1.5)]),LineString([(0,12),(100,12)])]);masked=ss.mask_park_edges(edges,[r],park(-1.5,20))
-  self.assertEqual(masked,len(edges[ss.road_key(r)][0]));rec=ss.pavement_records([r],edges)[ss.road_key(r)];self.assertNotIn('pavedWidth',rec)
+  edges=ss.cast_edges([r],[LineString([(0,-1.5),(100,-1.5)]),LineString([(0,12),(100,12)])]);nominal=ss.mask_park_edges(edges,[r],park(-1.5,20))
+  self.assertEqual(int(nominal[ss.road_key(r)].sum()),len(edges[ss.road_key(r)][0]));rec=ss.pavement_records([r],edges,None,nominal)[ss.road_key(r)];self.assertNotIn('pavedWidth',rec)
   np.testing.assert_allclose(np.abs(rec['left'][:,1]),5,atol=.01);np.testing.assert_allclose(np.abs(rec['right'][:,1]),5,atol=.01)
   # A narrow one-way street a park polygon merely covers keeps its 4.4 m roadway: its curbs lie well inside the park.
-  edges=ss.cast_edges([r],[LineString([(0,-2.2),(100,-2.2)]),LineString([(0,2.2),(100,2.2)])]);self.assertEqual(ss.mask_park_edges(edges,[r],park(-10,20)),0)
+  edges=ss.cast_edges([r],[LineString([(0,-2.2),(100,-2.2)]),LineString([(0,2.2),(100,2.2)])]);self.assertEqual(ss.mask_park_edges(edges,[r],park(-10,20)),{})
   self.assertEqual(ss.pavement_records([r],edges)[ss.road_key(r)]['pavedWidth'],4.4)
-  edges=ss.cast_edges([r],[LineString([(0,-1.5),(100,-1.5)]),LineString([(0,12),(100,12)])]);self.assertEqual(ss.mask_park_edges(edges,[r],park(5,20)),0,'outside the park nothing changes')
+  edges=ss.cast_edges([r],[LineString([(0,-1.5),(100,-1.5)]),LineString([(0,12),(100,12)])]);self.assertEqual(ss.mask_park_edges(edges,[r],park(5,20)),{},'outside the park nothing changes')
+
+ def test_a_short_park_edge_section_ramps_to_nominal_instead_of_interpolating(self):
+  # A 14 m roadway whose centerline dips into a curbed park island for 20 m: the island edge 1.5 m away on one side, the far curb across the lawn on the other.
+  r=road('p',[[0,0],[100,0]],10);island=[{'name':'Island','rings':[[[40,-20],[60,-20],[60,1.5],[40,1.5]]]}]
+  curbs=[LineString([(0,7),(100,7)]),LineString([(0,-7),(100,-7)]),LineString([(40,1.5),(60,1.5)])]
+  edges=ss.cast_edges([r],curbs);nominal=ss.mask_park_edges(edges,[r],island);self.assertEqual(int(nominal[ss.road_key(r)].sum()),19)
+  rec=ss.pavement_records([r],edges,None,nominal)[ss.road_key(r)];at=lambda P,x:P[np.argmin(np.abs(P[:,0]-x))]
+  self.assertAlmostEqual(abs(at(rec['left'],50)[1]),5,delta=.01);self.assertAlmostEqual(abs(at(rec['right'],50)[1]),5,delta=.01)
+  self.assertAlmostEqual(abs(at(rec['left'],20)[1]),7,delta=.01);self.assertAlmostEqual(abs(at(rec['right'],80)[1]),7,delta=.01)
+  plain=ss.pavement_records([r],edges)[ss.road_key(r)];self.assertAlmostEqual(abs(at(plain['right'],50)[1]),7,delta=.01,msg='without the mask the 20 m gap is interpolated from the 7 m neighbours')
+
+ def test_border_records_copy_a_neighbouring_carriageway_across_the_tile_line(self):
+  # Two one-way carriageways 9 m apart crossing x=1000; each tile owns one midpoint, and each crosswalk station (8 m from an end) looks across the other's edges.
+  a=road('a',[[900,0],[1100,0]],10);b=road('b',[[1095,9],[905,9]],10);c=road('c',[[500,500],[600,500]],10);d=road('d',[[880,-40],[960,40]],10)
+  roads=[a,b,c,d];edges=ss.cast_edges(roads,[]);records=ss.pavement_records(roads,edges);owner={ss.road_key(a):'0_0',ss.road_key(b):'1_0',ss.road_key(c):'0_0',ss.road_key(d):'1_0'}
+  borders=ss.border_records(roads,records,owner)
+  self.assertEqual({k:[r['id'] for r,_ in v] for k,v in borders.items()},{'0_0':['b'],'1_0':['a']},'c is far from every other record; d crosses the across line of a\'s first crosswalk at 45 degrees rather than running alongside')
+  owner[ss.road_key(b)]='0_0';self.assertEqual(ss.border_records(roads,records,owner),{},'records of the same tile need no copy')
 
 
 class InstallTest(unittest.TestCase):
  def test_install_is_idempotent_and_measures_the_roadway(self):
   with tempfile.TemporaryDirectory() as temporary:
    data=pathlib.Path(temporary);source=data/'source';source.mkdir();(data/'tiles').mkdir()
-   roads=[road('b-1',[[100,500],[900,500]],10,'Boston Street'),road('osm-1-0',[[1100,100],[1100,900]],8,'Town Street'),road('osm-2-0',[[1010,500],[1190,500]],8,'Cross Street'),road('deck',[[100,100],[400,100]],10,'Deck')]
-   roads[3]['elevations']=[8,8]
+   roads=[road('b-1',[[100,500],[990,500]],10,'Boston Street'),road('osm-1-0',[[1100,100],[1100,900]],8,'Town Street'),road('osm-2-0',[[1010,500],[1190,500]],8,'Cross Street'),road('osm-3-0',[[1150,530],[950,530]],8,'Boston Street'),road('deck',[[100,100],[400,100]],10,'Deck')]
+   roads[4]['elevations']=[8,8]
    city={'roads':roads,'neighborhoods':[{'name':'Boston','rings':[[[0,0],[1000,0],[1000,1000],[0,1000]]],'town':False},{'name':'Town','rings':[[[1000,0],[2000,0],[2000,1000],[1000,1000]]],'town':True}],'coverage':[[[0,0],[2000,0],[2000,1000],[0,1000]]],'parks':[{'name':'Old Loop','rings':[[[100,650],[400,650],[400,750],[100,750]]]}],'sources':[],'tiles':{'size':1000,'directory':'tiles','keys':['0_0','1_0']}}
    (data/'city.json').write_text(json.dumps(city));(data/'provenance.json').write_text('{}')
    legacy=ss.legacy_town_curbs(roads,{'Town':Polygon(city['neighborhoods'][1]['rings'][0])})
@@ -170,7 +188,7 @@ class InstallTest(unittest.TestCase):
    # Two curbs 200 m from any street: the one in the park is a removed roadway's remnant, the other is kept.
    curbs0=[[[0,493],[1000,493]],[[0,507],[400,507],[400,512],[403,512],[403,507],[1000,507]],rect_curb(500,520,520,530),rect_curb(600,520,640,530),[[150,700],[350,700]],[[600,700],[800,700]]]
    write_tile(data/'tiles/t_0_0.bin',{'tx':0,'tz':0,'size':1000,'buildings':[],'curbs':curbs0,'parkPaths':[],'roads':['b-1','deck']},[])
-   write_tile(data/'tiles/t_1_0.bin',{'tx':1,'tz':0,'size':1000,'buildings':[],'curbs':[c for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))],'parkPaths':[],'roads':['osm-1-0','osm-2-0']},[])
+   write_tile(data/'tiles/t_1_0.bin',{'tx':1,'tz':0,'size':1000,'buildings':[],'curbs':[c for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))],'parkPaths':[],'roads':['osm-1-0','osm-2-0','osm-3-0']},[])
    # The inventory: a concrete sidewalk along the street, and the 3 m strip that followed the removed roadway's curb through the park.
    (source/'layer-0.json').write_text(json.dumps({'features':[{'attributes':{'MATERIAL':'CC'},'geometry':{'rings':[[[0,493],[0,490],[1000,490],[1000,493],[0,493]]]}},{'attributes':{'MATERIAL':'CC','SWK_WIDTH':'9.8'},'geometry':{'rings':[[[150,703],[150,700],[350,700],[350,703],[150,703]]]}}]}))
    (source/'layer-6.json').write_text(json.dumps({'features':[{'attributes':{'TYPE':'CURB'},'geometry':{'paths':curbs0}}]}))
@@ -182,6 +200,7 @@ class InstallTest(unittest.TestCase):
    self.assertEqual({**first,'changedTiles':0},second,'the rerun finds the same stale stretches on the raw survey');self.assertEqual(first['changedTiles'],2)
    header=ss.unpack(data/'tiles/t_0_0.bin')[0];record=next(p for p in header['pavements'] if p['road']=='b-1')
    self.assertEqual([p['road'] for p in header['pavements']],['b-1'],'decks keep their ribbons');self.assertEqual(record['walk'],[0,1])
+   self.assertEqual([p['road'] for p in header['borderPavements']],['osm-3-0'],'the other carriageway, owned across the tile line, runs alongside the Boston Street crosswalk station; the Cross Street continuation does not');self.assertEqual(first['borderPavements'],2)
    self.assertEqual(first['staleCurbs'],1);self.assertEqual(first['staleCurbMetres'],200);self.assertNotIn([[150,700],[350,700]],header['curbs']);self.assertIn([[600,700],[800,700]],header['curbs'],'beyond reach but outside parkland')
    self.assertEqual(first['staleSidewalks'],1);self.assertTrue(all(max(z for x,z in w['rings'][0])<600 for w in header['sidewalks']),'the removed roadway\'s sidewalk strip goes with its curb');self.assertEqual(first['parkEdgeStations'],0)
    edges=np.array(record['edges']).reshape(-1,4)/100;np.testing.assert_allclose(edges[:,1],507,atol=.011);np.testing.assert_allclose(edges[:,3],493,atol=.011)
@@ -190,10 +209,10 @@ class InstallTest(unittest.TestCase):
    self.assertEqual(len(header['driveways']),1);self.assertAlmostEqual(Polygon(header['driveways'][0][0]).area,400+13.5*ss.SERVICE_WIDTH,delta=.01);self.assertEqual(first['driveways'],1);self.assertEqual(first['pavedFaces'],1)
    installed=json.loads((data/'city.json').read_text());self.assertEqual(next(r for r in installed['roads'] if r['id']=='b-1')['pavedWidth'],14)
    self.assertEqual([s['name'] for s in installed['sources']],['Boston Sidewalk Inventory','OpenStreetMap service roads and parking areas (driveway fills)'])
-   town=ss.unpack(data/'tiles/t_1_0.bin')[0];self.assertFalse({json.dumps(c) for c in town['curbs']}&{json.dumps(c) for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))},'legacy mitred curbs are replaced')
-   self.assertEqual(len(town['curbs']),first['townCurbs']);self.assertGreater(len(town['curbs']),0)
+   town=ss.unpack(data/'tiles/t_1_0.bin')[0];self.assertEqual([p['road'] for p in town['borderPavements']],['b-1']);self.assertEqual(town['borderPavements'][0]['edges'][0],-90000,'border edges are centimetres from this tile\'s origin');self.assertFalse({json.dumps(c) for c in town['curbs']}&{json.dumps(c) for curb in legacy for c in ss.clip_line(curb,ss.box(1000,0,2000,1000))},'legacy mitred curbs are replaced')
+   self.assertEqual(first['townCurbs'],len(town['curbs'])+len([c for c in header['curbs'] if min(x for x,z in c)>=940]),'the west end of the second carriageway puts its fillets in the Boston tile');self.assertGreater(len(town['curbs']),0)
    self.assertEqual(first['surveyCurbs']+first['townCurbs'],len(header['curbs'])+len(town['curbs']),'the two counts partition the curbs in the tiles')
-   provenance=json.loads((data/'provenance.json').read_text());self.assertEqual(provenance['streetSurfaces']['measuredRoads'],3,'the Boston street and both town streets')
+   provenance=json.loads((data/'provenance.json').read_text());self.assertEqual(provenance['streetSurfaces']['measuredRoads'],4,'the Boston street and the three town streets')
 
 
 if __name__=='__main__':unittest.main()

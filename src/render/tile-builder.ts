@@ -175,7 +175,7 @@ export function createTileBuilder(ctx: TileContext) {
         drapedStripInto(sink, city, left, right, y);
         if (sink instanceof IndexedSurfaceWriter) sink.clearLookup();
       };
-      const pavements = new Map<string, TilePavement[]>(), allEdges = tile.pavements.map(p => pavementEdges(tile, p));
+      const pavements = new Map<string, TilePavement[]>(), allEdges = [...tile.pavements, ...tile.borderPavements].map(p => pavementEdges(tile, p));
       for (const p of tile.pavements) { const list = pavements.get(p.road); if (list) list.push(p); else pavements.set(p.road, [p]); }
       // A few town ways share an id; the record starting nearest the road's first point is its own.
       const pavementOf = (road: Road) => {
