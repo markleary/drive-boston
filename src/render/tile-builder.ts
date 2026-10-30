@@ -7,7 +7,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
-import { pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
+import { pavementEdges, pavementSpan, type TilePavement } from '../simulation/tile-format.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
@@ -186,9 +186,9 @@ export function createTileBuilder(ctx: TileContext) {
       for (const road of ownedRoads) {
         if (road.elevations) continue; stats.roads++;
         if (due(pace)) yield 'roads';
-        const pavement = pavementOf(road), width = road.pavedWidth ?? road.width;
-        if (pavement && pavement.edges.length >= 8) {
-          const { left, right } = pavementEdges(tile, pavement);
+        const pavement = pavementOf(road), width = road.pavedWidth ?? road.width, edges = pavement && pavement.edges.length >= 8 ? pavementEdges(tile, pavement) : undefined;
+        if (pavement && edges) {
+          const { left, right } = edges;
           if (!pavement.walk?.[0]) strip(materials.sidewalk, band(left, right), left, .012);
           if (!pavement.walk?.[1]) strip(materials.sidewalk, right, band(right, left), .012);
           strip(materials.asphalt, left, right, .045);
@@ -207,8 +207,11 @@ export function createTileBuilder(ctx: TileContext) {
           const len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 18) continue;
           const tx = (b[0] - a[0]) / len, tz = (b[1] - a[1]) / len, crossing = `${Math.round(a[0] / 3)},${Math.round(a[1] / 3)},${Math.round(Math.atan2(tx, tz) * 2)}`;
           if (crossingKeys.has(crossing)) continue; crossingKeys.add(crossing);
-          for (let side = -width / 2 + .8; side < width / 2 - .5; side += 1.35) {
-            const x = a[0] + tx * 8 - tz * side, z = a[1] + tz * 8 + tx * side;
+          // The stripes span the roadway measured at their own station, not the road-wide median width: Boylston
+          // Street's west end closes from 21.8 m to 14 m, and its east end sits 6 m off the centerline.
+          const at: Point2 = [a[0] + tx * 8, a[1] + tz * 8], [lo, hi] = (edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2];
+          for (let side = lo + .8; side < hi - .5; side += 1.35) {
+            const x = at[0] - tz * side, z = at[1] + tx * side;
             ribbon(materials.paint, [[x, z], [x + tx * 3, z + tz * 3]], .65, .068);
           }
         }

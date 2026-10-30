@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {TriangleWriter} from '../src/render/geometry-writer.ts';
 import {drapedStripInto,drapedRibbonInto} from '../src/render/terrain-ground.ts';
-import {pavementEdges} from '../src/simulation/tile-format.ts';
+import {pavementEdges,pavementSpan} from '../src/simulation/tile-format.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
 import {hasMetroData,loadMetroCity} from './helpers/metro-city.mjs';
@@ -12,6 +12,25 @@ const flat={bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},elevation:{width:3,he
 test('pavement edges decode from tile-origin centimetres',()=>{
   const {left,right}=pavementEdges({tx:2,tz:-1,size:1000},{road:'r',edges:[150,25,-120,75,1000,0,900,0,7]});
   assert.deepEqual(left,[[2001.5,-999.75],[2010,-1000]]);assert.deepEqual(right,[[1998.8,-999.25],[2009,-1000]]);
+});
+
+test('a crosswalk spans the pavement edges at its own station, wherever the centerline sits between them',()=>{
+  const edges={left:[[0,5],[20,5],[40,9]],right:[[0,-5],[20,-5],[40,-9]]};
+  assert.deepEqual(pavementSpan(edges,[10,0],1,0),[-5,5]);assert.deepEqual(pavementSpan(edges,[30,0],1,0),[-7,7]);
+  assert.deepEqual(pavementSpan(edges,[30,0],-1,0),[-7,7],'the same span seen from the far end');
+  assert.equal(pavementSpan(edges,[45,0],1,0),undefined,'no span beyond the recorded edges');
+  const offset={left:[[0,8],[40,8]],right:[[0,-2],[40,-2]]};
+  assert.deepEqual(pavementSpan(offset,[20,0],1,0),[-2,8]);assert.deepEqual(pavementSpan(offset,[20,0],-1,0),[-8,2],'offsets flip with the direction, lower first');
+});
+
+test('Boylston Street\'s crosswalks follow the curbs where the roadway narrows and shifts off the centerline',{skip:!hasMetroData()},async()=>{
+  const city=await loadMetroCity({bounds:{minX:0,maxX:1000,minZ:-1000,maxZ:0}}),road=city.roads.find(r=>r.id==='17569-0-0');
+  assert.ok(road&&road.pavedWidth>20,'the whole segment measures over 20 m');
+  const tile=city.loadedTiles.get('0_-1'),record=tile.pavements.find(p=>p.road===road.id);assert.ok(record,'tile 0_-1 owns the record');
+  const edges=pavementEdges(tile,record),span=(a,b)=>{const len=Math.hypot(b[0]-a[0],b[1]-a[1]),tx=(b[0]-a[0])/len,tz=(b[1]-a[1])/len;return pavementSpan(edges,[a[0]+tx*8,a[1]+tz*8],tx,tz);};
+  const west=span(road.points[0],road.points[1]),east=span(road.points.at(-1),road.points.at(-2));
+  assert.ok(west&&Math.abs(west[1]-west[0]-14)<.5,`the west crossing spans the 14 m roadway there (${west})`);
+  assert.ok(east&&east[1]-east[0]>19&&Math.abs(east[0]+east[1])>10,`the east crossing spans a 20 m roadway shifted off the centerline (${east})`);
 });
 
 test('a strip between measured edges covers the quads a ribbon would, following each edge',()=>{

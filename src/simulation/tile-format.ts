@@ -57,6 +57,22 @@ export function pavementEdges(tile: Pick<CityTile, 'tx' | 'tz' | 'size'>, paveme
   return { left, right };
 }
 
+/** Where a pavement's edges cross the perpendicular through `at`, a station along the unit direction (tx, tz):
+ * the signed offsets across that direction, lower first, or undefined where an edge does not reach the station. */
+export function pavementSpan(edges: { left: Point2[]; right: Point2[] }, at: Point2, tx: number, tz: number): [number, number] | undefined {
+  const across = (edge: Point2[]) => {
+    for (let i = 1; i < edge.length; i++) {
+      const s0 = (edge[i - 1][0] - at[0]) * tx + (edge[i - 1][1] - at[1]) * tz, s1 = (edge[i][0] - at[0]) * tx + (edge[i][1] - at[1]) * tz;
+      if ((s0 <= 0) === (s1 <= 0)) continue;
+      const t = s0 / (s0 - s1), x = edge[i - 1][0] + (edge[i][0] - edge[i - 1][0]) * t, z = edge[i - 1][1] + (edge[i][1] - edge[i - 1][1]) * t;
+      return (z - at[1]) * tx - (x - at[0]) * tz;
+    }
+    return undefined;
+  };
+  const l = across(edges.left), r = across(edges.right);
+  return l === undefined || r === undefined ? undefined : [Math.min(l, r), Math.max(l, r)];
+}
+
 /** Inflate a gzip-compressed tile or elevation file with the platform stream API. */
 export async function gunzip(buffer: ArrayBuffer): Promise<ArrayBuffer> {
   const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
