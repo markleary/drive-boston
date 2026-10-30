@@ -15,7 +15,7 @@ export interface CityTile {
   tx: number; tz: number; size: number; key: string;
   buildings: TileBuilding[]; geometry: Map<string, TileBuildingGeometry>;
   curbs: Point2[][]; parks: CityArea[]; water: (CityArea & { level?: number })[]; parkPaths: ParkPath[]; roads: string[];
-  pavements: TilePavement[]; sidewalks: TileSidewalk[]; /** Closed curb faces filled with concrete (traffic islands, lane dividers, platforms). */ islands: Point2[][][];
+  pavements: TilePavement[]; /** Records of other tiles' roads that run alongside this tile's roads at their crosswalk stations, read by `roadwaySpan` only; the owning tile draws them. */ borderPavements: TilePavement[]; sidewalks: TileSidewalk[]; /** Closed curb faces filled with concrete (traffic islands, lane dividers, platforms). */ islands: Point2[][][];
   /** Closed curb faces an OSM service road or parking area explains (pull-offs, turnarounds, lots), filled with asphalt. */ driveways: Point2[][][];
 }
 export const TILE_SCALE = .01;
@@ -47,7 +47,7 @@ export function parseTile(buffer: ArrayBuffer): CityTile {
   }
   return { tx: header.tx, tz: header.tz, size: header.size, key: tileKey(header.tx, header.tz), buildings: header.buildings, geometry,
     curbs: header.curbs ?? [], parks: header.parks ?? [], water: header.water ?? [], parkPaths: header.parkPaths ?? [], roads: header.roads ?? [],
-    pavements: header.pavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [] };
+    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [] };
 }
 
 /** A pavement record's edges as world-metre left and right polylines. */
@@ -57,20 +57,66 @@ export function pavementEdges(tile: Pick<CityTile, 'tx' | 'tz' | 'size'>, paveme
   return { left, right };
 }
 
+/** The crossing of an edge polyline with the perpendicular through `at`, a station along the unit direction (tx, tz),
+ * nearest to `at`: its signed offset across that direction and how closely the edge runs with the road there (|cos|). */
+function edgeCrossing(edge: Point2[], at: Point2, tx: number, tz: number): [number, number] | undefined {
+  let best: [number, number] | undefined;
+  for (let i = 1; i < edge.length; i++) {
+    const s0 = (edge[i - 1][0] - at[0]) * tx + (edge[i - 1][1] - at[1]) * tz, s1 = (edge[i][0] - at[0]) * tx + (edge[i][1] - at[1]) * tz;
+    if ((s0 <= 0) === (s1 <= 0)) continue;
+    const t = s0 / (s0 - s1), x = edge[i - 1][0] + (edge[i][0] - edge[i - 1][0]) * t, z = edge[i - 1][1] + (edge[i][1] - edge[i - 1][1]) * t, offset = (z - at[1]) * tx - (x - at[0]) * tz;
+    if (best && Math.abs(best[0]) <= Math.abs(offset)) continue;
+    const dx = edge[i][0] - edge[i - 1][0], dz = edge[i][1] - edge[i - 1][1], len = Math.hypot(dx, dz) || 1;
+    best = [offset, Math.abs(dx * tx + dz * tz) / len];
+  }
+  return best;
+}
+
 /** Where a pavement's edges cross the perpendicular through `at`, a station along the unit direction (tx, tz):
  * the signed offsets across that direction, lower first, or undefined where an edge does not reach the station. */
 export function pavementSpan(edges: { left: Point2[]; right: Point2[] }, at: Point2, tx: number, tz: number): [number, number] | undefined {
-  const across = (edge: Point2[]) => {
-    for (let i = 1; i < edge.length; i++) {
-      const s0 = (edge[i - 1][0] - at[0]) * tx + (edge[i - 1][1] - at[1]) * tz, s1 = (edge[i][0] - at[0]) * tx + (edge[i][1] - at[1]) * tz;
-      if ((s0 <= 0) === (s1 <= 0)) continue;
-      const t = s0 / (s0 - s1), x = edge[i - 1][0] + (edge[i][0] - edge[i - 1][0]) * t, z = edge[i - 1][1] + (edge[i][1] - edge[i - 1][1]) * t;
-      return (z - at[1]) * tx - (x - at[0]) * tz;
-    }
-    return undefined;
-  };
-  const l = across(edges.left), r = across(edges.right);
-  return l === undefined || r === undefined ? undefined : [Math.min(l, r), Math.max(l, r)];
+  const l = edgeCrossing(edges.left, at, tx, tz), r = edgeCrossing(edges.right, at, tx, tz);
+  return l === undefined || r === undefined ? undefined : [Math.min(l[0], r[0]), Math.max(l[0], r[0])];
+}
+
+/** `own` widened across the records of twin carriageways: a record whose edges run with the road at this station
+ * (alignment at least .8, a span under 40 m), overlaps or touches `own` within .5 m, and adds at most one roadway of
+ * the own width (plus 2 m) beyond it. Where two one-way centerlines share one roadway (the Riverway at Longwood,
+ * Huntington Avenue off the reservation, Edwin H. Land Boulevard) a crosswalk stripes the whole asphalt instead of
+ * stopping at the record of the road that owns it. A reservation or median wider than .5 m keeps the spans apart; a
+ * cross street's junction mouth, a much wider street running alongside, or a record touching only a widened span
+ * (Bothwell Road's start beside Faneuil and Arlington Streets) does not stretch the stripes. */
+export function roadwaySpan(own: [number, number], others: { left: Point2[]; right: Point2[] }[], at: Point2, tx: number, tz: number): [number, number] {
+  let [lo, hi] = own;
+  const allowance = own[1] - own[0] + 2;
+  for (const e of others) {
+    const l = edgeCrossing(e.left, at, tx, tz), r = edgeCrossing(e.right, at, tx, tz);
+    if (!l || !r || l[1] < .8 || r[1] < .8 || Math.abs(l[0] - r[0]) > 40) continue;
+    const s0 = Math.min(l[0], r[0]), s1 = Math.max(l[0], r[0]);
+    if (s0 > own[1] + .5 || s1 < own[0] - .5 || Math.max(0, own[0] - s0) + Math.max(0, s1 - own[1]) > allowance) continue;
+    lo = Math.min(lo, s0); hi = Math.max(hi, s1);
+  }
+  return [lo, hi];
+}
+
+/** The length of a polyline. */
+export function polylineLength(points: Point2[]): number {
+  let length = 0;
+  for (let i = 1; i < points.length; i++) length += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+  return length;
+}
+
+/** The point `distance` along a polyline from its first vertex and the unit direction of the segment it lies on, or
+ * undefined where the polyline is shorter: a crosswalk station on a line whose first segment is short (a moved park-edge
+ * centerline tapers through close vertices) follows the line instead of the first segment's bearing. */
+export function stationAlong(points: Point2[], distance: number): { at: Point2; tx: number; tz: number } | undefined {
+  let left = distance;
+  for (let i = 1; i < points.length; i++) {
+    const [x0, z0] = points[i - 1], [x1, z1] = points[i], l = Math.hypot(x1 - x0, z1 - z0);
+    if (left <= l && l > 0) return { at: [x0 + (x1 - x0) * left / l, z0 + (z1 - z0) * left / l], tx: (x1 - x0) / l, tz: (z1 - z0) / l };
+    left -= l;
+  }
+  return undefined;
 }
 
 /** Inflate a gzip-compressed tile or elevation file with the platform stream API. */

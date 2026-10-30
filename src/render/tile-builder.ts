@@ -7,7 +7,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
-import { pavementEdges, pavementSpan, type TilePavement } from '../simulation/tile-format.ts';
+import { pavementEdges, pavementSpan, polylineLength, roadwaySpan, stationAlong, type TilePavement } from '../simulation/tile-format.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
@@ -175,7 +175,7 @@ export function createTileBuilder(ctx: TileContext) {
         drapedStripInto(sink, city, left, right, y);
         if (sink instanceof IndexedSurfaceWriter) sink.clearLookup();
       };
-      const pavements = new Map<string, TilePavement[]>();
+      const pavements = new Map<string, TilePavement[]>(), allEdges = [...tile.pavements, ...tile.borderPavements].map(p => pavementEdges(tile, p));
       for (const p of tile.pavements) { const list = pavements.get(p.road); if (list) list.push(p); else pavements.set(p.road, [p]); }
       // A few town ways share an id; the record starting nearest the road's first point is its own.
       const pavementOf = (road: Road) => {
@@ -205,14 +205,17 @@ export function createTileBuilder(ctx: TileContext) {
           if (road.width >= 9) for (let d = 8; d < len - 7; d += 9) { const end = Math.min(d + 3, len - 7); ribbon(road.oneway ? materials.paint : materials.yellow, [[a[0] + tx * d, a[1] + tz * d], [a[0] + tx * end, a[1] + tz * end]], .12, .065); }
         }
         if (road.width < 7 || /alley|unnamed/i.test(road.name)) continue;
+        if (polylineLength(road.points) < 18) continue;
         for (const reverse of [false, true]) {
-          const a = road.points[reverse ? road.points.length - 1 : 0], b = road.points[reverse ? road.points.length - 2 : 1]; if (!b) continue;
-          const len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 18) continue;
-          const tx = (b[0] - a[0]) / len, tz = (b[1] - a[1]) / len, crossing = `${Math.round(a[0] / 3)},${Math.round(a[1] / 3)},${Math.round(Math.atan2(tx, tz) * 2)}`;
+          // The station sits 8 m along the line itself, so a moved park-edge centerline's short taper vertices do not
+          // skip the crosswalk or bend it off the roadway.
+          const a = road.points[reverse ? road.points.length - 1 : 0], station = stationAlong(reverse ? [...road.points].reverse() : road.points, 8); if (!station) continue;
+          const { at, tx, tz } = station, crossing = `${Math.round(a[0] / 3)},${Math.round(a[1] / 3)},${Math.round(Math.atan2(tx, tz) * 2)}`;
           if (crossingKeys.has(crossing)) continue; crossingKeys.add(crossing);
           // The stripes span the roadway measured at their own station, not the road-wide median width: Boylston
-          // Street's west end closes from 21.8 m to 14 m, and its east end sits 6 m off the centerline.
-          const at: Point2 = [a[0] + tx * 8, a[1] + tz * 8], [lo, hi] = (edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2];
+          // Street's west end closes from 21.8 m to 14 m, and its east end sits 6 m off the centerline. Records of twin
+          // carriageways sharing the asphalt there (a parkway's second one-way centerline) extend them across the whole roadway.
+          const [lo, hi] = roadwaySpan((edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2], allEdges, at, tx, tz);
           for (let side = lo + .8; side < hi - .5; side += 1.35) {
             const x = at[0] - tz * side, z = at[1] + tx * side;
             ribbon(materials.paint, [[x, z], [x + tx * 3, z + tz * 3]], .65, .068);
