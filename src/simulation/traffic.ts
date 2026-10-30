@@ -23,6 +23,14 @@ const COUNT = 64;
 export const TRAFFIC_CAR_MASS = 1350;
 /** Closing speed (m/s) at which a touch becomes a knock rather than a nudge. */
 export const KNOCK_SPEED = 1.2;
+/** How a struck car moves once Rapier has resolved the hit. Box-on-road friction
+ * (averaged with the road's 1.0) would stop it at about 1 g in every direction and
+ * wipe out its spin within a tenth of a second, so while it is upright on the road
+ * its box barely touches (`friction`) and `tyreGrip` stands in for the wheels:
+ * they roll freely (`rolling`, in g) until the shaken driver brakes (`braking`
+ * after `brakeAfter` s) and grip sideways up to `grip` g at each axle. On its roof
+ * or side it scrapes with ordinary friction. */
+export const KNOCKED = { friction: .05, scrape: .6, linearDamping: .05, angularDamping: .3, grip: .7, rolling: .03, braking: .5, brakeAfter: .8 };
 const LOCAL_RADIUS = 650;
 const distance = (a: Point2, b: Point2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
 
@@ -310,19 +318,37 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     }
   }
   /** A struck car becomes a sliding, spinning dynamic box of sedan mass, carrying
-   * its lane speed into the collision; its taller shape rests on the road. */
+   * its lane speed into the collision; its taller shape rests on the road. The
+   * Min combine rule keeps its own low friction against the road. */
   function knock(actor:Actor){
     if(actor.knocked)return;
     actor.knocked={since:elapsed,settled:0};actor.rejoin=undefined;
     actor.collider.setShape(new RAPIER.Cuboid(.85,.62,1.95));
+    actor.collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
     actor.body.setBodyType(RAPIER.RigidBodyType.Dynamic,true);
-    actor.body.setLinearDamping(.3);actor.body.setAngularDamping(1.2);
+    actor.body.setLinearDamping(KNOCKED.linearDamping);actor.body.setAngularDamping(KNOCKED.angularDamping);
     actor.body.setLinvel({x:Math.sin(actor.yaw)*actor.speed,y:0,z:Math.cos(actor.yaw)*actor.speed},true);actor.body.setAngvel({x:0,y:0,z:0},true);
   }
   function restore(actor:Actor){
     if(!actor.knocked)return;
     actor.knocked=undefined;actor.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased,true);actor.collider.setShape(new RAPIER.Cuboid(.85,.45,1.95));
+    actor.collider.setFriction(.5);actor.collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Average);
     actor.body.setLinvel({x:0,y:0,z:0},true);actor.body.setAngvel({x:0,y:0,z:0},true);
+  }
+  const tyreQ=new THREE.Quaternion(),tyreForward=new THREE.Vector3(),tyreRight=new THREE.Vector3();
+  /** Wheel forces for a knocked car that is upright on the road, applied at both
+   * axles so a sideways slide also brakes its spin as real tyres do. */
+  function tyreGrip(actor:Actor,dt:number){
+    const r=actor.body.rotation(),t=actor.body.translation(),upright=1-2*(r.x*r.x+r.z*r.z)>.7&&t.y-sampleElevation(city,t.x,t.z)<1.1;
+    actor.collider.setFriction(upright?KNOCKED.friction:KNOCKED.scrape);if(!upright)return;
+    tyreQ.set(r.x,r.y,r.z,r.w);tyreForward.set(0,0,1).applyQuaternion(tyreQ);tyreRight.set(1,0,0).applyQuaternion(tyreQ);
+    const m=TRAFFIC_CAR_MASS/2,g=9.81,along=elapsed-actor.knocked!.since>KNOCKED.brakeAfter?KNOCKED.braking:KNOCKED.rolling;
+    for(const arm of [1.33,-1.33]){
+      const point={x:t.x+tyreForward.x*arm,y:t.y-.45,z:t.z+tyreForward.z*arm},v=actor.body.velocityAtPoint(point);
+      const vl=v.x*tyreForward.x+v.z*tyreForward.z,vs=v.x*tyreRight.x+v.z*tyreRight.z;
+      const jl=-Math.sign(vl)*Math.min(Math.abs(vl)*m,along*g*m*dt),js=-Math.sign(vs)*Math.min(Math.abs(vs)*m*.5,KNOCKED.grip*g*m*dt);
+      actor.body.applyImpulseAtPoint({x:tyreForward.x*jl+tyreRight.x*js,y:0,z:tyreForward.z*jl+tyreRight.z*js},point,true);
+    }
   }
   /** Knock every lane keeper the player (or an already knocked car) is pushing into. */
   function detectKnocks(){
@@ -455,6 +481,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
             actor.x=t.x;actor.z=t.z;actor.speed=Math.hypot(v.x,v.z);
             const fx=2*(r.x*r.z+r.w*r.y),fz=1-2*(r.x*r.x+r.y*r.y);if(Math.hypot(fx,fz)>.1)actor.yaw=Math.atan2(fx,fz);
             k.settled=Math.hypot(v.x,v.y,v.z)>.4||Math.hypot(w.x,w.y,w.z)>.4?0:k.settled+dt;
+            tyreGrip(actor,dt);
           }
           const way=lost?'lost':k.settled>1.2||elapsed-k.since>10?rejoinWay(actor):'wait';
           if(way==='lost')relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));
