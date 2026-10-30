@@ -32,7 +32,7 @@ test('busy neighborhoods have visible moving traffic and sidewalks; residential 
   expect(initial.population.traffic.forward).toBeGreaterThanOrEqual(5);
   expect(initial.population.pedestrians.local).toBeGreaterThanOrEqual(60);
   expect(initial.population.pedestrians.nearby).toBeGreaterThanOrEqual(20);
-  expect(initial.trafficCount).toBeLessThanOrEqual(64);
+  expect(initial.trafficCount).toBeLessThanOrEqual(77);
   expect(initial.pedestrians).toBeLessThanOrEqual(112);
   await expect.poll(async()=>{const next=await snapshot(page);return next.traffic.filter((car,i)=>Math.hypot(car.x-initial.traffic[i].x,car.z-initial.traffic[i].z)>2).length;},{timeout:15000}).toBeGreaterThan(4);
   const samples=[];

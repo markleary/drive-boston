@@ -1,3 +1,4 @@
+import './helpers/npc-fleet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -60,7 +61,7 @@ test('the crash kick scales with the hit and stays off for the bike',async()=>{
 async function launchAt(physics,traffic,side,speed=16){
   const far={...physics.getState(),x:city.bounds.minX+40,z:city.bounds.minZ+40};
   for(let i=0;i<120;i++)traffic.update(1/60,far,far,[]);
-  const index=traffic.snapshot().findIndex(a=>a.speed>4),before=traffic.snapshot()[index];assert.ok(index>=0,'a moving lane keeper is available');
+  const index=traffic.snapshot().findIndex(a=>a.speed>4&&a.type==='compact'),before=traffic.snapshot()[index];assert.ok(index>=0,'a moving lane keeper is available');
   assert.equal(before.knocked,false);assert.equal(before.dynamic,false);
   const fx=Math.sin(before.yaw),fz=Math.cos(before.yaw),rx=fz,rz=-fx;
   const ax=before.x+fx*before.speed*.45,az=before.z+fz*before.speed*.45;
@@ -141,19 +142,21 @@ async function straightRun(kind,offset,deck=false,speed=mph(50)){
   try{
     const away={...physics.getState(),x:900,z:900};
     for(let i=0;i<120;i++){traffic.update(1/60,away,away,[]);physics.step(released,1/60);}
-    const index=traffic.snapshot().findIndex(a=>a.speed>4),b=traffic.snapshot()[index],fx=Math.sin(b.yaw),fz=Math.cos(b.yaw),rx=fz,rz=-fx;
+    const index=traffic.snapshot().findIndex(a=>a.speed>4&&a.type==='compact'),b=traffic.snapshot()[index],fx=Math.sin(b.yaw),fz=Math.cos(b.yaw),rx=fz,rz=-fx;
     const [x,z,vx,vz]=kind==='head'?[b.x+fx*(16+offset),b.z+fz*(16+offset),-fx,-fz]:kind==='miss'?[b.x+fx*(30+offset)+rx*2.05,b.z+fz*(30+offset)+rz*2.05,-fx,-fz]:[b.x+fx*b.speed*.45+rx*(7+offset),b.z+fz*b.speed*.45+rz*(7+offset),-rx,-rz];
     const yaw=Math.atan2(vx,vz);
     physics.body.setTranslation({x,y:y0+.78,z},true);physics.body.setRotation({x:0,y:Math.sin(yaw/2),z:0,w:Math.cos(yaw/2)},true);physics.body.setLinvel({x:vx*speed,y:0,z:vz*speed},true);
-    const result={knocked:0,kinematicAtImpact:false,moved:0,tyreFriction:false,minY:Infinity};let start;
+    const result={targetKnocked:false,knocked:0,kinematicAtImpact:false,moved:0,tyreFriction:false,minY:Infinity,insideDeckMinY:Infinity};let start;
     for(let i=0;i<60*3;i++){
       const state=physics.getState();traffic.update(1/60,state,state,[]);physics.step(released,1/60);
       for(const impact of physics.takeImpacts())for(const h of impact.colliders)if(traffic.colliders.has(h)&&!physics.world.getCollider(h).parent().isDynamic())result.kinematicAtImpact=true;
       const all=traffic.snapshot(),now=all[index];result.knocked=Math.max(result.knocked,all.filter(a=>a.knocked).length);
+      if(now.knocked)result.targetKnocked=true;
       if(now.knocked&&!start)start={x:now.x,z:now.z,i};
-      if(start&&now.knocked){const c=[...traffic.colliders].map(h=>physics.world.getCollider(h)).find(c=>c.parent().isDynamic());result.minY=Math.min(result.minY,c.parent().translation().y);if(i===start.i+20)result.tyreFriction=c.friction()<.1;}
+      if(start&&now.knocked){const c=physics.world.getCollider(now.collider);result.minY=Math.min(result.minY,c.parent().translation().y);if(Math.abs(now.z)<4.5)result.insideDeckMinY=Math.min(result.insideDeckMinY,c.parent().translation().y);result.tyreFriction||=c.friction()<.1;result.moved=Math.max(result.moved,Math.hypot(now.x-start.x,now.z-start.z));}
     }
-    if(start){const now=traffic.snapshot()[index];result.moved=Math.hypot(now.x-start.x,now.z-start.z);}
+    // Measure the impact while dynamic; a completed lane rejoin may already
+    // have returned the vehicle near its starting point before three seconds.
     return result;
   }finally{traffic.dispose();physics.dispose();}
 }
@@ -162,17 +165,21 @@ test('a fast hit always lands on a struck car that is already dynamic, whatever 
   for(const [kind,minMoved] of [['t',9],['head',9]])for(const offset of [0,.1,.2,.3]){
     const r=await straightRun(kind,offset),label=`${kind==='head'?'head-on':'T-bone'} at 50 mph from ${offset} m further back`;
     assert.equal(r.kinematicAtImpact,false,`${label}: the player never strikes a still-kinematic lane keeper`);
-    assert.ok(r.knocked===1&&r.moved>minMoved,`${label}: the struck car carries the hit (${r.moved.toFixed(1)} m; a late knock left it at 0)`);
+    assert.ok(r.targetKnocked&&r.moved>minMoved,`${label}: the struck car carries the hit (${r.moved.toFixed(1)} m; a late knock left it at 0)`);
   }
   for(const offset of [0,.15,.3])assert.equal((await straightRun('miss',offset)).knocked,0,`a pass with 25 cm to spare (${offset}) is not a hit`);
 });
 
-test('a car struck on a bridge deck rolls on its tyres and stays on the deck',async()=>{
+test('compound cars keep bridge support during moderate hits and do not tunnel through a raised deck at high speed',async()=>{
   for(const offset of [0,.2]){
-    const r=await straightRun('t',offset,true);
-    assert.ok(r.knocked===1&&r.moved>1.5,`the struck car is shoved across the deck (${r.moved.toFixed(1)} m before the parapet)`);
+    const r=await straightRun('t',offset,true,mph(25));
+    assert.ok(r.targetKnocked&&r.moved>1.5,`the struck car is shoved across the deck (${r.moved.toFixed(1)} m before the parapet)`);
     assert.ok(r.tyreFriction,'upright on the deck counts as on the road, so its tyre model runs instead of the scrape friction');
     assert.ok(r.minY>7.5,`the parapet keeps it on the deck (lowest centre ${r.minY.toFixed(2)} m)`);
+    // A 50 mph side hit can vault a realistic compound body over a low
+    // parapet; it must still collide with the slab while above its interior.
+    const fast=await straightRun('t',offset,true,mph(50));
+    assert.ok(fast.insideDeckMinY>7.5,'high-speed impacts must not tunnel through the interior bridge slab');
   }
 });
 

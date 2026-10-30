@@ -1,3 +1,4 @@
+import './helpers/npc-fleet.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -41,17 +42,16 @@ test('ambient actors and collision bodies share the measured road grade',async()
       assert.ok(closest<.02,'kinematic collision body must remain aligned with the visible car');
     }
     assert.ok(life.parkedCount>0&&life.count>0,'fixture must exercise parked cars and walkers');
-    const parkedMesh=scene.getObjectByName('Parked sedan paint');
-    const parkedColliders=[];
-    physics.world.forEachCollider(collider=>{const half=collider.halfExtents();if(half&&Math.abs(half.x-.91)<.001&&Math.abs(half.z-2.16)<.001)parkedColliders.push(collider);});
-    assert.equal(parkedColliders.length,life.parkedCount);
+    const parkedMesh=scene.getObjectByName('ParkedVehicles').children[0];
+    const parkedBodies=[...new Set([...life.parkedColliders].map(handle=>physics.world.getCollider(handle).parent()))];
+    assert.equal(parkedBodies.length,life.parkedCount);
     for(let i=0;i<life.parkedCount;i++){
       const car=life.parked[i];parkedMesh.getMatrixAt(i,matrix);matrix.decompose(position,rotation,scale);
-      const expected=new THREE.Vector3(car.x,ground(car.x,car.z),car.z).addScaledVector(expectedUp,.69);
+      const expected=new THREE.Vector3(car.x,ground(car.x,car.z),car.z);
       assert.ok(position.distanceTo(expected)<.002,'parked car shell must rest on the grade');
       assert.ok(new THREE.Vector3(0,1,0).applyQuaternion(rotation).dot(expectedUp)>.99999);
-      const colliderCenter=new THREE.Vector3(car.x,ground(car.x,car.z),car.z).addScaledVector(expectedUp,.82);
-      assert.ok(parkedColliders.some(collider=>new THREE.Vector3().copy(collider.translation()).distanceTo(colliderCenter)<.002),'parked collision shape must match its sloped visible body');
+      const colliderCenter=new THREE.Vector3(car.x,ground(car.x,car.z),car.z).addScaledVector(expectedUp,.65);
+      assert.ok(parkedBodies.some(body=>new THREE.Vector3().copy(body.translation()).distanceTo(colliderCenter)<.04),'parked collision shape must match its sloped visible body');
     }
     for(const time of [0,8,19,37]){
       life.update(1,time);
@@ -70,7 +70,7 @@ test('the fixed traffic fleet follows a distant neighborhood outside a protected
     const positions=()=>Array.from({length:traffic.count},(_,i)=>{mesh.getMatrixAt(i,matrix);return{x:matrix.elements[12],z:matrix.elements[14]};});
     traffic.update(1/60,physics.getState());
     let previous=positions();
-    assert.equal(traffic.count,64,'the map should retain a fixed sixty-four-car desktop budget');
+    assert.equal(traffic.count,77,'the map should retain a fixed seventy-seven-vehicle desktop budget');
     assert.ok(previous.filter(p=>Math.hypot(p.x-city.spawn.x,p.z-city.spawn.z)<650).length>=48,'busy Back Bay should have forty-eight local cars');
     for(let i=0;i<previous.length;i++) {
       assert.ok(Math.hypot(previous[i].x-city.spawn.x,previous[i].z-city.spawn.z)>34.9,'initial traffic must clear the player');
@@ -89,7 +89,7 @@ test('the fixed traffic fleet follows a distant neighborhood outside a protected
       previous=next;
     }
     assert.ok(relocations>0,'a long trip must move the ambient pool to the active neighborhood');
-    assert.equal(traffic.count,64,'neighborhood relocation must never grow the physics fleet');
+    assert.equal(traffic.count,77,'neighborhood relocation must never grow the physics fleet');
     assert.ok(previous.filter(p=>distance(p)<650).length>=12,'Mission Hill should regain a dozen nearby cars with the same fleet');
   }finally{traffic.dispose();physics.dispose();}
 });

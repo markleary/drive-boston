@@ -1,3 +1,4 @@
+import './helpers/npc-fleet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -221,7 +222,7 @@ test('traffic waits through the shared red phase and resumes on green', async ()
 });
 
 
-test('street life stays on clear sidewalks and parked cars block the player', async () => {
+test('street life stays on clear sidewalks and parked cars react to impacts', async () => {
   const city = await loadCentralCity();
   const physics = await DrivingPhysics.create(city);
   const life = createStreetLife(new THREE.Scene(), city, physics);
@@ -245,10 +246,15 @@ test('street life stays on clear sidewalks and parked cars block the player', as
     }
     const parked = life.parked[0];
     physics.reset(parked.x - Math.sin(parked.yaw) * 12, parked.z - Math.cos(parked.yaw) * 12, parked.yaw);
-    const state = advance(physics, 4, { ...released, throttle: 1 });
-    const separation = Math.hypot(state.x - parked.x, state.z - parked.z);
-    assert.ok(separation > 3.9 && separation < 4.6, `the parked car should stop the player at its bumper (gap ${separation} m)`);
-    assert.ok(Math.abs(state.speed) < .15, 'continued throttle must not pass through a parked car');
+    const initial={x:parked.x,z:parked.z};let impacts=0,penetration=0;
+    for(let i=0;i<240;i++){physics.step({...released,throttle:1},STEP);life.update(STEP);impacts+=physics.takeImpacts().length;for(const h of life.parkedColliders)physics.world.contactPair(physics.chassisCollider,physics.world.getCollider(h),m=>{for(let j=0;j<m.numContacts();j++)penetration=Math.max(penetration,-m.contactDist(j));});}
+    const state=physics.getState();
+    assert.ok(penetration<.12,`compound bodies must resolve surface contacts without tunneling (${penetration} m penetration)`);
+    assert.ok([state.x,state.y,state.z,parked.x,parked.y,parked.z].every(Number.isFinite));
+    assert.ok(Math.hypot(parked.x-initial.x,parked.z-initial.z)>.15,'a real impact must move the finite-mass parked car');
+    assert.ok(impacts>0,'the impact must be reported');
+    assert.ok([...life.parkedColliders].every(h=>physics.world.getCollider(h).parent().isDynamic()),'parked vehicles use dynamic Rapier bodies');
+
   } finally {
     life.dispose();
     physics.dispose();
