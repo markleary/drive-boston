@@ -23,6 +23,7 @@ import { inTransitCorridor } from '../simulation/transit-corridors';
 import { addSourceFooting } from './source-footings';
 import {isStateHouse,createStateHouseShellMaterials,splitStateHouseShell} from './state-house';
 import {isSymphonyHall,createSymphonyHallMaterials,splitSymphonyHallShell} from './symphony-hall';
+import {isSouthStation,createSouthStationMaterials,splitSouthStationShell} from './south-station';
 import {createPrudentialPenthouseMaterial,isPrudential,prudentialCrownCollider,splitPrudentialShell} from './prudential';
 import { isMetroCity, type Reader } from '../simulation/city-tiles.ts';
 import type { PlacedSignal } from '../simulation/signal-placement.ts';
@@ -150,6 +151,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const stateHouseMaterials=createStateHouseShellMaterials();
   const missionChurchMaterials=createMissionChurchMaterials();
   const symphonyHallMaterials=createSymphonyHallMaterials();
+  const southStationMaterials=createSouthStationMaterials();
   const prudentialPenthouse=createPrudentialPenthouseMaterial();
   // Source tiles include park monuments, shelters and utility structures among
   // the building meshes. Keep their measured forms without residential windows.
@@ -193,6 +195,13 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
       for(const part of splitSymphonyHallShell(normalized,b,isRoof)){
         const hallMaterial=symphonyHallMaterials[part.kind],key=`${hallMaterial.uuid}:symphony-hall`;
         const bucket=buckets.get(key)??{material:hallMaterial,geometries:[]};bucket.geometries.push(part.geometry);buckets.set(key,bucket);
+      }
+      normalized.dispose();if(normalized!==geometry)geometry.dispose();return;
+    }
+    if(b&&isSouthStation(b)){
+      for(const part of splitSouthStationShell(normalized,isRoof)){
+        const stationMaterial=part.kind==='other'?material:southStationMaterials[part.kind],key=`${stationMaterial.uuid}:south-station`;
+        const bucket=buckets.get(key)??{material:stationMaterial,geometries:[]};bucket.geometries.push(part.geometry);buckets.set(key,bucket);
       }
       normalized.dispose();if(normalized!==geometry)geometry.dispose();return;
     }
