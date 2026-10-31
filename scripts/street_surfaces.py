@@ -83,10 +83,13 @@ BORDER_REACH=40.0
 SHARED_ALIGNMENT=0.8
 """An edge crossing that line shares the roadway when its direction there is within this cosine of the road's: the renderer's threshold."""
 CROSSWALK_STATION=8.0
+"""The across line for the border-record test sits this far along a road from each end. The renderer
+(src/simulation/crosswalks.ts) stripes only at junctions, just beyond the crossing roadway, between about 4 m and
+30 m from the end, so a twin carriageway running alongside at 8 m is the candidate it may then span."""
 CROSSWALK_ROAD=18.0
 CROSSWALK_WIDTH=7.0
 ALLEY=re.compile('alley|unnamed',re.I)
-"""Crosswalk stripes sit this far along a road from each end (tile-builder.ts)."""
+"""The roads the renderer may stripe: at least CROSSWALK_ROAD m long, CROSSWALK_WIDTH m wide, not an alley or unnamed; it stripes a subset of them."""
 SERVICE_WIDTHS={'parking_aisle':5.5,'driveway':4.0,'alley':4.5,'drive-through':4.0,'emergency_access':4.0}
 """Ribbon widths in metres by OSM `service` value when the way carries no `width`."""
 SERVICE_WIDTH=4.5
@@ -582,15 +585,18 @@ def mask_park_edges(edges,roads,parks,reach=PARK_EDGE,tolerance=1.0):
 
 
 def stripes_crosswalks(road,minimum=CROSSWALK_ROAD,width=CROSSWALK_WIDTH):
- """Whether tile-builder.ts stripes crosswalks on this road: a line of at least `minimum` m on a road `width` m wide or more that is not an alley or unnamed."""
+ """Whether the renderer may stripe crosswalks on this road: a line of at least `minimum` m on a road `width` m wide or
+ more that is not an alley or unnamed. The renderer (crosswalks.ts) further requires a junction at the end, so this is a superset."""
  pts=road['points']
  return len(pts)>=2 and road.get('width',0)>=width and not ALLEY.search(road.get('name') or '') and LineString(pts).length>=minimum
 
 
 def crosswalk_stations(points,offset=CROSSWALK_STATION):
- """(station, road direction) where tile-builder.ts stripes a road's crosswalks: `offset` m along the line from each
- end, on the segment holding that distance, as its stationAlong walks it (a short or bent first segment would put an
- extrapolated station on another cross-section, Highland Avenue in Somerville starts with a 1.2 m segment at a bend)."""
+ """(station, road direction) of the border-record test for a road's crosswalks: `offset` m along the line from each
+ end, on the segment holding that distance, as the renderer's stationAlong walks it (a short or bent first segment would
+ put an extrapolated station on another cross-section, Highland Avenue in Somerville starts with a 1.2 m segment at a
+ bend). The renderer places its stripes beyond the crossing roadway at a junction, so this station is where a record
+ running alongside the road is looked for, not where the stripes sit."""
  out=[]
  for seq in (points,points[::-1]):
   left=offset

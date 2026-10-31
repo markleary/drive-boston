@@ -7,7 +7,8 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
-import { pavementEdges, pavementSpan, polylineLength, roadwaySpan, stationAlong, type TilePavement } from '../simulation/tile-format.ts';
+import { pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
+import { junctionIndexSteps, planCrosswalks, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
@@ -113,6 +114,7 @@ export function createTileBuilder(ctx: TileContext) {
   const principalParks = (city.parks ?? []).filter(p => /^(Boston Common|Public Garden)$/.test(p.name) && p.rings[0]);
   const parkStructure = (b: Building) => b.height < 30 && principalParks.some(p => { const box = areaBounds.get(p)!; return b.center[0] >= box.minX && b.center[0] <= box.maxX && b.center[1] >= box.minZ && b.center[1] <= box.maxZ && pointInside(b.center, p.rings[0]) && !p.rings.slice(1).some(r => pointInside(b.center, r)); });
   const grid = terrainGrid(city) ?? (() => { throw new Error('A metro city needs its elevation grid before tiles can be built'); })();
+  let junctions: JunctionIndex | undefined;
 
   /** `partial` is owned by the caller so an interrupted build can be undone with `abandon`. */
   function* build(tile: CityTile, partial: PartialTile = { group: new THREE.Group(), colliders: [], key: tile.key, tile }, pace: Pace = UNPACED): Generator<TileStage, BuiltTile> {
@@ -165,7 +167,7 @@ export function createTileBuilder(ctx: TileContext) {
     // Boston sidewalk inventory does not cover; a road without a record keeps
     // the constant-width ribbons of the survey build.
     {
-      const batches = ctx.mobile ? new SurfaceBatches(500) : new PartBatches(500), crossingKeys = new Set<string>();
+      const batches = ctx.mobile ? new SurfaceBatches(500) : new PartBatches(500);
       const ribbon = (material: THREE.Material, points: Point2[], width: number, y: number) => {
         const sink = batches.at(material, points[0][0], points[0][1]);
         drapedRibbonInto(sink, city, points, width, y);
@@ -205,21 +207,21 @@ export function createTileBuilder(ctx: TileContext) {
           const tx = dx / len, tz = dz / len;
           if (road.width >= 9) for (let d = 8; d < len - 7; d += 9) { const end = Math.min(d + 3, len - 7); ribbon(road.oneway ? materials.paint : materials.yellow, [[a[0] + tx * d, a[1] + tz * d], [a[0] + tx * end, a[1] + tz * end]], .12, .065); }
         }
-        if (road.width < 7 || /alley|unnamed/i.test(road.name)) continue;
-        if (polylineLength(road.points) < 18) continue;
-        for (const reverse of [false, true]) {
-          // The station sits 8 m along the line itself, so a moved park-edge centerline's short taper vertices do not
-          // skip the crosswalk or bend it off the roadway.
-          const a = road.points[reverse ? road.points.length - 1 : 0], station = stationAlong(reverse ? [...road.points].reverse() : road.points, 8); if (!station) continue;
-          const { at, tx, tz } = station, crossing = `${Math.round(a[0] / 3)},${Math.round(a[1] / 3)},${Math.round(Math.atan2(tx, tz) * 2)}`;
-          if (crossingKeys.has(crossing)) continue; crossingKeys.add(crossing);
-          // The stripes span the roadway measured at their own station, not the road-wide median width: Boylston
-          // Street's west end closes from 21.8 m to 14 m, and its east end sits 6 m off the centerline. Records of twin
-          // carriageways sharing the asphalt there (a parkway's second one-way centerline) extend them across the whole roadway.
-          const [lo, hi] = roadwaySpan((edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2], allEdges, at, tx, tz);
+      }
+      // Crosswalks: at junctions only, just beyond the crossing roadway, thinned along each roadway (crosswalks.ts).
+      // The stripes span the roadway measured at their own station, not the road-wide median width: Boylston
+      // Street's west end closes from 21.8 m to 14 m, and its east end sits 6 m off the centerline. Records of twin
+      // carriageways sharing the asphalt there (a parkway's second one-way centerline) extend them across the whole roadway.
+      {
+        const borders = new Map(tile.borderPavements.map(p => [p.road, p]));
+        const edgesOf = (road: Road) => { const p = pavementOf(road) ?? borders.get(road.id); return p && p.edges.length >= 8 ? pavementEdges(tile, p) : undefined; };
+        // The citywide junction index (20k roads) is built once, paced across frames by the first tile that needs it.
+        if (!junctions) { const steps = junctionIndexSteps(city.roads, city.signals); let r = steps.next(); while (!r.done) { if (due(pace)) yield 'roads'; r = steps.next(); } junctions = r.value; }
+        for (const { at, tx, tz, span: [lo, hi] } of planCrosswalks(ownedRoads, junctions, edgesOf, allEdges)) {
+          if (due(pace)) yield 'roads';
           for (let side = lo + .8; side < hi - .5; side += 1.35) {
             const x = at[0] - tz * side, z = at[1] + tx * side;
-            ribbon(materials.paint, [[x, z], [x + tx * 3, z + tz * 3]], .65, .068);
+            ribbon(materials.paint, [[x, z], [x + tx * STRIPE_LENGTH, z + tz * STRIPE_LENGTH]], .65, .068);
           }
         }
       }
