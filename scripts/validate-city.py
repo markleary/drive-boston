@@ -15,7 +15,7 @@ from shapely.geometry import Polygon, Point
 from shapely.ops import unary_union
 from shapely.prepared import prep
 ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scripts'));import tileformat
-from mesh_winding import orient_shells
+from mesh_winding import orient_patches,orient_shells
 from building_clearance import RoadClearanceIndex
 from building_collision_policy import exact_far_collision
 from harvard_bridge import validate_harvard_profile
@@ -145,7 +145,9 @@ for key in keys:
   assert bool(far_flags[key][ordinal]&2)==exact_far_collision(b),f"{b['id']} far proxy collision policy is stale"
   p=b['positions'];base=b['baseElevation'];assert len(p)==b['v']>0 and np.isfinite(p).all()
   if not b.get('structure'):
-   assert not orient_shells(p,np.concatenate([b['facade'],b['roof']]))[1],f"{b['id']} contains an inverted occupied shell"
+   shell=np.concatenate([b['facade'],b['roof']])
+   assert not orient_shells(p,shell)[1],f"{b['id']} contains an inverted occupied shell"
+   assert not orient_patches(p,shell)[1],f"{b['id']} has walls or roofs wound into the building"
   assert b['facade'].max(initial=-1)<b['v'] and b['roof'].max(initial=-1)<b['v'] and b['facade'].size+b['roof'].size>0
   top=p[:,1].max();bottom=p[:,1].min();step=b.get('scale',tileformat.SCALE);triangles+=len(b['facade'])+len(b['roof'])
   if b.get('source')=='osm-extrusion':
