@@ -5,6 +5,7 @@ import type { FarBuilding, FarTile } from '../simulation/far-format.ts';
 import { terrainGrid } from '../simulation/terrain.ts';
 import { FACADE_STYLES } from './materials.ts';
 import { clipPortalSurface } from './terrain-ground.ts';
+import { farPassageFootprints, isTunnelPassageFar } from '../simulation/tunnel-passages.ts';
 
 /** Distant representation of the whole metro: one flat-shaded box per hull
  * (its minimum-area oriented rectangle) and a coarse terrain sheet, both per
@@ -14,18 +15,8 @@ export interface FarCityView { group: THREE.Group; setChunkDetailed(key: string,
 
 const FAR_STEP = 5; // grid cells per coarse terrain vertex (30 m at 6 m cells)
 
-/** Rotating-calipers rectangle: the hull edge direction giving the least area. */
-export function orientedBox(points: readonly [number, number][]) {
-  let best = { area: Infinity, cx: 0, cz: 0, ux: 1, uz: 0, half: 0, halfPerp: 0 };
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i], b = points[(i + 1) % points.length], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .05) continue;
-    const ux = dx / length, uz = dz / length; let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
-    for (const [x, z] of points) { const u = x * ux + z * uz, v = -x * uz + z * ux; minU = Math.min(minU, u); maxU = Math.max(maxU, u); minV = Math.min(minV, v); maxV = Math.max(maxV, v); }
-    const area = (maxU - minU) * (maxV - minV);
-    if (area < best.area) { const cu = (minU + maxU) / 2, cv = (minV + maxV) / 2; best = { area, cx: cu * ux - cv * uz, cz: cu * uz + cv * ux, ux, uz, half: (maxU - minU) / 2, halfPerp: (maxV - minV) / 2 }; }
-  }
-  return best;
-}
+export { orientedBox } from '../simulation/oriented-box.ts';
+import { orientedBox } from '../simulation/oriented-box.ts';
 
 function styleColor(style: number) {
   const base = new THREE.Color(FACADE_STYLES[Math.min(style, FACADE_STYLES.length - 1)]?.base ?? '#8a8278');
@@ -47,7 +38,8 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     chunks.set(key, { detailed: false, count: 0, center: new THREE.Vector3((tx + .5) * size, 0, (tz + .5) * size) });
   }
   function buildBuildings(tile: FarTile) {
-    const list = tile.buildings.filter(b => !b.hidden && b.height >= 3 && b.footprint.length >= 3);
+    // A tunnel-passage building is boxed by the pieces its detailed shell keeps (see tunnel-passages.ts).
+    const list = tile.buildings.filter(b => !b.hidden && b.height >= 3 && b.footprint.length >= 3).flatMap(b => isTunnelPassageFar(tile.key, b) ? farPassageFootprints(city, b).map(footprint => ({ ...b, footprint })) : [b]);
     if (!list.length) return;
     // Five faces per box (no floor), flat normals from a non-indexed layout: 30 vertices.
     const count = list.length, positions = new Float32Array(count * 30 * 3), normals = new Float32Array(count * 30 * 3), color = new Uint8Array(count * 30 * 3);

@@ -3,9 +3,11 @@ import test from 'node:test';
 import * as THREE from 'three';
 import {resolveCity,loadTile} from '../src/simulation/city-tiles.ts';
 import {parseTile,gunzip} from '../src/simulation/tile-format.ts';
-import {TUNNEL_PASSAGE_BUILDING_IDS,REMNANT_SPAN,prepareBuildingTunnelPassage} from '../src/simulation/tunnel-passages.ts';
+import {TUNNEL_PASSAGE_BUILDING_IDS,TUNNEL_PASSAGE_FAR,REMNANT_SPAN,farPassageFootprints,isTunnelPassageFar,prepareBuildingTunnelPassage} from '../src/simulation/tunnel-passages.ts';
 import {roadProjection,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
-import {tunnelCoveredAt,tunnelStations} from '../src/simulation/tunnels.ts';
+import {pointInside} from '../src/simulation/roads.ts';
+import {tunnelCoveredAt,tunnelStations,inOpenSkyClearance} from '../src/simulation/tunnels.ts';
+import {orientedBox} from '../src/simulation/oriented-box.ts';
 import {sourceFootingGeometry,addSourceFooting} from '../src/render/source-footings.ts';
 import {tileSourceGeometry} from '../src/render/tile-geometry.ts';
 import {read,readJson} from './helpers/metro-city.mjs';
@@ -62,3 +64,22 @@ test(`${building.name} generated footings share the adapted render/collision ape
 });
 
 }
+
+test('each passage building has one far hull, boxed by the pieces its detailed shell keeps',()=>{
+ assert.deepEqual([...TUNNEL_PASSAGE_BUILDING_IDS].sort(),TUNNEL_PASSAGE_FAR.map(p=>p.id).sort());
+ for(const passage of TUNNEL_PASSAGE_FAR){
+  const building=raw.buildings.find(b=>b.id===passage.id);
+  assert.ok(Math.hypot(building.center[0]-passage.center[0],building.center[1]-passage.center[1])<.02&&Math.abs(building.height-passage.height)<.01,'recorded centre and height match the survey');
+  const far=[...city.far.tiles.values()].flatMap(t=>t.buildings.filter(b=>!b.hidden&&isTunnelPassageFar(t.key,b)&&pointInside(passage.center,b.footprint)&&Math.abs(b.height-passage.height)<.02));
+  assert.equal(far.length,1,`${building.name} matches exactly one far hull`);
+  const pieces=farPassageFootprints(city,far[0]);assert.ok(pieces.length>=1,'part of the building stays in the distance as it does up close');
+  const kept=pieces.reduce((sum,p)=>sum+orientedBox(p).area,0),whole=orientedBox(far[0].footprint).area;assert.ok(kept<whole*.9,`the distant block loses the cleared ramps too (${(kept/whole).toFixed(2)})`);
+  let samples=0,open=0;
+  for(const piece of pieces){
+   const xs=piece.map(p=>p[0]),zs=piece.map(p=>p[1]);
+   for(let x=Math.min(...xs);x<=Math.max(...xs);x+=1)for(let z=Math.min(...zs);z<=Math.max(...zs);z+=1)if(pointInside([x,z],piece)){samples++;if(inOpenSkyClearance(city,x,z))open++;}
+  }
+  // Only the 2 m raster's edge cells may overhang the cleared columns.
+  assert.ok(open<samples*.08,`the far boxes of ${building.name} stay off the open ramps (${open}/${samples})`);
+ }
+});

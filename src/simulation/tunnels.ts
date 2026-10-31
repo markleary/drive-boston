@@ -125,6 +125,8 @@ function polygonSign(p:Point2[]){let area=0;for(let i=0;i<p.length;i++){const a=
 function inside(p:Point2,polygon:Point2[]){const sign=polygonSign(polygon);return polygon.every((a,i)=>{const b=polygon[(i+1)%polygon.length];return sign*((b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]))>=-1e-7;});}
 export function hasTunnelPortals(city:TunnelCity){return !!index(city).portalList.length;}
 export function tunnelPortalBoundsIntersect(city:TunnelCity,minX:number,maxX:number,minZ:number,maxZ:number){return index(city).portalList.some(p=>p.minX<=maxX&&p.maxX>=minX&&p.minZ<=maxZ&&p.maxZ>=minZ);}
+/** Inside a clearance volume over an open-air stretch, the column clipTunnelClearance removes from a passage shell. */
+export function inOpenSkyClearance(city:TunnelCity,x:number,z:number){return (index(city).volumes.get(key(x,z))??[]).some(v=>v.open&&x>=v.minX&&x<=v.maxX&&z>=v.minZ&&z<=v.maxZ&&inside([x,z],v.polygon));}
 export function inTunnelPortal(city:TunnelCity,x:number,z:number){return (index(city).portals.get(key(x,z))??[]).some(p=>inside([x,z],p.polygon));}
 
 /** Returns only the bore containing the supplied height. Surface roads over a
