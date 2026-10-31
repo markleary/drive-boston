@@ -9,12 +9,19 @@ import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import {buildPlayerEngineAudio} from './build-player-car-audio.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(root, 'public/audio');
 const model = 'eleven_text_to_sound_v2';
 const format = 'mp3_44100_128';
 const clips = [
+  {"id": "mclaren-720s-idle", "seconds": 6, "loop": true, "prompt": "Realistic close tailpipe recording of a McLaren 720S petrol V8 at constant 850 RPM idle. Deep gritty combustion growl, low exhaust burble, throaty harmonics. Dry muffled exhaust, steady pitch and volume throughout, seamless loop. No air hiss, whistle, wind, electronic tones, sci fi drone, music, clicks or gear changes."},
+  {"id": "mclaren-720s-upshift", "seconds": 1, "loop": false, "prompt": "Realistic close tailpipe recording of a McLaren 720S petrol V8: a brief rounded falling exhaust note as engine speed drops. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech."},
+  {"id": "mclaren-720s-downshift", "seconds": 1, "loop": false, "prompt": "Realistic close tailpipe recording of a McLaren 720S petrol V8: one gentle accelerator blip, rounded rise and fall in exhaust pitch. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech."},
+  {"id": "supra-mk4-idle", "seconds": 6, "loop": true, "prompt": "Realistic close tailpipe recording of a 1990s Toyota Supra 2JZ petrol straight six at constant 850 RPM idle. Warm bass rumble, rapid distinct combustion pulses, throaty mechanical growl. Dry muffled exhaust, steady pitch and volume throughout, seamless loop. No air hiss, whistle, wind, electronic tones, sci fi drone, music, clicks or gear changes."},
+  {"id": "supra-mk4-upshift", "seconds": 1, "loop": false, "prompt": "Realistic close tailpipe recording of a 1990s Toyota Supra 2JZ petrol straight six: a brief rounded falling exhaust note as engine speed drops. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech."},
+  {"id": "supra-mk4-downshift", "seconds": 1, "loop": false, "prompt": "Realistic close tailpipe recording of a 1990s Toyota Supra 2JZ petrol straight six: one gentle accelerator blip, rounded rise and fall in exhaust pitch. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech."},
   {
     id:'mclaren-gt-idle',seconds:6,loop:true,
     prompt:'Close dry recording of a McLaren GT M840TE 4.0 litre twin turbo V8 idling steadily at 850 RPM. Refined low burbling eight cylinder exhaust with subtle metallic ticking. Exactly constant engine speed and level, seamless continuous loop. No revving, gear changes, start or stop, voices, music or other cars.'
@@ -98,7 +105,8 @@ async function localKey() {
 async function main() {
   const selection=process.argv.find(arg=>arg.startsWith('--only='))?.slice(7);
   const selected=selection?clips.filter(clip=>clip.id.startsWith(selection)):clips;
-  if(!selected.length)throw new Error('No clips match --only.');
+  const derivedSelected=['mclaren-720s-drive','mclaren-720s-high','supra-mk4-drive','supra-mk4-high'].filter(id=>!selection||id.startsWith(selection));
+  if(!selected.length&&!derivedSelected.length)throw new Error('No clips match --only.');
   const total = selected.reduce((sum, clip) => sum + clip.seconds, 0);
   const pending = [];
   for (const clip of selected) if (!await exists(resolve(output, `${clip.id}.mp3`))) pending.push(clip);
@@ -106,10 +114,11 @@ async function main() {
   console.log(`Audio plan: ${selected.length} clips / ${total}s total; ${pending.length} missing / ${pending.reduce((sum, clip) => sum + clip.seconds, 0)}s to generate.`);
   if (!process.argv.includes('--generate')) {
     for (const clip of pending) console.log(`  ${clip.id}: ${clip.seconds}s${clip.loop ? ' loop' : ''}`);
+    if(derivedSelected.length)console.log('Selected drive/high assets are mastered locally from the existing GT sources; no additional provider requests.');
     console.log('Preview only. Add --generate to make billable ElevenLabs requests. Existing files are never overwritten.');
     return;
   }
-  if (!pending.length) return;
+  if (!pending.length) {await buildPlayerEngineAudio({selected:derivedSelected});return;}
   const key = await localKey();
   await mkdir(output, { recursive: true });
   const provenancePath = resolve(output, 'provenance.json');
@@ -152,6 +161,7 @@ async function main() {
     }, null, 2) + '\n');
     console.log(`Saved ${file} (${bytes.length} bytes).`);
   }
+  await buildPlayerEngineAudio({selected:derivedSelected});
 }
 
 main().catch(error => { console.error(error.message); process.exitCode = 1; });

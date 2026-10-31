@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DEFAULT_CAR, PLAYER_CARS, type PlayerCarId } from '../simulation/player-cars.ts';
 import { createMcLarenGeometry, createMcLarenWheelGeometry } from './mclaren-gt.ts';
+import {create720SGeometry,create720SWheelGeometry} from './mclaren-720s.ts';
+import {createSupraGeometry,createSupraWheelGeometry} from './supra-mk4.ts';
 import type { VehicleState } from '../types';
 
 export type VehicleStyle = 'coupe' | 'sedan' | 'crossover' | 'van' | 'hatchback';
@@ -320,10 +322,10 @@ export function createMassachusettsPlateMaterial(registration = '4BK 026') {
 }
 
 export function createCar(id:PlayerCarId=DEFAULT_CAR) {
-  const gt=id==='mclaren-gt',spec=PLAYER_CARS[id];
-  const group = new THREE.Group(); group.name = gt?'PlayerMcLarenGT':'PlayerCoupe';group.userData.carId=id;
+  const gt=id==='mclaren-gt',m720=id==='mclaren-720s',supra=id==='supra-mk4',stock=id===DEFAULT_CAR,spec=PLAYER_CARS[id];
+  const group = new THREE.Group(); group.name = gt?'PlayerMcLarenGT':m720?'PlayerMcLaren720S':supra?'PlayerSupraMk4':'PlayerCoupe';group.userData.carId=id;
   const materials: Record<VehicleSurface, THREE.MeshStandardMaterial> = {
-    paint: new THREE.MeshPhysicalMaterial({ color: gt?0xc87935:0xc8c5b0, metalness: gt?.62:.38, roughness: .23, clearcoat: 1, clearcoatRoughness: .13 }),
+    paint: new THREE.MeshPhysicalMaterial({ color: gt?0xc87935:m720?0x176bc1:supra?0xb91823:0xc8c5b0, metalness: gt||m720?.62:supra?.28:.38, roughness: .23, clearcoat: 1, clearcoatRoughness: .13, side: stock||gt?THREE.FrontSide:THREE.DoubleSide }),
     trim: new THREE.MeshStandardMaterial({ color: 0x151b1e, metalness: .24, roughness: .48, side: THREE.DoubleSide }),
     rubber: new THREE.MeshStandardMaterial({ color: 0x171a1b, roughness: .94 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xb8bec0, metalness: .9, roughness: .21 }),
@@ -333,28 +335,28 @@ export function createCar(id:PlayerCarId=DEFAULT_CAR) {
     amber: new THREE.MeshStandardMaterial({ color: 0xb0651d, emissive: 0xd37817, emissiveIntensity: .15, roughness: .3 }),
     plate: new THREE.MeshStandardMaterial({ color: 0xdadacb, roughness: .48 }),
   };
-  for (const [surface, geometry] of gt?createMcLarenGeometry():createVehicleGeometry('coupe', false)) {
+  for (const [surface, geometry] of gt?createMcLarenGeometry():m720?create720SGeometry():supra?createSupraGeometry():createVehicleGeometry('coupe', false)) {
     const mesh = new THREE.Mesh(geometry, materials[surface]); mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
   }
   // Keep plate UVs separate from merged geometry so the tiny lettering stays crisp.
-  const plateMaterial = createMassachusettsPlateMaterial();
+  const plateMaterial = createMassachusettsPlateMaterial(m720?'7MS 720':supra?'2JZ 094':'4BK 026');
   let plateGeometry:THREE.BufferGeometry;
-  if(!gt)plateGeometry=createVehiclePlateGeometry('coupe');
+  if(stock)plateGeometry=createVehiclePlateGeometry('coupe');
   else {
-    const front=new THREE.PlaneGeometry(.305,.1524);front.translate(0,-.215,2.385);
-    const rear=new THREE.PlaneGeometry(.305,.1524);rear.rotateY(Math.PI);rear.translate(0,-.08,-2.367);
+    const front=new THREE.PlaneGeometry(.305,.1524);front.translate(0,gt?-.215:m720?-.27:-.13,gt?2.385:m720?2.30:2.298);
+    const rear=new THREE.PlaneGeometry(.305,.1524);rear.rotateY(Math.PI);rear.translate(0,gt?-.08:m720?-.23:-.09,gt?-2.367:m720?-2.31:-2.296);
     plateGeometry=mergeGeometries([front,rear],false)!;front.dispose();rear.dispose();
   }
   const plates=new THREE.Mesh(plateGeometry,plateMaterial);plates.name='PlayerMassachusettsPlates';group.add(plates);
-  if(gt&&typeof document!=='undefined'){
+  if(!stock&&typeof document!=='undefined'){
     const canvas=document.createElement('canvas');canvas.width=512;canvas.height=96;
-    const context=canvas.getContext('2d')!;context.fillStyle='#d5d8da';context.textAlign='center';context.font='italic bold 68px Arial';context.fillText('McLaren',256,72);
+    const context=canvas.getContext('2d')!;context.fillStyle='#d5d8da';context.textAlign='center';context.font='italic bold 68px Arial';context.fillText(supra?'Supra':'McLaren',256,72);
     const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;
     const badge=new THREE.MeshStandardMaterial({map:texture,transparent:true,depthWrite:false,metalness:.4,roughness:.3});
-    const geometry=new THREE.PlaneGeometry(.25,.047);geometry.rotateY(Math.PI);geometry.translate(0,.20,-2.44);group.add(new THREE.Mesh(geometry,badge));
+    const geometry=new THREE.PlaneGeometry(.25,.047);geometry.rotateY(Math.PI);geometry.translate(supra?.35:0,gt?.20:supra?.27:.115,gt?-2.44:supra?-2.268:-2.322);group.add(new THREE.Mesh(geometry,badge));
   }
   // Satin B-pillars and fine window seals polish the existing coupe.
-  if(!gt){
+  if(stock){
     const detail=geometryParts();
     for(const side of [-1,1]){
       detail.beam('trim',[side*.836,.34,-.30],[side*.70,.825,-.30],.027);
@@ -367,7 +369,7 @@ export function createCar(id:PlayerCarId=DEFAULT_CAR) {
   for (const z of [spec.wheelbase/2, -spec.wheelbase/2]) for (const side of [-1, 1]) {
     const pivot = new THREE.Group(); pivot.position.set(side * (z>0?spec.track:spec.rearTrack)/2, -.08-spec.suspensionRest, z); group.add(pivot);
     const spin = new THREE.Group(); pivot.add(spin);
-    for (const [surface, geometry] of gt?createMcLarenWheelGeometry(side,z>0):createVehicleWheelGeometry(side)) {
+    for (const [surface, geometry] of gt?createMcLarenWheelGeometry(side,z>0):m720?create720SWheelGeometry(side,z>0):supra?createSupraWheelGeometry(side,z>0):createVehicleWheelGeometry(side)) {
       const mesh = new THREE.Mesh(geometry, materials[surface]); mesh.castShadow = true; spin.add(mesh);
     }
     wheels.push({ pivot, spin });
@@ -375,7 +377,7 @@ export function createCar(id:PlayerCarId=DEFAULT_CAR) {
   const lights: THREE.SpotLight[] = [];
   for (const x of [-.55, .55]) {
     const light = new THREE.SpotLight(0xffedc4, 0, 45, .42, .65, 1.5); light.visible = false;
-    light.position.set(x, gt?.18:.075, gt?2.35:2.18); light.target.position.set(x, -.4, 24);
+    light.position.set(x, stock?.075:gt?.18:.08, stock?2.18:gt?2.35:spec.halfLength+.02); light.target.position.set(x, -.4, 24);
     group.add(light, light.target); lights.push(light);
   }
   // A short chase boom can end inside the coupe when a wall/parked vehicle

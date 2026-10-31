@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { DEFAULT_CAR, PLAYER_CARS, gtGear, gtRpm, type PlayerCarId } from '../simulation/player-cars.ts';
+import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, isPerformanceCar, carGear, carRpm, type PlayerCarId } from '../simulation/player-cars.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
@@ -130,10 +130,10 @@ export class DrivingPhysics {
   }
 
   private configureCar() {
-    const spec=this.carSpec,gt=this.selectedCar==='mclaren-gt';
+    const spec=this.carSpec,id=this.selectedCar,performance=isPerformanceCar(id),drive=performance?CAR_POWERTRAINS[id]:null;
     this.chassisCollider.setTranslationWrtParent({x:0,y:-.06,z:0});
-    this.chassisCollider.setShape(new RAPIER.Cuboid(spec.halfWidth, gt?.19:.23, spec.halfLength));
-    this.chassisCollider.setMassProperties(spec.mass, {x:0,y:gt?-.15:-.17,z:gt?-.18:0}, gt?{x:2500,y:2850,z:750}:{x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
+    this.chassisCollider.setShape(new RAPIER.Cuboid(spec.halfWidth, performance?.19:.23, spec.halfLength));
+    this.chassisCollider.setMassProperties(spec.mass, {x:0,y:performance?-.15:-.17,z:drive?.cgZ??0}, id==='mclaren-gt'?{x:2500,y:2850,z:750}:performance?{x:spec.mass*1.63,y:spec.mass*1.86,z:spec.mass*.49}:{x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
     this.body.setLinearDamping(spec.linearDamping); this.body.setAngularDamping(1.6);
     this.controller = this.world.createVehicleController(this.body);
     this.controller.indexUpAxis = 1;
@@ -258,7 +258,7 @@ export class DrivingPhysics {
       this.bike.step(input, timestep, state.speed, state.yaw);
       this.steering=this.bike.steering;this.braking=this.bike.braking;this.gear=state.speed<-.3?-1:1;this.rpm=0;
     } else {
-    const speed = state.speed,spec=this.carSpec,gt=this.selectedCar==='mclaren-gt';
+    const speed = state.speed,spec=this.carSpec,id=this.selectedCar,performance=isPerformanceCar(id),drive=performance?CAR_POWERTRAINS[id]:null;
     const throttle = clamp(input.throttle, -1, 1);
     const pedalBrake = clamp(input.brake, 0, 1);
     const changeDirection = throttle * speed < -0.4;
@@ -270,35 +270,34 @@ export class DrivingPhysics {
     const speedLimit = throttle >= 0 ? spec.maxForwardSpeed : spec.maxReverseSpeed;
     this.pedal += (throttle-this.pedal)*(1-Math.exp(-(Math.abs(throttle)>Math.abs(this.pedal)?22:14)*timestep));
     if(Math.abs(throttle)<.001&&Math.abs(this.pedal)<.005)this.pedal=0;
-    const targetGear=gt?gtGear(Math.max(0,speed),this.gear):Math.min(5,Math.max(1,1+Math.floor(Math.abs(speed)/7.5)));
+    const targetGear=isPerformanceCar(this.selectedCar)?carGear(this.selectedCar,Math.max(0,speed),this.gear):Math.min(5,Math.max(1,1+Math.floor(Math.abs(speed)/7.5)));
     const previousGear=this.gear;
     // Reverse input brakes a forward-moving car before selecting reverse.
     // Only select R while actually reversing or nearly stopped with reverse intent.
     this.gear=speed<-.3||(Math.abs(speed)<=.3&&throttle<-.1)?-1:targetGear;
-    this.rpm=gt?gtRpm(speed,this.gear,this.pedal):850+Math.abs(speed)/(this.gear<0?7.5:7.5*targetGear)*3000+Math.abs(this.pedal)*650;
-    if(gt&&previousGear>0&&this.gear>0&&previousGear!==this.gear)this.shiftRemaining=.065;
+    this.rpm=isPerformanceCar(this.selectedCar)?carRpm(this.selectedCar,speed,this.gear,this.pedal):850+Math.abs(speed)/(this.gear<0?7.5:7.5*targetGear)*3000+Math.abs(this.pedal)*650;
+    if(drive&&previousGear>0&&this.gear>0&&previousGear!==this.gear)this.shiftRemaining=drive.shiftSeconds;
     this.shiftRemaining=Math.max(0,this.shiftRemaining-timestep);
-    // GT: rear-wheel drive, power-limited after launch; quadratic aero drag and
-    // rolling resistance, rather than artificial linear damping. CdA is tuned
-    // to the published 326 km/h terminal speed at 81% drivetrain efficiency.
-    const resistance=gt?180+.5*1.225*.77*speed*speed:spec.mass*spec.linearDamping*Math.abs(speed);
-    if(gt&&Math.abs(speed)>.05){
+    // Performance cars use rear-wheel drive with calibrated wheel power,
+    // launch traction, shift interruption and quadratic aerodynamic drag.
+    const resistance=drive?drive.rolling+.5*1.225*drive.dragArea*speed*speed:spec.mass*spec.linearDamping*Math.abs(speed);
+    if(drive&&Math.abs(speed)>.05){
       const q=this.body.rotation(),fx=2*(q.x*q.z+q.w*q.y),fy=2*(q.y*q.z-q.w*q.x),fz=1-2*(q.x*q.x+q.y*q.y),drag=-Math.sign(speed)*resistance*timestep;
       this.body.applyImpulse({x:fx*drag,y:fy*drag,z:fz*drag},true);
     }
-    const tractiveForce=Math.min(spec.traction,spec.power*(gt?.81:1)/Math.max(10,Math.abs(speed)));
+    const tractiveForce=Math.min(spec.traction,spec.power*(drive?.efficiency??1)/Math.max(10,Math.abs(speed)));
     const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
-    const force = changeDirection || pedalBrake > 0.1 || (input.handbrake&&Math.abs(throttle)<.05) ? 0 : this.pedal * governedForce/(gt?2:4)*(this.shiftRemaining>0?.2:1);
+    const force = changeDirection || pedalBrake > 0.1 || (input.handbrake&&Math.abs(throttle)<.05) ? 0 : this.pedal * governedForce/(performance?2:4)*(this.shiftRemaining>0?.2:1);
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
     const brakingImpulse = (changeDirection ? spec.brakeForce*.8 : pedalBrake * spec.brakeForce) * timestep / 4;
-    const rollingImpulse = !gt&&Math.abs(throttle) < 0.05 ? (90+Math.min(110,Math.abs(speed)*5))*timestep : 0;
+    const rollingImpulse = !performance&&Math.abs(throttle) < 0.05 ? (90+Math.min(110,Math.abs(speed)*5))*timestep : 0;
     for (let i = 0; i < 4; i++) {
       const radius=spec.wheelbase/Math.tan(this.steering||1e-8);
       const ackermann=Math.atan(spec.wheelbase/(radius+(i%2===0?-1:1)*spec.track/2));
       this.controller.setWheelSteering(i, i < 2 ? ackermann : 0);
       // Rapier chooses engine force before wheel braking. A locked rear wheel
       // must receive exactly zero engine force, including decaying pedal input.
-      this.controller.setWheelEngineForce(i, (input.handbrake&&i>=2)||(gt&&i<2)?0:force);
+      this.controller.setWheelEngineForce(i, (input.handbrake&&i>=2)||(performance&&i<2)?0:force);
       this.controller.setWheelBrake(i, brakingImpulse*(i<2?1.2:.8) + rollingImpulse + (input.handbrake && i >= 2 ? 16000 * timestep / 2 : 0));
       const slidingTurn=input.handbrake&&Math.abs(input.steer)>.25&&Math.abs(speed)>3;
       this.controller.setWheelSideFrictionStiffness(i, slidingTurn && i >= 2 ? 0.45 : 1.05);
@@ -423,7 +422,7 @@ export class DrivingPhysics {
       const rx=point.x-p.x,ry=point.y-p.y,rz=point.z-p.z;
       const vx=v.x+w.y*rz-w.z*ry,vz=v.z+w.x*ry-w.y*rx,heading=yaw+(c.wheelSteering(i)??0);
       const speed=vx*Math.sin(heading)+vz*Math.cos(heading),side=vx*Math.cos(heading)-vz*Math.sin(heading);
-      contacts.push({wheel:i,x:point.x,y:point.y,z:point.z,normal:{x:normal.x,y:normal.y,z:normal.z},width:bike?.11:this.carId==='mclaren-gt'?(i<2?.225:.295):.235,intensity:tireSlipIntensity(input,speed,side,bike?i===1:i>=2,bike)});
+      contacts.push({wheel:i,x:point.x,y:point.y,z:point.z,normal:{x:normal.x,y:normal.y,z:normal.z},width:bike?.11:this.carId==='supra-mk4'?(i<2?.235:.255):this.carId==='mclaren-720s'?(i<2?.245:.305):this.carId==='mclaren-gt'?(i<2?.225:.295):.235,intensity:tireSlipIntensity(input,speed,side,bike?i===1:i>=2,bike)});
     }
     return contacts;
   }

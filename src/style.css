@@ -253,3 +253,5 @@ html,body{height:100dvh}
 .welcome-start .pad-only{margin:0 -12px}.welcome-start .pad-glyph{width:24px;height:24px;font-size:12px}
 #interface.gamepad button:focus,#interface.gamepad a:focus{outline:2px solid var(--orange);outline-offset:5px}
 #interface.gamepad .welcome-start:focus{outline-color:var(--accent)}
+
+.car-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.car-choices button{min-height:44px}
