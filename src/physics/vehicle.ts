@@ -1,4 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
+import { DEFAULT_CAR, PLAYER_CARS, gtGear, gtRpm, type PlayerCarId } from '../simulation/player-cars.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
@@ -7,20 +8,8 @@ import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, r
 import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
 
-export const VEHICLE = {
-  mass: 1240,
-  wheelRadius: 0.34,
-  wheelbase: 2.66,
-  track: 1.72,
-  suspensionRest: 0.31,
-  spawnHeight: 0.78,
-  maxForwardSpeed: 27,
-  maxReverseSpeed: 8,
-  maxSteering: .52,
-  maxLateralAcceleration: 8.5,
-};
-
-export const carSteeringLimit=(speed:number)=>Math.min(VEHICLE.maxSteering,Math.atan(VEHICLE.maxLateralAcceleration*VEHICLE.wheelbase/(speed*speed+16)));
+export const VEHICLE = PLAYER_CARS[DEFAULT_CAR];
+export const carSteeringLimit=(speed:number,spec:typeof PLAYER_CARS[PlayerCarId]=VEHICLE)=>Math.min(spec.maxSteering,Math.atan(spec.maxLateralAcceleration*spec.wheelbase/(speed*speed+16)));
 
 export interface PhysicsVehicleState extends VehicleState {
   rotation: { x: number; y: number; z: number; w: number };
@@ -30,6 +19,9 @@ export interface PhysicsVehicleState extends VehicleState {
   gear: number;
   rpm: number;
   vehicle: 'car' | 'ultrabee';
+  carId: PlayerCarId;
+  halfLength: number;
+  halfWidth: number;
   lean: number;
   wheelie: number;
   wheelieRemaining: number;
@@ -56,6 +48,10 @@ export class DrivingPhysics {
   readonly body: RAPIER.RigidBody;
   controller!: RAPIER.DynamicRayCastVehicleController;
   private bike?: BikeDynamics;
+  private selectedCar: PlayerCarId = DEFAULT_CAR;
+  get carId(){return this.selectedCar;}
+  private get carSpec(){return PLAYER_CARS[this.selectedCar];}
+  private shiftRemaining=0;
   get vehicleType(): 'car' | 'ultrabee' { return this.bike ? 'ultrabee' : 'car'; }
   readonly chassisCollider: RAPIER.Collider;
   /** Additional mesh/structure geometry used by flight's continuous sweeps. */
@@ -131,26 +127,41 @@ export class DrivingPhysics {
   }
 
   private configureCar() {
-    this.chassisCollider.setShape(new RAPIER.Cuboid(.85, .23, 2.02));
-    this.chassisCollider.setMassProperties(VEHICLE.mass, {x:0,y:-.17,z:0}, {x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
-    this.body.setLinearDamping(.13); this.body.setAngularDamping(1.6);
+    const spec=this.carSpec,gt=this.selectedCar==='mclaren-gt';
+    this.chassisCollider.setTranslationWrtParent({x:0,y:-.06,z:0});
+    this.chassisCollider.setShape(new RAPIER.Cuboid(spec.halfWidth, gt?.19:.23, spec.halfLength));
+    this.chassisCollider.setMassProperties(spec.mass, {x:0,y:gt?-.15:-.17,z:gt?-.18:0}, gt?{x:2500,y:2850,z:750}:{x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
+    this.body.setLinearDamping(spec.linearDamping); this.body.setAngularDamping(1.6);
     this.controller = this.world.createVehicleController(this.body);
     this.controller.indexUpAxis = 1;
     this.controller.setIndexForwardAxis = 2;
     // Front wheels first. The negative X axle gives positive engine force +Z.
-    for (const z of [VEHICLE.wheelbase / 2, -VEHICLE.wheelbase / 2]) {
-      for (const x of [-VEHICLE.track / 2, VEHICLE.track / 2]) {
+    for (const z of [spec.wheelbase / 2, -spec.wheelbase / 2]) {
+      for (const x of [-(z>0?spec.track:spec.rearTrack)/2,(z>0?spec.track:spec.rearTrack)/2]) {
         const i = this.controller.numWheels();
-        this.controller.addWheel({ x, y: -0.08, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, VEHICLE.suspensionRest, VEHICLE.wheelRadius);
-        this.controller.setWheelSuspensionStiffness(i, 32);
-        this.controller.setWheelSuspensionCompression(i, 4.4);
-        this.controller.setWheelSuspensionRelaxation(i, 5.2);
-        this.controller.setWheelMaxSuspensionTravel(i, 0.16);
+        this.controller.addWheel({ x, y: -0.08, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, spec.suspensionRest, z>0?spec.wheelRadius:spec.rearWheelRadius);
+        this.controller.setWheelSuspensionStiffness(i, spec.stiffness);
+        this.controller.setWheelSuspensionCompression(i, spec.compression);
+        this.controller.setWheelSuspensionRelaxation(i, spec.relaxation);
+        this.controller.setWheelMaxSuspensionTravel(i, spec.travel);
         this.controller.setWheelMaxSuspensionForce(i, 12500);
-        this.controller.setWheelFrictionSlip(i, 1.5);
+        this.controller.setWheelFrictionSlip(i, spec.friction);
         this.controller.setWheelSideFrictionStiffness(i, 1.05);
       }
     }
+  }
+
+  /** Switching cars parks the chassis upright on its current drive surface.
+   * Bike/flight retain the selection for the next time Drive is chosen. */
+  setCar(id:PlayerCarId){
+    if(id===this.selectedCar)return;
+    this.selectedCar=id;
+    if(this.bike)return;
+    const state=this.getState(),surface=sampleDriveSurface(this.city,state.x,state.z,state.y);
+    this.world.removeVehicleController(this.controller);this.configureCar();
+    this.body.recomputeMassPropertiesFromColliders();
+    if(this.canResetAt(state.x,state.z,state.yaw,surface.road?.id))this.reset(state.x,state.z,state.yaw,surface.road?.id);
+    else this.recoverFromCrash(state);
   }
 
   setVehicleType(kind: 'car' | 'ultrabee') {
@@ -244,36 +255,47 @@ export class DrivingPhysics {
       this.bike.step(input, timestep, state.speed, state.yaw);
       this.steering=this.bike.steering;this.braking=this.bike.braking;this.gear=state.speed<-.3?-1:1;this.rpm=0;
     } else {
-    const speed = state.speed;
+    const speed = state.speed,spec=this.carSpec,gt=this.selectedCar==='mclaren-gt';
     const throttle = clamp(input.throttle, -1, 1);
     const pedalBrake = clamp(input.brake, 0, 1);
     const changeDirection = throttle * speed < -0.4;
     this.braking = pedalBrake > 0.05 || input.handbrake || changeDirection;
     // Slightly tighter arcs at parking and road speeds; cap lateral demand near .87g.
-    const steeringLimit = carSteeringLimit(speed);
+    const steeringLimit = carSteeringLimit(speed,spec);
     const desiredSteer = clamp(input.steer, -1, 1) * steeringLimit;
     this.steering += (desiredSteer - this.steering) * (1 - Math.exp(-8 * timestep));
-    const speedLimit = throttle >= 0 ? VEHICLE.maxForwardSpeed : VEHICLE.maxReverseSpeed;
-    const power = clamp(1 - Math.max(0, Math.abs(speed) - speedLimit * 0.7) / (speedLimit * 0.3), 0, 1);
+    const speedLimit = throttle >= 0 ? spec.maxForwardSpeed : spec.maxReverseSpeed;
     this.pedal += (throttle-this.pedal)*(1-Math.exp(-(Math.abs(throttle)>Math.abs(this.pedal)?22:14)*timestep));
     if(Math.abs(throttle)<.001&&Math.abs(this.pedal)<.005)this.pedal=0;
-    const targetGear=Math.min(5,Math.max(1,1+Math.floor(Math.abs(speed)/7.5)));
+    const targetGear=gt?gtGear(Math.max(0,speed),this.gear):Math.min(5,Math.max(1,1+Math.floor(Math.abs(speed)/7.5)));
+    const previousGear=this.gear;
     // Reverse input brakes a forward-moving car before selecting reverse.
     // Only select R while actually reversing or nearly stopped with reverse intent.
     this.gear=speed<-.3||(Math.abs(speed)<=.3&&throttle<-.1)?-1:targetGear;
-    this.rpm=850+Math.abs(speed)/(this.gear<0?7.5:7.5*targetGear)*3000+Math.abs(this.pedal)*650;
-    const tractiveForce=Math.min(8400,125000/Math.max(10,Math.abs(speed)));
-    const force = changeDirection || pedalBrake > 0.1 || (input.handbrake&&Math.abs(throttle)<.05) ? 0 : this.pedal * tractiveForce/4 * power;
+    this.rpm=gt?gtRpm(speed,this.gear,this.pedal):850+Math.abs(speed)/(this.gear<0?7.5:7.5*targetGear)*3000+Math.abs(this.pedal)*650;
+    if(gt&&previousGear>0&&this.gear>0&&previousGear!==this.gear)this.shiftRemaining=.065;
+    this.shiftRemaining=Math.max(0,this.shiftRemaining-timestep);
+    // GT: rear-wheel drive, power-limited after launch; quadratic aero drag and
+    // rolling resistance, rather than artificial linear damping. CdA is tuned
+    // to the published 326 km/h terminal speed at 81% drivetrain efficiency.
+    const resistance=gt?180+.5*1.225*.77*speed*speed:spec.mass*spec.linearDamping*Math.abs(speed);
+    if(gt&&Math.abs(speed)>.05){
+      const q=this.body.rotation(),fx=2*(q.x*q.z+q.w*q.y),fy=2*(q.y*q.z-q.w*q.x),fz=1-2*(q.x*q.x+q.y*q.y),drag=-Math.sign(speed)*resistance*timestep;
+      this.body.applyImpulse({x:fx*drag,y:fy*drag,z:fz*drag},true);
+    }
+    const tractiveForce=Math.min(spec.traction,spec.power*(gt?.81:1)/Math.max(10,Math.abs(speed)));
+    const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
+    const force = changeDirection || pedalBrake > 0.1 || (input.handbrake&&Math.abs(throttle)<.05) ? 0 : this.pedal * governedForce/(gt?2:4)*(this.shiftRemaining>0?.2:1);
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
-    const brakingImpulse = (changeDirection ? 10000 : pedalBrake * 12500) * timestep / 4;
-    const rollingImpulse = Math.abs(throttle) < 0.05 ? (90+Math.min(110,Math.abs(speed)*5))*timestep : 0;
+    const brakingImpulse = (changeDirection ? spec.brakeForce*.8 : pedalBrake * spec.brakeForce) * timestep / 4;
+    const rollingImpulse = !gt&&Math.abs(throttle) < 0.05 ? (90+Math.min(110,Math.abs(speed)*5))*timestep : 0;
     for (let i = 0; i < 4; i++) {
-      const radius=VEHICLE.wheelbase/Math.tan(this.steering||1e-8);
-      const ackermann=Math.atan(VEHICLE.wheelbase/(radius+(i%2===0?-1:1)*VEHICLE.track/2));
+      const radius=spec.wheelbase/Math.tan(this.steering||1e-8);
+      const ackermann=Math.atan(spec.wheelbase/(radius+(i%2===0?-1:1)*spec.track/2));
       this.controller.setWheelSteering(i, i < 2 ? ackermann : 0);
       // Rapier chooses engine force before wheel braking. A locked rear wheel
       // must receive exactly zero engine force, including decaying pedal input.
-      this.controller.setWheelEngineForce(i, input.handbrake&&i>=2?0:force);
+      this.controller.setWheelEngineForce(i, (input.handbrake&&i>=2)||(gt&&i<2)?0:force);
       this.controller.setWheelBrake(i, brakingImpulse*(i<2?1.2:.8) + rollingImpulse + (input.handbrake && i >= 2 ? 16000 * timestep / 2 : 0));
       const slidingTurn=input.handbrake&&Math.abs(input.steer)>.25&&Math.abs(speed)>3;
       this.controller.setWheelSideFrictionStiffness(i, slidingTurn && i >= 2 ? 0.45 : 1.05);
@@ -345,7 +367,7 @@ export class DrivingPhysics {
    * nearest clear road at the crash's level; the last explicit reset point is
    * only the fallback when no local road qualifies. */
   private recoverFromCrash(position:{x:number;y:number;z:number}){
-    const spawnHeight=this.bike?ULTRA_BEE.spawnHeight:VEHICLE.spawnHeight;
+    const spawnHeight=this.bike?ULTRA_BEE.spawnHeight:this.carSpec.spawnHeight;
     if([position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
       const crashSurface=sampleDriveSurface(this.city,position.x,position.z,position.y);
       // Keep recovery inside the already-streamed neighborhood.
@@ -379,14 +401,16 @@ export class DrivingPhysics {
       yaw: Math.atan2(fx, fz), speed: this.bike ? (velocity.x*fx+velocity.z*fz)/(Math.hypot(fx,fz)||1) : velocity.x * fx + velocity.y * fy + velocity.z * fz,
       steering: this.steering, rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
       wheelAngles: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelRotation(i) ?? 0),
-      suspension: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelSuspensionLength(i) ?? VEHICLE.suspensionRest),
-      braking: this.braking,gear:this.gear,rpm:this.rpm,vehicle:this.vehicleType,lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
+      suspension: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelSuspensionLength(i) ?? this.carSpec.suspensionRest),
+      braking: this.braking,gear:this.gear,rpm:this.rpm,vehicle:this.vehicleType,carId:this.carId,
+      halfLength:this.bike?.8:this.carSpec.halfLength,halfWidth:this.bike?.4:this.carSpec.halfWidth,
+      lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
     };
   }
 
   private resetPose(x:number,z:number,yaw:number,roadId?:string){
     const surface=sampleDriveSurface(this.city,x,z,undefined,roadId),normal=surface.normal;
-    return{normal,position:{x,y:surface.height+(this.bike?ULTRA_BEE.spawnHeight:VEHICLE.spawnHeight)/Math.max(.5,normal.y),z},rotation:rotationFromNormal(normal,yaw)};
+    return{normal,position:{x,y:surface.height+(this.bike?ULTRA_BEE.spawnHeight:this.carSpec.spawnHeight)/Math.max(.5,normal.y),z},rotation:rotationFromNormal(normal,yaw)};
   }
 
   /** Check a saved arrival against loaded static geometry before moving the car.
@@ -416,7 +440,7 @@ export class DrivingPhysics {
     this.body.resetForces(true);
     this.body.resetTorques(true);
     this.steering = 0;this.pedal=0;this.gear=1;this.rpm=850;
-    this.overturnedTime = 0;this.braking=false;this.bike?.reset();
+    this.overturnedTime = 0;this.shiftRemaining=0;this.braking=false;this.bike?.reset();
     for (let i = 0; i < this.controller.numWheels(); i++) {
       this.controller.setWheelEngineForce(i, 0);
       this.controller.setWheelBrake(i, 0);

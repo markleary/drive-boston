@@ -1,6 +1,7 @@
 /**
  * Optional, billable, local asset generation. Never imported into the game.
  * Preview: node scripts/generate-audio.mjs
+ * Optional subset: --only=mclaren-gt
  * Generate missing clips: node scripts/generate-audio.mjs --generate
  * Requires ELEVENLABS_API_KEY in the shell or root .env (never VITE_*).
  */
@@ -14,6 +15,26 @@ const output = resolve(root, 'public/audio');
 const model = 'eleven_text_to_sound_v2';
 const format = 'mp3_44100_128';
 const clips = [
+  {
+    id:'mclaren-gt-idle',seconds:6,loop:true,
+    prompt:'Close dry recording of a McLaren GT M840TE 4.0 litre twin turbo V8 idling steadily at 850 RPM. Refined low burbling eight cylinder exhaust with subtle metallic ticking. Exactly constant engine speed and level, seamless continuous loop. No revving, gear changes, start or stop, voices, music or other cars.'
+  },
+  {
+    id:'mclaren-gt-drive',seconds:8,loop:true,
+    prompt:'McLaren GT 4.0 litre twin turbo V8 held steadily at 4000 RPM under engine load, rear exhaust perspective. Rich sharp supercar V8 growl, tight rapid combustion pulses, restrained turbo whistle. Constant pitch and load for seamless looping. No acceleration, gear changes, flyby, Doppler effect, tire squeal, voices or music.'
+  },
+  {
+    id:'mclaren-gt-high',seconds:6,loop:true,
+    prompt:'McLaren GT M840TE twin turbo V8 held at exactly constant 7000 RPM under heavy throttle, close dry rear exhaust recording. High urgent raspy V8 howl and fine turbo hiss, constant pitch and volume throughout, seamless loop. No gear shifts, acceleration sweep, flyby, tires, voices or music.'
+  },
+  {
+    id:'mclaren-gt-upshift',seconds:1,loop:false,
+    prompt:'A single immediate fast McLaren GT seven speed dual clutch full throttle upshift. Very brief sharp exhaust crack and mechanical clutch snap with a short turbo air chirp and sudden falling V8 pitch, then silence. One short dry transient within a quarter second. No repeated shifting, long revs, voices or music.'
+  },
+  {
+    id:'mclaren-gt-downshift',seconds:1,loop:false,
+    prompt:'A single immediate McLaren GT seven speed dual clutch downshift: short precise automatic throttle blip of a twin turbo V8 with a tight mechanical clutch click, then silence. One short dry transient under half a second. No repeated revs, gear changes, voices, music or ambient noise.'
+  },
   {
     id: 'engine-idle', seconds: 8, loop: true,
     prompt: 'A realistic small four-cylinder gasoline car engine idling steadily at 850 RPM, close perspective beside the car, warm low mechanical rumble and subtle even combustion pulses. Exactly constant idle speed throughout, continuous seamless loop. Dry natural recording, no revving, no starting or stopping, no voices, no music, no horns, no passing traffic.'
@@ -75,11 +96,14 @@ async function localKey() {
 }
 
 async function main() {
-  const total = clips.reduce((sum, clip) => sum + clip.seconds, 0);
-  if (total > 60) throw new Error('Generation duration exceeds the 60-second task budget.');
+  const selection=process.argv.find(arg=>arg.startsWith('--only='))?.slice(7);
+  const selected=selection?clips.filter(clip=>clip.id.startsWith(selection)):clips;
+  if(!selected.length)throw new Error('No clips match --only.');
+  const total = selected.reduce((sum, clip) => sum + clip.seconds, 0);
   const pending = [];
-  for (const clip of clips) if (!await exists(resolve(output, `${clip.id}.mp3`))) pending.push(clip);
-  console.log(`Audio plan: ${clips.length} clips / ${total}s total; ${pending.length} missing / ${pending.reduce((sum, clip) => sum + clip.seconds, 0)}s to generate.`);
+  for (const clip of selected) if (!await exists(resolve(output, `${clip.id}.mp3`))) pending.push(clip);
+  if(pending.reduce((sum,clip)=>sum+clip.seconds,0)>60)throw new Error('Pending generation exceeds the 60-second budget; use --only=prefix.');
+  console.log(`Audio plan: ${selected.length} clips / ${total}s total; ${pending.length} missing / ${pending.reduce((sum, clip) => sum + clip.seconds, 0)}s to generate.`);
   if (!process.argv.includes('--generate')) {
     for (const clip of pending) console.log(`  ${clip.id}: ${clip.seconds}s${clip.loop ? ' loop' : ''}`);
     console.log('Preview only. Add --generate to make billable ElevenLabs requests. Existing files are never overwritten.');

@@ -10,7 +10,7 @@ test('driving into traffic knocks the car and plays a crash; a struck walker goe
   page.on('console',message=>{if(message.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)/i.test(message.text()))errors.push(message.text());});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
   await expect(page.locator('#welcome')).toBeHidden();
-  await expect.poll(async()=>(await snapshot(page)).audio.loadedCount,{timeout:20000}).toBe(11);
+  await expect.poll(async()=>(await snapshot(page)).audio.loadedCount,{timeout:20000}).toBe(16);
   expect((await snapshot(page)).audio.failed).toEqual([]);
   // Boylston opens with lane keepers ahead; full throttle catches one from behind.
   const start=await snapshot(page);expect(start.traffic.every(a=>!a.knocked&&!a.dynamic)).toBe(true);
