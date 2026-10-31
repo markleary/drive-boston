@@ -43,6 +43,7 @@ MIN_RISE=1.5
 TERRAIN_RISE=.3
 RAMP_RISE=.05
 RAMP_TAPER=10
+LANDING_SHARE=.01
 ALLOWED_KINDS={'elevated','water-crossing','restored-water-span'}
 ALLOWED_IDS=('structure-','water-link-')
 OWNED_NAMES={'Longfellow Bridge'}
@@ -187,7 +188,7 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
    else:
     landing,low,shares,taper=ramp(road);dist=point_distances(road,along[len(points)-1 if ends[1] else 0])
     bounds.append((dist,max([level+MIN_RISE]+[ground(*p)+TERRAIN_RISE*t for i,(p,t) in enumerate(zip(points,taper)) if i!=landing])))
-  above=[]
+  above=[];unresolved=[]
   for road in chain:
    line=LineString(road['points']);ends=[lifted(road,0),lifted(road,-1)]
    for j in tree.query(line,predicate='intersects'):
@@ -203,7 +204,9 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
      if all(ends):bounds.append((point_distances(road,d),required))
      else:
       landing,low,shares,taper=ramp(road);along=alongs[road['id']];share=smooth(abs(d-along[landing])/(along[-1] or 1))
-      bounds.append((point_distances(road,along[len(along)-1 if ends[1] else 0]),low+(required-low)/max(share,.1)))
+      # The ramp reaches only `share` of the deck-end rise here, so the deck end must rise by the deficit divided by that share. A crossing right at the pinned landing cannot be cleared by any approach; it is reported, not quietly weakened.
+      if share<LANDING_SHARE:unresolved.append({'road':other['id'],'share':round(share,4)})
+      else:bounds.append((point_distances(road,along[len(along)-1 if ends[1] else 0]),low+(required-low)/share))
   if above:report['skipped'].append({**entry,'reason':'crossed above','by':sorted(set(above))});continue
   for _ in range(60):
    raise_by={};uniform=0
@@ -228,7 +231,7 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
    if any(abs(a-b)>.0001 for a,b in zip(old,new)):
     changed.append(road['id'])
     if apply:road['elevations']=new
-  report['chains'].append({**entry,'deck':[round(min(heights),4),round(max(heights),4)],'lifts':sorted(round(v,4) for v in (lifts.values() if landings else bump)),'waterLevel':round(level,4),'junctions':sorted(round(v,4) for v in junctions),'changed':sorted(changed)})
+  report['chains'].append({**entry,'deck':[round(min(heights),4),round(max(heights),4)],'lifts':sorted(round(v,4) for v in (lifts.values() if landings else bump)),'waterLevel':round(level,4),'junctions':sorted(round(v,4) for v in junctions),'unresolvedCrossings':unresolved,'changed':sorted(changed)})
   report['changedRoads'].extend(changed)
  report['changedRoads'].sort()
  return report

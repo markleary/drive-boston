@@ -20,11 +20,13 @@ def main():
  for chain in report['chains']:print('deck',chain['deck'],'lifts',chain['lifts'],'water',chain['waterLevel'],'junctions',chain['junctions'],', '.join(chain['names']),'changed',len(chain['changed']),'of',len(chain['roads']))
  for skipped in report['skipped']:print('skipped',skipped['reason'],', '.join(skipped['names']),skipped.get('by',''),skipped.get('farthestLiftedNodeMeters',''))
  print(f"{len(report['changedRoads'])} roads changed across {len(report['chains'])} water crossings; {len(report['skipped'])} chains left to their builders")
+ for chain in report['chains']:
+  for crossing in chain['unresolvedCrossings']:print('unresolved',', '.join(chain['names']),'crossed by',crossing['road'],'at the pinned landing, share',crossing['share'])
  if a.check:return
  (a.data_dir/'city.json').write_text(json.dumps(city,separators=(',',':'))+'\n')
  provenance_path=a.data_dir/'provenance.json';provenance=json.loads(provenance_path.read_text())
  provenance['waterCrossingDecks']={'method':'One deck surface per water-crossing chain of lifted nodes: the inverse-distance blend of the chain\'s own at-grade junction heights along the chain, each junction raised as far as the terrain and water under the deck, the terrain under its ramps and any road crossing beneath need on its side; ramps keep their pinned ground landings and never sink into the terrain','deckAboveWaterMeters':DECK,'deckAboveTerrainMeters':TERRAIN_RISE,'liftedNodeReachMeters':WATER_REACH,'heightAccuracy':'Estimated game profiles, not surveyed bridge decks',
-  'chains':[{'names':c['names'],'deck':c['deck'],'lifts':c['lifts'],'waterLevel':c['waterLevel'],'roads':c['roads']} for c in report['chains']],'skipped':report['skipped']}
+  'chains':[{'names':c['names'],'deck':c['deck'],'lifts':c['lifts'],'waterLevel':c['waterLevel'],'roads':c['roads'],**({'unresolvedCrossings':c['unresolvedCrossings']} if c['unresolvedCrossings'] else {})} for c in report['chains']],'skipped':report['skipped']}
  provenance_path.write_text(json.dumps(provenance,separators=(',',':'))+'\n')
 
 

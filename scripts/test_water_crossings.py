@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 from shapely.geometry import box
 
-from water_crossings import DECK,TERRAIN_RISE,chain_grades,grid_sampler,level_water_crossings,lifted,water_inputs
+from water_crossings import DECK,LANDING_SHARE,TERRAIN_RISE,chain_grades,grid_sampler,level_water_crossings,lifted,water_inputs
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 WATER=[box(40,-30,160,30)]
@@ -73,6 +73,17 @@ class WaterCrossingsTest(unittest.TestCase):
   self.assertEqual(ys,sorted(ys,reverse=True),'the ramp rides the embankment and only descends toward its landing')
   self.assertEqual(roads[3]['elevations'][-1],deck,'the deck pieces meet the ramp at the lifted height')
   again=copy.deepcopy(roads);self.assertEqual(level_water_crossings(roads,WATER,embankment)['changedRoads'],[]);self.assertEqual(roads,again)
+
+ def test_street_under_a_ramp_is_cleared_by_the_ramp_share_or_reported(self):
+  roads=bridge()+[{'id':'9-0-0','name':'Under Ramp Street','width':7,'oneway':0,'points':[[210,-40],[210,40]]}]
+  report=level_water_crossings(roads,WATER,ground);ramp=roads[4];xs=[p[0] for p in ramp['points']];ys=ramp['elevations'];i=next(i for i,x in enumerate(xs) if x>=210)
+  at_crossing=ys[i-1]+(ys[i]-ys[i-1])*(210-xs[i-1])/(xs[i]-xs[i-1])
+  self.assertGreaterEqual(at_crossing,DECK-.001,'the deck end rises by the deficit divided by the ramp share at the crossing, so the crossing itself gets 6.4 m');self.assertEqual(report['chains'][0]['unresolvedCrossings'],[])
+  self.assertEqual(ys[-1],0);self.assertEqual(ys,sorted(ys,reverse=True))
+  roads=bridge()+[{'id':'9-0-0','name':'Landing Street','width':7,'oneway':0,'points':[[229.8,-40],[229.8,40]]}]
+  report=level_water_crossings(roads,WATER,ground);chain=report['chains'][0]
+  self.assertEqual([c['road'] for c in chain['unresolvedCrossings']],['9-0-0'],'a street crossing at the pinned landing cannot be cleared by any approach and is reported');self.assertLess(chain['unresolvedCrossings'][0]['share'],LANDING_SHARE);self.assertLess(chain['deck'][1],.5,'and does not lift the deck')
+  self.assertEqual(roads[4]['elevations'][-1],0)
 
  def test_junction_range_and_water_floor(self):
   roads=bridge();roads[0]['elevations'][0]=3;roads[4]['elevations'][-1]=2.5
