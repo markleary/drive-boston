@@ -144,6 +144,18 @@ test('survey clearance clipping opens only a finite tunnel aperture and retains 
   }finally{p.dispose();}
 });
 
+test('survey clearance clipping clears the shell to the sky over an open-air stretch, slivers beside the deck included',async()=>{
+  const {clipTunnelClearance}=await import('../src/simulation/tunnels.ts');
+  // Covered for the first 50 m, then a ramp rising out of the bore into the open.
+  const road={...bore,points:[[0,-50],[0,0],[0,50]],elevations:[0,0,8],width:6.4,tunnel:{clearance:5.2,covered:[[0,50]]}},c={...city,roads:[road]};
+  const wall=z=>{const v=new Float32Array([-30,0,z,30,0,z,-30,45,z,30,45,z]);return clipTunnelClearance(c,v,new Uint32Array([0,1,2,1,3,2]));};
+  const area=mesh=>{let a=0;for(let i=0;i<mesh.indices.length;i+=3){const [p,q,r]=[0,1,2].map(j=>Array.from(mesh.vertices.slice(mesh.indices[i+j]*3,mesh.indices[i+j]*3+3)));a+=Math.abs((q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0]))/2;}return a;};
+  const covered=area(wall(-25)),open=wall(25);
+  assert.ok(Math.abs(covered-(60*45-(6.4+.8)*(5.2+.45)))<.05,`under cover only the finite aperture opens, area=${covered}`);
+  assert.ok(Math.abs(area(open)-(60-(6.4+16))*45)<.05,`over the open ramp a full-height band 8 m past each deck edge goes, area=${area(open)}`);
+  for(let i=0;i<open.vertices.length;i+=3)assert.ok(Math.abs(open.vertices[i])>=3.2+8-1e-4,'no sliver stays within the margin');
+});
+
 test('a rising merge keeps its roof sealed outside the exact adjoining roof footprint',async()=>{
   const main={...bore,id:'main',points:[[0,-100],[0,400]],elevations:[-12,-12],width:20,tunnel:{clearance:5.2}};
   const branch={id:'branch',name:'Exit',points:[[0,0],[7,250]],elevations:[-12,-2],width:8,oneway:1,tunnel:{clearance:5.2}};

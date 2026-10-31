@@ -5,6 +5,7 @@ import { pointInside } from '../simulation/roads';
 import { sampleElevation } from '../simulation/terrain';
 import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {roadSlabGeometry,deckEdge} from '../simulation/road-surfaces.ts';
+import {canopyHitsDeck,PARK_CANOPY} from '../simulation/deck-canopy.ts';
 import { canvasTexture, seeded } from './materials';
 import { createStreetTrees, type TreeField } from './foliage';
 import { drapedRibbonInto,clipPortalSurface } from './terrain-ground';
@@ -154,7 +155,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       const p:Point2=[b.minX+random()*(b.maxX-b.minX),b.minZ+random()*(b.maxZ-b.minZ)];if(!insideArea(p,park)||!safe(p))continue;
       const cx=Math.floor(p[0]/10),cz=Math.floor(p[1]/10);let near=false;
       for(let x=cx-1;x<=cx+1;x++)for(let z=cz-1;z<=cz+1;z++)if((treeCells.get(`${x},${z}`)??[]).some(q=>Math.hypot(p[0]-q[0],p[1]-q[1])<8))near=true;
-      if(near)continue;const k=`${cx},${cz}`,list=treeCells.get(k)??[];list.push(p);treeCells.set(k,list);
+      if(near||canopyHitsDeck(city,p[0],p[1],sampleElevation(city,...p),PARK_CANOPY))continue;const k=`${cx},${cz}`,list=treeCells.get(k)??[];list.push(p);treeCells.set(k,list);
       treePoints.push(new THREE.Vector3(p[0],sampleElevation(city,...p)+.025,p[1]));count++;
     }
   }
