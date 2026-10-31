@@ -68,7 +68,7 @@ const eta=(c:Claim)=>c.stopsShort?Infinity:c.travel/Math.max(c.speed,2);
  * In order: deadlock priority; for cars already touching, the one with nothing
  * in front; a car already in the other's path; a car too fast to stop; the
  * decision remembered from the previous step, so the order cannot flip while
- * both brake; then the earlier arrival. Index breaks every remaining tie. */
+ * both brake, unless its winner is now held short; then the earlier arrival. Index breaks every remaining tie. */
 export function rightOfWay(i:Claim,j:Claim,remembered?:number){
   if(i.forced!==j.forced)return i.forced?i.index:j.index;
   const iIn=i.travel<=0,jIn=j.travel<=0;
@@ -79,7 +79,8 @@ export function rightOfWay(i:Claim,j:Claim,remembered?:number){
   }
   if(iIn!==jIn)return iIn?i.index:j.index;
   const ic=committed(i),jc=committed(j);if(ic!==jc)return ic?i.index:j.index;
-  if(remembered!==undefined)return remembered;
+  // A remembered winner that a red light or its route's end now holds short gives up its turn.
+  const kept=remembered===i.index?i:remembered===j.index?j:undefined;if(kept&&!kept.stopsShort)return remembered;
   const ie=eta(i),je=eta(j);if(ie!==je)return ie<je?i.index:j.index;
   return Math.min(i.index,j.index);
 }

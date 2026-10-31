@@ -75,6 +75,7 @@ test('right of way always lets exactly one of two cars meeting at a corner go',(
   assert.equal(rightOfWay(claim(0,{travel:10}),claim(1,{travel:4})),1,'otherwise the earlier arrival goes first');
   assert.equal(rightOfWay(claim(0,{travel:10}),claim(1,{travel:4}),0),0,'a remembered order holds while both brake');
   assert.equal(rightOfWay(claim(0,{travel:10}),claim(1,{travel:4,stopsShort:true})),0,'a car held by a red light claims nothing');
+  assert.equal(rightOfWay(claim(0,{travel:10}),claim(1,{travel:4,stopsShort:true}),1),0,'a remembered winner that turns red gives way');
   assert.equal(rightOfWay(claim(0,{travel:0,forced:true}),claim(1,{travel:0,otherAhead:false})),0,'deadlock priority beats every other rule');
   assert.equal(yieldSpeed(CONFLICT.buffer),0);assert.ok(yieldSpeed(12)>9);
 });
