@@ -57,6 +57,26 @@ test('the surveyed Nashua viaducts have ground-reaching piers while the Zakim wa
  assert.ok(supports.every(p=>p.z<=-1580&&p.top-p.bottom>=4));assert.deepEqual(data.positions,before,'the original cable bridge mesh must remain unchanged');
 });
 
+test('Zakim viaduct pier caps stay beneath every deck they span',async()=>{
+ // Reported at x 1160, z -1852: full-width caps rose through the sloping deck
+ // and hung over the lower carriageway beside it.
+ const tile=await loadTile(metro,0,-3,read),data=tile.geometry.get(tile.buildings.find(b=>b.landmark==='zakim-bridge').id),v=data.positions,decks=[];
+ for(let i=0;i<data.roof.length;i+=3){
+  const p=[0,1,2].map(j=>[v[data.roof[i+j]*3],v[data.roof[i+j]*3+1],v[data.roof[i+j]*3+2]]),a=p[1].map((n,k)=>n-p[0][k]),b=p[2].map((n,k)=>n-p[0][k]);
+  const ny=a[2]*b[0]-a[0]*b[2],nx=a[1]*b[2]-a[2]*b[1],nz=a[0]*b[1]-a[1]*b[0];if(ny>0&&Math.hypot(nx,nz)/ny<=.3)decks.push(p);
+ }
+ const heights=(x,z)=>decks.flatMap(([a,b,c])=>{const dx1=b[0]-a[0],dz1=b[2]-a[2],dx2=c[0]-a[0],dz2=c[2]-a[2],det=dx1*dz2-dz1*dx2;if(!det)return[];const u=((x-a[0])*dz2-(z-a[2])*dx2)/det,w=(dx1*(z-a[2])-dz1*(x-a[0]))/det;return u>=-1e-3&&w>=-1e-3&&u+w<=1.001?[a[1]+u*(b[1]-a[1])+w*(c[1]-a[1])]:[];});
+ const supports=surveyViaductSupports(metro,data);
+ assert.ok(supports.some(p=>Math.hypot(p.x-1157.8,p.z+1854)<30),'the reported stretch keeps its piers');
+ for(const p of supports){
+  const c=Math.cos(p.yaw),s=Math.sin(p.yaw);
+  for(let u=-p.width/2;u<=p.width/2+1e-6;u+=.5)for(const w of [-1.6,0,1.6]){
+   const x=p.capX+u*c+w*s,z=p.capZ-u*s+w*c;
+   for(const h of heights(x,z))assert.ok(h>=p.top+.5||h<p.top-6,`cap at ${p.x.toFixed(0)}, ${p.z.toFixed(0)} meets a deck at ${h.toFixed(2)} (cap top ${p.top.toFixed(2)})`);
+  }
+ }
+});
+
 test('Longfellow has four collidable towers, dedicated carriageways, and eleven arch spans',()=>{
  const scene=new THREE.Scene(),{group,collisions}=addCharlesBridgeDetails(scene,metro);
  assert.equal(group.userData.towers,4);assert.equal(group.userData.archSpans,11);assert.ok(collisions.length>25);

@@ -27,6 +27,7 @@ import { createStreetSign } from './signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { addRoadStructures } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
+import { addSurveyDeckSurface } from './survey-deck-surface';
 import { addSourceFooting } from './source-footings';
 import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
@@ -301,6 +302,7 @@ export function createTileBuilder(ctx: TileContext) {
           if(b.landmark==='zakim-bridge'){
             const viaduct=addSurveyViaductSupports(group,city,data);
             for(const mesh of viaduct.collisions)colliders.push(physics.addStaticMesh(mesh.vertices,mesh.indices));
+            addSurveyDeckSurface(group,city,data,materials);
           }
           const source = tileSourceGeometry(data);
           const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));
