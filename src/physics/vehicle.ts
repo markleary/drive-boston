@@ -7,6 +7,7 @@ import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampl
 import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, registerDriveSurface } from '../simulation/road-surfaces.ts';
 import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
+import {tireSlipIntensity,type TireContact} from '../simulation/tire-tracks.ts';
 
 export const VEHICLE = PLAYER_CARS[DEFAULT_CAR];
 export const carSteeringLimit=(speed:number,spec:typeof PLAYER_CARS[PlayerCarId]=VEHICLE)=>Math.min(spec.maxSteering,Math.atan(spec.maxLateralAcceleration*spec.wheelbase/(speed*speed+16)));
@@ -68,6 +69,8 @@ export class DrivingPhysics {
   /** Ground colliders (whole-city trimesh or streamed tiles), so an impact can be classified. */
   readonly terrainColliders = new Set<number>();
   private impacts: Impact[] = [];
+  /** Break visual tire trails across resets, travel and vehicle changes. */
+  poseRevision=0;
   /** Impacts recorded since the previous call; the caller plays their sounds. */
   takeImpacts() { const list = this.impacts; this.impacts = []; return list; }
   private readonly bounds: CityData['bounds'];
@@ -408,6 +411,23 @@ export class DrivingPhysics {
     };
   }
 
+  getTireContacts(input:DriveInput):TireContact[]{
+    const c=this.controller,p=this.body.translation(),q=this.body.rotation(),v=this.body.linvel(),w=this.body.angvel(),contacts:TireContact[]=[];
+    const yaw=Math.atan2(2*(q.x*q.z+q.w*q.y),1-2*(q.x*q.x+q.y*q.y)),bike=!!this.bike,up=1-2*(q.x*q.x+q.z*q.z);
+    if(up<.4)return contacts;
+    for(let i=0;i<c.numWheels();i++){
+      if(!c.wheelIsInContact(i))continue;
+      const point=c.wheelContactPoint(i),normal=c.wheelContactNormal(i),ground=c.wheelGroundObject(i);
+      const parent=ground?.parent();
+      if(!point||!normal||normal.y<.5||!ground||parent&&!parent.isFixed())continue;
+      const rx=point.x-p.x,ry=point.y-p.y,rz=point.z-p.z;
+      const vx=v.x+w.y*rz-w.z*ry,vz=v.z+w.x*ry-w.y*rx,heading=yaw+(c.wheelSteering(i)??0);
+      const speed=vx*Math.sin(heading)+vz*Math.cos(heading),side=vx*Math.cos(heading)-vz*Math.sin(heading);
+      contacts.push({wheel:i,x:point.x,y:point.y,z:point.z,normal:{x:normal.x,y:normal.y,z:normal.z},width:bike?.11:this.carId==='mclaren-gt'?(i<2?.225:.295):.235,intensity:tireSlipIntensity(input,speed,side,bike?i===1:i>=2,bike)});
+    }
+    return contacts;
+  }
+
   private resetPose(x:number,z:number,yaw:number,roadId?:string){
     const surface=sampleDriveSurface(this.city,x,z,undefined,roadId),normal=surface.normal;
     return{normal,position:{x,y:surface.height+(this.bike?ULTRA_BEE.spawnHeight:this.carSpec.spawnHeight)/Math.max(.5,normal.y),z},rotation:rotationFromNormal(normal,yaw)};
@@ -431,6 +451,7 @@ export class DrivingPhysics {
 
   reset(x: number, z: number, yaw: number, roadId?:string) {
     if (![x, z, yaw].every(Number.isFinite)) return;
+    this.poseRevision++;
     this.rescue = { x, z, yaw,roadId };
     const {position,rotation}=this.resetPose(x,z,yaw,roadId);
     this.body.setTranslation(position, true);
