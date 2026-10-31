@@ -42,6 +42,18 @@ test('every restored source span joins retained decks at exactly the same height
  for(const id of ['water-link-14557-0-0','water-link-14614-0-0','water-link-14615-0-0','water-link-14902-0-0','water-link-16428-0-0'])assert.ok(spans.find(r=>r.id===id));
 });
 
+// Reported at Dorchester Avenue: each per-segment profile had lifted the bank
+// nodes 6.4 m above the quay, so both bridges humped 4.4 m inside a 10 m stub.
+test('the Summer Street and Congress Street bridges are level decks between their Dorchester Avenue junctions',()=>{
+ for(const ids of [['16427-0-0','16424-0-0','water-link-16424-0-0','16424-0-1','18106-0-0'],['16432-0-0','16428-0-0','water-link-16428-0-0','16428-0-1','17615-0-0']]){
+  const roads=ids.map(id=>metro.roads.find(r=>r.id===id));assert.ok(roads.every(Boolean));
+  const heights=roads.flatMap(r=>r.elevations);assert.ok(Math.max(...heights)-Math.min(...heights)<1.5,`${ids[0]}: no hump between the junctions and the channel span`);
+  for(const r of roads)for(let i=1;i<r.points.length;i++){const d=Math.hypot(r.points[i][0]-r.points[i-1][0],r.points[i][1]-r.points[i-1][1]);assert.ok(Math.abs(r.elevations[i]-r.elevations[i-1])<=.05*d+1e-6,`${r.id} ramps steeper than 5% at point ${i}`);}
+  for(const [r,i]of [[roads[0],0],[roads.at(-1),roads.at(-1).points.length-1]])assert.ok(Math.abs(r.elevations[i]-sampleElevation(metro,...r.points[i]))<.02,`${r.id} meets the graded street at its junction`);
+  const span=roads[2];assert.ok(span.elevations.every(y=>y===span.elevations[0]),'the channel span is flat');
+ }
+});
+
 test('long unsplit source segments receive repeated supports and keep lower streets clear',()=>{
  const road={id:'upper',name:'Upper',points:[[0,0],[0,220]],width:10,elevations:[10,10],bridge:{thickness:.75}},lower={id:'lower',name:'Lower',points:[[-20,86],[20,86]],width:9};
  const supports=bridgeSupports({roads:[road,lower]},road);
