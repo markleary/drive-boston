@@ -1,6 +1,6 @@
 # Back Bay sound effects
 
-These eleven synthetic sound effects were generated for this prototype with ElevenLabs Sound Effects v2. They are not recordings of Boston or of a particular vehicle. No voices, music, or third-party recordings were supplied. The prompts, requested durations, provider settings, generation timestamps, and file checksums are recorded in [provenance.json](./provenance.json).
+These sixteen synthetic sound effects were generated for this prototype with ElevenLabs Sound Effects v2. They are not recordings of Boston or of a particular vehicle. No voices, music, or third-party recordings were supplied. The prompts, requested durations, provider settings, generation timestamps, and file checksums are recorded in [provenance.json](./provenance.json).
 
 | File | Requested duration | Use |
 | --- | ---: | --- |
@@ -21,3 +21,9 @@ The first six clips totaled 39 seconds. The helicopter iteration added one eight
 The generator is a local development tool: `node scripts/generate-audio.mjs` previews its plan, and adding `--generate` makes billable requests for missing files. Existing assets are skipped. It reads `ELEVENLABS_API_KEY` from the shell or the ignored root `.env`, sends it only as an authentication header to `https://api.elevenlabs.io`, and never includes it in game code or public output. There are no runtime provider calls. If generation is interrupted after a provider response but before a file is saved, inspect the account's usage before repeating the request; the script intentionally does not retry automatically.
 
 Generated output use is subject to the generating account's applicable [ElevenLabs terms](https://elevenlabs.io/terms-of-use). Generation alone does not verify account subscription or license scope. API request fields follow the [official Sound Effects API reference](https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert).
+
+## McLaren GT
+
+Five car-specific effects (22 seconds) were generated with the same ElevenLabs v2 settings: `mclaren-gt-idle` (6 s loop), `mclaren-gt-drive` (8 s loop at 4,000 RPM), `mclaren-gt-high` (6 s loop at 7,000 RPM), `mclaren-gt-upshift` and `mclaren-gt-downshift` (1 s each, one-shots). These are synthetic GT V8 interpretations, not authentic vehicle recordings. The selected car controls the engine layers; the GT's actual Rapier drivetrain gear changes trigger its shift sounds. Shift playback uses a quieter mix, a 1,100 Hz low-pass filter, a 25 ms fade-in and an 80 ms fade-out to soften the generated clutch clicks while retaining the lower exhaust/blip character. Pause, mute, vehicle-mode changes and car changes gate/cancel the sounds.
+
+Generate just these missing assets with `node scripts/generate-audio.mjs --only=mclaren-gt --generate`. The 60-second generation guard applies to pending assets per invocation. Existing files are never regenerated. The full library now totals 77.5 requested seconds.

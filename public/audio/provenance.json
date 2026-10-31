@@ -116,6 +116,56 @@
       "generatedAt": "2026-10-29T20:07:31.963Z",
       "bytes": 24702,
       "sha256": "cff03da3d5bf5a1a9f12e6ba9e2c02d9f603e90621c4288c6ebea9ee64187416"
+    },
+    {
+      "id": "mclaren-gt-idle",
+      "seconds": 6,
+      "loop": true,
+      "prompt": "Close dry recording of a McLaren GT M840TE 4.0 litre twin turbo V8 idling steadily at 850 RPM. Refined low burbling eight cylinder exhaust with subtle metallic ticking. Exactly constant engine speed and level, seamless continuous loop. No revving, gear changes, start or stop, voices, music or other cars.",
+      "file": "mclaren-gt-idle.mp3",
+      "generatedAt": "2026-10-31T12:53:54.199Z",
+      "bytes": 97009,
+      "sha256": "8d19d7021a62d03a286373eb5e772bd127c983debb4383718abcf7979310ba18"
+    },
+    {
+      "id": "mclaren-gt-drive",
+      "seconds": 8,
+      "loop": true,
+      "prompt": "McLaren GT 4.0 litre twin turbo V8 held steadily at 4000 RPM under engine load, rear exhaust perspective. Rich sharp supercar V8 growl, tight rapid combustion pulses, restrained turbo whistle. Constant pitch and load for seamless looping. No acceleration, gear changes, flyby, Doppler effect, tire squeal, voices or music.",
+      "file": "mclaren-gt-drive.mp3",
+      "generatedAt": "2026-10-31T12:53:57.574Z",
+      "bytes": 129192,
+      "sha256": "e85de095582f80ae081e86ccf3ee32eabcdb9500a3a4774257e321ffd705f1c5"
+    },
+    {
+      "id": "mclaren-gt-high",
+      "seconds": 6,
+      "loop": true,
+      "prompt": "McLaren GT M840TE twin turbo V8 held at exactly constant 7000 RPM under heavy throttle, close dry rear exhaust recording. High urgent raspy V8 howl and fine turbo hiss, constant pitch and volume throughout, seamless loop. No gear shifts, acceleration sweep, flyby, tires, voices or music.",
+      "file": "mclaren-gt-high.mp3",
+      "generatedAt": "2026-10-31T12:54:00.155Z",
+      "bytes": 97009,
+      "sha256": "c40c8b5c91dff4930f8139f2ed21c6c3f5f851ae16d0b19c11f22b550697383a"
+    },
+    {
+      "id": "mclaren-gt-upshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "A single immediate fast McLaren GT seven speed dual clutch full throttle upshift. Very brief sharp exhaust crack and mechanical clutch snap with a short turbo air chirp and sudden falling V8 pitch, then silence. One short dry transient within a quarter second. No repeated shifting, long revs, voices or music.",
+      "file": "mclaren-gt-upshift.mp3",
+      "generatedAt": "2026-10-31T12:54:01.927Z",
+      "bytes": 17179,
+      "sha256": "2deb550a155c9f7a41c1c9b5d1c59b26adad5fcaafa934b113f54e3c6b2b63d9"
+    },
+    {
+      "id": "mclaren-gt-downshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "A single immediate McLaren GT seven speed dual clutch downshift: short precise automatic throttle blip of a twin turbo V8 with a tight mechanical clutch click, then silence. One short dry transient under half a second. No repeated revs, gear changes, voices, music or ambient noise.",
+      "file": "mclaren-gt-downshift.mp3",
+      "generatedAt": "2026-10-31T12:54:04.243Z",
+      "bytes": 17179,
+      "sha256": "70c1d7a040d7d08c4847069a58e9ed55662a70416a6234e6bc06ce85508dd6fa"
     }
   ]
 }

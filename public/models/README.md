@@ -71,3 +71,5 @@ targets are 58/38/22 for busy/mixed/residential districts (previously 48/32/18).
 The fleet mix favors compact cars and sedans; seven of the 77 are box trucks.
 Paint is sampled from each type's realistic palette and remains stable for
 that vehicle. Pedestrian density is unchanged.
+
+Player car meshes and reference/calibration notes: [Harbor S4 and McLaren GT](./PLAYER_CARS.md).

@@ -1,12 +1,15 @@
+import {DEFAULT_CAR, type PlayerCarId} from './player-cars.ts';
 import type { DriveInput, TravelMode } from '../types';
 
-type SoundName = 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
+type GTSound = 'mclaren-gt-idle' | 'mclaren-gt-drive' | 'mclaren-gt-high' | 'mclaren-gt-upshift' | 'mclaren-gt-downshift';
+type SoundName = GTSound | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
 /** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
 type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number };
 interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; }
-const SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
-const ONE_SHOTS = new Set<SoundName>(['horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
+const GT_SOUNDS:GTSound[]=['mclaren-gt-idle','mclaren-gt-drive','mclaren-gt-high','mclaren-gt-upshift','mclaren-gt-downshift'];
+const SOUNDS: SoundName[] = [...GT_SOUNDS,'engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
+const ONE_SHOTS = new Set<SoundName>(['mclaren-gt-upshift','mclaren-gt-downshift','horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
 /** Velocity change (m/s in one physics step) below which a knock is a bump rather than a crash. */
 const LIGHT_IMPACT = 3.5;
 const clamp = (value: number, low = 0, high = 1) => Math.max(low, Math.min(high, value));
@@ -22,6 +25,14 @@ export class DriveAudio {
   private fallback?: { oscillator: OscillatorNode; gain: GainNode; filter: BiquadFilterNode };
   private electric?: {oscillator:OscillatorNode;gain:GainNode};
   private rotorFallback?: { oscillator: OscillatorNode; modulator: OscillatorNode; gain: GainNode };
+  private carId:PlayerCarId=DEFAULT_CAR;
+  private previousDriveGear=0;
+  private lastShift=-Infinity;
+  private shiftCount=0;
+  setCar(id:PlayerCarId){
+    if(id===this.carId)return;this.carId=id;this.previousDriveGear=0;this.gear=0;this.rpm=850;this.stopOneShots();
+    if(this.context)for(const name of ['engine-idle','engine-drive',...GT_SOUNDS] as SoundName[])this.loops.get(name)?.gain.gain.setTargetAtTime(0,this.context.currentTime,.025);
+  }
   private mode: TravelMode = 'drive';
   private disposed = false;
   private muted = false;
@@ -45,10 +56,11 @@ export class DriveAudio {
 
   setMode(mode: TravelMode) {
     if (mode === this.mode) return;
-    this.mode = mode; this.stopOneShots();
+    this.mode = mode; this.previousDriveGear=0;this.stopOneShots();
     if (!this.context) return;
     const now = this.context.currentTime;
     const silent: SoundName[] = mode === 'helicopter' ? ['engine-idle', 'engine-drive', 'tire-road', 'tire-skid'] : mode==='bike'?['engine-idle','engine-drive','helicopter-rotor','tire-skid']:['helicopter-rotor'];
+    if(mode!=='drive')silent.push(...GT_SOUNDS);
     this.electric?.gain.gain.setTargetAtTime(0,now,.1);
     for (const name of silent) this.loops.get(name)?.gain.gain.setTargetAtTime(0, now, 0.1);
     if (mode !== 'drive') this.fallback?.gain.gain.setTargetAtTime(0, now, 0.1);
@@ -58,7 +70,7 @@ export class DriveAudio {
   /** A fresh, read-only snapshot for local diagnostics; never exposes audio nodes. */
   getStatus() {
     return {
-      context: this.context?.state ?? 'not-started', mode: this.mode,
+      carId:this.carId,shiftCount:this.shiftCount,context: this.context?.state ?? 'not-started', mode: this.mode,
       enabled: this.enabled, paused: this.paused || document.hidden,
       loadedCount: this.buffers.size, expectedCount: SOUNDS.length,
       decodedBytes:[...this.buffers.values()].reduce((bytes,b)=>bytes+b.length*b.numberOfChannels*4,0),
@@ -68,7 +80,7 @@ export class DriveAudio {
       masterGain: this.master?.gain.value ?? 0, rpm: Math.round(this.rpm), gear: this.gear + 1,
       rotorGain: this.loops.get('helicopter-rotor')?.gain.gain.value ?? 0,
       electricGain:this.electric?.gain.gain.value??0, impactCount: this.impactCount,
-      engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0),
+      engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0)+GT_SOUNDS.reduce((sum,name)=>sum+(this.loops.get(name)?.gain.gain.value??0),0),
     };
   }
 
@@ -104,7 +116,7 @@ export class DriveAudio {
     this.syncMaster();
     const now = context.currentTime;
     const dt = clamp(now - this.previousTime, 0, 0.1); this.previousTime = now;
-    if (paused || document.hidden) return;
+    if (paused || document.hidden) {this.previousDriveGear=0;return;}
 
     const velocity = Math.abs(Number.isFinite(speed) ? speed : 0);
     const pedal = clamp(Number.isFinite(throttle) ? Math.abs(throttle) : 0);
@@ -146,9 +158,27 @@ export class DriveAudio {
     const targetRpm = controls?.rpm ?? (velocity < 0.7 ? 850 + load * 1050 : 1250 + progress * 2300 + load * 450);
     if(controls?.gear!==undefined)this.gear=Math.max(0,Math.abs(controls.gear)-1);
     this.rpm += (targetRpm - this.rpm) * (1 - Math.exp(-dt * 5));
-    const mix = clamp(Math.max(velocity / 6, load * 0.52));
-    this.setLoop('engine-idle', Math.cos(mix * Math.PI / 2) * (0.43 + load * 0.12), clamp(this.rpm / 1000, 0.82, 1.55), 780 + load * 650);
-    this.setLoop('engine-drive', Math.sin(mix * Math.PI / 2) * (0.46 + load * 0.3), clamp(this.rpm / 2600, 0.55, 1.8), 1300 + load * 2400 + this.rpm * 0.25);
+    const gt=this.carId==='mclaren-gt';
+    if(gt){
+      const nextGear=controls?.gear??1;
+      if(this.previousDriveGear>0&&nextGear>0&&nextGear!==this.previousDriveGear&&velocity>2&&now-this.lastShift>.12){
+        const buffer=this.buffers.get(nextGear>this.previousDriveGear?'mclaren-gt-upshift':'mclaren-gt-downshift');
+        if(buffer&&!this.muted){this.playOneShot(buffer,nextGear>this.previousDriveGear?.26:.24,1,true);this.shiftCount++;}
+        this.lastShift=now;
+      }
+      this.previousDriveGear=nextGear;
+      const driveMix=clamp(Math.max(velocity/8,load*.6)),highMix=clamp((this.rpm-4500)/2300);
+      const shiftDuck=now-this.lastShift<.075?.55:1;
+      this.setLoop('mclaren-gt-idle',(1-driveMix)*.48,clamp(this.rpm/850,.85,1.5),1200);
+      this.setLoop('mclaren-gt-drive',driveMix*(1-highMix)*(.44+load*.23)*shiftDuck,clamp(this.rpm/4000,.48,1.85),1800+load*3300);
+      this.setLoop('mclaren-gt-high',driveMix*highMix*(.40+load*.25)*shiftDuck,clamp(this.rpm/7000,.6,1.25),3000+load*4300);
+      this.setLoop('engine-idle',0,1,1000);this.setLoop('engine-drive',0,1,1000);
+    }else{
+      const mix=clamp(Math.max(velocity/6,load*.52));
+      this.setLoop('engine-idle',Math.cos(mix*Math.PI/2)*(.43+load*.12),clamp(this.rpm/1000,.82,1.55),780+load*650);
+      this.setLoop('engine-drive',Math.sin(mix*Math.PI/2)*(.46+load*.3),clamp(this.rpm/2600,.55,1.8),1300+load*2400+this.rpm*.25);
+      for(const name of GT_SOUNDS)this.setLoop(name,0,1,2000);
+    }
     this.setLoop('city-ambience', 0.17 / (1 + velocity * 0.035), 1, 4200);
     this.setLoop('tire-road', Math.pow(clamp(velocity / 25), 0.8) * 0.44, clamp(0.62 + velocity / 32, 0.62, 1.6), 1400 + velocity * 90);
 
@@ -159,7 +189,7 @@ export class DriveAudio {
     this.setLoop('tire-skid', Math.max(cornerScrub, lockedTires, hardBraking) * 0.32, clamp(0.85 + velocity * 0.014, 0.85, 1.4), 3600);
     if (this.fallback) {
       this.fallback.oscillator.frequency.setTargetAtTime(this.rpm / 30, now, 0.12);
-      this.fallback.gain.gain.setTargetAtTime(0.035 + load * 0.045, now, 0.1);
+      this.fallback.gain.gain.setTargetAtTime(gt?0:0.035 + load * 0.045, now, 0.1);
       this.fallback.filter.frequency.setTargetAtTime(160 + load * 180, now, 0.1);
     }
   }
@@ -175,12 +205,22 @@ export class DriveAudio {
     else if (this.failed.has('horn')) this.fallbackHorn();
   }
 
-  private playOneShot(buffer: AudioBuffer, volume: number, rate: number) {
+  private playOneShot(buffer: AudioBuffer, volume: number, rate: number, softShift=false) {
     const context = this.context!;
     const source = context.createBufferSource(); source.buffer = buffer; source.playbackRate.value = rate;
     const gain = context.createGain(); gain.gain.value = volume;
-    source.connect(gain); gain.connect(this.master!); this.oneShots.add(source);
-    source.onended = () => { this.oneShots.delete(source); source.disconnect(); gain.disconnect(); };
+    let filter:BiquadFilterNode|undefined;
+    if(softShift){
+      // The generated clutch snap is too sharp beside the engine loops. Keep
+      // its low exhaust character, with a gentle onset and a quieter mix.
+      filter=context.createBiquadFilter();filter.type='lowpass';filter.frequency.value=1100;filter.Q.value=.5;
+      source.connect(filter);filter.connect(gain);
+      const now=context.currentTime,duration=buffer.duration/rate;
+      gain.gain.setValueAtTime(0,now);gain.gain.linearRampToValueAtTime(volume,now+.025);
+      gain.gain.setValueAtTime(volume,now+Math.max(.025,duration-.08));gain.gain.linearRampToValueAtTime(0,now+duration);
+    }else source.connect(gain);
+    gain.connect(this.master!); this.oneShots.add(source);
+    source.onended = () => { this.oneShots.delete(source); source.disconnect(); filter?.disconnect(); gain.disconnect(); };
     source.start();
   }
 
@@ -282,8 +322,8 @@ export class DriveAudio {
     const loop = this.loops.get(name);
     if (!loop || !this.context) return;
     const now = this.context.currentTime;
-    if (name === 'engine-idle' && this.failed.has('engine-drive')) volume = Math.max(volume, 0.46);
-    if (name === 'engine-drive' && this.failed.has('engine-idle')) volume = Math.max(volume, 0.4);
+    if (volume>0 && name === 'engine-idle' && this.failed.has('engine-drive')) volume = Math.max(volume, 0.46);
+    if (volume>0 && name === 'engine-drive' && this.failed.has('engine-idle')) volume = Math.max(volume, 0.4);
     loop.gain.gain.setTargetAtTime(volume, now, name === 'tire-skid' ? 0.07 : 0.14);
     loop.source.playbackRate.setTargetAtTime(rate, now, 0.12);
     loop.filter.frequency.setTargetAtTime(cutoff, now, 0.12);

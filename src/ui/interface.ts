@@ -1,3 +1,4 @@
+import {DEFAULT_CAR, PLAYER_CARS, isPlayerCarId, type PlayerCarId} from '../simulation/player-cars.ts';
 import type { CameraMode, CityData, DriveInput, LightingMode, Point2, TravelMode, VehicleState } from '../types';
 import type { QualityMode } from '../render/graphics';
 import { areaAt, indexAreas } from './geography';
@@ -23,6 +24,7 @@ export interface InterfaceCallbacks {
   onSound?(enabled: boolean): void;
   onStart?(): void;
   onQuality?(mode: QualityMode): void;
+  onCar?(id:PlayerCarId):void;
   onTravelMode?(mode: TravelMode): void;
 }
 
@@ -95,6 +97,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       <div class="panel"><button class="close-btn" id="close-settings" aria-label="Resume driving">${svg('close')}</button><div class="eyebrow">Take a moment</div><h2 id="settings-title">Your afternoon.</h2>
         <div class="touch-settings"><span class="setting-label">Touch controls</span><div class="segments" aria-label="Touch control layout"><button data-touch-mode="analog" class="active" aria-pressed="true">Steering + pedals</button><button data-touch-mode="joystick" aria-pressed="false">Combined joystick</button></div><p class="touch-help" id="touch-help">Drag left or right to steer. Use Gas and Brake to control speed. Stop before choosing D or R.</p>
         <span class="setting-label">Your vehicle</span><div class="segments" aria-label="Mobile travel mode"><button data-travel="drive" class="active" aria-pressed="true">Car</button><button data-travel="bike" aria-pressed="false">Ultra Bee</button><button data-travel="helicopter" aria-pressed="false">Helicopter</button></div></div>
+        <span class="setting-label">Your car</span><div class="segments" aria-label="Choose your car">${Object.entries(PLAYER_CARS).map(([id,car])=>`<button data-car="${id}" aria-pressed="${id===DEFAULT_CAR}" class="${id===DEFAULT_CAR?'active':''}">${car.name}</button>`).join('')}</div><p class="touch-help" id="car-description">${PLAYER_CARS[DEFAULT_CAR].description}</p>
         <span class="setting-label">Time of day</span><div class="segments" aria-label="Time of day"><button data-light="golden" class="active" aria-pressed="true">Golden hour</button><button data-light="day" aria-pressed="false">Daylight</button><button data-light="night" aria-pressed="false">Night</button></div>
         <span class="setting-label">Your view</span><div class="segments" aria-label="Camera"><button data-camera="chase" class="active" aria-pressed="true">Chase</button><button data-camera="hood" aria-pressed="false">Hood</button><button data-camera="aerial" aria-pressed="false">Aerial</button></div>
         <span class="setting-label">City sound</span><div class="segments" aria-label="City sound"><button data-sound="on" class="active" aria-pressed="true">Sound on</button><button data-sound="off" aria-pressed="false">Muted</button></div>
@@ -135,6 +138,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   try { graphicsReport = localStorage.getItem('backbay-graphics-interruption-v1') ?? ''; } catch { /* Optional storage. */ }
   let camera: CameraMode = 'chase', lighting: LightingMode = 'golden', sound = true;
   let travelMode: TravelMode = 'drive', altitude = 0;
+  let carId:PlayerCarId=DEFAULT_CAR;
   let state: VehicleState = { ...city.spawn, y: 1, speed: 0, steering: 0 };
   let lastMapDraw = 0, lastLocation = 0, toastTimer = 0, nextShown = false;
   let mapCenter: Point2 = [(city.bounds.minX + city.bounds.maxX) / 2, (city.bounds.minZ + city.bounds.maxZ) / 2];
@@ -419,6 +423,15 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   host.querySelectorAll<HTMLButtonElement>('[data-touch-mode]').forEach(b=>on(b,'click',()=>setTouchMode(b.dataset.touchMode as TouchDrivingMode,true)));
   host.querySelector('[data-hud="performance"]')!.addEventListener('click',diagnostics.togglePerformance);
   host.querySelector('[data-hud="debug"]')!.addEventListener('click',diagnostics.toggleDebug);
+  function setCar(id:PlayerCarId,persist=false){
+    carId=id;
+    host.querySelectorAll<HTMLButtonElement>('[data-car]').forEach(button=>{const selected=button.dataset.car===id;button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));});
+    el('car-description').textContent=PLAYER_CARS[id].description;
+    callbacks.onCar?.(id);
+    if(persist)try{localStorage.setItem('boston-player-car-v1',id);}catch{/* Optional preference. */}
+  }
+  host.querySelectorAll<HTMLButtonElement>('[data-car]').forEach(button=>on(button,'click',()=>{if(isPlayerCarId(button.dataset.car)){setCar(button.dataset.car,true);toast(`${PLAYER_CARS[button.dataset.car].name} selected`);}}));
+  try{const saved=localStorage.getItem('boston-player-car-v1');if(isPlayerCarId(saved))setCar(saved);}catch{/* Optional preference. */}
   host.querySelectorAll<HTMLButtonElement>('[data-travel]').forEach(b => on(b, 'click', () => { if (started && !graphicsInterrupted && (!isPaused()||settingsOpen)) { setTravelMode(b.dataset.travel as TravelMode, true); b.blur(); } }));
   for (const source of city.sources) {
     const li = document.createElement('li'), a = document.createElement('a');
@@ -591,9 +604,10 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   function update(next: VehicleState, stats?: InterfaceStats) {
     if(stats?.travelMode && stats.travelMode!==travelMode)setTravelMode(stats.travelMode);
     state=next;touchDriving.setSpeed(state.speed);latestStats=stats??{};const speed=Math.abs(state.speed)*2.236936;
-    const speedScale=travelMode==='helicopter'?HELICOPTER.cruiseSpeed*2.236936:travelMode==='bike'?56:65;
+    const speedScale=travelMode==='helicopter'?HELICOPTER.cruiseSpeed*2.236936:travelMode==='bike'?56:PLAYER_CARS[carId].maxForwardSpeed*2.236936;
     el('speed-value').textContent=String(Math.round(speed));el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;el('gear').textContent=travelMode==='helicopter'?'H':state.speed<-.3?'R':travelMode==='bike'?'E':`D${stats?.gear&&stats.gear>0?stats.gear:''}`;
     el('gear').title=travelMode==='drive'&&stats?.rpm?`Automatic transmission · ${Math.round(stats.rpm)} rpm`:'';
+    if(travelMode==='drive')el('journey-label').textContent=PLAYER_CARS[carId].name.toUpperCase();
     if(travelMode==='bike')el('journey-label').textContent=(stats?.wheelieRemaining??0)>0?`WHEELIE · ${Math.ceil(stats!.wheelieRemaining!)}s`:'ULTRA BEE · ELECTRIC';
     if(travelMode==='helicopter'){
       altitude=Math.max(0,stats?.altitude??state.y);el('altitude-value').textContent=String(Math.round(altitude*3.28084));
