@@ -32,6 +32,8 @@ import { addPrudentialCrown } from './render/prudential';
 import { addNeighborhoodDetails } from './render/neighborhood-architecture';
 import { updateFoliage } from './render/foliage';
 import { createGroundCover } from './render/ground-cover';
+import {createTireTracks} from './render/tire-tracks';
+import {createTireSurfaceSampler} from './simulation/tire-tracks';
 import { addRooftopDetails } from './render/rooftops';
 import { createStreetLife } from './render/street-life';
 import { createInterface } from './ui/interface';
@@ -185,6 +187,7 @@ async function boot(){
     if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait});}
     else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile,waitForContext:contextGate.wait})]);physics=results[0];world=results[1];}
     const streamer=world.streamer;
+    const tireTracks=createTireTracks(scene,city,createTireSurfaceSampler(city,()=>Array.from(streamer?.loaded.values()??[],entry=>entry.tile)));
     if(streamer){const arrival=mobile&&saved?saved:city.spawn;ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(arrival.x,arrival.z);}
     await contextGate.wait();
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
@@ -323,7 +326,7 @@ async function boot(){
       if(!paused&&travelMode==='drive'&&pad.pressed.has('LS'))audio.horn();
       const controls=paused||flying?{throttle:0,brake:flying?1:0,steer:0,handbrake:flying}:input();
       const flightControls=paused||!flying?{forward:0,strafe:0,turn:0,lift:0}:flightInput();
-      if(!paused){accumulator+=dt;while(accumulator>=1/60){const before=physics!.getState(),observer=flying?flight!.state:before;transit!.update(1/60,before,observer,traffic!.obstacles());traffic!.update(1/60,before,observer,transit!.obstacles());physics!.step(controls,1/60);elapsed+=1/60;accumulator-=1/60;if(!flying)distance+=Math.abs(before.speed)/60;}}else accumulator=0;
+      if(!paused){accumulator+=dt;while(accumulator>=1/60){const before=physics!.getState(),observer=flying?flight!.state:before;transit!.update(1/60,before,observer,traffic!.obstacles());traffic!.update(1/60,before,observer,transit!.obstacles());physics!.step(controls,1/60);elapsed+=1/60;tireTracks.update(flying?[]:physics!.getTireContacts(controls),elapsed,physics!.poseRevision);accumulator-=1/60;if(!flying)distance+=Math.abs(before.speed)/60;}}else accumulator=0;
       // Flight already substeps at <= 1/120 s and sweeps its full movement for
       // clearance. Advance it on the camera's clock: quantizing it to Rapier's
       // 60 Hz ticks makes a moving aircraft bob against the smoothed camera.
@@ -398,7 +401,7 @@ async function boot(){
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
       flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw)),
       /** Browser specs: the live scene graph and renderer, for attributing resource growth to its owner group. */
-      scene,renderer,
+      scene,renderer,tireTracks,
       /** Browser specs: draw every resident object once, with frustum culling off and distance-hidden objects shown (lights stay as they are so no shader variant recompiles). three.js uploads a geometry's GL buffers on its first draw, so without this the renderer's geometry count and buffer bytes track what the camera has happened to see rather than what the scene holds. */
       drawResident:()=>{const culled:THREE.Object3D[]=[],hidden:THREE.Object3D[]=[];scene.traverse(o=>{if(o.frustumCulled){o.frustumCulled=false;culled.push(o);}if(!o.visible&&!(o as THREE.Light).isLight){o.visible=true;hidden.push(o);}});try{renderer.render(scene,camera);}finally{for(const o of culled)o.frustumCulled=true;for(const o of hidden)o.visible=false;}}};
     Object.assign(window,{__backbay:diagnostic});
