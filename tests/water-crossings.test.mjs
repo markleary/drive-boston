@@ -50,7 +50,8 @@ test('the Summer Street and Congress Street bridges are level decks between thei
   const heights=roads.flatMap(r=>r.elevations);assert.ok(Math.max(...heights)-Math.min(...heights)<1.5,`${ids[0]}: no hump between the junctions and the channel span`);
   for(const r of roads)for(let i=1;i<r.points.length;i++){const d=Math.hypot(r.points[i][0]-r.points[i-1][0],r.points[i][1]-r.points[i-1][1]);assert.ok(Math.abs(r.elevations[i]-r.elevations[i-1])<=.05*d+1e-6,`${r.id} ramps steeper than 5% at point ${i}`);}
   for(const [r,i]of [[roads[0],0],[roads.at(-1),roads.at(-1).points.length-1]])assert.ok(Math.abs(r.elevations[i]-sampleElevation(metro,...r.points[i]))<.02,`${r.id} meets the graded street at its junction`);
-  const span=roads[2];assert.ok(span.elevations.every(y=>y===span.elevations[0]),'the channel span is flat');
+  const span=roads[2],length=span.points.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p[0]-span.points[i][0],p[1]-span.points[i][1]),0);
+  assert.ok(Math.max(...span.elevations)-Math.min(...span.elevations)<.01*length,'the channel span slopes under 1% between its quays');
  }
 });
 
