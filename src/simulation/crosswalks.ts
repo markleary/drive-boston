@@ -16,14 +16,14 @@ import { pavementSpan, polylineLength, roadwaySpan, stationAlong } from './tile-
  * meets it or a traffic signal stands within `SIGNAL_REACH`. Alleys, unnamed ways and ramps never justify a
  * crosswalk and are never striped. Crosswalks on one roadway closer than `MIN_SPACING` keep the one at the signal,
  * then the stem, then the wider cross street: the two carriageways of a divided street split at different nodes and
- * would stripe the shared asphalt twice. */
+ * would stripe the shared asphalt twice; the two sides of one junction are never thinned against each other. */
 export const CROSSWALK_SETBACK = 1, STRIPE_LENGTH = 3, MIN_SPACING = 12, COMPARABLE = .75, SIGNAL_REACH = 25, MIN_ROAD = 18, MIN_WIDTH = 7;
 export const NO_CROSSWALK = /alley|unnamed/i;
 
 export interface Leg { road: Road; tx: number; tz: number }
 export interface JunctionIndex { legsAt(p: Point2): Leg[]; signalNear(p: Point2): boolean }
 export interface Edges { left: Point2[]; right: Point2[] }
-export interface Crosswalk { road: Road; at: Point2; tx: number; tz: number; span: [number, number]; priority: number }
+export interface Crosswalk { road: Road; /** The junction vertex the crosswalk belongs to. */ node: Point2; at: Point2; tx: number; tz: number; span: [number, number]; priority: number }
 
 const cell = (x: number, z: number) => `${Math.round(x)}:${Math.round(z)}`;
 /** The unit direction from vertex `i` toward the vertex 4 m along the line (or the line's end) in direction `step`. */
@@ -51,16 +51,25 @@ function insideRecord(edges: Edges, line: Point2[], p: Point2): boolean {
   const off = (p[1] - at[1]) * tx - (p[0] - at[0]) * tz; return off > span[0] - .3 && off < span[1] + .3;
 }
 
-/** Every road vertex, so a street that ends on another's mid-vertex (half the T junctions are not split) still finds it. */
-export function junctionIndex(roads: Road[], signals: Point2[]): JunctionIndex {
+/** Every road vertex, so a street that ends on another's mid-vertex (half the T junctions are not split) still finds it.
+ * Built in steps (a yield every 400 roads) so the first tile build can pace the whole metro's 20k roads across frames. */
+export function* junctionIndexSteps(roads: Road[], signals: Point2[]): Generator<void, JunctionIndex> {
   const legs = new Map<string, { p: Point2; legs: Leg[] }[]>(), lights = new Map<string, Point2[]>();
   const put = (p: Point2, leg: Leg) => { const k = cell(p[0], p[1]); let list = legs.get(k); if (!list) legs.set(k, list = []); let node = list.find(n => Math.hypot(n.p[0] - p[0], n.p[1] - p[1]) < .5); if (!node) list.push(node = { p, legs: [] }); node.legs.push(leg); };
-  for (const road of roads) for (let i = 0; i < road.points.length; i++) for (const step of [1, -1] as const) { const t = bearing(road.points, i, step); if (t) put(road.points[i], { road, tx: t[0], tz: t[1] }); }
+  for (const [i, road] of roads.entries()) {
+    if (i % 400 === 399) yield;
+    for (let j = 0; j < road.points.length; j++) for (const step of [1, -1] as const) { const t = bearing(road.points, j, step); if (t) put(road.points[j], { road, tx: t[0], tz: t[1] }); }
+  }
   for (const s of signals) { const k = cell(s[0] / SIGNAL_REACH, s[1] / SIGNAL_REACH); let list = lights.get(k); if (!list) lights.set(k, list = []); list.push(s); }
   return {
     legsAt(p) { const out: Leg[] = []; for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const n of legs.get(cell(p[0] + dx, p[1] + dz)) ?? []) if (Math.hypot(n.p[0] - p[0], n.p[1] - p[1]) < 1) out.push(...n.legs); return out; },
     signalNear(p) { for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const s of lights.get(cell(p[0] / SIGNAL_REACH + dx, p[1] / SIGNAL_REACH + dz)) ?? []) if (Math.hypot(s[0] - p[0], s[1] - p[1]) <= SIGNAL_REACH) return true; return false; },
   };
+}
+
+/** The whole index at once, for tests and tools. */
+export function junctionIndex(roads: Road[], signals: Point2[]): JunctionIndex {
+  const steps = junctionIndexSteps(roads, signals); let r = steps.next(); while (!r.done) r = steps.next(); return r.value;
 }
 
 /** A road leaving a junction vertex in one direction, seen from the node: how far along it the crossing roadways reach,
@@ -113,7 +122,7 @@ export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (ro
       const station = stationAlong(seq, end.offset); if (!station) continue;
       const { at, tx, tz } = station, edges = edgesOf(road), width = road.pavedWidth ?? road.width;
       const span = roadwaySpan((edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2], others, at, tx, tz);
-      candidates.push({ road, at, tx, tz, span, priority: end.priority });
+      candidates.push({ road, node: points[ends[j].i], at, tx, tz, span, priority: end.priority });
     }
   }
   candidates.sort((a, b) => b.priority - a.priority || (b.span[1] - b.span[0]) - (a.span[1] - a.span[0]));
@@ -121,6 +130,8 @@ export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (ro
   const center = (c: Crosswalk): Point2 => [c.at[0] + c.tx * STRIPE_LENGTH / 2, c.at[1] + c.tz * STRIPE_LENGTH / 2];
   for (const c of candidates) {
     const cc = center(c), crowded = kept.some(k => {
+      // The two sides of one junction are both wanted however narrow the cross street (a signal at a 5 m lane).
+      if (Math.hypot(k.node[0] - c.node[0], k.node[1] - c.node[1]) < 1) return false;
       const dot = k.tx * c.tx + k.tz * c.tz; if (Math.abs(dot) < .8) return false;
       const kc = center(k), dx = kc[0] - cc[0], dz = kc[1] - cc[1]; if (Math.abs(dx * c.tx + dz * c.tz) >= MIN_SPACING) return false;
       const n = -dx * c.tz + dz * c.tx, lo = dot > 0 ? n + k.span[0] : n - k.span[1], hi = dot > 0 ? n + k.span[1] : n - k.span[0];

@@ -8,7 +8,7 @@ import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
 import { pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
-import { junctionIndex, planCrosswalks, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
+import { junctionIndexSteps, planCrosswalks, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
@@ -215,7 +215,9 @@ export function createTileBuilder(ctx: TileContext) {
       {
         const borders = new Map(tile.borderPavements.map(p => [p.road, p]));
         const edgesOf = (road: Road) => { const p = pavementOf(road) ?? borders.get(road.id); return p && p.edges.length >= 8 ? pavementEdges(tile, p) : undefined; };
-        for (const { at, tx, tz, span: [lo, hi] } of planCrosswalks(ownedRoads, junctions ??= junctionIndex(city.roads, city.signals), edgesOf, allEdges)) {
+        // The citywide junction index (20k roads) is built once, paced across frames by the first tile that needs it.
+        if (!junctions) { const steps = junctionIndexSteps(city.roads, city.signals); let r = steps.next(); while (!r.done) { if (due(pace)) yield 'roads'; r = steps.next(); } junctions = r.value; }
+        for (const { at, tx, tz, span: [lo, hi] } of planCrosswalks(ownedRoads, junctions, edgesOf, allEdges)) {
           if (due(pace)) yield 'roads';
           for (let side = lo + .8; side < hi - .5; side += 1.35) {
             const x = at[0] - tz * side, z = at[1] + tx * side;

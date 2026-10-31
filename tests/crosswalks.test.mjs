@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {junctionIndex,planCrosswalks,STRIPE_LENGTH,CROSSWALK_SETBACK,MIN_SPACING} from '../src/simulation/crosswalks.ts';
+import {junctionIndex,junctionIndexSteps,planCrosswalks,STRIPE_LENGTH,CROSSWALK_SETBACK,MIN_SPACING} from '../src/simulation/crosswalks.ts';
 import {pavementEdges,pavementSpan,polylineLength} from '../src/simulation/tile-format.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
 import {hasMetroData,loadMetroCity} from './helpers/metro-city.mjs';
@@ -32,6 +32,16 @@ test('a traffic signal justifies crosswalks across the through street at a narro
   assert.deepEqual(on(lit,'main').map(c=>+c.at[0].toFixed(1)),[44.5,55.5],'with a signal at the lane: offsets of 4.5 m plus the setback');
   assert.ok(on(lit,'main').every(c=>c.priority>100),'signal crosswalks outrank the rest');
   assert.equal(on(lit,'alley').length,0,'alleys are not striped');
+  // A 5 m lane at a signal puts the two sides' centres 10 m apart, under the minimum spacing: both sides of one junction stay.
+  const narrow=plan([main,road('path',[[50,0],[50,60]],5,'Narrow Path')],{signals:[[52,3]]});
+  assert.deepEqual(on(narrow,'main').map(c=>+c.at[0].toFixed(1)),[46.5,53.5],'both sides of the signalled junction');
+});
+
+test('the junction index builds in steps so a tile build can pace it',()=>{
+  const roads=Array.from({length:1000},(_,i)=>road(`r${i}`,[[i*10,0],[i*10,50]],7));
+  const steps=junctionIndexSteps(roads,[]);let yields=0,r=steps.next();while(!r.done){yields++;r=steps.next();}
+  assert.equal(yields,2,'a yield every 400 roads');assert.equal(r.value.legsAt([40,0]).length,1);
+  assert.equal(junctionIndex(roads,[]).legsAt([40,50]).length,1,'the synchronous wrapper builds the same index');
 });
 
 test('the station follows the crossing street\'s measured record, so a side street meeting a wide roadway is striped beyond its far curb, not inside it',()=>{
