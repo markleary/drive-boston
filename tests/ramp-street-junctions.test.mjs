@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {roundedPath,pathRoad,join,lane,roadGraph} from '../src/simulation/traffic.ts';
-import {bridgeBarriers,sampleRoadElevation,RAIL_LIP} from '../src/simulation/road-surfaces.ts';
+import {bridgeBarriers,sampleRoadElevation,deckEdgeGrounded,junctionMouths,RAIL_LIP,SHELF_DROP,MOUTH_REACH} from '../src/simulation/road-surfaces.ts';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 
 // A ramp or bridge deck ends on an ordinary street at grade. The street keeps its
@@ -49,22 +49,45 @@ test('a ramp mouth at grade has no parapets until its deck edge stands off the g
   const cliff={roads:[shelf],elevation:{width:2,height:3,cellSize:60,originX:-30,originZ:-60,heights:[4,4,4,4,0,0]}};
   const sides=bridgeBarriers(cliff,shelf);
   assert.ok(sides.every(p=>p.z>0)&&sides.length,'the edge over the drop keeps its parapet, the edge on the ground gives none');
+  // A bridge approach whose graded verge is a shelf a few metres wide above an embankment (Alford Street at the Mystic) is not a street: the ground
+  // beside the rail is level with the deck, but it falls away within 7 m, so the rail stays. The same deck over ground that stays level gives none.
+  const approach={id:'approach',name:'Approach',width:8,oneway:1,points:[[0,0],[60,0]],elevations:[.3,.3]};
+  const rows=[-2,0,0,0,0,0,-2,-2],embankment={roads:[approach],elevation:{width:21,height:rows.length,cellSize:3,originX:0,originZ:-9,heights:rows.flatMap(h=>Array(21).fill(h))}};
+  const kept=bridgeBarriers(embankment,approach);
+  assert.ok(kept.some(p=>p.z>0)&&kept.some(p=>p.z<0),'both edges above the embankment keep their parapets');
+  assert.ok(kept.every(p=>p.y-.38<RAIL_LIP),'those rails stand on a deck that is itself on the ground');
+  assert.ok(!deckEdgeGrounded(embankment,30,4,.3,0,1)&&deckEdgeGrounded({roads:[approach],elevation:flat(0)},30,4,.3,0,1));
+  assert.deepEqual(bridgeBarriers({roads:[approach],elevation:flat(0)},approach),[],'on level ground the same deck has no rails');
+  assert.ok(SHELF_DROP>RAIL_LIP);
+  // Where that approach leaves a cross street, the shelf test waits until the junction mouth is behind: the first 12 m stay open for the crosswalk.
+  const cross={id:'cross',name:'Cross Street',width:8,points:[[0,-30],[0,0]]},same={id:'same',name:'Approach',width:8,points:[[-30,0],[0,0]]};
+  assert.deepEqual(junctionMouths({...embankment,roads:[approach,cross]},approach),[[0,0]]);
+  assert.deepEqual(junctionMouths({...embankment,roads:[approach,same]},approach),[],'the same street continuing is no junction');
+  const mouthed=bridgeBarriers({...embankment,roads:[approach,cross]},approach),reach=Math.sqrt(MOUTH_REACH**2-4**2); // measured from the node to the deck edge, 4 m off the centerline
+  assert.ok(mouthed.length&&mouthed.every(p=>p.x-p.length/2>reach-.05),'no rail inside the junction mouth');
+  assert.ok(mouthed.some(p=>p.x-p.length/2<reach+1),'the embankment rail starts right after it');
 });
 
 test('no parapet stands on the ground anywhere in the metro, and the Tobin ramps open onto New Rutherford Avenue',async()=>{
   const city=await loadMetroCity({tiles:[]}),{sampleElevation}=await import('../src/simulation/terrain.ts'),{roadProjection}=await import('../src/simulation/road-surfaces.ts');
-  const offenders=[];let rails=0;
+  const offenders=[];let rails=0,shelves=0;
   for(const road of city.roads){
     if(!road.elevations||road.tunnel)continue;
+    const mouths=junctionMouths(city,road);
     for(const p of bridgeBarriers(city,road)){
       rails++;const hit=roadProjection(road,p.x,p.z),n=Math.hypot(p.x-hit.x,p.z-hit.z)||1,ox=(p.x-hit.x)/n,oz=(p.z-hit.z)/n,base=p.y-.38;
-      // The rule's own probes, just outside the rail and 1.5 m further out: a rail whose deck sits on the ground at both is a wall across a street.
+      // The rule's own probes: a rail whose deck sits on the ground beside it, with no drop within reach (or inside a junction mouth), is a wall across a street.
       const lip=Math.max(base-sampleElevation(city,p.x+ox*.3,p.z+oz*.3),base-sampleElevation(city,p.x+ox*1.5,p.z+oz*1.5));
-      if(lip<RAIL_LIP-.02)offenders.push(`${road.id} ${road.name} (${p.x.toFixed(1)},${p.z.toFixed(1)}) lip ${lip.toFixed(2)}`);
+      if(deckEdgeGrounded(city,p.x,p.z,base+.02,ox,oz,mouths.some(m=>Math.hypot(m[0]-p.x,m[1]-p.z)<MOUTH_REACH)))offenders.push(`${road.id} ${road.name} (${p.x.toFixed(1)},${p.z.toFixed(1)}) lip ${lip.toFixed(2)}`);
+      else if(lip<RAIL_LIP-.02)shelves++;
     }
   }
   assert.ok(rails>20000,'the metro still has its elevated parapets');
   assert.deepEqual(offenders.slice(0,10),[],`${offenders.length} grounded rails`);
+  assert.ok(shelves>0,'approaches on a shelf above an embankment keep their rails');
+  // Alford Street's first metres over the Mystic embankment: level verge beside the deck, a 2 m drop within 8 m.
+  const alford=city.roads.find(r=>r.id==='10305-0-0'),mouth=bridgeBarriers(city,alford).filter(p=>Math.hypot(p.x-324,p.z+4475)<5);
+  assert.ok(mouth.length,'Alford Street keeps its parapet along the embankment from its first metres');
   // The reported junction: both ramps land at the shared New Rutherford Avenue node and their first 15 m, through the junction's crosswalks, have no walls.
   const node=[794.4,-2471.8];
   for(const id of ['tobin-boston-north','tobin-boston-south']){

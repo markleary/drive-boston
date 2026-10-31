@@ -255,21 +255,63 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
 /** How far a deck edge must stand above the ground beside it before it gets a
  * parapet: about two curb heights. */
 export const RAIL_LIP=.35;
+/** A deck edge on the ground still gets its parapet when the ground falls more
+ * than this, a rail's height, within `SHELF_REACH` metres of it: the graded
+ * verge beside a bridge approach is a shelf a few metres wide over an
+ * embankment (Alford Street climbing to the Mystic), not a street. */
+export const SHELF_DROP=.75,SHELF_REACH=[4,7];
+/** Within this distance of a junction the shelf test is waived: the ground
+ * beyond a narrow cross street falls away too, and the crosswalk station lies
+ * 8 m along the road, so a rail there would stand across its landing. */
+export const MOUTH_REACH=12;
+
+/** Whether a deck edge at (x, z, y) sits on the ground: the terrain just outside
+ * the rail and 1.5 m further out, along the unit outward normal (ox, oz), lies
+ * within `RAIL_LIP` of it, and, away from a junction mouth, the terrain 4 and
+ * 7 m out has not fallen away by more than `SHELF_DROP`. The rule for the
+ * barriers and for the tests that sweep them. */
+export function deckEdgeGrounded(city:CityData,x:number,z:number,y:number,ox:number,oz:number,mouth=false){
+  return y-sampleElevation(city,x+ox*.3,z+oz*.3)<RAIL_LIP&&y-sampleElevation(city,x+ox*1.5,z+oz*1.5)<RAIL_LIP&&(mouth||SHELF_REACH.every(reach=>y-sampleElevation(city,x+ox*reach,z+oz*reach)<SHELF_DROP));
+}
+
+const roadEnds=new WeakMap<CityData,Map<string,Road[]>>();
+const endKey=(x:number,z:number)=>`${Math.round(x*2)},${Math.round(z*2)}`;
+/** The road's endpoints that are street junctions: another road ends within
+ * 0.5 m of them that is not the same street continuing (a bridge piece meeting
+ * its own approach, like Alford Street's, has no crosswalk and is no mouth). */
+export function junctionMouths(city:CityData,road:Road){
+  let ends=roadEnds.get(city);
+  if(!ends){ends=new Map();for(const r of city.roads)for(const p of [r.points[0],r.points[r.points.length-1]]){const k=endKey(p[0],p[1]);const list=ends.get(k);if(list)list.push(r);else ends.set(k,[r]);}roadEnds.set(city,ends);}
+  const mouths:[number,number][]=[];
+  for(const p of [road.points[0],road.points[road.points.length-1]]){
+    const others:Road[]=[];
+    for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)for(const r of ends.get(`${Math.round(p[0]*2)+i},${Math.round(p[1]*2)+j}`)??[]){
+      if(r===road||others.includes(r))continue;
+      if([r.points[0],r.points[r.points.length-1]].some(q=>Math.hypot(q[0]-p[0],q[1]-p[1])<.5))others.push(r);
+    }
+    if(others.length>1||others.some(r=>r.name!==road.name))mouths.push([p[0],p[1]]);
+  }
+  return mouths;
+}
 
 /** Parapets along the exposed deck edges, except where the deck sits on the
  * ground. Every estimated structure lands on a street at grade, and the first
  * metres of a ramp mouth, an at-grade approach or a preserved surface street run
  * within centimetres of the terrain: a 0.76 m wall there stands across the
  * junction's sidewalk and crosswalk landings (the Tobin ramps at New Rutherford
- * Avenue, the McGrath Highway stubs). The ground is probed just outside the rail
- * and 1.5 m further out, so an edge beside a drop or over water keeps its rail. */
+ * Avenue, the McGrath Highway stubs). `deckEdgeGrounded` probes the ground just
+ * outside the rail, 1.5 m further out and up to 7 m out, so an edge beside a
+ * drop, over water or on a narrow shelf above an embankment keeps its rail, while
+ * the first `MOUTH_REACH` metres from a junction (`junctionMouths`) stay open
+ * whatever lies beyond the cross street. */
 export function bridgeBarriers(city:CityData,road:Road){
   if(isHarvardBridgeRoad(road))return[]; // Outer sidewalk parapets are built in harvard-bridge.ts.
+  const mouths=junctionMouths(city,road);
   // The outside probe preserves protection on the union's exposed perimeter,
   // including where two source road ribbons share the same outer edge.
   return bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb,side})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),ox=-dz/(distance||1)*side,oz=dx/(distance||1)*side;
-    const grounded=(t:number)=>{const x=a[0]+dx*t,z=a[1]+dz*t,y=ya+dy*t;return y-sampleElevation(city,x+ox*.3,z+oz*.3)<RAIL_LIP&&y-sampleElevation(city,x+ox*1.5,z+oz*1.5)<RAIL_LIP;};
+    const grounded=(t:number)=>{const x=a[0]+dx*t,z=a[1]+dz*t;return deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouths.some(m=>Math.hypot(m[0]-x,m[1]-z)<MOUTH_REACH));};
     const clear=(t:number)=>grounded(t)||inTransitClearance(city,a[0]+dx*t,a[1]+dz*t,ya+dy*t),steps=Math.max(1,Math.ceil(distance/.4));
     const exposed:[number,number][]=[],boundary=(low:number,high:number,state:boolean)=>{
       for(let i=0;i<12;i++){const middle=(low+high)/2;if(clear(middle)===state)low=middle;else high=middle;}return(low+high)/2;
