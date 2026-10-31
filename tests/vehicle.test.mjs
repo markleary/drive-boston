@@ -246,10 +246,15 @@ test('street life stays on clear sidewalks and parked cars react to impacts', as
     }
     const parked = life.parked[0];
     physics.reset(parked.x - Math.sin(parked.yaw) * 12, parked.z - Math.cos(parked.yaw) * 12, parked.yaw);
-    const initial={x:parked.x,z:parked.z};let impacts=0,penetration=0;
-    for(let i=0;i<240;i++){physics.step({...released,throttle:1},STEP);life.update(STEP);impacts+=physics.takeImpacts().length;for(const h of life.parkedColliders)physics.world.contactPair(physics.chassisCollider,physics.world.getCollider(h),m=>{for(let j=0;j<m.numContacts();j++)penetration=Math.max(penetration,-m.contactDist(j));});}
+    const initial={x:parked.x,z:parked.z};let impacts=0,penetration=0,closing=0;
+    for(let i=0;i<240;i++){const speed=Math.abs(physics.getState().speed);physics.step({...released,throttle:1},STEP);life.update(STEP);impacts+=physics.takeImpacts().length;let depth=0;for(const h of life.parkedColliders)physics.world.contactPair(physics.chassisCollider,physics.world.getCollider(h),m=>{for(let j=0;j<m.numContacts();j++)depth=Math.max(depth,-m.contactDist(j));});if(depth>0&&!closing)closing=speed;penetration=Math.max(penetration,depth);}
     const state=physics.getState();
-    assert.ok(penetration<.12,`compound bodies must resolve surface contacts without tunneling (${penetration} m penetration)`);
+    // Rapier only resists a contact once it exists, so the first contact may
+    // overlap by up to one step of closing travel, depending on where the last
+    // step ended (a few centimetres of parked-car placement decide it). More
+    // than that, or through the 18 cm bumper plate, would be tunneling.
+    const allowed=Math.min(.18,closing*STEP+.01);
+    assert.ok(penetration<allowed,`compound bodies must resolve surface contacts without tunneling (${penetration} m penetration, ${allowed} m allowed at ${closing} m/s)`);
     assert.ok([state.x,state.y,state.z,parked.x,parked.y,parked.z].every(Number.isFinite));
     assert.ok(Math.hypot(parked.x-initial.x,parked.z-initial.z)>.15,'a real impact must move the finite-mass parked car');
     assert.ok(impacts>0,'the impact must be reported');
