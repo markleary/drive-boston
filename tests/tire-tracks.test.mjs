@@ -34,10 +34,25 @@ test('surface sampling respects survey pavement, sidewalk, path, lawn, water, ho
   assert.equal(sample(0,0,-30),'pavement');
   assert.equal(sample(0,0,20),'grass');
   assert.equal(sample(45,0,45),null);
-  assert.equal(sample(75,0,75),null);
+  assert.equal(sample(75,0,75),'grass','a park polygon hole still exposes the grassy base terrain');
+  assert.equal(sample(200,0,200),'grass','unmapped open terrain has the same grass material');
   assert.equal(sample(0,8,20),null,'raised objects cannot acquire grass marks');
   const deck={...road,id:'deck',points:[[-100,45],[100,45]],elevations:[8,8]};
   assert.equal(createTireSurfaceSampler({...city,roads:[deck]})(0,8,45),'pavement');
+});
+
+test('open terrain without any mapped parks receives torn-grass tracks',()=>{
+  const openCity={...city,parks:[]},sample=createTireSurfaceSampler(openCity);
+  assert.equal(sample(200,0,200),'grass');
+  assert.equal(sample(45,0,45),null,'water remains excluded outside parks');
+  assert.equal(sample(200,8,200),null,'raised contacts remain excluded outside parks');
+  const scene=new THREE.Scene(),marks=createTireTracks(scene,openCity,sample);
+  try{
+    marks.update([contact(200,200)],0,0);
+    marks.update([contact(201,200)],1/60,0);
+    assert.equal(marks.stats().grass,1);
+    assert.equal(marks.stats().pavement,0);
+  }finally{marks.dispose();}
 });
 
 test('trails fade, stay bounded and break across lifts, teleports, resets and surface changes',()=>{

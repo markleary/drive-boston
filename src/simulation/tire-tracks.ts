@@ -79,6 +79,7 @@ export function createTireSurfaceSampler(city:CityData,tiles:()=>Iterable<CityTi
       if(roadProjection(line,x,z).distance<=line.width/2)return'pavement';
     }
     const hits=areas.at(x,z);if(hits.some(a=>a.surface===null))return null;
-    return hits.find(a=>a.surface==='pavement')?.surface??hits[0]?.surface??null;
+    // The base terrain uses the grass material even outside mapped parks.
+    return hits.find(a=>a.surface==='pavement')?.surface??hits[0]?.surface??'grass';
   };
 }
