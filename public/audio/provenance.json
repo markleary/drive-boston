@@ -166,6 +166,146 @@
       "generatedAt": "2026-10-31T12:54:04.243Z",
       "bytes": 17179,
       "sha256": "70c1d7a040d7d08c4847069a58e9ed55662a70416a6234e6bc06ce85508dd6fa"
+    },
+    {
+      "id": "mclaren-720s-idle",
+      "seconds": 6,
+      "loop": true,
+      "prompt": "Realistic close tailpipe recording of a McLaren 720S petrol V8 at constant 850 RPM idle. Deep gritty combustion growl, low exhaust burble, throaty harmonics. Dry muffled exhaust, steady pitch and volume throughout, seamless loop. No air hiss, whistle, wind, electronic tones, sci fi drone, music, clicks or gear changes.",
+      "file": "mclaren-720s-idle.mp3",
+      "generatedAt": "2026-10-31T14:49:14.289Z",
+      "bytes": 97009,
+      "sha256": "3f676d7cbd8e3511eb7c3f1b7afdbb6af3146a1c3635fd12ddf097114bb1ea67"
+    },
+    {
+      "id": "mclaren-720s-upshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "Realistic close tailpipe recording of a McLaren 720S petrol V8: a brief rounded falling exhaust note as engine speed drops. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech.",
+      "file": "mclaren-720s-upshift.mp3",
+      "generatedAt": "2026-10-31T14:49:23.352Z",
+      "bytes": 17179,
+      "sha256": "67b3dcd5a04ab9ba9d02fd2b2ea99d08fece868356b9a57548a614dc1ecb989c"
+    },
+    {
+      "id": "mclaren-720s-downshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "Realistic close tailpipe recording of a McLaren 720S petrol V8: one gentle accelerator blip, rounded rise and fall in exhaust pitch. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech.",
+      "file": "mclaren-720s-downshift.mp3",
+      "generatedAt": "2026-10-31T14:49:25.248Z",
+      "bytes": 17179,
+      "sha256": "f6c1f5894ac7f51c1f61bf0b8a05c2fefe11e364ec6bfb3bf84f1e639530c0a8"
+    },
+    {
+      "id": "supra-mk4-idle",
+      "seconds": 6,
+      "loop": true,
+      "prompt": "Realistic close tailpipe recording of a 1990s Toyota Supra 2JZ petrol straight six at constant 850 RPM idle. Warm bass rumble, rapid distinct combustion pulses, throaty mechanical growl. Dry muffled exhaust, steady pitch and volume throughout, seamless loop. No air hiss, whistle, wind, electronic tones, sci fi drone, music, clicks or gear changes.",
+      "file": "supra-mk4-idle.mp3",
+      "generatedAt": "2026-10-31T14:49:28.325Z",
+      "bytes": 97009,
+      "sha256": "886f4b5f075b2fb86773ef6e8ae790afde3f71311b465e4a686c450368399408"
+    },
+    {
+      "id": "supra-mk4-upshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "Realistic close tailpipe recording of a 1990s Toyota Supra 2JZ petrol straight six: a brief rounded falling exhaust note as engine speed drops. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech.",
+      "file": "supra-mk4-upshift.mp3",
+      "generatedAt": "2026-10-31T14:49:36.924Z",
+      "bytes": 17179,
+      "sha256": "94f65d144513a97e24145cd1a5ea2a06bebe4501a54f99ac0e5b492ec2f6489b"
+    },
+    {
+      "id": "supra-mk4-downshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "Realistic close tailpipe recording of a 1990s Toyota Supra 2JZ petrol straight six: one gentle accelerator blip, rounded rise and fall in exhaust pitch. Soft bassy combustion burble for half a second, fading smoothly to silence. Only the muffled exhaust note. No mechanical clicks, clutch noise, impacts, bangs, air hiss, whistle, electronic tones, music or speech.",
+      "file": "supra-mk4-downshift.mp3",
+      "generatedAt": "2026-10-31T14:49:39.066Z",
+      "bytes": 17179,
+      "sha256": "5f63c3487a0961849d9a96b163871fcdd2abddbe69282f2cfccf0144fcb28bdd"
+    },
+    {
+      "id": "mclaren-720s-drive",
+      "seconds": 8,
+      "loop": true,
+      "file": "mclaren-720s-drive.mp3",
+      "masteredAt": "2026-10-31T15:13:13.072Z",
+      "bytes": 129193,
+      "sha256": "55c25ae24c0936fad594e1c981573b3d56a98cc425c034fe876f1e04905d6f03",
+      "derivation": {
+        "sourceId": "mclaren-gt-drive",
+        "sourceFile": "mclaren-gt-drive.mp3",
+        "sourceSha256": "e85de095582f80ae081e86ccf3ee32eabcdb9500a3a4774257e321ffd705f1c5",
+        "sourceProvider": "ElevenLabs",
+        "sourceModel": "eleven_text_to_sound_v2",
+        "sourcePrompt": "McLaren GT 4.0 litre twin turbo V8 held steadily at 4000 RPM under engine load, rear exhaust perspective. Rich sharp supercar V8 growl, tight rapid combustion pulses, restrained turbo whistle. Constant pitch and load for seamless looping. No acceleration, gear changes, flyby, Doppler effect, tire squeal, voices or music.",
+        "tool": "ffmpeg",
+        "filter": "asetrate=42336,aresample=44100,highpass=f=45,equalizer=f=650:t=q:w=0.8:g=3,bass=g=1.5:f=180,treble=g=-3:f=3500,alimiter=limit=0.92:level=false",
+        "description": "Locally mastered variation of the approved GT engine; not a separate ElevenLabs generation or a recording of a real 720S."
+      }
+    },
+    {
+      "id": "mclaren-720s-high",
+      "seconds": 6,
+      "loop": true,
+      "file": "mclaren-720s-high.mp3",
+      "masteredAt": "2026-10-31T15:13:13.128Z",
+      "bytes": 97010,
+      "sha256": "136388a799d693df5193e68ed0b5951321e057a53ea9a5e3b768fa69a4196437",
+      "derivation": {
+        "sourceId": "mclaren-gt-high",
+        "sourceFile": "mclaren-gt-high.mp3",
+        "sourceSha256": "c40c8b5c91dff4930f8139f2ed21c6c3f5f851ae16d0b19c11f22b550697383a",
+        "sourceProvider": "ElevenLabs",
+        "sourceModel": "eleven_text_to_sound_v2",
+        "sourcePrompt": "McLaren GT M840TE twin turbo V8 held at exactly constant 7000 RPM under heavy throttle, close dry rear exhaust recording. High urgent raspy V8 howl and fine turbo hiss, constant pitch and volume throughout, seamless loop. No gear shifts, acceleration sweep, flyby, tires, voices or music.",
+        "tool": "ffmpeg",
+        "filter": "asetrate=42336,aresample=44100,highpass=f=45,equalizer=f=650:t=q:w=0.8:g=3,bass=g=1.5:f=180,treble=g=-3:f=3500,alimiter=limit=0.92:level=false",
+        "description": "Locally mastered variation of the approved GT engine; not a separate ElevenLabs generation or a recording of a real 720S."
+      }
+    },
+    {
+      "id": "supra-mk4-drive",
+      "seconds": 8,
+      "loop": true,
+      "file": "supra-mk4-drive.mp3",
+      "masteredAt": "2026-10-31T15:21:03.411Z",
+      "bytes": 129193,
+      "sha256": "fbe14896ec4b8f91934e80f112208a86c21765451fbad5c562d3fe1d3664865e",
+      "derivation": {
+        "sourceId": "mclaren-gt-drive",
+        "sourceFile": "mclaren-gt-drive.mp3",
+        "sourceSha256": "e85de095582f80ae081e86ccf3ee32eabcdb9500a3a4774257e321ffd705f1c5",
+        "sourceProvider": "ElevenLabs",
+        "sourceModel": "eleven_text_to_sound_v2",
+        "sourcePrompt": "McLaren GT 4.0 litre twin turbo V8 held steadily at 4000 RPM under engine load, rear exhaust perspective. Rich sharp supercar V8 growl, tight rapid combustion pulses, restrained turbo whistle. Constant pitch and load for seamless looping. No acceleration, gear changes, flyby, Doppler effect, tire squeal, voices or music.",
+        "tool": "ffmpeg",
+        "filter": "asetrate=33075,aresample=44100,highpass=f=90,equalizer=f=800:t=q:w=0.8:g=3,equalizer=f=220:t=q:w=1:g=-2,treble=g=-4:f=4000,alimiter=limit=0.92:level=false",
+        "description": "Lower-pitched, smoother straight-six-inspired interpretation mastered from the approved GT exhaust; not an authentic 2JZ recording or a separate ElevenLabs generation."
+      }
+    },
+    {
+      "id": "supra-mk4-high",
+      "seconds": 6,
+      "loop": true,
+      "file": "supra-mk4-high.mp3",
+      "masteredAt": "2026-10-31T15:21:03.464Z",
+      "bytes": 97010,
+      "sha256": "28d70795c4d9e5656a44a75c9af3cadae407a144249dbfab0622ab74c0b9be09",
+      "derivation": {
+        "sourceId": "mclaren-gt-high",
+        "sourceFile": "mclaren-gt-high.mp3",
+        "sourceSha256": "c40c8b5c91dff4930f8139f2ed21c6c3f5f851ae16d0b19c11f22b550697383a",
+        "sourceProvider": "ElevenLabs",
+        "sourceModel": "eleven_text_to_sound_v2",
+        "sourcePrompt": "McLaren GT M840TE twin turbo V8 held at exactly constant 7000 RPM under heavy throttle, close dry rear exhaust recording. High urgent raspy V8 howl and fine turbo hiss, constant pitch and volume throughout, seamless loop. No gear shifts, acceleration sweep, flyby, tires, voices or music.",
+        "tool": "ffmpeg",
+        "filter": "asetrate=33075,aresample=44100,highpass=f=90,equalizer=f=800:t=q:w=0.8:g=3,equalizer=f=220:t=q:w=1:g=-2,treble=g=-4:f=4000,alimiter=limit=0.92:level=false",
+        "description": "Lower-pitched, smoother straight-six-inspired interpretation mastered from the approved GT exhaust; not an authentic 2JZ recording or a separate ElevenLabs generation."
+      }
     }
   ]
 }
