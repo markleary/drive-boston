@@ -230,7 +230,7 @@ function coveredDeckInterval(a:Point2,b:Point2,ya:number,yb:number,triangle:Deck
  * centerline; rails probe outside the deck to retain coincident outer edges. */
 export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset=inset,levelTolerance=.8){
   if(!road.elevations)return[];
-  const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number}[]=[];
+  const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number;side:number}[]=[];
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
     const a=deckEdge(road,i-1,side,inset),b=deckEdge(road,i,side,inset),ya=road.deckEdgeElevations?sampleRoadElevation(city,road,...a):deckEdgeElevation(road,i-1,side),yb=road.deckEdgeElevations?sampleRoadElevation(city,road,...b):deckEdgeElevation(road,i,side);
     const outsideA=deckEdge(road,i-1,side,probeInset),outsideB=deckEdge(road,i,side,probeInset);
@@ -246,19 +246,31 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),length=Math.hypot(distance,dy);
     for(const [start,end]of exposed){
       if((end-start)*length<.12)continue;
-      parts.push({a:[a[0]+dx*start,a[1]+dz*start],b:[a[0]+dx*end,a[1]+dz*end],ya:ya+dy*start,yb:ya+dy*end});
+      parts.push({a:[a[0]+dx*start,a[1]+dz*start],b:[a[0]+dx*end,a[1]+dz*end],ya:ya+dy*start,yb:ya+dy*end,side});
     }
   }
   return parts;
 }
 
+/** How far a deck edge must stand above the ground beside it before it gets a
+ * parapet: about two curb heights. */
+export const RAIL_LIP=.35;
+
+/** Parapets along the exposed deck edges, except where the deck sits on the
+ * ground. Every estimated structure lands on a street at grade, and the first
+ * metres of a ramp mouth, an at-grade approach or a preserved surface street run
+ * within centimetres of the terrain: a 0.76 m wall there stands across the
+ * junction's sidewalk and crosswalk landings (the Tobin ramps at New Rutherford
+ * Avenue, the McGrath Highway stubs). The ground is probed just outside the rail
+ * and 1.5 m further out, so an edge beside a drop or over water keeps its rail. */
 export function bridgeBarriers(city:CityData,road:Road){
   if(isHarvardBridgeRoad(road))return[]; // Outer sidewalk parapets are built in harvard-bridge.ts.
   // The outside probe preserves protection on the union's exposed perimeter,
   // including where two source road ribbons share the same outer edge.
-  return bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb})=>{
-    const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz);
-    const clear=(t:number)=>inTransitClearance(city,a[0]+dx*t,a[1]+dz*t,ya+dy*t),steps=Math.max(1,Math.ceil(distance/.4));
+  return bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb,side})=>{
+    const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),ox=-dz/(distance||1)*side,oz=dx/(distance||1)*side;
+    const grounded=(t:number)=>{const x=a[0]+dx*t,z=a[1]+dz*t,y=ya+dy*t;return y-sampleElevation(city,x+ox*.3,z+oz*.3)<RAIL_LIP&&y-sampleElevation(city,x+ox*1.5,z+oz*1.5)<RAIL_LIP;};
+    const clear=(t:number)=>grounded(t)||inTransitClearance(city,a[0]+dx*t,a[1]+dz*t,ya+dy*t),steps=Math.max(1,Math.ceil(distance/.4));
     const exposed:[number,number][]=[],boundary=(low:number,high:number,state:boolean)=>{
       for(let i=0;i<12;i++){const middle=(low+high)/2;if(clear(middle)===state)low=middle;else high=middle;}return(low+high)/2;
     };
