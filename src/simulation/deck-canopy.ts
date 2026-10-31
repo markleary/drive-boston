@@ -1,12 +1,15 @@
 import type {CityData,Point2,Road} from '../types';
 import {tunnelCoveredAt,tunnelStations} from './tunnels.ts';
 
-/** Tree crowns as the foliage field draws them: `reach` is the widest crown
- * radius from the trunk and `top` the highest leaf above the trunk base, both
- * at the largest random instance scale (street trees 1.12, park specimens 1.65 x 1.12). */
+/** Tree crowns as the foliage field draws them: `reach` is the widest
+ * horizontal extent from the trunk (leaf-card corners included) and `top` the
+ * highest point above the trunk base, over every distance level (the far
+ * levels use larger cards) at the largest instance scale: street trees 1.12
+ * over three species, park specimens 1.65 x 1.12 over four. A node test checks
+ * them against crownExtent() in src/render/foliage.ts. */
 export interface Canopy{reach:number;top:number;}
-export const STREET_CANOPY:Canopy={reach:4.6,top:17.5};
-export const PARK_CANOPY:Canopy={reach:7.5,top:28};
+export const STREET_CANOPY:Canopy={reach:7.6,top:18};
+export const PARK_CANOPY:Canopy={reach:12.5,top:29.5};
 
 type DeckSegment={road:Road;a:Point2;b:Point2;ya:number;yb:number;sa:number;sb:number;half:number};
 const CELL=64,indexes=new WeakMap<Road[],Map<string,DeckSegment[]>>();
