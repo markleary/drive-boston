@@ -20,6 +20,7 @@ import { type createMaterials, facadeStyleIndex, hash, seeded } from './material
 import { tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
 import { drapedRibbonInto, drapedStripInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurface } from './terrain-ground';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
+import { canopyHitsDeck, STREET_CANOPY } from '../simulation/deck-canopy.ts';
 import { spatialInstances } from './spatial-batches';
 import { PartBatches, box } from './geometry-writer';
 import { due, UNPACED, type Pace } from './pacing';
@@ -367,7 +368,7 @@ export function createTileBuilder(ctx: TileContext) {
             for (const side of [-1, 1]) {
               const x = a[0] + tx * d - tz * verge * side, z = a[1] + tz * d + tx * verge * side;
               const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (occupied(x, z) || inRoad(x, z) || taken.has(k)) continue; taken.add(k);
-              if (!/Boylston/.test(road.name) || random() > .5) treePositions.push(new THREE.Vector3(x, height(x, z), z));
+              if ((!/Boylston/.test(road.name) || random() > .5) && !canopyHitsDeck(city, x, z, height(x, z), STREET_CANOPY)) treePositions.push(new THREE.Vector3(x, height(x, z), z));
               if (side === 1 && !inRoad(x - tx * 5, z - tz * 5) && !occupied(x - tx * 5, z - tz * 5)) lamps.push(new THREE.Vector3(x - tx * 5, height(x - tx * 5, z - tz * 5), z - tz * 5));
             }
           }

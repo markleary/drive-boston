@@ -22,7 +22,11 @@ export function tunnelPointAt(road:Road,station:number){
 }
 
 type Portal={polygon:Point2[];minX:number;maxX:number;minZ:number;maxZ:number};
-type TunnelVolume=Portal&{road:Road;x:number;z:number;y:number;gx:number;gz:number};
+/** `open`: a clearance volume over a stretch open to the sky (not `covered`); it clears the survey shell through its full height, so nothing stands over the open ramp or walls in the space beneath its deck. */
+type TunnelVolume=Portal&{road:Road;x:number;z:number;y:number;gx:number;gz:number;open?:boolean};
+/** Over an open-air stretch the shell is cleared this far beyond each deck edge,
+ * so no full-height wall slivers stand beside or between the ramps. */
+const OPEN_SKY_MARGIN=8;
 type TunnelCity=Pick<CityData,'roads'>&Partial<Pick<CityData,'bounds'|'elevation'>>;
 type TunnelIndex={roads:Map<string,Road[]>;portals:Map<string,Portal[]>;portalList:Portal[];volumes:Map<string,TunnelVolume[]>;shellVolumes:Map<string,TunnelVolume[]>;wallVolumes:Map<string,TunnelVolume[]>;elevation?:CityData['elevation']};
 const emptyRoads:Road[]=[];
@@ -79,16 +83,22 @@ function index(city:TunnelCity){
       // adjoining roof and leaves daylight slivers around every rising merge.
       // Wall cuts meet the inner wall face (edge +.08 minus .2m half-thickness);
       // clipping to the full deck makes both meeting walls erase their seam.
-      for(const [cells,inset]of [[volumes,-.4],[shellVolumes,0],[wallVolumes,.12]] as const){
-        const crossSection=[deckEdge(road,i-1,-1,inset),deckEdge(road,i-1,1,inset),deckEdge(road,i,-1,inset),deckEdge(road,i,1,inset)],floorHeights=[deckEdgeElevation(road,i-1,-1),deckEdgeElevation(road,i-1,1),deckEdgeElevation(road,i,-1),deckEdgeElevation(road,i,1)];
+      // Clearance volumes split where the road leaves its cover: a surveyed
+      // shell may stand over a covered bore but never over an open-air ramp.
+      const lo=stations[i-1],hi=stations[i],cuts=[lo,...(road.tunnel.covered??[]).flat().filter(v=>v>lo+.01&&v<hi-.01).sort((a,b)=>a-b),hi];
+      for(const [cells,inset]of [[volumes,-.4],[shellVolumes,0],[wallVolumes,.12]] as const)for(let piece=1;piece<(cells===volumes?cuts.length:2);piece++){
+        const s0=cells===volumes?cuts[piece-1]:lo,s1=cells===volumes?cuts[piece]:hi,f0=(s0-lo)/(hi-lo||1),f1=(s1-lo)/(hi-lo||1),open=cells===volumes&&!tunnelCoveredAt(road,(s0+s1)/2);
+        const edge=(side:number,f:number):Point2=>{const a=deckEdge(road,i-1,side,open?-OPEN_SKY_MARGIN:inset),b=deckEdge(road,i,side,open?-OPEN_SKY_MARGIN:inset);return[a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f];};
+        const floorAt=(side:number,f:number)=>deckEdgeElevation(road,i-1,side)+(deckEdgeElevation(road,i,side)-deckEdgeElevation(road,i-1,side))*f;
+        const crossSection=[edge(-1,f0),edge(1,f0),edge(-1,f1),edge(1,f1)],floorHeights=[floorAt(-1,f0),floorAt(1,f0),floorAt(-1,f1),floorAt(1,f1)];
         for(const [ia,ib,ic]of [[0,1,2],[1,3,2]]){
           const p=crossSection[ia],q=crossSection[ib],r=crossSection[ic],dx1=q[0]-p[0],dz1=q[1]-p[1],dx2=r[0]-p[0],dz2=r[1]-p[1],dy1=floorHeights[ib]-floorHeights[ia],dy2=floorHeights[ic]-floorHeights[ia],det=dx1*dz2-dx2*dz1;
           if(Math.abs(det)<1e-8)continue;
-          const volume:TunnelVolume={road,polygon:[p,q,r],x:p[0],z:p[1],y:floorHeights[ia],gx:(dy1*dz2-dy2*dz1)/det,gz:(dx1*dy2-dx2*dy1)/det,minX:Math.min(p[0],q[0],r[0]),maxX:Math.max(p[0],q[0],r[0]),minZ:Math.min(p[1],q[1],r[1]),maxZ:Math.max(p[1],q[1],r[1])};
+          const volume:TunnelVolume={road,open,polygon:[p,q,r],x:p[0],z:p[1],y:floorHeights[ia],gx:(dy1*dz2-dy2*dz1)/det,gz:(dx1*dy2-dx2*dy1)/det,minX:Math.min(p[0],q[0],r[0]),maxX:Math.max(p[0],q[0],r[0]),minZ:Math.min(p[1],q[1],r[1]),maxZ:Math.max(p[1],q[1],r[1])};
           insert(cells,volume,volume.minX,volume.maxX,volume.minZ,volume.maxZ);
         }
       }
-      const lo=stations[i-1],hi=stations[i],steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(v=>v>lo&&v<hi)].sort((a,b)=>a-b);
+      const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(v=>v>lo&&v<hi)].sort((a,b)=>a-b);
       for(let j=1;j<breaks.length;j++){
         const start=breaks[j-1],end=breaks[j];if(end-start<.001)continue;if(tunnelCoveredAt(road,(start+end)/2)||tunnelSurfaceLandingAt(road,(start+end)/2))continue;
         const leftA=deckEdge(road,i-1,-1,-.3),rightA=deckEdge(road,i-1,1,-.3),leftB=deckEdge(road,i,-1,-.3),rightB=deckEdge(road,i,1,-.3);
@@ -115,6 +125,8 @@ function polygonSign(p:Point2[]){let area=0;for(let i=0;i<p.length;i++){const a=
 function inside(p:Point2,polygon:Point2[]){const sign=polygonSign(polygon);return polygon.every((a,i)=>{const b=polygon[(i+1)%polygon.length];return sign*((b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]))>=-1e-7;});}
 export function hasTunnelPortals(city:TunnelCity){return !!index(city).portalList.length;}
 export function tunnelPortalBoundsIntersect(city:TunnelCity,minX:number,maxX:number,minZ:number,maxZ:number){return index(city).portalList.some(p=>p.minX<=maxX&&p.maxX>=minX&&p.minZ<=maxZ&&p.maxZ>=minZ);}
+/** Inside a clearance volume over an open-air stretch, the column clipTunnelClearance removes from a passage shell. */
+export function inOpenSkyClearance(city:TunnelCity,x:number,z:number){return (index(city).volumes.get(key(x,z))??[]).some(v=>v.open&&x>=v.minX&&x<=v.maxX&&z>=v.minZ&&z<=v.maxZ&&inside([x,z],v.polygon));}
 export function inTunnelPortal(city:TunnelCity,x:number,z:number){return (index(city).portals.get(key(x,z))??[]).some(p=>inside([x,z],p.polygon));}
 
 /** Returns only the bore containing the supplied height. Surface roads over a
@@ -251,7 +263,7 @@ function subtractVolume(subject:Vertex[],volume:TunnelVolume,floorMargin=.5,roof
   if(Math.max(...subject.map(p=>p[0]))<volume.minX-1e-7||Math.min(...subject.map(p=>p[0]))>volume.maxX+1e-7||Math.max(...subject.map(p=>p[2]))<volume.minZ-1e-7||Math.min(...subject.map(p=>p[2]))>volume.maxZ+1e-7)return[subject];
   const sign=polygonSign(volume.polygon),planes:((p:Vertex)=>number)[]=volume.polygon.map((a,i)=>{const b=volume.polygon[(i+1)%volume.polygon.length];return p=>sign*((b[0]-a[0])*(p[2]-a[1])-(b[1]-a[1])*(p[0]-a[0]));});
   const floor=(p:Vertex)=>volume.y+volume.gx*(p[0]-volume.x)+volume.gz*(p[2]-volume.z);
-  planes.push(p=>p[1]-floor(p)+floorMargin,p=>floor(p)+volume.road.tunnel!.clearance+roofMargin-p[1]);
+  if(!volume.open)planes.push(p=>p[1]-floor(p)+floorMargin,p=>floor(p)+volume.road.tunnel!.clearance+roofMargin-p[1]);
   if(planes.some(plane=>subject.every(p=>plane(p)<-1e-7)))return[subject];
   let remainder=subject;const result:Vertex[][]=[];
   for(const plane of planes){const outside=clipPlane3(remainder,plane,false);if(area3(outside)>1e-7)result.push(outside);remainder=clipPlane3(remainder,plane,true);if(area3(remainder)<1e-7)break;}
@@ -259,9 +271,12 @@ function subtractVolume(subject:Vertex[],volume:TunnelVolume,floorMargin=.5,roof
 }
 /** Finite 3D clearance subtraction for an explicitly selected surveyed shell
  * whose catalog datum closes a mapped tunnel. Callers choose the building;
- * this never globally hides buildings or clips anything above the bore roof.
- * The aperture includes .4m per side, .5m below floor and .45m over ceiling,
- * enough to meet the shared concrete lining without exposing triangle edges. */
+ * this never globally hides buildings. Under cover the aperture includes .4m
+ * per side, .5m below floor and .45m over ceiling, enough to meet the shared
+ * concrete lining without exposing triangle edges, and the shell above the bore
+ * roof stays. Where the road is open to the sky the shell is removed through its
+ * full height to OPEN_SKY_MARGIN beyond each deck edge: a building cannot stand
+ * over an open ramp, and narrower remnants read as free-standing wall slivers. */
 export function clipTunnelClearance(city:CityData,vertices:Float32Array,indices:Uint32Array):TunnelMesh{
   const cells=index(city).volumes;if(!cells.size)return{vertices,indices};
   const output=Array.from(vertices),triangles:number[]=[];let changed=false;
@@ -271,7 +286,8 @@ export function clipTunnelClearance(city:CityData,vertices:Float32Array,indices:
     if(!candidates.size){triangles.push(indices[i],indices[i+1],indices[i+2]);continue;}
     const original:Vertex[]=[ia,ib,ic].map(n=>[vertices[n],vertices[n+1],vertices[n+2]]);let parts:Vertex[][]=[original];
     for(const volume of candidates)parts=parts.flatMap(part=>subtractVolume(part,volume));
-    if(parts.length===1&&parts[0]===original){triangles.push(indices[i],indices[i+1],indices[i+2]);continue;}
+    // A triangle that only passes a volume's corner comes back split with nothing removed.
+    if(parts.length===1&&parts[0]===original||parts.reduce((sum,part)=>sum+area3(part),0)>area3(original)*(1-1e-5)){triangles.push(indices[i],indices[i+1],indices[i+2]);continue;}
     changed=true;
     for(const part of parts)for(let j=1;j<part.length-1;j++)if(area3([part[0],part[j],part[j+1]])>1e-7){const n=output.length/3;output.push(...part[0],...part[j],...part[j+1]);triangles.push(n,n+1,n+2);}
   }

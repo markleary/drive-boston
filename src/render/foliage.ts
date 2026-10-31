@@ -65,6 +65,16 @@ function assets(){
   resources={bark,leaves,depth,geometries:SPECIES.map((_,i)=>[0,1,2].map(lod=>geometryFor(i,lod)))};return resources;
 }
 
+/** Instance scale range applied to every site (see TreeField.add). */
+export const TREE_SCALE_RANGE=[.82,1.12] as const;
+/** Widest horizontal reach from the trunk and highest point of the drawn tree
+ * geometry at scale 1, over the given species and distance levels: what
+ * src/simulation/deck-canopy.ts must keep clear of raised decks. */
+export function crownExtent(species:number[],lods:number[]){
+  let reach=0,top=0;
+  for(const i of species)for(const lod of lods){const g=geometryFor(i,lod);for(const part of [g.wood,g.leaves]){const p=part.getAttribute('position');for(let k=0;k<p.count;k++){reach=Math.max(reach,Math.hypot(p.getX(k),p.getZ(k)));top=Math.max(top,p.getY(k));}part.dispose();}}
+  return{reach,top};
+}
 export interface TreeField { group:THREE.Group; add(owner:string,positions:THREE.Vector3[]):void; remove(owner:string):void; readonly count:number; }
 type Site={p:THREE.Vector3;species:number;scale:number;yaw:number;owner:string};
 let grateMaterial:THREE.Material|undefined,grateGeometry:THREE.BufferGeometry|undefined;
@@ -120,7 +130,7 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
   const field:TreeField={group,
     add(owner,positions){
       const random=seeded(owner==='all'?9311:9311+hash(owner)%100000);
-      for(const p of positions.filter(p=>!inLongfellowCorridor(p.x,p.z)))sites.push({p,species:options.grates===false?Math.floor(random()*4):Math.floor(random()*3),scale:scale*(.82+random()*.30),yaw:random()*Math.PI*2,owner});
+      for(const p of positions.filter(p=>!inLongfellowCorridor(p.x,p.z)))sites.push({p,species:options.grates===false?Math.floor(random()*4):Math.floor(random()*3),scale:scale*(TREE_SCALE_RANGE[0]+random()*(TREE_SCALE_RANGE[1]-TREE_SCALE_RANGE[0])),yaw:random()*Math.PI*2,owner});
       dirty=true;refreshGrates();group.userData.treeCount=sites.length;
     },
     remove(owner){sites=sites.filter(s=>s.owner!==owner);dirty=true;refreshGrates();group.userData.treeCount=sites.length;},
