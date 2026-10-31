@@ -1,11 +1,17 @@
 """Conservative orientation repair for independently authored survey shells.
 
-Keep all measured positions and topology. Flip a consistently wound connected
-shell only when its elevated roof faces and signed enclosed volume both point
-inwards. Downward floors/soffits in an outward shell remain downward.
+Keep all measured positions and topology. `orient_shells` flips a consistently
+wound connected shell only when its elevated roof faces and signed enclosed
+volume both point inwards. Downward floors/soffits in an outward shell remain
+downward. `orient_patches` then judges the parts of an inconsistently wound
+shell one consistent patch at a time, since such a shell has no component
+orientation to flip.
 """
 from collections import defaultdict
 import numpy as np
+import shapely
+from shapely.geometry import Polygon
+from shapely.strtree import STRtree
 
 
 def orient_shells(vertices,faces):
@@ -60,4 +66,71 @@ def orient_shells(vertices,faces):
    if base_fraction<.7:continue
   out[ids]=f[ids][:,[0,2,1]]
   repairs.append({'triangles':len(ids),'volume':round(float(volume),3),'topArea':round(float(down/2),3),'closed':not bool(boundary),'baseBoundaryFraction':round(base_fraction,3)})
+ return out,repairs
+
+
+def orient_patches(vertices,faces,probe=.3,minimum=1.,layer=.5):
+ """Reverse consistently wound patches whose walls face into the building.
+
+ Survey shells are assembled from parts whose winding can disagree: the roof of
+ 100 Hood Park Drive faces the sky while every wall of its main body faces the
+ interior, so the single-sided facade material culls the near walls and the far
+ walls show from inside. Such a shell has no component orientation to flip, so
+ each patch of mutually consistent triangles (neighbours sharing an edge in
+ opposite directions; a seam wound alike or shared by three faces separates
+ patches) is judged on its own. A near-vertical wall is probed `probe` metres
+ to either side at its centre height: it votes against its patch when only the
+ side its normal points to lies under a covering face of the same building, and
+ for it when only the other side does. A horizontal face with nothing above it
+ votes by whether it faces up, unless an upward face lies within `layer` metres
+ beneath it: a down-facing membrane or parapet tray resting on a roof that
+ already shows reveals nothing when reversed and would turn its rim inwards. A
+ wall under an eave, an interior partition, a soffit, a floor and a parapet see
+ both sides alike and abstain. A patch with at least `minimum` square metres of
+ inverted votes and twice as much inverted as confirmed area is reversed whole.
+ Returns (faces, repairs) like orient_shells; positions, topology and the
+ facade/roof split are unchanged."""
+ p=np.asarray(vertices,dtype=np.float64).reshape(-1,3);f=np.asarray(faces,dtype=np.int64).reshape(-1,3)
+ if not len(f):return f.copy(),[]
+ _,inverse=np.unique(np.round(p,5),axis=0,return_inverse=True);welded=inverse.reshape(-1)[f];edges={}
+ for i,t in enumerate(welded):
+  for a,b in ((t[0],t[1]),(t[1],t[2]),(t[2],t[0])):
+   if a!=b:edges.setdefault((min(a,b),max(a,b)),[]).append((i,a<b))
+ parent=np.arange(len(f))
+ def root(i):
+  while parent[i]!=i:parent[i]=parent[parent[i]];i=parent[i]
+  return i
+ for pair in edges.values():
+  if len(pair)==2 and pair[0][1]!=pair[1][1]:parent[root(pair[0][0])]=root(pair[1][0])
+ patch=np.fromiter((root(i) for i in range(len(f))),dtype=np.int64,count=len(f))
+ a,b,c=p[f[:,0]],p[f[:,1]],p[f[:,2]];n=np.cross(b-a,c-a);length=np.linalg.norm(n,axis=1);centers=(a+b+c)/3;ok=length>1e-9
+ cover=np.nonzero(ok&(np.abs(n[:,1])>.2*length))[0]
+ tree=STRtree([Polygon([(a[i,0],a[i,2]),(b[i,0],b[i,2]),(c[i,0],c[i,2])]) for i in cover]) if len(cover) else None
+ def covered(points,heights,own,below=None):
+  """Whether a covering face other than `own` passes above each (x, z) point at its height,
+  or, with `below`, whether an upward face passes within that distance beneath it."""
+  out=np.zeros(len(points),dtype=bool)
+  if tree is None or not len(points):return out
+  k,j=tree.query(shapely.points(points),predicate='intersects')
+  if not len(k):return out
+  i=cover[j];ni=n[i];y=centers[i,1]-(ni[:,0]*(points[k,0]-centers[i,0])+ni[:,2]*(points[k,1]-centers[i,2]))/ni[:,1]
+  hit=(i!=own[k])&((y>heights[k]+.01) if below is None else (ni[:,1]>0)&(y<=heights[k]+.01)&(y>=heights[k]-below));out[k[hit]]=True
+  return out
+ inverted=np.zeros(len(f));confirmed=np.zeros(len(f));wall_votes=np.zeros(len(f))
+ walls=np.nonzero(ok&(np.abs(n[:,1])<.3*length))[0]
+ if len(walls):
+  h=np.hypot(n[walls,0],n[walls,2]);step=np.stack([n[walls,0]/h,n[walls,2]/h],1)*probe;xz=centers[walls][:,[0,2]]
+  front=covered(xz+step,centers[walls,1],walls);back=covered(xz-step,centers[walls,1],walls);area=length[walls]/2
+  inverted[walls[front&~back]]=area[front&~back];confirmed[walls[back&~front]]=area[back&~front];wall_votes[walls[front!=back]]=area[front!=back]
+ tops=np.nonzero(ok&(np.abs(n[:,1])>.65*length))[0]
+ if len(tops):
+  xz=centers[tops][:,[0,2]];exposed=tops[~covered(xz,centers[tops,1],tops)];down=n[exposed,1]<0
+  resting=covered(centers[exposed][:,[0,2]],centers[exposed,1],exposed,below=layer)
+  inverted[exposed[down&~resting]]=length[exposed[down&~resting]]/2;confirmed[exposed[~down]]=length[exposed[~down]]/2
+ out=f.copy();repairs=[]
+ for key in np.unique(patch):
+  ids=np.nonzero(patch==key)[0];bad=inverted[ids].sum();good=confirmed[ids].sum()
+  if bad<minimum or bad<=2*good:continue
+  out[ids]=f[ids][:,[0,2,1]]
+  repairs.append({'triangles':int(len(ids)),'area':round(float(length[ids].sum()/2),3),'inverted':round(float(bad),3),'confirmed':round(float(good),3),'wallVotes':round(float(wall_votes[ids].sum()),3)})
  return out,repairs

@@ -13,7 +13,7 @@ Layout (little-endian, whole file gzip-compressed):
 from __future__ import annotations
 import gzip, io, json, math, pathlib, struct
 import numpy as np
-from mesh_winding import orient_shells
+from mesh_winding import orient_patches,orient_shells
 
 MAGIC=b'DBT2'
 SCALE=.01
@@ -42,9 +42,10 @@ def mesh_record(vertices,faces,anchor,base,repair_winding=True):
  if len(f)==0:return None
  used,remap=np.unique(f,return_inverse=True);f=remap.reshape(-1,3)
  # Imported surveys are authored independently and can contain an inverted
- # shell beside correctly oriented parts. Repair at the final packaged scale;
- # positions, topology and the facade/roof split remain unchanged.
- if repair_winding:f=orient_shells(unique[used]*scale+np.asarray(anchor),f)[0]
+ # shell beside correctly oriented parts, or walls wound into the building under
+ # a roof that faces the sky. Repair at the final packaged scale; positions,
+ # topology and the facade/roof split remain unchanged.
+ if repair_winding:positions=unique[used]*scale+np.asarray(anchor);f=orient_patches(positions,orient_shells(positions,f)[0])[0]
  return unique[used].astype(np.int16),f[~roof].astype(np.uint32),f[roof].astype(np.uint32),scale
 
 def write_tile(path,header,geometry):

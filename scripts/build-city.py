@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse, csv, io, json, math, pathlib, struct, zipfile, hashlib, subprocess, sys
 from collections import Counter
 from building_semantics import apply_building_identity
-from mesh_winding import orient_shells
+from mesh_winding import orient_patches,orient_shells
 from pyproj import Transformer
 from shapely.geometry import Point, LineString, Polygon, box
 from shapely.ops import unary_union
@@ -69,7 +69,7 @@ class GLB:
   if components==3:a.update(min=[min(v[k] for v in values) for k in range(3)],max=[max(v[k] for v in values) for k in range(3)])
   idx=len(self.doc['accessors']);self.doc['accessors'].append(a);return idx
  def add(self,r,vertices,faces):
-  faces=orient_shells(vertices,faces)[0]
+  faces=orient_patches(vertices,orient_shells(vertices,faces)[0])[0]
   groups=[{'p':[],'n':[],'uv':[],'idx':[],'seen':{}},{'p':[],'n':[],'uv':[],'idx':[],'seen':{}}]
   for face in faces:
    a,b,c=[vertices[i] for i in face]
