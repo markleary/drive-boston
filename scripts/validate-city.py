@@ -25,6 +25,7 @@ from longfellow_connections import validate_longfellow_connections
 from rutherford_connections import validate_rutherford
 from leverett_connections import validate_leverett
 from road_structure_clearance import validate_bridge_clearance
+from water_crossings import level_water_crossings,water_inputs
 from harvard_terrain import repair_memorial_terrain
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
 data_dir=args.data_dir;city=json.loads((data_dir/'city.json').read_text());provenance=json.loads((data_dir/'provenance.json').read_text())
@@ -207,6 +208,9 @@ validate_longfellow_connections(city['roads'],lambda p:elevation(*p))
 validate_rutherford(city,json.loads((ROOT/'public/data/road-connections-source.json').read_text()),heights)
 validate_leverett(city,json.loads((ROOT/'public/data/leverett-connections-source.json').read_text()),heights)
 validate_bridge_clearance(city['roads'],elevation)
+water_polygons,water_level=water_inputs(city);decks=level_water_crossings(city['roads'],water_polygons,elevation,water_level,apply=False)
+assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
+recorded=provenance.get('waterCrossingDecks');assert recorded and [c['roads'] for c in recorded['chains']]==[c['roads'] for c in decks['chains']] and all(abs(a['deck']-b['deck'])<.001 for a,b in zip(recorded['chains'],decks['chains'])),'provenance must describe the installed water-crossing decks'
 cells=defaultdict(list)
 for r in city['roads']:
  assert len(r['points'])>=2 and r['oneway'] in (-1,0,1) and 3<=r['width']<=20,r['id']
