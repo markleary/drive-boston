@@ -105,3 +105,22 @@ test('Hathorn Street at Broadway in Somerville is striped beyond the south carri
     for(const r of meeting){const e=edgesOf(r);if(!e)continue;const n=nearest(p,r.points);if(!n||Math.abs(n.tx*c.tx+n.tz*c.tz)>=.8)continue;const span=pavementSpan(e,n.at,n.tx,n.tz);if(!span)continue;const off=(p[1]-n.at[1])*n.tx-(p[0]-n.at[0])*n.tz;if(off>span[0]+.5&&off<span[1]-.5)inside.push(`${c.road.name} at ${p.map(v=>v.toFixed(0))} in ${r.name} (${r.id})`);}}
   assert.deepEqual(inside,[]);
 });
+
+test('Boylston Street\'s carriageways split between tiles -4_2 and -5_2 keep one crosswalk per side of the junction when each tile plans the roads near it',{skip:!hasMetroData()},async()=>{
+  const keys=['-4_2','-5_2'],city=await loadMetroCity({tiles:keys}),index=junctionIndex(city.roads,city.signals),kept=[];
+  for(const key of keys){
+    const tile=city.loadedTiles.get(key),x0=tile.tx*tile.size,z0=tile.tz*tile.size,x1=x0+tile.size,z1=z0+tile.size;
+    const owns=r=>{const m=roadMidpoint(r);return m[0]>=x0&&m[0]<x1&&m[1]>=z0&&m[1]<z1;};
+    // The builder plans the roads whose bounds overlap the owned roads' extents grown by 40 m and draws the owned ones.
+    const ownedRoads=city.roads.filter(owns),owned=new Set(ownedRoads),box=r=>({minX:Math.min(...r.points.map(p=>p[0])),maxX:Math.max(...r.points.map(p=>p[0])),minZ:Math.min(...r.points.map(p=>p[1])),maxZ:Math.max(...r.points.map(p=>p[1]))});
+    const reach=ownedRoads.map(box).reduce((a,b)=>({minX:Math.min(a.minX,b.minX),maxX:Math.max(a.maxX,b.maxX),minZ:Math.min(a.minZ,b.minZ),maxZ:Math.max(a.maxZ,b.maxZ)}));
+    const near=city.roads.filter(r=>{const b=box(r);return b.minX<=reach.maxX+40&&b.maxX>=reach.minX-40&&b.minZ<=reach.maxZ+40&&b.maxZ>=reach.minZ-40;});
+    const records=new Map();for(const p of [...tile.pavements,...tile.borderPavements])if(!records.has(p.road))records.set(p.road,p);
+    const edgesOf=r=>{const p=records.get(r.id);return p&&p.edges.length>=8?pavementEdges(tile,p):undefined;},others=[...records.values()].map(p=>pavementEdges(tile,p));
+    assert.ok(planCrosswalks(ownedRoads,index,edgesOf,others).some(c=>c.road.name==='Boylston Street'&&Math.abs(c.at[0]+4203)<2),`planned alone, tile ${key} keeps a Boylston Street crosswalk at x -4203`);
+    kept.push(...planCrosswalks(near,index,edgesOf,others).filter(c=>owned.has(c.road)).map(c=>({...c,tile:key})));
+  }
+  const boylston=kept.filter(c=>c.road.name==='Boylston Street'&&Math.abs(c.at[0]+4203)<2);
+  assert.equal(boylston.length,1,`one crosswalk across the roadway at x -4203, not one per tile (${boylston.map(c=>c.tile+':'+c.road.id)})`);
+  for(const a of kept)for(const b of kept){if(a===b||a.tile===b.tile||Math.abs(a.tx*b.tx+a.tz*b.tz)<.8)continue;const d=Math.hypot(a.at[0]-b.at[0],a.at[1]-b.at[1]);assert.ok(d>=MIN_SPACING||Math.hypot(a.node[0]-b.node[0],a.node[1]-b.node[1])<1,`${a.road.name} and ${b.road.name} ${d.toFixed(1)} m apart across the border`);}
+});

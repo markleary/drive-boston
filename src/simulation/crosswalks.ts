@@ -103,11 +103,15 @@ function roadEnd(road: Road, points: Point2[], index: JunctionIndex, edgesOf: (r
   return { reach, offset: reach + CROSSWALK_SETBACK, stripe, priority: (signal ? 100 : 0) + (through.length ? 0 : 10) + widest };
 }
 
-/** The crosswalks of `roads`, thinned along each roadway. `edgesOf` gives a road's pavement record edges where the tile
- * holds them (own or border); `others` are every record's edges for `roadwaySpan`. Deterministic for a given road order. */
-export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[]): Crosswalk[] {
+/** The crosswalks of `roads`, thinned along each roadway, in steps (a yield every 50 roads) for the tile pacer. `edgesOf`
+ * gives a road's pavement record edges where the tile holds them (own or border); `others` are every record's edges for
+ * `roadwaySpan`. A tile passes every road within reach of the ones it owns (which can end 200 m outside it), not only
+ * those, so the thinning sees the other carriageway's candidate across a tile border (Boylston Street between tiles
+ * -4_2 and -5_2) and both tiles keep the same one; the caller then draws the owned roads' crosswalks. */
+export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[]): Generator<void, Crosswalk[]> {
   const candidates: Crosswalk[] = [];
-  for (const road of roads) {
+  for (const [i, road] of roads.entries()) {
+    if (i % 50 === 49) yield;
     if (road.elevations || road.width < MIN_WIDTH || NO_CROSSWALK.test(road.name)) continue;
     const points = road.points, last = points.length - 1; if (polylineLength(points) < MIN_ROAD) continue;
     // Junction vertices: both ends, and every mid-vertex another road reaches (OpenStreetMap ways are not split at every T).
@@ -125,7 +129,10 @@ export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (ro
       candidates.push({ road, node: points[ends[j].i], at, tx, tz, span, priority: end.priority });
     }
   }
-  candidates.sort((a, b) => b.priority - a.priority || (b.span[1] - b.span[0]) - (a.span[1] - a.span[0]));
+  // Deterministic whatever order the roads came in and whichever tile holds a road's record (a neighbour sees only its
+  // median width), so two tiles planning the same border candidates keep the same one: the wider street's first.
+  const breadth = (c: Crosswalk) => c.road.pavedWidth ?? c.road.width;
+  candidates.sort((a, b) => b.priority - a.priority || breadth(b) - breadth(a) || (a.road.id < b.road.id ? -1 : a.road.id > b.road.id ? 1 : 0) || a.at[0] - b.at[0] || a.at[1] - b.at[1]);
   const kept: Crosswalk[] = [];
   const center = (c: Crosswalk): Point2 => [c.at[0] + c.tx * STRIPE_LENGTH / 2, c.at[1] + c.tz * STRIPE_LENGTH / 2];
   for (const c of candidates) {
@@ -140,4 +147,9 @@ export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (ro
     if (!crowded) kept.push(c);
   }
   return kept;
+}
+
+/** The whole plan at once, for tests and tools. */
+export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[]): Crosswalk[] {
+  const steps = planCrosswalkSteps(roads, index, edgesOf, others); let r = steps.next(); while (!r.done) r = steps.next(); return r.value;
 }

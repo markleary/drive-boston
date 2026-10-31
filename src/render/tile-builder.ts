@@ -8,7 +8,7 @@ import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
 import { pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
-import { junctionIndexSteps, planCrosswalks, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
+import { junctionIndexSteps, planCrosswalkSteps, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
@@ -217,7 +217,14 @@ export function createTileBuilder(ctx: TileContext) {
         const edgesOf = (road: Road) => { const p = pavementOf(road) ?? borders.get(road.id); return p && p.edges.length >= 8 ? pavementEdges(tile, p) : undefined; };
         // The citywide junction index (20k roads) is built once, paced across frames by the first tile that needs it.
         if (!junctions) { const steps = junctionIndexSteps(city.roads, city.signals); let r = steps.next(); while (!r.done) { if (due(pace)) yield 'roads'; r = steps.next(); } junctions = r.value; }
-        for (const { at, tx, tz, span: [lo, hi] } of planCrosswalks(ownedRoads, junctions, edgesOf, allEdges)) {
+        // Planned over every road within 40 m of the owned roads' extents (a road owned by its midpoint can end 200 m
+        // into the next tile), so the thinning sees the candidates across the tile border; drawn for the owned ones.
+        const reach: Bounds = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+        for (const road of ownedRoads) { const b = roadBounds.get(road)!; reach.minX = Math.min(reach.minX, b.minX); reach.maxX = Math.max(reach.maxX, b.maxX); reach.minZ = Math.min(reach.minZ, b.minZ); reach.maxZ = Math.max(reach.maxZ, b.maxZ); }
+        const ownedSet = new Set(ownedRoads), planning = planCrosswalkSteps(ownedRoads.length ? roadsNear(grow(reach, 40)) : [], junctions, edgesOf, allEdges);
+        let planned = planning.next(); while (!planned.done) { if (due(pace)) yield 'roads'; planned = planning.next(); }
+        for (const { road, at, tx, tz, span: [lo, hi] } of planned.value) {
+          if (!ownedSet.has(road)) continue;
           if (due(pace)) yield 'roads';
           for (let side = lo + .8; side < hi - .5; side += 1.35) {
             const x = at[0] - tz * side, z = at[1] + tx * side;
