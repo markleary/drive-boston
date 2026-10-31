@@ -1,3 +1,4 @@
+import {DEFAULT_CAR, type PlayerCarId} from './simulation/player-cars';
 import '@fontsource/bebas-neue/latin-400.css';import '@fontsource/barlow/latin-400.css';import '@fontsource/barlow/latin-700.css';import '@fontsource/jetbrains-mono/latin-400.css';
 import './style.css';
 import * as THREE from 'three';
@@ -31,6 +32,8 @@ import { addPrudentialCrown } from './render/prudential';
 import { addNeighborhoodDetails } from './render/neighborhood-architecture';
 import { updateFoliage } from './render/foliage';
 import { createGroundCover } from './render/ground-cover';
+import {createTireTracks} from './render/tire-tracks';
+import {createTireSurfaceSampler} from './simulation/tire-tracks';
 import { addRooftopDetails } from './render/rooftops';
 import { createStreetLife } from './render/street-life';
 import { createInterface } from './ui/interface';
@@ -52,6 +55,7 @@ async function boot(){
   const metro=isMetroCity(city);
   let cameraMode:CameraMode='chase',lighting:LightingMode='golden';
   let travelMode:TravelMode='drive';
+  let carId:PlayerCarId=DEFAULT_CAR,playerCar:ReturnType<typeof createCar>|undefined;
   let flight:ReturnType<typeof createHelicopterFlight>|undefined;
   const mobile=matchMedia('(pointer: coarse)').matches;
   let quality:QualityMode=mobile?'balanced':'high';
@@ -79,6 +83,11 @@ async function boot(){
   };
   const ui=createInterface(city,{
     onReset(){if(!physics)return;if(travelMode==='helicopter'){flight?.reset();populateNeighborhood();cameraSnap=true;lookOffset=0;}else void travelTo(city.spawn.x,city.spawn.z,()=>physics!.reset(city.spawn.x,city.spawn.z,city.spawn.yaw));},
+    onCar(id){
+      if(id===carId)return;carId=id;physics?.setCar(id);audio.setCar(id);
+      if(playerCar){scene.remove(playerCar.group);playerCar.dispose();playerCar=createCar(id);scene.add(playerCar.group);}
+      keys.clear();cameraSnap=true;
+    },
     onCamera(mode){cancelCameraDrag();cameraMode=mode;cameraSnap=true;lookOffset=0;},
     onTravelMode(mode){
       if(!flight||!physics||mode===travelMode)return;
@@ -178,6 +187,7 @@ async function boot(){
     if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait});}
     else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile,waitForContext:contextGate.wait})]);physics=results[0];world=results[1];}
     const streamer=world.streamer;
+    const tireTracks=createTireTracks(scene,city,createTireSurfaceSampler(city,()=>Array.from(streamer?.loaded.values()??[],entry=>entry.tile)));
     if(streamer){const arrival=mobile&&saved?saved:city.spawn;ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(arrival.x,arrival.z);}
     await contextGate.wait();
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
@@ -216,8 +226,8 @@ async function boot(){
     physics.world.step();
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
-    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city);const rooftops=metro?undefined:addRooftopDetails(scene,city);
-    const car=createCar();scene.add(car.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;traffic=createTraffic(scene,city,physics);
+    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
+    physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;traffic=createTraffic(scene,city,physics);
     transit=createTransit(scene,city,physics,transitData);
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     const streetLife=createStreetLife(scene,city,physics);setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
@@ -316,14 +326,14 @@ async function boot(){
       if(!paused&&travelMode==='drive'&&pad.pressed.has('LS'))audio.horn();
       const controls=paused||flying?{throttle:0,brake:flying?1:0,steer:0,handbrake:flying}:input();
       const flightControls=paused||!flying?{forward:0,strafe:0,turn:0,lift:0}:flightInput();
-      if(!paused){accumulator+=dt;while(accumulator>=1/60){const before=physics!.getState(),observer=flying?flight!.state:before;transit!.update(1/60,before,observer,traffic!.obstacles());traffic!.update(1/60,before,observer,transit!.obstacles());physics!.step(controls,1/60);elapsed+=1/60;accumulator-=1/60;if(!flying)distance+=Math.abs(before.speed)/60;}}else accumulator=0;
+      if(!paused){accumulator+=dt;while(accumulator>=1/60){const before=physics!.getState(),observer=flying?flight!.state:before;transit!.update(1/60,before,observer,traffic!.obstacles());traffic!.update(1/60,before,observer,transit!.obstacles());physics!.step(controls,1/60);elapsed+=1/60;tireTracks.update(flying?[]:physics!.getTireContacts(controls),elapsed,physics!.poseRevision);accumulator-=1/60;if(!flying)distance+=Math.abs(before.speed)/60;}}else accumulator=0;
       // Flight already substeps at <= 1/120 s and sweeps its full movement for
       // clearance. Advance it on the camera's clock: quantizing it to Rapier's
       // 60 Hz ticks makes a moving aircraft bob against the smoothed camera.
       if(flying&&!paused){flight!.update(dt,flightControls);distance+=flight!.state.speed*dt;}
       const carState=physics!.getState(),riding=carState.vehicle==='ultrabee';
       const interior=!flying?tunnelAt(city,carState.x,carState.z,carState.y):undefined;
-      if(!riding)car.update(carState,lighting==='night'||!!interior?.covered,paused?0:dt);car.group.visible=!riding&&(flying||cameraMode!=='hood');
+      if(!riding)playerCar!.update(carState,lighting==='night'||!!interior?.covered,paused?0:dt);playerCar!.group.visible=!riding&&(flying||cameraMode!=='hood');
       if(riding)bike.update(carState,lighting==='night'||!!interior?.covered,cameraMode==='hood'&&!flying);bike.group.visible=riding;
       helicopter.update(flight!.state,paused?0:dt,flying);helicopter.group.visible=flying&&cameraMode!=='hood';
       const state=flying?{...flight!.state,steering:0}:carState;
@@ -367,13 +377,13 @@ async function boot(){
       // A meter-scale near plane preserves ground-layer depth precision from
       // above; the close driving view retains its dashboard-friendly near plane.
       camera.near=flying?1:.15;camera.lookAt(look);camera.updateProjectionMatrix();cameraSnap=false;
-      car.setCameraPosition(camera.position);
+      playerCar!.setCameraPosition(camera.position);
       const flightShadows=flying&&quality==='high'&&!mobile;
-      world!.update(target,elapsed,!mobile||!paused,flightShadows);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:{...carState,halfLength:riding?.8:2.1,halfWidth:riding?.4:.95});updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
+      world!.update(target,elapsed,!mobile||!paused,flightShadows);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
       for(const impact of physics!.takeImpacts())if(!paused)audio.impact(classifyImpact(impact),impact.severity);
       for(const speed of streetLife.takeHits())if(!paused)audio.impact('pedestrian',speed);
-      renderer.info.reset();world!.updateReflections(target,elapsed,flying?helicopter.group:riding?bike.group:car.group);
+      renderer.info.reset();world!.updateReflections(target,elapsed,flying?helicopter.group:riding?bike.group:playerCar!.group);
       if(warmNightPasses){const shown=switchedLights.map(light=>light.visible);for(const lampsOnly of [false,true]){switchedLights.forEach(light=>{light.visible=!lampsOnly||light instanceof THREE.PointLight;});graphics!.render(0);}switchedLights.forEach((light,i)=>{light.visible=shown[i];});warmNightPasses=false;}
       graphics!.render(dt);frameCount++;fpsTimer+=raw;frameMs=raw*1000;if(fpsTimer>=.5){fps=Math.round(frameCount/fpsTimer);averageFrameMs=fpsTimer/frameCount*1000;frameCount=0;fpsTimer=0;}
       ui.update(state,{fps,distance,travelMode,quality,groundHeight:sampleElevation(city,state.x,state.z),performance:{fps,frameMs:averageFrameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,traffic:traffic!.count,transit:transit!.count,pedestrians:streetLife.count},gear:carState.gear,rpm:carState.rpm,wheelieRemaining:carState.wheelieRemaining,altitude:flying?state.y-sampleElevation(city,state.x,state.z):0,verticalSpeed:flying?flight!.state.verticalSpeed:0});saveTimer+=dt;if(saveTimer>5){saveTimer=0;save();}
@@ -385,13 +395,13 @@ async function boot(){
       const observer=travelMode==='helicopter'?flight!.state:physics!.getState();
       return {traffic:traffic!.population(observer),pedestrians:streetLife.population(observer)};
     };
-    const diagnostic={get ready(){return true;},snapshot:()=>({state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),touchInput:ui.getTouchInput(),flightTouchInput:ui.getFlightTouchInput(),camera:cameraMode,carBodyVisible:car.bodyVisible,vehicleScreenBounds:cameraMode==='hood'||(travelMode==='drive'&&!car.bodyVisible)?null:vehicleScreenBounds(travelMode==='helicopter'?helicopter.group:travelMode==='bike'?bike.group:car.group,camera,innerWidth,innerHeight),cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},shadows:world!.shadowCoverage,farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,parkedVehicles:streetLife.parked.map(v=>({...v})),walkers:streetLife.pedestrians.map(p=>({x:p.position.x,y:p.position.y,z:p.position.z,yaw:p.yaw,knocked:p.knocked?.phase??null})),audio:audio.getStatus(),distance}),city,
+    const diagnostic={get ready(){return true;},snapshot:()=>({carId,state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),touchInput:ui.getTouchInput(),flightTouchInput:ui.getFlightTouchInput(),camera:cameraMode,carBodyVisible:playerCar!.bodyVisible,vehicleScreenBounds:cameraMode==='hood'||(travelMode==='drive'&&!playerCar!.bodyVisible)?null:vehicleScreenBounds(travelMode==='helicopter'?helicopter.group:travelMode==='bike'?bike.group:playerCar!.group,camera,innerWidth,innerHeight),cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},shadows:world!.shadowCoverage,farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,parkedVehicles:streetLife.parked.map(v=>({...v})),walkers:streetLife.pedestrians.map(p=>({x:p.position.x,y:p.position.y,z:p.position.z,yaw:p.yaw,knocked:p.knocked?.phase??null})),audio:audio.getStatus(),distance}),city,
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
       travelTo:(x:number,z:number,yaw=0,roadId?:string)=>travelTo(x,z,()=>physics!.reset(x,z,yaw,roadId)),
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
       flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw)),
       /** Browser specs: the live scene graph and renderer, for attributing resource growth to its owner group. */
-      scene,renderer,
+      scene,renderer,tireTracks,
       /** Browser specs: draw every resident object once, with frustum culling off and distance-hidden objects shown (lights stay as they are so no shader variant recompiles). three.js uploads a geometry's GL buffers on its first draw, so without this the renderer's geometry count and buffer bytes track what the camera has happened to see rather than what the scene holds. */
       drawResident:()=>{const culled:THREE.Object3D[]=[],hidden:THREE.Object3D[]=[];scene.traverse(o=>{if(o.frustumCulled){o.frustumCulled=false;culled.push(o);}if(!o.visible&&!(o as THREE.Light).isLight){o.visible=true;hidden.push(o);}});try{renderer.render(scene,camera);}finally{for(const o of culled)o.frustumCulled=true;for(const o of hidden)o.visible=false;}}};
     Object.assign(window,{__backbay:diagnostic});

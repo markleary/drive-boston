@@ -4,7 +4,7 @@ import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.
 import {inTransitClearance} from './transit-corridors.ts';
 import {inTunnelPortal,tunnelAt} from './tunnels.ts';
 
-export function roadProjection(road:Road,x:number,z:number){
+export function roadProjection(road:Pick<Road,'points'>,x:number,z:number){
   let best={distance:Infinity,index:0,t:0,x:road.points[0]?.[0]??x,z:road.points[0]?.[1]??z};
   for(let i=1;i<road.points.length;i++){
     const a=road.points[i-1],b=road.points[i],dx=b[0]-a[0],dz=b[1]-a[1],len=dx*dx+dz*dz;

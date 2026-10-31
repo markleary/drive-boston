@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { DEFAULT_CAR, PLAYER_CARS, type PlayerCarId } from '../simulation/player-cars.ts';
+import { createMcLarenGeometry, createMcLarenWheelGeometry } from './mclaren-gt.ts';
 import type { VehicleState } from '../types';
 
 export type VehicleStyle = 'coupe' | 'sedan' | 'crossover' | 'van' | 'hatchback';
@@ -42,7 +44,7 @@ function shell(sections: Section[]) {
   return geometry;
 }
 
-function geometryParts() {
+export function geometryParts() {
   const buckets = new Map<VehicleSurface, THREE.BufferGeometry[]>();
   const add = (surface: VehicleSurface, geometry: THREE.BufferGeometry) => {
     const normalized = geometry.index ? geometry.toNonIndexed() : geometry;
@@ -317,10 +319,11 @@ export function createMassachusettsPlateMaterial(registration = '4BK 026') {
   return new THREE.MeshStandardMaterial({ map: massachusettsPlateTexture(registration) ?? null, color: 0xffffff, roughness: .49, metalness: .04 });
 }
 
-export function createCar() {
-  const group = new THREE.Group(); group.name = 'PlayerCoupe';
+export function createCar(id:PlayerCarId=DEFAULT_CAR) {
+  const gt=id==='mclaren-gt',spec=PLAYER_CARS[id];
+  const group = new THREE.Group(); group.name = gt?'PlayerMcLarenGT':'PlayerCoupe';group.userData.carId=id;
   const materials: Record<VehicleSurface, THREE.MeshStandardMaterial> = {
-    paint: new THREE.MeshPhysicalMaterial({ color: 0xc8c5b0, metalness: .28, roughness: .26, clearcoat: .75, clearcoatRoughness: .19 }),
+    paint: new THREE.MeshPhysicalMaterial({ color: gt?0xc87935:0xc8c5b0, metalness: gt?.62:.38, roughness: .23, clearcoat: 1, clearcoatRoughness: .13 }),
     trim: new THREE.MeshStandardMaterial({ color: 0x151b1e, metalness: .24, roughness: .48, side: THREE.DoubleSide }),
     rubber: new THREE.MeshStandardMaterial({ color: 0x171a1b, roughness: .94 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xb8bec0, metalness: .9, roughness: .21 }),
@@ -330,17 +333,41 @@ export function createCar() {
     amber: new THREE.MeshStandardMaterial({ color: 0xb0651d, emissive: 0xd37817, emissiveIntensity: .15, roughness: .3 }),
     plate: new THREE.MeshStandardMaterial({ color: 0xdadacb, roughness: .48 }),
   };
-  for (const [surface, geometry] of createVehicleGeometry('coupe', false)) {
+  for (const [surface, geometry] of gt?createMcLarenGeometry():createVehicleGeometry('coupe', false)) {
     const mesh = new THREE.Mesh(geometry, materials[surface]); mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
   }
   // Keep plate UVs separate from merged geometry so the tiny lettering stays crisp.
   const plateMaterial = createMassachusettsPlateMaterial();
-  group.add(new THREE.Mesh(createVehiclePlateGeometry('coupe'), plateMaterial));
+  let plateGeometry:THREE.BufferGeometry;
+  if(!gt)plateGeometry=createVehiclePlateGeometry('coupe');
+  else {
+    const front=new THREE.PlaneGeometry(.305,.1524);front.translate(0,-.215,2.385);
+    const rear=new THREE.PlaneGeometry(.305,.1524);rear.rotateY(Math.PI);rear.translate(0,-.08,-2.367);
+    plateGeometry=mergeGeometries([front,rear],false)!;front.dispose();rear.dispose();
+  }
+  const plates=new THREE.Mesh(plateGeometry,plateMaterial);plates.name='PlayerMassachusettsPlates';group.add(plates);
+  if(gt&&typeof document!=='undefined'){
+    const canvas=document.createElement('canvas');canvas.width=512;canvas.height=96;
+    const context=canvas.getContext('2d')!;context.fillStyle='#d5d8da';context.textAlign='center';context.font='italic bold 68px Arial';context.fillText('McLaren',256,72);
+    const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;
+    const badge=new THREE.MeshStandardMaterial({map:texture,transparent:true,depthWrite:false,metalness:.4,roughness:.3});
+    const geometry=new THREE.PlaneGeometry(.25,.047);geometry.rotateY(Math.PI);geometry.translate(0,.20,-2.44);group.add(new THREE.Mesh(geometry,badge));
+  }
+  // Satin B-pillars and fine window seals polish the existing coupe.
+  if(!gt){
+    const detail=geometryParts();
+    for(const side of [-1,1]){
+      detail.beam('trim',[side*.836,.34,-.30],[side*.70,.825,-.30],.027);
+      detail.beam('chrome',[side*.84,.314,-1.18],[side*.84,.314,.80],.007);
+      detail.box('paint',[.095,.12,.23],[side*.865,-.13,1.06]);
+    }
+    for(const [surface,geometry] of detail.finish())group.add(new THREE.Mesh(geometry,materials[surface]));
+  }
   const wheels: { pivot: THREE.Group; spin: THREE.Group }[] = [];
-  for (const z of [1.33, -1.33]) for (const side of [-1, 1]) {
-    const pivot = new THREE.Group(); pivot.position.set(side * .86, -.34, z); group.add(pivot);
+  for (const z of [spec.wheelbase/2, -spec.wheelbase/2]) for (const side of [-1, 1]) {
+    const pivot = new THREE.Group(); pivot.position.set(side * (z>0?spec.track:spec.rearTrack)/2, -.08-spec.suspensionRest, z); group.add(pivot);
     const spin = new THREE.Group(); pivot.add(spin);
-    for (const [surface, geometry] of createVehicleWheelGeometry(side)) {
+    for (const [surface, geometry] of gt?createMcLarenWheelGeometry(side,z>0):createVehicleWheelGeometry(side)) {
       const mesh = new THREE.Mesh(geometry, materials[surface]); mesh.castShadow = true; spin.add(mesh);
     }
     wheels.push({ pivot, spin });
@@ -348,7 +375,7 @@ export function createCar() {
   const lights: THREE.SpotLight[] = [];
   for (const x of [-.55, .55]) {
     const light = new THREE.SpotLight(0xffedc4, 0, 45, .42, .65, 1.5); light.visible = false;
-    light.position.set(x, .075, 2.18); light.target.position.set(x, -.4, 24);
+    light.position.set(x, gt?.18:.075, gt?2.35:2.18); light.target.position.set(x, -.4, 24);
     group.add(light, light.target); lights.push(light);
   }
   // A short chase boom can end inside the coupe when a wall/parked vehicle
@@ -369,10 +396,10 @@ export function createCar() {
       group.position.set(s.x, s.y, s.z);
       if (s.rotation) group.quaternion.set(s.rotation.x, s.rotation.y, s.rotation.z, s.rotation.w);
       else group.rotation.set(0, s.yaw, 0);
-      fallbackWheelAngle += s.speed * Math.min(dt, .1) / .34;
+      fallbackWheelAngle += s.speed * Math.min(dt, .1) / spec.wheelRadius;
       wheels.forEach((wheel, i) => {
         wheel.pivot.rotation.y = i < 2 ? s.steering : 0;
-        wheel.pivot.position.y = -.08 - (s.suspension?.[i] ?? .26);
+        wheel.pivot.position.y = -.08 - (s.suspension?.[i] ?? spec.suspensionRest);
         wheel.spin.rotation.x = s.wheelAngles?.[i] ?? fallbackWheelAngle;
       });
       materials.headlight.emissiveIntensity = night ? 3 : .45;
@@ -388,7 +415,9 @@ export function createCar() {
           (Array.isArray(object.material) ? object.material : [object.material]).forEach(material => ownedMaterials.add(material));
         }
       });
-      ownedMaterials.forEach(material => material.dispose()); plateMaterial.map?.dispose();
+      const textures=new Set<THREE.Texture>();
+      for(const material of ownedMaterials){const map=(material as THREE.MeshStandardMaterial).map;if(map)textures.add(map);material.dispose();}
+      textures.forEach(texture=>texture.dispose());
     },
   };
 }

@@ -24,9 +24,9 @@ test('desktop: recorded driving sound, pause/mute/horn and both graphics modes',
   await expect(page.getByTestId('start-drive')).toBeEnabled({ timeout: 60000 });
   await page.getByTestId('start-drive').click();
   await expect(page.locator('#welcome')).toBeHidden();
-  await expect.poll(async () => (await snapshot(page)).audio.loadedCount, { timeout: 20000 }).toBe(11);
+  await expect.poll(async () => (await snapshot(page)).audio.loadedCount, { timeout: 20000 }).toBe(16);
   const initial = await snapshot(page);
-  expect(initial.audio.expectedCount).toBe(11);
+  expect(initial.audio.expectedCount).toBe(16);
   expect(initial.audio.loading).toBe(false);
   expect(initial.audio.failed).toEqual([]);
   expect(initial.audio.fallback).toBe(false);

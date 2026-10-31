@@ -1,4 +1,4 @@
-"""Level estimated water-crossing decks on their own at-grade junctions.
+"""Level estimated water-crossing decks between their own at-grade junctions.
 
 `build-metro.py` profiles each Boston GIS segment on its own: a node with a
 positive source level, or inside mapped water, sits 6.4 m above the raw DEM
@@ -11,16 +11,25 @@ that the segment is a bridge, and the source level does not say how high.
 
 A water crossing here is the chain of elevated pieces joined through lifted
 nodes that reaches mapped water, with every lifted land node within 60 m of
-the water. The chain gets one flat deck: the water-based estimate (basin level
-plus 6.4 m) limited to the range of the chain's own at-grade junction heights,
-then raised where the graded terrain under the deck or a road crossing beneath
-needs it. Ramp pieces keep their unchanged ground landing, which the terrain
-grader pinned, and smoothstep to the deck as `deck_profile()` does. Chains with
-a dedicated builder (Harvard, Longfellow, Bowker, Tobin, Chelsea Creek,
-Leverett, source-connection approaches) and chains reaching inland viaducts
+the water. The chain gets one deck surface: the inverse-distance blend of the
+chain's own at-grade junction heights along the chain, so a bridge between two
+streets of different height slopes gently across the water instead of putting
+the difference into a junction stub. Every lower bound raises the effective
+height of its nearest junction until the surface meets it: 0.3 m over the
+graded terrain under the deck pieces and under each ramp (fading to nothing
+over the 10 m before the pinned landing, so a quay or an approach embankment
+the DEM kept lifts the deck end on its own bank only), 1.5 m over the water
+plane, and 6.4 m over any road crossing beneath. Ramp pieces keep their
+unchanged ground landing, which the terrain grader pinned, smoothstep to the
+deck as `deck_profile()` does, and are held point by point just over the
+terrain, since the grader never touches the ground under an elevated piece and
+that ground is both a collider and the drive surface (Alford Street's ramps sat
+1.9 m inside their embankment). Chains with a dedicated builder (Harvard,
+Longfellow, Bowker, Tobin, Chelsea Creek, Leverett, source-connection
+approaches) and chains reaching inland viaducts
 are reported, never changed. Estimated game profiles, not surveyed decks.
 """
-import math
+import heapq,math
 from collections import defaultdict
 from shapely.geometry import LineString,Point,Polygon
 from shapely.ops import unary_union
@@ -32,6 +41,9 @@ DECK=6.4
 WATER_REACH=60
 MIN_RISE=1.5
 TERRAIN_RISE=.3
+RAMP_RISE=.05
+RAMP_TAPER=10
+LANDING_SHARE=.01
 ALLOWED_KINDS={'elevated','water-crossing','restored-water-span'}
 ALLOWED_IDS=('structure-','water-link-')
 OWNED_NAMES={'Longfellow Bridge'}
@@ -68,6 +80,12 @@ def node_key(p):return (round(p[0],1),round(p[1],1))
 def lifted(road,index):return road.get('startLevel' if index==0 else 'endLevel')==1
 
 
+def ramp(road):
+ """A ramp's landing index and height, each point's smoothstep share of the climb to the deck, and how far the terrain margin has faded in from the landing."""
+ along=stations(road['points']);total=along[-1] or 1;landing=0 if lifted(road,-1) else len(along)-1
+ return landing,road['elevations'][landing],[smooth(abs(d-along[landing])/total) for d in along],[min(1,abs(d-along[landing])/RAMP_TAPER) for d in along]
+
+
 def stations(points):
  result=[0]
  for a,b in zip(points,points[1:]):result.append(result[-1]+math.dist(a,b))
@@ -91,16 +109,36 @@ def water_chains(roads):
  return sorted(chains.values(),key=lambda chain:min(r['id'] for r in chain))
 
 
+def landing_distances(chain):
+ """At-grade landing heights by node, and each landing's path distance to every node of the chain."""
+ edges=defaultdict(list);landings={}
+ for road in chain:
+  a,b=node_key(road['points'][0]),node_key(road['points'][-1]);length=stations(road['points'])[-1]
+  edges[a].append((b,length));edges[b].append((a,length))
+  for index,key in ((0,a),(-1,b)):
+   if not lifted(road,index):landings[key]=road['elevations'][index]
+ distances={}
+ for start in landings:
+  dist={start:0};heap=[(0,start)]
+  while heap:
+   d,n=heapq.heappop(heap)
+   if d>dist[n]:continue
+   for m,length in edges[n]:
+    if d+length<dist.get(m,math.inf):dist[m]=d+length;heapq.heappush(heap,(d+length,m))
+  distances[start]=dist
+ return landings,distances
+
+
 def owned(road):
  bridge=road.get('bridge',{})
  return road['name'] in OWNED_NAMES or bridge.get('kind','elevated') not in ALLOWED_KINDS or not str(bridge.get('id','')).startswith(ALLOWED_IDS)
 
 
 def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK,reach=WATER_REACH,apply=True):
- """Give every qualifying water chain one flat deck. `ground(x,z)` is the graded
- terrain; `water_level(x,z)` returns a basin plane or None. Returns a report;
- with apply=False the roads are left as they are and only the report says what
- would change."""
+ """Give every qualifying water chain one deck surface that runs between its own
+ junctions. `ground(x,z)` is the graded terrain; `water_level(x,z)` returns a
+ basin plane or None. Returns a report; with apply=False the roads are left as
+ they are and only the report says what would change."""
  water=unary_union(water_polygons);wet=prep(water);deep=prep(water.buffer(-8))
  others=[r for r in roads if not r.get('tunnel')];lines=[LineString(r['points']) for r in others];tree=STRtree(lines)
  def water_node(p):return deep.covers(Point(p))
@@ -128,13 +166,31 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
    mid=line.intersection(water).centroid
    if not mid.is_empty:samples.append((water_level and water_level(mid.x,mid.y)) or ground(mid.x,mid.y))
   level=max(samples);estimate=level+deck
-  base=min(max(estimate,min(junctions)),max(junctions)) if junctions else estimate
-  base=max(base,level+MIN_RISE)
-  terrain=max((ground(*p) for road in chain if lifted(road,0) and lifted(road,-1) for p in road['points']),default=-math.inf)
-  base=max(base,terrain+TERRAIN_RISE)
-  beneath=[];above=[]
+  # The surface is the inverse-distance blend of the junction heights along the
+  # chain, so a bridge between two streets of different height slopes across
+  # the water instead of putting the difference into a junction stub. Every
+  # lower bound (terrain and water under the deck, terrain under a ramp, a road
+  # crossing beneath) raises the effective height of its nearest junction until
+  # the surface meets it, so a quay on one bank never lifts the other bank.
+  landings,distances=landing_distances(chain);lifts={key:0 for key in landings};bump=[0]
+  alongs={road['id']:stations(road['points']) for road in chain}
+  def point_distances(road,d):
+   a,b=node_key(road['points'][0]),node_key(road['points'][-1]);total=alongs[road['id']][-1]
+   return {start:min(dist.get(a,math.inf)+d,dist.get(b,math.inf)+total-d) for start,dist in distances.items()}
+  def height(dist):
+   if not landings:return estimate+bump[0]
+   weights=[(landings[start]+lifts[start],1/max(d,.01)) for start,d in dist.items()];total=sum(w for _,w in weights)
+   return sum(h*w for h,w in weights)/total
+  bounds=[]
   for road in chain:
-   line=LineString(road['points'])
+   along=alongs[road['id']];points=road['points'];ends=[lifted(road,0),lifted(road,-1)]
+   if all(ends):bounds.extend((point_distances(road,d),max(ground(*p)+TERRAIN_RISE,level+MIN_RISE)) for d,p in zip(along,points))
+   else:
+    landing,low,shares,taper=ramp(road);dist=point_distances(road,along[len(points)-1 if ends[1] else 0])
+    bounds.append((dist,max([level+MIN_RISE]+[ground(*p)+TERRAIN_RISE*t for i,(p,t) in enumerate(zip(points,taper)) if i!=landing])))
+  above=[];unresolved=[]
+  for road in chain:
+   line=LineString(road['points']);ends=[lifted(road,0),lifted(road,-1)]
    for j in tree.query(line,predicate='intersects'):
     other=others[j]
     if other['id'] in ids:continue
@@ -142,23 +198,40 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
     for q in points:
      p=[q.x,q.y]
      if any(math.dist(p,v)<.05 for v in road['points']) and any(math.dist(p,v)<.05 for v in other['points']):continue
-     height=road_height(other,p,ground)
-     if height<road_height(road,p,ground):beneath.append(height)
-     else:above.append(other['id'])
+     height_below=road_height(other,p,ground)
+     if height_below>=road_height(road,p,ground):above.append(other['id']);continue
+     d=line.project(q);required=height_below+deck
+     if all(ends):bounds.append((point_distances(road,d),required))
+     else:
+      landing,low,shares,taper=ramp(road);along=alongs[road['id']];share=smooth(abs(d-along[landing])/(along[-1] or 1))
+      # The ramp reaches only `share` of the deck-end rise here, so the deck end must rise by the deficit divided by that share. A crossing right at the pinned landing cannot be cleared by any approach; it is reported, not quietly weakened.
+      if share<LANDING_SHARE:unresolved.append({'road':other['id'],'share':round(share,4)})
+      else:bounds.append((point_distances(road,along[len(along)-1 if ends[1] else 0]),low+(required-low)/share))
   if above:report['skipped'].append({**entry,'reason':'crossed above','by':sorted(set(above))});continue
-  base=round(max([base]+[h+deck for h in beneath]),4)
-  changed=[]
+  for _ in range(60):
+   raise_by={};uniform=0
+   for dist,required in bounds:
+    deficit=required-height(dist)
+    if deficit<=.0001:continue
+    if landings:key=min(dist,key=dist.get);raise_by[key]=max(raise_by.get(key,0),deficit)
+    else:uniform=max(uniform,deficit)
+   if not raise_by and not uniform:break
+   for key,d in raise_by.items():lifts[key]+=d
+   bump[0]+=uniform
+  changed=[];heights=[]
   for road in chain:
-   lifted_ends=[lifted(road,0),lifted(road,-1)];old=road['elevations']
-   if all(lifted_ends):new=[base]*len(road['points'])
+   along=alongs[road['id']];old=road['elevations'];ends=[lifted(road,0),lifted(road,-1)]
+   if all(ends):new=[height(point_distances(road,d)) for d in along];heights.extend(new)
    else:
-    along=stations(road['points']);total=along[-1] or 1
-    ha,hb=(old[0],base) if lifted_ends[1] else (base,old[-1])
-    new=[round(ha+(hb-ha)*smooth(d/total),4) for d in along]
+    landing,low,shares,taper=ramp(road);top=height(point_distances(road,along[len(along)-1 if ends[1] else 0]));heights.append(top)
+    new=[low+(top-low)*s if i==landing else max(low+(top-low)*s,ground(*p)+RAMP_RISE*t) for i,(p,s,t) in enumerate(zip(road['points'],shares,taper))]
+    if top>=max(new):
+     for i in (range(1,len(new)) if landing==0 else range(len(new)-2,-1,-1)):new[i]=max(new[i],new[i-1 if landing==0 else i+1])
+   new=[round(v,4) for v in new]
    if any(abs(a-b)>.0001 for a,b in zip(old,new)):
     changed.append(road['id'])
     if apply:road['elevations']=new
-  report['chains'].append({**entry,'deck':base,'waterLevel':round(level,4),'junctions':sorted(round(v,4) for v in junctions),'changed':sorted(changed)})
+  report['chains'].append({**entry,'deck':[round(min(heights),4),round(max(heights),4)],'lifts':sorted(round(v,4) for v in (lifts.values() if landings else bump)),'waterLevel':round(level,4),'junctions':sorted(round(v,4) for v in junctions),'unresolvedCrossings':unresolved,'changed':sorted(changed)})
   report['changedRoads'].extend(changed)
  report['changedRoads'].sort()
  return report
