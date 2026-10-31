@@ -10,7 +10,10 @@ import {createTransitTracks} from '../render/transit-tracks.ts';
 import {createRailProfile,railSurface,railCovered,railStopDistance,type RailProfile} from './transit-rail-surface.ts';
 export interface TransitRoute {id:string;line:string;kind:'bus'|'tram';destination:string;directionId?:number;covered?:{start:number;end:number}[];bridges?:{start:number;end:number}[];points:Point2[];length:number;stops:{id:string;name:string;distance:number;position:Point2}[];}
 export interface TransitData {routes:TransitRoute[];sources:{name:string;url:string;license:string}[];notes:string;}
-export interface TrafficObstacle {x:number;y:number;z:number;halfLength?:number;halfWidth?:number;speed?:number;}
+/** A vehicle other traffic must keep clear of. A bus or tram also gives its
+ * heading and its pose `travel` metres further along its route, so cars can
+ * settle right of way with it instead of only braking for what is ahead. */
+export interface TrafficObstacle {x:number;y:number;z:number;halfLength?:number;halfWidth?:number;speed?:number;yaw?:number;pose?:(travel:number)=>{x:number;z:number;yaw:number};}
 interface Route extends TransitRoute {rail?:RailProfile;distances:number[];signalStops:{distance:number;yaw:number}[];decks:(Road|undefined)[];}
 interface Actor {signalStop?:number;signalCommitted?:boolean;route:Route;distance:number;speed:number;dwell:number;nextStop:number;model:THREE.Group;tram?:ReturnType<typeof createGreenLine>;bodies:RAPIER.RigidBody[];x:number;z:number;y:number;yaw:number;lastStop:string;}
 const dist=(a:Point2,b:Point2)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
@@ -133,7 +136,7 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
   else place(actor.model,actor.bodies[0],actor.route,actor.distance,immediate);
  };
  actors.forEach(a=>pose(a,true));
- const obstacles=():TrafficObstacle[]=>actors.filter(a=>!a.route.rail||!railCovered(a.route.rail,a.distance)).map(a=>({x:a.x,y:a.y,z:a.z,halfLength:a.tram?11.25:6.0,halfWidth:1.3,speed:a.speed}));
+ const obstacles=():TrafficObstacle[]=>actors.filter(a=>!a.route.rail||!railCovered(a.route.rail,a.distance)).map(a=>({x:a.x,y:a.y,z:a.z,halfLength:a.tram?11.25:6.0,halfWidth:1.3,speed:a.speed,yaw:a.yaw,pose:(travel:number)=>{const s=Math.min(a.distance+travel,a.route.length-2),p=transitPoint(a.route,s),q=transitPoint(a.route,s+2);return{x:p[0],z:p[1],yaw:Math.atan2(q[0]-p[0],q[1]-p[1])};}}));
  return{
   count:actors.length,busCount:actors.filter(a=>!a.tram).length,tramCount:actors.filter(a=>a.tram).length,obstacles,
   /** Collider handles of every bus and tram section; they stay kinematic (a 12 t bus does not budge for a car). */
