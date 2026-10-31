@@ -10,10 +10,14 @@ import {reserveTransitCorridors,shareTransitCorridors} from '../src/simulation/t
 import {loadMetroCity} from './helpers/metro-city.mjs';
 
 const route={kind:'tram',line:'Green-B',points:[[0,-30],[0,30]]};
-function fixture(ground=6){
+/** A 6 m deck across a railway at `rail` height: the ground is a ridge under the
+ * rail line only (a 5 m tent on the 5 m grid), so the deck edges beside it stand
+ * off the ground and keep their parapets wherever the rail does not open them. */
+function fixture(rail=6){
   const road={id:'crossing',name:'Crossing',width:10,points:[[-20,0],[20,0]],elevations:[6,6]};
+  const heights=Array.from({length:21*21},(_,k)=>k%21===10?rail:0);
   return{bounds:{minX:-50,maxX:50,minZ:-50,maxZ:50},roads:[road],buildings:[],spawn:{x:20,z:20,yaw:0},
-    elevation:{width:2,height:2,cellSize:100,originX:-50,originZ:-50,heights:[ground,ground,ground,ground]}};
+    elevation:{width:21,height:21,cellSize:5,originX:-50,originZ:-50,heights}};
 }
 
 test('a same-level railway opens the same narrow bridge-barrier gap in rendering and physics',async()=>{
@@ -31,9 +35,9 @@ test('a same-level railway opens the same narrow bridge-barrier gap in rendering
 });
 
 test('upper-road parapets stay intact above a lower or covered railway and tile views share clearance',()=>{
-  for(const ground of [0,6]){
-    const city=fixture(ground),road=city.roads[0],original=bridgeBarriers(city,road);
-    reserveTransitCorridors(city,[{...route,...(ground===6?{covered:[{start:20,end:40}]}:{})}]);
+  for(const rail of [0,6]){
+    const city=fixture(rail),road=city.roads[0],original=bridgeBarriers(city,road);assert.ok(original.length>=2,'the deck has parapets to keep');
+    reserveTransitCorridors(city,[{...route,...(rail===6?{covered:[{start:20,end:40}]}:{})}]);
     assert.deepEqual(bridgeBarriers(city,road),original,'an underpass cannot cut the upper-road edge');
   }
   const city=fixture(),tile={...city};reserveTransitCorridors(city,[route]);shareTransitCorridors(tile,city);

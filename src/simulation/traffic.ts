@@ -19,7 +19,7 @@ import {createRouteSignalLookup} from './traffic-route-signals.ts';
 interface Edge { id: number; start: number; end: number; points: Point2[]; length:number; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; }
 /** `source` keeps the unrounded lane points (and the source vertex of each rounded
  * point) so a route can be extended in place; `last` is its final graph edge. */
-interface Path { points: Point2[]; distances: number[]; length: number; stops: {distance:number;yaw:number}[]; roadAt:Road[]; component?: number; last?:Edge; source:{points:Point2[];roads:Road[];vertex:number[]}; }
+export interface Path { points: Point2[]; distances: number[]; length: number; stops: {distance:number;yaw:number}[]; roadAt:Road[]; component?: number; last?:Edge; source:{points:Point2[];roads:Road[];vertex:number[]}; }
 /** A struck car runs as a dynamic body (`knocked`) until it comes to rest, then
  * eases back onto its lane over `rejoin` from the pose it was left in. */
 interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; }
@@ -103,9 +103,17 @@ export function lane(edge: Edge): Point2[] {
   });
 }
 
-function roundedPath(points: Point2[],roads:Road[]): Path {
+/** `owners[i]` is the road of the lane that reaches vertex i, so the segment
+ * leaving vertex i belongs to `owners[i+1]`: a junction vertex keeps the arriving
+ * road (the next lane's first point is dropped as a duplicate or cut away in
+ * `join`), and attributing the departing segment to it as well put a car on a
+ * street at the clamped end height of the deck it had just left (sunk 0.65 m on
+ * New Rutherford Avenue after the Austin Street deck) or carried a street's
+ * terrain height onto the first span of a bridge. `roadAt[k]` is the road of the
+ * segment that starts at rounded point k, which is what `pathRoad` reads. */
+export function roundedPath(points: Point2[],roads:Road[]): Path {
   const clean:Point2[]=[],owners:Road[]=[];points.forEach((p,i)=>{if(i===0||distance(p,points[i-1])>.15){clean.push(p);owners.push(roads[i]);}});
-  const rounded: Point2[] = [clean[0]],roadAt:Road[]=[owners[0]],vertex=[0];
+  const rounded: Point2[] = [clean[0]],roadAt:Road[]=[owners[Math.min(1,owners.length-1)]],vertex=[0];
   for (let i = 1; i < clean.length - 1; i++) {
     const a = clean[i - 1], b = clean[i], c = clean[i + 1];
     const ab = distance(a, b), bc = distance(b, c);
@@ -115,7 +123,8 @@ function roundedPath(points: Point2[],roads:Road[]): Path {
     rounded.push(before);roadAt.push(owners[i]);vertex.push(i);
     for (let j = 1; j <= 6; j++) {
       const t = j / 6, u = 1 - t;
-      rounded.push([u * u * before[0] + 2 * u * t * b[0] + t * t * after[0], u * u * before[1] + 2 * u * t * b[1] + t * t * after[1]]);roadAt.push(owners[i]);vertex.push(i);
+      // Up to the apex (j = 3, on the junction vertex) the corner lies on the arriving lane; the segments from the apex on are on the departing one.
+      rounded.push([u * u * before[0] + 2 * u * t * b[0] + t * t * after[0], u * u * before[1] + 2 * u * t * b[1] + t * t * after[1]]);roadAt.push(owners[j<=2?i:i+1]);vertex.push(i);
     }
   }
   rounded.push(clean[clean.length - 1]);roadAt.push(owners[owners.length-1]);vertex.push(clean.length-1);
@@ -132,7 +141,8 @@ function at(path: Path, s: number): Point2 {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
-function pathRoad(path:Path,distance:number){let lo=0,hi=path.distances.length-1;while(lo+1<hi){const mid=(lo+hi)>>1;if(path.distances[mid]<distance)lo=mid;else hi=mid;}return path.roadAt[lo];}
+/** The road under a path station: the owner of the rounded segment containing it. */
+export function pathRoad(path:Path,distance:number){let lo=0,hi=path.distances.length-1;while(lo+1<hi){const mid=(lo+hi)>>1;if(path.distances[mid]<distance)lo=mid;else hi=mid;}return path.roadAt[lo];}
 function pathYaw(path:Path,distance:number){distance=Math.min(distance,path.length-2);const a=at(path,distance),b=at(path,distance+2);return Math.atan2(b[0]-a[0],b[1]-a[1]);}
 
 /** Append a lane to a route. Lanes sit to one side of their centerlines, so at
@@ -653,7 +663,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         if(candidate){relocate(actor,candidate.path,candidate.d);if(Math.hypot(candidate.p[0]-observer.x,candidate.p[1]-observer.z)<240)nearby++;const p=aheadOf(candidate.p,observer);if(p.along>35&&p.along<200&&Math.abs(p.across)<12)inFront++;}
       }
     },
-    snapshot:()=>actors.map(a=>{const stop=a.path.stops.find(s=>s.distance>=a.distance-.2);return{x:a.x,z:a.z,yaw:a.yaw,speed:a.speed,steering:a.steering,evasion:a.evasion?.offset??0,road:pathRoad(a.path,a.distance).name,signal:stop?signalPhase(elapsed,stop.yaw):undefined,stopGap:stop?stop.distance-a.distance:Infinity,remaining:a.path.length-a.distance,priority:elapsed<(a.priorityUntil??0),knocked:!!a.knocked,rejoining:!!a.rejoin,dynamic:a.body.isDynamic(),collider:a.collider.handle,registration:a.registration,type:a.spec.type,mass:a.spec.mass,color:`#${a.color.getHexString()}`,height:a.spec.height,halfLength:a.spec.length/2,halfWidth:a.spec.width/2};}),
+    snapshot:()=>actors.map(a=>{const stop=a.path.stops.find(s=>s.distance>=a.distance-.2);return{x:a.x,y:a.body.translation().y,z:a.z,yaw:a.yaw,speed:a.speed,steering:a.steering,evasion:a.evasion?.offset??0,road:pathRoad(a.path,a.distance).name,signal:stop?signalPhase(elapsed,stop.yaw):undefined,stopGap:stop?stop.distance-a.distance:Infinity,remaining:a.path.length-a.distance,priority:elapsed<(a.priorityUntil??0),knocked:!!a.knocked,rejoining:!!a.rejoin,dynamic:a.body.isDynamic(),collider:a.collider.handle,registration:a.registration,type:a.spec.type,mass:a.spec.mass,color:`#${a.color.getHexString()}`,height:a.spec.height,halfLength:a.spec.length/2,halfWidth:a.spec.width/2};}),
     obstacles:():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed})),
     /** Collider handles of the fleet, so an impact on the player can be classified. */
     colliders:new Set(byCollider.keys()),
