@@ -46,3 +46,33 @@ test('touch settings expose both cars in a scrollable panel',async({browser},inf
     expect((await snap(page)).paused).toBe(false);
   }finally{await context.close();}
 });
+
+for(const scenario of ['missing GT loops','corrupt high-RPM loop','only generic idle survives','only generic drive survives','all engine loops unavailable'] as const){
+  test(`GT engine fallback: ${scenario}`,async({page})=>{
+    const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.addInitScript(()=>localStorage.setItem('boston-player-car-v1','mclaren-gt'));
+    const gtLoops=['mclaren-gt-idle','mclaren-gt-drive','mclaren-gt-high'];
+    await page.route('**/audio/*.mp3',async route=>{
+      const name=new URL(route.request().url()).pathname.split('/').at(-1)!.replace('.mp3','');
+      if(scenario==='corrupt high-RPM loop'){
+        if(name==='mclaren-gt-high'){await route.fulfill({contentType:'audio/mpeg',body:'not decodable MP3 audio'});return;}
+      }else if(gtLoops.includes(name)||(name==='engine-idle'&&(scenario==='only generic drive survives'||scenario==='all engine loops unavailable'))||(name==='engine-drive'&&(scenario==='only generic idle survives'||scenario==='all engine loops unavailable'))){
+        await route.fulfill({status:404,body:''});return;
+      }
+      await route.continue();
+    });
+    await start(page);
+    await expect.poll(async()=>(await snap(page)).audio.loading).toBe(false);
+    const synthesized=scenario==='all engine loops unavailable';
+    await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe(synthesized?'synthesized':'generic');
+    await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeGreaterThan(synthesized?.02:.1);
+    expect((await snap(page)).carId).toBe('mclaren-gt');
+    await page.keyboard.down('w');
+    try{await expect.poll(async()=>(await snap(page)).state.speed).toBeGreaterThan(7);await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeGreaterThan(synthesized?.04:.1);}finally{await page.keyboard.up('w');}
+    await page.keyboard.press('2');await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe('off');
+    await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeLessThan(.001);
+    await page.keyboard.press('1');await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeGreaterThan(synthesized?.02:.1);
+    await page.keyboard.press('Escape');await expect.poll(async()=>(await snap(page)).audio.masterGain).toBeLessThan(.001);
+    expect(errors).toEqual([]);
+  });
+}

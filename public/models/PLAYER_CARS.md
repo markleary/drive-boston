@@ -2,6 +2,8 @@
 
 Settings → Your car selects the original Harbor S4 (the default) or the McLaren GT. The preference is stored locally in `boston-player-car-v1`, retained while riding the Ultra Bee or flying, and restored on reload. Changing the car parks it upright at the current drive surface; a blocked chassis uses the existing nearby-road recovery. Both cars use the same live Rapier body; the old controller, meshes, materials and plate texture are released when replaced.
 
+Pedestrian hit detection takes its footprint from the active physics vehicle, including the GT's longer front/rear bumper reach and the bike's smaller dimensions.
+
 ## Original artwork
 
 The Harbor S4 retains the original coupe silhouette, cream paint and Massachusetts plates. Clearcoat, satin pillars, window seals and body details received small refinements. Its engine controller now sustains an actual **60 mph** on level pavement; previously its nominal 27 m/s limit was undermined by an early power taper and damping.

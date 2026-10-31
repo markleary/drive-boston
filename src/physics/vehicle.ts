@@ -20,6 +20,8 @@ export interface PhysicsVehicleState extends VehicleState {
   rpm: number;
   vehicle: 'car' | 'ultrabee';
   carId: PlayerCarId;
+  halfLength: number;
+  halfWidth: number;
   lean: number;
   wheelie: number;
   wheelieRemaining: number;
@@ -400,7 +402,9 @@ export class DrivingPhysics {
       steering: this.steering, rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
       wheelAngles: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelRotation(i) ?? 0),
       suspension: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelSuspensionLength(i) ?? this.carSpec.suspensionRest),
-      braking: this.braking,gear:this.gear,rpm:this.rpm,vehicle:this.vehicleType,carId:this.carId,lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
+      braking: this.braking,gear:this.gear,rpm:this.rpm,vehicle:this.vehicleType,carId:this.carId,
+      halfLength:this.bike?.8:this.carSpec.halfLength,halfWidth:this.bike?.4:this.carSpec.halfWidth,
+      lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
     };
   }
 
