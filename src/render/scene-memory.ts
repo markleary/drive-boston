@@ -4,7 +4,8 @@ import * as THREE from 'three';
  * This is a CPU-array subtotal, not GPU allocation or total browser memory. */
 export function sceneAttributeBytes(scene:THREE.Object3D){
   const buffers=new Set<ArrayBufferLike>();
-  const add=(attribute:THREE.BufferAttribute|THREE.InterleavedBufferAttribute|null)=>{if(attribute)buffers.add(attribute.array.buffer);};
+  // Streamed tile arrays released after upload (upload-release.ts) are null.
+  const add=(attribute:THREE.BufferAttribute|THREE.InterleavedBufferAttribute|null)=>{if(attribute?.array)buffers.add(attribute.array.buffer);};
   scene.traverse(object=>{
     if(!(object instanceof THREE.Mesh))return;
     const geometry:THREE.BufferGeometry=object.geometry;
