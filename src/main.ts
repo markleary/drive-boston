@@ -128,7 +128,7 @@ async function boot(){
   renderer.info.autoReset=false;
   const container=document.querySelector('#scene')!;container.appendChild(renderer.domElement);renderer.domElement.setAttribute('aria-label','3D driving view');
   let contextLost=false,contextLosses=0,initialGraphicsReady=false,environmentDirty=false,graphicsBuilds=0;
-  let startupTarget:THREE.WebGLRenderTarget|undefined;
+  let startupTarget:THREE.WebGLRenderTarget|undefined,tileRebuild=Promise.resolve(),tileRebuilds=0;
   const contextGate=createContextGate(()=>renderer.getContext().isContextLost());
   const ensureGraphics=()=>{
     if(environmentDirty&&world){world.setLighting(lighting);environmentDirty=false;}
@@ -160,10 +160,19 @@ async function boot(){
     // Render-target contents cannot be re-uploaded from a source image. Rebuild
     // the sky environment and mark the desktop reflection probe dirty too.
     contextLost=false;cameraSnap=true;
-    // Startup owns its first graphics instance and warm-up. Restoring during
-    // tile downloads must not create a composer that startup then overwrites.
-    if(initialGraphicsReady){ensureGraphics();ui.setGraphicsRestored();}
-    contextGate.restore();
+    const resume=()=>{
+      // Startup owns its first graphics instance and warm-up. Restoring during
+      // tile downloads must not create a composer that startup then overwrites.
+      if(initialGraphicsReady){ensureGraphics();ui.setGraphicsRestored();}
+      contextGate.restore();
+    };
+    // Phones free streamed tiles' vertex arrays after upload, so the new
+    // context has nothing to re-upload them from: rebuild those tiles in place
+    // first. The frame loop stays idle until then because graphics is unset.
+    const streamer=world?.streamer;
+    if(!streamer?.needsRebuildAfterRestore){resume();return;}
+    const ticket=++tileRebuilds,at=travelMode==='helicopter'?flight!.state:physics!.getState();
+    tileRebuild=tileRebuild.then(()=>streamer.rebuild(at.x,at.z)).catch(error=>console.error('Tile rebuild after context restore failed',error)).then(()=>{if(ticket===tileRebuilds&&!contextLost)resume();});
   });
   try{
     // Screen storage before streaming. Exact hulls are only candidates; check
@@ -306,7 +315,7 @@ async function boot(){
         `Vehicle: ${travelMode} / camera: ${cameraMode} / lighting: ${lighting}`,
         `Position: ${JSON.stringify({x:active.x,y:active.y,z:active.z,yaw:active.yaw})}`,
         `FPS: ${fps} / geometries: ${renderer.info.memory.geometries} / textures: ${renderer.info.memory.textures}`,
-        `Resident scene attribute bytes: ${sceneAttributeBytes(scene)} (CPU arrays; not total process memory)`,
+        `Resident scene attribute bytes: ${sceneAttributeBytes(scene)} (CPU arrays; not total process memory) / released after upload: ${tiles?.releasedBytes??0}`,
         `Detailed tiles: ${JSON.stringify(tiles?.keys??[])}`,
         `Resident tile groups: ${tiles?.residentGroups??0} / tracked tiles: ${tiles?.loaded??0} / building: ${tiles?.building??'none'}`,
         `Physics colliders: ${physics!.world.colliders.len()} / context losses: ${contextLosses}`,

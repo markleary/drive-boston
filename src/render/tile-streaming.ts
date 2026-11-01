@@ -5,6 +5,7 @@ import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import type { FarCityView } from './far-city';
 import { createTileBuilder, type BuiltTile, type PartialTile, type TileContext, type TileStage } from './tile-builder';
 import type { Pace } from './pacing';
+import { createUploadRelease } from './upload-release';
 
 export interface TileStreamer {
   group: THREE.Group;
@@ -13,6 +14,10 @@ export interface TileStreamer {
   update(position: THREE.Vector3, altitude: number): void;
   /** Build the neighborhood and its road owners; false if any required tile failed to load. */
   ensureAround(x: number, z: number, radius?: number): Promise<boolean>;
+  /** True when a WebGL context restore must rebuild the tiles: their uploaded vertex arrays were freed. */
+  readonly needsRebuildAfterRestore: boolean;
+  /** Rebuild every resident tile (geometry and colliders) and the neighborhood around the observer. */
+  rebuild(x: number, z: number): Promise<boolean>;
   readonly loaded: ReadonlyMap<string, BuiltTile>;
   stats(): { exactMeshes: number } & Record<string, unknown>;
 }
@@ -31,6 +36,8 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
   const { scene, city } = ctx, builder = createTileBuilder(ctx);
   const loadRadius = mobile ? 450 : LOAD_RADIUS, unloadRadius = mobile ? 700 : UNLOAD_RADIUS;
   const maxFetches = mobile ? 1 : MAX_FETCHES;
+  // Phones free each finished tile's vertex arrays once they are on the GPU.
+  const uploads = mobile ? createUploadRelease() : undefined;
   const coverage = new RoadTileCoverage(city, builder.roadsNear);
   const wantedAround = (x: number, z: number, radius: number) => mobile ? coverage.tilesNear(x, z, radius) : tilesNear(city, x, z, radius);
   const group = new THREE.Group(); group.name = 'Streamed tiles'; scene.add(group);
@@ -67,7 +74,7 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     entry.stage = result.value;
     return undefined;
   };
-  const finish = (entry: Active, built: BuiltTile) => { loaded.set(entry.key, built); far?.setChunkDetailed(entry.key, true); refreshLive(); };
+  const finish = (entry: Active, built: BuiltTile) => { uploads?.release(built.group); loaded.set(entry.key, built); far?.setChunkDetailed(entry.key, true); refreshLive(); };
   const runToCompletion = (entry: Active) => { pace.deadline = Infinity; let built: BuiltTile | undefined; while (!(built = step(entry))); finish(entry, built); return built; };
   const unload = (key: string) => { const built = loaded.get(key); if (!built) return; loaded.delete(key); built.dispose(); far?.setChunkDetailed(key, false); refreshLive(); };
   const abandon = () => { if (!active) return; active.generator.return(undefined as never); builder.abandon(active.partial); active = undefined; };
@@ -107,6 +114,8 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
       if (built) { finish(active, built); active = undefined; break; }
       if (performance.now() > pace.deadline) break;
     }
+    // The partial group draws this frame; note its uploads so finish() can free them.
+    if (active) uploads?.watch(active.partial.group);
   }
 
   async function ensureAround(x: number, z: number, radius = mobile ? 180 : 350) {
@@ -129,13 +138,29 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     return wanted.every(t=>loaded.has(t.key));
   }
 
+  async function rebuild(x: number, z: number) {
+    // Rebuild from the decoded tiles already held (a build never changes them):
+    // downloading again could fail offline or after the cache expires, and a
+    // failed key is never retried, leaving a hole in the ground.
+    // Downloads not yet built stay queued in `fetched`.
+    const resident = new Map([...loaded].map(([key, built]) => [key, built.tile])); if (active) resident.set(active.key, active.tile);
+    abandon(); for (const key of [...loaded.keys()]) unload(key);
+    focus = { x, z, until: performance.now() + 8000 };
+    for (const [key, tile] of resident) {
+      if (loaded.has(key) || active?.key === key) continue;
+      runToCompletion(start(key, tile));
+      if (mobile) await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+    return ensureAround(x, z);
+  }
+
   function boundsOf(tile: CityTile) { return { minX: tile.tx * tile.size, maxX: (tile.tx + 1) * tile.size, minZ: tile.tz * tile.size, maxZ: (tile.tz + 1) * tile.size }; }
   function stats() {
     const totals = { buildings: 0, exactMeshes: 0, triangles: 0, roads: 0, structures: 0, trees: 0, lamps: 0, signs: 0, signals: 0, parkTrees: 0, storefronts: 0, facades: 0, rooftops: 0, porches: 0, colliders: 0, buildMs: 0, cpuMs: 0 }, stageMs: Record<string, number> = {};
     for (const t of loaded.values()) { for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] += t.stats[k]; for (const [stage, ms] of Object.entries(t.stats.stageMs ?? {})) stageMs[stage] = (stageMs[stage] ?? 0) + ms; }
     for (const stage of Object.keys(stageMs)) stageMs[stage] = Math.round(stageMs[stage]);
     const tiles = [...loaded.values()].map(t => ({ key: t.key, buildings: t.stats.buildings, triangles: t.stats.triangles, buildMs: t.stats.buildMs, cpuMs: t.stats.cpuMs, stageMs: t.stats.stageMs }));
-    return { loadRadius, unloadRadius, maxFetches, loaded: loaded.size, residentGroups: group.children.length, keys: [...loaded.keys()], fetching: fetching.size, pending: fetched.size, failed: failed.size, building: active?.key, stage: active?.stage, budgetMs: Math.round(budget * 10) / 10, tileSize: city.tiles.size, available: city.tiles.keys.length, farBuildings: city.tiles.buildingCount, ...totals, stageMs, tiles };
+    return { loadRadius, unloadRadius, maxFetches, releasedBytes: uploads?.releasedBytes ?? 0, releasedAttributes: uploads?.releasedAttributes ?? 0, loaded: loaded.size, residentGroups: group.children.length, keys: [...loaded.keys()], fetching: fetching.size, pending: fetched.size, failed: failed.size, building: active?.key, stage: active?.stage, budgetMs: Math.round(budget * 10) / 10, tileSize: city.tiles.size, available: city.tiles.keys.length, farBuildings: city.tiles.buildingCount, ...totals, stageMs, tiles };
   }
-  return { group, buildingChunks, lampPositions, signals, update, ensureAround, loaded, stats };
+  return { group, buildingChunks, lampPositions, signals, update, ensureAround, rebuild, get needsRebuildAfterRestore() { return (uploads?.releasedAttributes ?? 0) > 0; }, loaded, stats };
 }

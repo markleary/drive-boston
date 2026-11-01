@@ -46,7 +46,12 @@ for(const mobile of [true,false])test.describe(mobile?'phone graphics recovery':
     await expect(page.locator('#reload-graphics')).toBeFocused();
     await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:(window as any).__originalClipboard}));
     await page.screenshot({path:testInfo.outputPath('graphics-interrupted.png')});
+    // Phones rebuild their freed tiles from the decoded data they hold: a
+    // restore while offline must not need the tile downloads again.
+    const tileRequests:string[]=[];
+    if(mobile)await page.route('**/tiles/*.bin',route=>{tileRequests.push(route.request().url());return route.abort();});
     await restore(page);await expect(page.getByRole('heading',{name:'Ready to resume.'})).toBeVisible({timeout:20000});
+    if(mobile){expect(tileRequests.filter(url=>before.tiles.keys.some(key=>url.endsWith(`/t_${key}.bin`)))).toEqual([]);await page.unroute('**/tiles/*.bin');}
     await page.locator('#resume-graphics').click();await expect(page.locator('#graphics-modal')).toBeHidden();
     const resumed=await snapshot(page);expect(resumed.travelMode).toBe(before.travelMode);expect(resumed.paused).toBe(false);
     expect(resumed.graphicsContext.builds).toBe(2);
