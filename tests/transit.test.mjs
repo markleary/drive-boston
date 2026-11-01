@@ -174,14 +174,17 @@ test('a bus changes lanes around a trolley dwelling in its lane and moves back o
  const routes=[{id:'tram',kind:'tram',line:'Green-E',destination:'E TEST',directionId:0,points:[[-2.5,-100],[-2.5,900]],length:1000,stops},{id:'bus',kind:'bus',line:'39',destination:'39 TEST',points:[[0,-200],[0,600]],length:800,stops:[]}];
  const physics=await DrivingPhysics.create(city),transit=createTransit(new THREE.Scene(),city,physics,{routes,sources:[],notes:''}),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
  try{
-  let passed=false,closest=Infinity,widest=0;
+  let passed=false,closest=Infinity,widest=0,merging;
   for(let i=0;i<70*60&&!passed;i++){
    transit.update(1/60,far,{x:0,y:0,z:0});
    const [tram,bus]=['tram','bus'].map(kind=>transit.snapshot().find(a=>a.kind===kind));
+   // Mid-change, the trajectory traffic yields to already runs into the track-clear lane.
+   if(!merging&&bus.laneOffset>.4&&bus.laneOffset<1.6){const pose=transit.obstacles().find(o=>o.halfLength===6).pose;merging={now:pose(0).x,later:pose(20).x,offset:bus.laneOffset};}
    if(Math.abs(bus.z-tram.z)<6+11.25)closest=Math.min(closest,Math.abs(bus.x-tram.x));
    widest=Math.max(widest,-bus.x);passed=bus.z>tram.z+40;
   }
   assert.ok(passed,'the bus must overtake the trolley instead of queuing behind its stops');
+  assert.ok(merging&&merging.later<merging.now-.5,`a lane change under way is published in the bus's predicted path (${merging&&(merging.now-merging.later).toFixed(2)} m further west 20 m on)`);
   assert.ok(closest>2.6,`alongside the trolley the bus keeps clear of it (${closest.toFixed(2)} m between centers)`);
   assert.ok(widest>5.2&&widest<7.2,`the bus uses the lane beside the track and stays off the curb (${widest.toFixed(2)} m west)`);
   for(let i=0;i<20*60;i++)transit.update(1/60,far,{x:0,y:0,z:0});
@@ -198,11 +201,14 @@ test('a bus waits for a car alongside to clear the lane before changing lanes ei
  const physics=await DrivingPhysics.create(city),transit=createTransit(new THREE.Scene(),city,physics,{routes,sources:[],notes:''}),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
  const find=kind=>transit.snapshot().find(a=>a.kind===kind);
  // A car keeping pace beside the bus, its centre `x` metres east.
- const run=(seconds,x,check)=>{for(let i=0;i<seconds*60;i++){const bus=find('bus'),car=x===undefined?[]:[{x,y:bus.y,z:bus.z,halfLength:2.2,halfWidth:.9,speed:bus.speed,yaw:0}];transit.update(1/60,far,{x:0,y:0,z:0},car);check?.(find('bus'),car[0]);}};
+ const run=(seconds,x,check,yaw=0)=>{for(let i=0;i<seconds*60;i++){const bus=find('bus'),car=x===undefined?[]:[{x,y:bus.y,z:bus.z,halfLength:2.2,halfWidth:.9,speed:yaw?0:bus.speed,yaw}];transit.update(1/60,far,{x:0,y:0,z:0},car);check?.(find('bus'),car[0]);}};
  try{
-  let closest=Infinity;
-  run(30,-6,(bus,car)=>closest=Math.min(closest,Math.abs(bus.x-car.x)));
-assert.ok(find('tram').z-find('bus').z<40,'the trolley is still ahead of the bus');
+  // A car crossing the street, its nose 6.2 m west of the centerline: side-on it would stay clear of the strip the bus moves into.
+  run(30,-8.4,undefined,Math.PI/2);
+  assert.ok(find('tram').z-find('bus').z<40&&Math.abs(find('bus').laneOffset)<.1,'the bus waits for a car crossing its track-clear lane');
+  let closest=Infinity,drift=0;
+  run(10,-6,(bus,car)=>{closest=Math.min(closest,Math.abs(bus.x-car.x));const pose=transit.obstacles().find(o=>o.halfLength===6).pose;drift=Math.max(drift,Math.abs(pose(20).x-pose(0).x));});
+  assert.ok(drift<.05,`a bus holding its lane does not publish a lane change it is waiting to make (${drift.toFixed(3)} m)`);
   assert.ok(closest>2.2&&Math.abs(find('bus').laneOffset)<.1,`the bus holds its lane while the car is beside the track-clear lane (${closest.toFixed(2)} m)`);
   let passed=false;for(let i=0;i<60&&!passed;i++){run(1);passed=find('bus').z>find('tram').z+20;}
   assert.ok(passed&&find('bus').laneOffset>2.2,'with the car gone the bus moves over and passes the trolley');

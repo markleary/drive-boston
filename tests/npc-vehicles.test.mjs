@@ -56,7 +56,7 @@ test('traffic uses all approved types, valid stable paint, actual dimensions, an
   for(const [i,v] of before.entries()){
    const spec=NPC_VEHICLES.find(s=>s.type===v.type);
    assert.equal(v.mass,spec.mass);assert.ok(spec.colors.includes(Number.parseInt(v.color.slice(1),16)));
-   assert.equal(traffic.obstacles()[i].halfLength,spec.length/2);assert.equal(traffic.obstacles()[i].halfWidth,spec.width/2);
+   assert.equal(traffic.obstacles()[i].halfLength,spec.length/2);assert.equal(traffic.obstacles()[i].halfWidth,spec.width/2);assert.equal(traffic.obstacles()[i].yaw,before[i].yaw);
   }
   traffic.update(1/60,physics.getState());assert.deepEqual(traffic.snapshot().map(v=>v.color),before.map(v=>v.color));assert.deepEqual(traffic.snapshot().map(v=>v.registration),before.map(v=>v.registration));
  }finally{traffic.dispose();physics.dispose();}

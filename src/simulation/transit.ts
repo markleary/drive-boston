@@ -18,8 +18,9 @@ interface Route extends TransitRoute {rail?:RailProfile;distances:number[];signa
 /** A bus's lateral position every DECK_STEP, in metres right of its route shape along (rx, rz):
  * `base` is the right-hand lane of the street it rides, `base + delta` the lane clear of the tram tracks. */
 export interface BusLanes {base:Float32Array;delta:Float32Array;rx:Float32Array;rz:Float32Array;}
-/** `offset`: metres beyond the bus's street lane toward its track-clear lane, held in metres so the lane narrowing ahead does not move it. */
-interface Actor {offset:number;lean:number;signalStop?:number;signalCommitted?:boolean;route:Route;distance:number;speed:number;dwell:number;nextStop:number;model:THREE.Group;tram?:ReturnType<typeof createGreenLine>;bodies:RAPIER.RigidBody[];x:number;z:number;y:number;yaw:number;lastStop:string;}
+/** `offset`: metres beyond the bus's street lane toward its track-clear lane, held in metres so the lane narrowing ahead does not move it;
+ * `lateral`: the speed (m/s) of the lane change under way, 0 while the bus holds; `near`: a tram calls for the track-clear lane. */
+interface Actor {offset:number;lateral:number;near:boolean;lean:number;signalStop?:number;signalCommitted?:boolean;route:Route;distance:number;speed:number;dwell:number;nextStop:number;model:THREE.Group;tram?:ReturnType<typeof createGreenLine>;bodies:RAPIER.RigidBody[];x:number;z:number;y:number;yaw:number;lastStop:string;}
 const dist=(a:Point2,b:Point2)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
 export function transitPoint(route:Pick<Route,'points'|'distances'|'length'>,distance:number):Point2{
  const s=Math.max(0,Math.min(route.length,distance));let lo=0,hi=route.distances.length-1;
@@ -160,6 +161,8 @@ export function routeLanes(city:CityData,route:Pick<Route,'points'|'distances'|'
  for(let k=0;k<n;k++)for(let j=Math.max(0,k-10);j<=Math.min(n-1,k+10);j++)if(Math.abs(shift[j])>Math.abs(held[k]))held[k]=shift[j];
  return{base:lane,delta:smooth(held,8),rx:smooth(rx,2),rz:smooth(rz,2)};
 }
+/** A lane array sampled `distance` along the route. */
+function laneAt(values:Float32Array,distance:number){const at=Math.max(0,Math.min(values.length-1,distance/DECK_STEP)),i=Math.floor(at),j=Math.min(values.length-1,i+1);return values[i]+(values[j]-values[i])*(at-i);}
 /** Where a bus is `distance` along its route, `shift` of the way from its street lane to its track-clear lane plus `extra` metres. */
 export function busPoint(route:Pick<Route,'points'|'distances'|'length'>&{lanes?:BusLanes},distance:number,shift=0,extra=0):Point2{
  const p=transitPoint(route,distance),lanes=route.lanes;if(!lanes)return p;
@@ -209,7 +212,7 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
     const body=physics.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
     colliders.add(physics.world.createCollider(RAPIER.ColliderDesc.cuboid(tram?1.25:1.25,tram?1.25:1.3,tram?(part===1?3.12:3.85):5.9).setFriction(.4).setRestitution(.02),body).handle);bodies.push(body);
    }
-   const actor:Actor={offset:0,lean:0,route,distance,speed:0,dwell:0,nextStop:Math.max(0,route.stops.findIndex(s=>s.distance>distance+3)),model,tram,bodies,x:point[0],z:point[1],y:routeSurface(city,route,distance,...point).height,yaw,lastStop:''};
+   const actor:Actor={offset:0,lateral:0,near:false,lean:0,route,distance,speed:0,dwell:0,nextStop:Math.max(0,route.stops.findIndex(s=>s.distance>distance+3)),model,tram,bodies,x:point[0],z:point[1],y:routeSurface(city,route,distance,...point).height,yaw,lastStop:''};
    if(route.stops.every(s=>s.distance<=distance+3))actor.nextStop=route.stops.length;actors.push(actor);
   }
  }
@@ -232,7 +235,9 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
   else place(actor.model,actor.bodies[0],actor.route,actor.distance,immediate,actor.offset,actor.lean);
  };
  actors.forEach(a=>pose(a,true));
- const obstacles=():TrafficObstacle[]=>actors.filter(a=>!a.route.rail||!railCovered(a.route.rail,a.distance)).map(a=>({x:a.x,y:a.y,z:a.z,halfLength:a.tram?11.25:6.0,halfWidth:1.3,speed:a.speed,yaw:a.yaw,pose:(travel:number)=>{const s=Math.min(a.distance+travel,a.route.length-2),p=busPoint(a.route,s,0,a.offset),q=busPoint(a.route,s+2,0,a.offset);return{x:p[0],z:p[1],yaw:Math.atan2(q[0]-p[0],q[1]-p[1])};}}));
+ // The trajectory traffic settles right of way with carries a lane change under way to its end (a held bus stays put).
+ const predictedOffset=(a:Actor,travel:number)=>{if(!a.lateral||!a.route.lanes)return a.offset;const reach=Math.abs(a.lateral)*travel/Math.max(1,a.speed),goal=a.near?laneAt(a.route.lanes.delta,a.distance+travel):0;return a.offset+THREE.MathUtils.clamp(goal-a.offset,-reach,reach);};
+ const obstacles=():TrafficObstacle[]=>actors.filter(a=>!a.route.rail||!railCovered(a.route.rail,a.distance)).map(a=>({x:a.x,y:a.y,z:a.z,halfLength:a.tram?11.25:6.0,halfWidth:1.3,speed:a.speed,yaw:a.yaw,pose:(travel:number)=>{const s=Math.min(a.distance+travel,a.route.length-2),o=predictedOffset(a,travel),p=busPoint(a.route,s,0,o),q=busPoint(a.route,s+2,0,o);return{x:p[0],z:p[1],yaw:Math.atan2(q[0]-p[0],q[1]-p[1])};}}));
  return{
   count:actors.length,busCount:actors.filter(a=>!a.tram).length,tramCount:actors.filter(a=>a.tram).length,obstacles,
   /** Collider handles of every bus and tram section; they stay kinematic (a 12 t bus does not budge for a car). */
@@ -263,11 +268,13 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
       return Math.abs(to-from)>.01&&others.some(o=>{
        if(Math.abs(o.y-actor.y)>4)return false;
        const c=o.yaw===undefined?1:Math.abs(Math.cos(o.yaw-actor.yaw)),sn=Math.sqrt(1-c*c),hl=o.halfLength??2.1,hw=o.halfWidth??.9,lateral=(o.x-route[0])*rx+(o.z-route[1])*rz,reach=hl*sn+hw*c;
-       return Math.abs((o.x-actor.x)*fx+(o.z-actor.z)*fz)<half+hl*c+hw*sn+1.5&&lateral+reach>lo&&lateral-reach<hi;
+       // Leave room for what closes on the bus during the change (about 2.5 s): a faster car behind, a slower one ahead.
+       const along=(o.x-actor.x)*fx+(o.z-actor.z)*fz,closing=(along<0?1:-1)*((o.speed??0)*(o.yaw===undefined?1:Math.cos(o.yaw-actor.yaw))-actor.speed);
+       return Math.abs(along)<half+hl*c+hw*sn+1.5+Math.max(0,closing)*2.5&&lateral+reach>lo&&lateral-reach<hi;
       });
      };
-     const rate=Math.min(1.5,.5+.12*actor.speed),before=actor.offset;if(!blocked(goal))actor.offset+=THREE.MathUtils.clamp(goal-actor.offset,-rate*dt,rate*dt);
-     actor.lean+=(-Math.atan2(dt>0?(actor.offset-before)/dt:0,Math.max(3,actor.speed))-actor.lean)*Math.min(1,dt*4);
+     const rate=Math.min(1.5,.5+.12*actor.speed),before=actor.offset;actor.near=near;if(!blocked(goal))actor.offset+=THREE.MathUtils.clamp(goal-actor.offset,-rate*dt,rate*dt);actor.lateral=dt>0?(actor.offset-before)/dt:0;
+     actor.lean+=(-Math.atan2(actor.lateral,Math.max(3,actor.speed))-actor.lean)*Math.min(1,dt*4);
      // Where the track-clear lane narrows within braking reach (its ends) and the bus could not move back to the room left
      // there, it stops before it would leave that lane instead of running on past it beside whatever holds it there.
      if(Math.abs(actor.offset)>.3)for(let ahead=2;ahead<=actor.speed*actor.speed/4.8+12;ahead+=DECK_STEP){
