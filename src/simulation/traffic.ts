@@ -664,7 +664,8 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       }
     },
     snapshot:()=>actors.map(a=>{const stop=a.path.stops.find(s=>s.distance>=a.distance-.2);return{x:a.x,y:a.body.translation().y,z:a.z,yaw:a.yaw,speed:a.speed,steering:a.steering,evasion:a.evasion?.offset??0,road:pathRoad(a.path,a.distance).name,signal:stop?signalPhase(elapsed,stop.yaw):undefined,stopGap:stop?stop.distance-a.distance:Infinity,remaining:a.path.length-a.distance,priority:elapsed<(a.priorityUntil??0),knocked:!!a.knocked,rejoining:!!a.rejoin,dynamic:a.body.isDynamic(),collider:a.collider.handle,registration:a.registration,type:a.spec.type,mass:a.spec.mass,color:`#${a.color.getHexString()}`,height:a.spec.height,halfLength:a.spec.length/2,halfWidth:a.spec.width/2};}),
-    obstacles:():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed})),
+    /** Each car with its heading, so a bus changing lanes sees how far a turning or crossing car reaches. */
+    obstacles:():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw})),
     /** Collider handles of the fleet, so an impact on the player can be classified. */
     colliders:new Set(byCollider.keys()),
     update(dt: number, player: VehicleState, observer: Pick<VehicleState,'x'|'y'|'z'> = player, external:TrafficObstacle[] = []) {

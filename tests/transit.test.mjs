@@ -3,8 +3,9 @@ import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import * as THREE from 'three';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
-import {createTransit,transitPoint,routeDecks,routeSurface} from '../src/simulation/transit.ts';
+import {createTransit,transitPoint,routeDecks,routeSurface,routeLanes,trackIndex,busPoint} from '../src/simulation/transit.ts';
 import {signalAxis,signalPhase} from '../src/simulation/signals.ts';
+import {roadProjection} from '../src/simulation/road-surfaces.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 import {meshBuildingIds,usesExactBuildingCollision} from '../src/simulation/building-collisions.ts';
 import {createRailProfile,railCovered} from '../src/simulation/transit-rail-surface.ts';
@@ -162,5 +163,130 @@ test('bus dwells at a stop, brakes for a parked player, and departs after cleara
   const stopped=transit.snapshot()[0].z;physics.reset(60,110,0);
   for(let i=0;i<8*60;i++){transit.update(1/60,physics.getState());physics.step({throttle:0,brake:1,steer:0,handbrake:true},1/60);}
   assert.ok(transit.snapshot()[0].z>stopped+12,'the bus should move after the lane clears');
+ }finally{transit.dispose();physics.dispose();}
+});
+
+test('a bus changes lanes around a trolley dwelling in its lane and moves back once past',async()=>{
+ // A two-way street 18 m between the curbs, heading south (+z), so the right-hand lane lies 3 m west of the
+ // centerline. The southbound track runs 2.5 m west, in that lane, with a stop every 60 m.
+ const city={bounds:{minX:-100,maxX:100,minZ:-400,maxZ:1100},roads:[{id:'street',name:'Shared Street',points:[[0,-400],[0,1100]],width:15,pavedWidth:18,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:60,z:0,yaw:0}};
+ const stops=Array.from({length:12},(_,i)=>({id:`t${i}`,name:`Trolley stop ${i}`,distance:300+i*60,position:[-2.5,-100+300+i*60]}));
+ const routes=[{id:'tram',kind:'tram',line:'Green-E',destination:'E TEST',directionId:0,points:[[-2.5,-100],[-2.5,900]],length:1000,stops},{id:'bus',kind:'bus',line:'39',destination:'39 TEST',points:[[0,-200],[0,600]],length:800,stops:[]}];
+ const physics=await DrivingPhysics.create(city),transit=createTransit(new THREE.Scene(),city,physics,{routes,sources:[],notes:''}),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
+ try{
+  let passed=false,closest=Infinity,widest=0,merging;
+  for(let i=0;i<70*60&&!passed;i++){
+   transit.update(1/60,far,{x:0,y:0,z:0});
+   const [tram,bus]=['tram','bus'].map(kind=>transit.snapshot().find(a=>a.kind===kind));
+   // Mid-change, the trajectory traffic yields to already runs into the track-clear lane.
+   if(!merging&&bus.laneOffset>.4&&bus.laneOffset<1.6){const pose=transit.obstacles().find(o=>o.halfLength===6).pose;merging={now:pose(0).x,later:pose(20).x,offset:bus.laneOffset};}
+   if(Math.abs(bus.z-tram.z)<6+11.25)closest=Math.min(closest,Math.abs(bus.x-tram.x));
+   widest=Math.max(widest,-bus.x);passed=bus.z>tram.z+40;
+  }
+  assert.ok(passed,'the bus must overtake the trolley instead of queuing behind its stops');
+  assert.ok(merging&&merging.later<merging.now-.5,`a lane change under way is published in the bus's predicted path (${merging&&(merging.now-merging.later).toFixed(2)} m further west 20 m on)`);
+  assert.ok(closest>2.6,`alongside the trolley the bus keeps clear of it (${closest.toFixed(2)} m between centers)`);
+  assert.ok(widest>5.2&&widest<7.2,`the bus uses the lane beside the track and stays off the curb (${widest.toFixed(2)} m west)`);
+  for(let i=0;i<20*60;i++)transit.update(1/60,far,{x:0,y:0,z:0});
+  const bus=transit.snapshot().find(a=>a.kind==='bus');
+  assert.ok(Math.abs(bus.laneOffset)<.1&&Math.abs(bus.x+3)<.2,`with the trolley far behind the bus returns to its lane (${bus.x.toFixed(2)})`);
+ }finally{transit.dispose();physics.dispose();}
+});
+
+test('a bus waits for a car alongside to clear the lane before changing lanes either way',async()=>{
+ // The street and trolley of the overtaking fixture: the bus's own lane is 3 m west, its track-clear lane 5.5 m west.
+ const city={bounds:{minX:-100,maxX:100,minZ:-400,maxZ:1100},roads:[{id:'street',name:'Shared Street',points:[[0,-400],[0,1100]],width:15,pavedWidth:18,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:60,z:0,yaw:0}};
+ const stops=Array.from({length:12},(_,i)=>({id:`t${i}`,name:`Trolley stop ${i}`,distance:300+i*60,position:[-2.5,-100+300+i*60]}));
+ const routes=[{id:'tram',kind:'tram',line:'Green-E',destination:'E TEST',directionId:0,points:[[-2.5,-100],[-2.5,900]],length:1000,stops},{id:'bus',kind:'bus',line:'39',destination:'39 TEST',points:[[0,-200],[0,600]],length:800,stops:[]}];
+ const physics=await DrivingPhysics.create(city),transit=createTransit(new THREE.Scene(),city,physics,{routes,sources:[],notes:''}),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
+ const find=kind=>transit.snapshot().find(a=>a.kind===kind);
+ // A car keeping pace beside the bus, its centre `x` metres east.
+ const run=(seconds,x,check,yaw=0)=>{for(let i=0;i<seconds*60;i++){const bus=find('bus'),car=x===undefined?[]:[{x,y:bus.y,z:bus.z,halfLength:2.2,halfWidth:.9,speed:yaw?0:bus.speed,yaw}];transit.update(1/60,far,{x:0,y:0,z:0},car);check?.(find('bus'),car[0]);}};
+ try{
+  // A car crossing the street, its nose 6.2 m west of the centerline: side-on it would stay clear of the strip the bus moves into.
+  run(30,-8.4,undefined,Math.PI/2);
+  assert.ok(find('tram').z-find('bus').z<40&&Math.abs(find('bus').laneOffset)<.1,'the bus waits for a car crossing its track-clear lane');
+  let closest=Infinity,drift=0;
+  run(10,-6,(bus,car)=>{closest=Math.min(closest,Math.abs(bus.x-car.x));const pose=transit.obstacles().find(o=>o.halfLength===6).pose;drift=Math.max(drift,Math.abs(pose(20).x-pose(0).x));});
+  assert.ok(drift<.05,`a bus holding its lane does not publish a lane change it is waiting to make (${drift.toFixed(3)} m)`);
+  assert.ok(closest>2.2&&Math.abs(find('bus').laneOffset)<.1,`the bus holds its lane while the car is beside the track-clear lane (${closest.toFixed(2)} m)`);
+  let passed=false;for(let i=0;i<60&&!passed;i++){run(1);passed=find('bus').z>find('tram').z+20;}
+  assert.ok(passed&&find('bus').laneOffset>2.2,'with the car gone the bus moves over and passes the trolley');
+  closest=Infinity;run(15,-3,(bus,car)=>closest=Math.min(closest,Math.abs(bus.x-car.x)));
+  assert.ok(closest>2.2&&find('bus').laneOffset>2.2,`the bus stays in the track-clear lane while the car is in its own lane (${closest.toFixed(2)} m)`);
+  run(15);
+  assert.ok(Math.abs(find('bus').laneOffset)<.1,'with the car gone the bus returns to its lane');
+ }finally{transit.dispose();physics.dispose();}
+});
+
+test('a track-clear lane found on a wide street is not carried over the curb of a narrower one',()=>{
+ // The street is 18 m between the curbs south to the z 200 junction and 9 m beyond; the southbound track runs 2.5 m west throughout.
+ // Only the wide stretch leaves room beside the track, so the bus's track-clear lane must end within the narrow one's curbs.
+ const city={bounds:{minX:-100,maxX:100,minZ:-400,maxZ:1100},roads:[{id:'wide',name:'Wide Street',points:[[0,-400],[0,200]],width:15,pavedWidth:18,oneway:0},{id:'narrow',name:'Narrow Street',points:[[0,200],[0,1100]],width:9,pavedWidth:9,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:60,z:0,yaw:0}};
+ const route=withDistances({points:[[0,-200],[0,600]]}),track=withDistances({points:[[-2.5,-100],[-2.5,900]]});route.decks=routeDecks(city,route);route.lanes=routeLanes(city,route,trackIndex([track]));
+ let widest=0;
+ for(let s=0;s<=route.length;s+=2){
+  const [x,z]=busPoint(route,s,1),curb=(z<=200?18:9)/2-1.3;widest=Math.max(widest,-x);
+  assert.ok(-x<=curb+.01,`at z ${z.toFixed(0)} the track-clear lane stays within the curb (${(-x).toFixed(2)} m west, curb allows ${curb.toFixed(2)})`);
+ }
+ assert.ok(widest>5,'the wide stretch still moves the bus clear of the track');
+});
+
+test('where the track leaves the street a bus held beside a car stops before the end of its lane instead of drifting',async()=>{
+ // The trolley turns off the street at z 300, so the bus's track-clear lane (2.4 m beyond its own) narrows away by z 345.
+ const city={bounds:{minX:-100,maxX:200,minZ:-400,maxZ:1100},roads:[{id:'street',name:'Shared Street',points:[[0,-400],[0,1100]],width:15,pavedWidth:18,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:150,z:0,yaw:0}};
+ const routes=[{id:'tram',kind:'tram',line:'Green-E',destination:'E TEST',directionId:0,points:[[-2.5,-100],[-2.5,300],[80,380]],length:515,stops:[{id:'t',name:'Trolley stop',distance:300,position:[-2.5,200]}]},{id:'bus',kind:'bus',line:'39',destination:'39 TEST',points:[[0,-200],[0,600]],length:800,stops:[]}];
+ const physics=await DrivingPhysics.create(city),transit=createTransit(new THREE.Scene(),city,physics,{routes,sources:[],notes:''}),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
+ const find=kind=>transit.snapshot().find(a=>a.kind===kind),step=car=>transit.update(1/60,far,{x:0,y:0,z:0},car?[car]:[]);
+ try{
+  for(let i=0;i<60*60&&!(find('bus').laneOffset>2.2&&find('bus').z>find('tram').z+5);i++)step();
+  assert.ok(find('bus').laneOffset>2.2,'the bus moves over to pass the dwelling trolley');
+  // A car now keeps pace in the bus's own lane, 3 m west of the centerline.
+  let closest=Infinity;
+  for(let i=0;i<30*60;i++){const bus=find('bus'),car={x:-3,y:bus.y,z:bus.z,halfLength:2.2,halfWidth:.9,speed:bus.speed,yaw:0};step(car);const now=find('bus');closest=Math.min(closest,Math.abs(now.x-car.x));}
+  const held=find('bus');
+  assert.ok(closest>2.2,`the bus never closes on the car beside it (${closest.toFixed(2)} m)`);
+  assert.ok(held.speed<.1&&held.z<345&&held.laneOffset>2.2,`it waits before its lane runs out (z ${held.z.toFixed(1)}, offset ${held.laneOffset.toFixed(2)})`);
+  for(let i=0;i<20*60;i++)step();
+  const bus=find('bus');
+  assert.ok(Math.abs(bus.laneOffset)<.1&&bus.z>360,'with the car gone it moves back and drives on');
+ }finally{transit.dispose();physics.dispose();}
+});
+
+test('opposite bus directions keep their own lanes and clear the Mission Hill trolley tracks',async()=>{
+ const city=await loadMetroCity({tiles:[]});
+ const data=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8'));
+ const routes=data.routes.map(withDistances),trams=routes.filter(r=>r.kind==='tram'),rails=trackIndex(trams);
+ const [south,north]=['39 FOREST HILLS','39 BACK BAY'].map(destination=>{const route=routes.find(r=>r.destination===destination);route.decks=routeDecks(city,route);route.lanes=routeLanes(city,route,rails);return route;});
+ const nearest=(points,[x,z])=>Math.min(...points.map(p=>Math.hypot(p[0]-x,p[1]-z)));
+ const missionHill=([x,z])=>x>-2900&&x<-2650&&z>1870&&z<1920,curbs=city.roads.filter(r=>r.name==='Huntington Avenue'&&r.oneway===0&&r.pavedWidth>18);
+ const samples=route=>Array.from({length:Math.floor(route.length/4)},(_,i)=>i*4).filter(s=>missionHill(busPoint(route,s)));
+ const northLane=samples(north).map(s=>busPoint(north,s));
+ assert.ok(northLane.length>40&&samples(south).length>40,'both directions run the street-running stretch');
+ for(const s of samples(south))assert.ok(nearest(northLane,busPoint(south,s))>2.7,`opposite 39s pass beside each other at ${s} m instead of meeting head on`);
+ for(const route of [south,north])for(const s of samples(route)){
+  const point=busPoint(route,s,1),street=Math.min(...curbs.map(r=>roadProjection(r,...point).distance-r.pavedWidth/2));
+  assert.ok(street<-1.3,`${route.destination} at ${s} m stays on the pavement beside the tracks`);
+  for(const tram of trams.filter(t=>t.line==='Green-E'))assert.ok(roadProjection(tram,...point).distance>2.65,`${route.destination} at ${s} m clears the ${tram.destination} track`);
+ }
+});
+
+test('the bus fleet no longer stalls nose to nose with oncoming buses or trolleys',async()=>{
+ const city=await loadMetroCity({tiles:[]}),data=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8'));
+ const physics=await DrivingPhysics.create({bounds:city.bounds,roads:[],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:0,z:0,yaw:0}});
+ const transit=createTransit(new THREE.Scene(),city,physics,data),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
+ try{
+  let samples=0,stalled=0;
+  for(let i=0;i<4*60*30;i++){
+   transit.update(1/30,far,{x:0,y:0,z:0});if(i%30)continue;
+   const fleet=transit.snapshot();
+   for(const bus of fleet.filter(a=>a.kind==='bus')){
+    samples++;if(bus.dwell>0||bus.speed>.5)continue;
+    const fx=Math.sin(bus.yaw),fz=Math.cos(bus.yaw);
+    const holds=o=>{const dx=o.x-bus.x,dz=o.z-bus.z,along=dx*fx+dz*fz;return along>0&&along<30&&Math.abs(dx*fz-dz*fx)<2.65;};
+    if(fleet.some(o=>o!==bus&&!o.covered&&Math.abs(o.y-bus.y)<4&&(o.kind==='tram'||Math.cos(o.yaw-bus.yaw)<0)&&holds(o)))stalled++;
+   }
+  }
+  assert.ok(stalled/samples<.01,`buses spend ${(100*stalled/samples).toFixed(1)}% of their time held by an oncoming bus or a trolley`);
  }finally{transit.dispose();physics.dispose();}
 });
