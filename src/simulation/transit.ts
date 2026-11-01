@@ -249,15 +249,24 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
     const light=actor.route.signalStops.find(l=>l.distance>=actor.distance+half-.3);
     if(light&&signalPhase(elapsed,light.yaw)!=='green'){const gap=light.distance-actor.distance-half;if(actor.signalStop!==light.distance){actor.signalStop=light.distance;actor.signalCommitted=actor.speed>2&&gap<actor.speed*actor.speed/7+1;}if(!actor.signalCommitted)target=Math.min(target,Math.sqrt(Math.max(0,2*2.4*(gap-.6))));}else{actor.signalStop=undefined;actor.signalCommitted=false;}
     const covered=!!actor.route.rail&&railCovered(actor.route.rail,actor.distance);
+    const others:TrafficObstacle[]=[...(covered?[]:[{...player,halfLength:2.1,halfWidth:.9},...traffic]),...fleet.filter(a=>a.x!==actor.x||a.z!==actor.z)];
     if(actor.route.lanes){
      // Move over while an open tram is within 90 m ahead or 30 m behind (either direction), ease back once it has gone;
      // the change runs faster with speed, and the bus heads into it as a lane change rather than sliding sideways.
-     const near=actors.some(o=>{if(!o.tram||Math.abs(o.y-actor.y)>=4||railCovered(o.route.rail!,o.distance))return false;const dx=o.x-actor.x,dz=o.z-actor.z,along=dx*fx+dz*fz;return along>-30&&along<90&&Math.abs(dx*fz-dz*fx)<9;});
-     const rate=Math.min(.6,.2+.05*actor.speed),before=actor.shift;actor.shift+=THREE.MathUtils.clamp((near?1:0)-actor.shift,-rate*dt,rate*dt);
-     const k=Math.min(actor.route.lanes.delta.length-1,Math.round(actor.distance/DECK_STEP)),sideways=dt>0?(actor.shift-before)/dt*actor.route.lanes.delta[k]:0;
+     const lanes=actor.route.lanes,near=actors.some(o=>{if(!o.tram||Math.abs(o.y-actor.y)>=4||railCovered(o.route.rail!,o.distance))return false;const dx=o.x-actor.x,dz=o.z-actor.z,along=dx*fx+dz*fz;return along>-30&&along<90&&Math.abs(dx*fz-dz*fx)<9;});
+     const k=Math.min(lanes.delta.length-1,Math.round(actor.distance/DECK_STEP)),from=lanes.base[k]+actor.shift*lanes.delta[k],to=lanes.base[k]+(near?1:0)*lanes.delta[k];
+     // Either way the bus waits for the strip it would sweep into to be free of anything alongside: the player, a car,
+     // another bus or a tram. Its own footprint is not part of the strip, so a car queued behind it does not count.
+     const [lo,hi]=to>from?[from+BUS_HALF,to+BUS_HALF+.3]:[to-BUS_HALF-.3,from-BUS_HALF],route=transitPoint(actor.route,actor.distance),rx=lanes.rx[k],rz=lanes.rz[k];
+     const blocked=Math.abs(to-from)>.01&&others.some(o=>{
+      if(Math.abs(o.y-actor.y)>4)return false;
+      const c=o.yaw===undefined?1:Math.abs(Math.cos(o.yaw-actor.yaw)),sn=Math.sqrt(1-c*c),hl=o.halfLength??2.1,hw=o.halfWidth??.9,lateral=(o.x-route[0])*rx+(o.z-route[1])*rz,reach=hl*sn+hw*c;
+      return Math.abs((o.x-actor.x)*fx+(o.z-actor.z)*fz)<half+hl*c+hw*sn+1.5&&lateral+reach>lo&&lateral-reach<hi;
+     });
+     const rate=Math.min(.6,.2+.05*actor.speed),before=actor.shift;if(!blocked)actor.shift+=THREE.MathUtils.clamp((near?1:0)-actor.shift,-rate*dt,rate*dt);
+     const sideways=dt>0?(actor.shift-before)/dt*lanes.delta[k]:0;
      actor.lean+=(-Math.atan2(sideways,Math.max(3,actor.speed))-actor.lean)*Math.min(1,dt*4);
     }
-    const others:TrafficObstacle[]=[...(covered?[]:[{...player,halfLength:2.1,halfWidth:.9},...traffic]),...fleet.filter(a=>a.x!==actor.x||a.z!==actor.z)];
     for(const other of others){
      if(Math.abs(other.y-actor.y)>4)continue;const dx=other.x-actor.x,dz=other.z-actor.z,along=dx*fx+dz*fz,across=Math.abs(dx*fz-dz*fx),gap=along-half-(other.halfLength??2.1)-2;
      if(along>0&&along<65&&across<1.35+(other.halfWidth??.9))target=Math.min(target,Math.sqrt(Math.max(0,2*3.2*gap)));

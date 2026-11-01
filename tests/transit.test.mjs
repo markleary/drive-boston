@@ -190,6 +190,29 @@ test('a bus changes lanes around a trolley dwelling in its lane and moves back o
  }finally{transit.dispose();physics.dispose();}
 });
 
+test('a bus waits for a car alongside to clear the lane before changing lanes either way',async()=>{
+ // The street and trolley of the overtaking fixture: the bus's own lane is 3 m west, its track-clear lane 5.5 m west.
+ const city={bounds:{minX:-100,maxX:100,minZ:-400,maxZ:1100},roads:[{id:'street',name:'Shared Street',points:[[0,-400],[0,1100]],width:15,pavedWidth:18,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:60,z:0,yaw:0}};
+ const stops=Array.from({length:12},(_,i)=>({id:`t${i}`,name:`Trolley stop ${i}`,distance:300+i*60,position:[-2.5,-100+300+i*60]}));
+ const routes=[{id:'tram',kind:'tram',line:'Green-E',destination:'E TEST',directionId:0,points:[[-2.5,-100],[-2.5,900]],length:1000,stops},{id:'bus',kind:'bus',line:'39',destination:'39 TEST',points:[[0,-200],[0,600]],length:800,stops:[]}];
+ const physics=await DrivingPhysics.create(city),transit=createTransit(new THREE.Scene(),city,physics,{routes,sources:[],notes:''}),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
+ const find=kind=>transit.snapshot().find(a=>a.kind===kind);
+ // A car keeping pace beside the bus, its centre `x` metres east.
+ const run=(seconds,x,check)=>{for(let i=0;i<seconds*60;i++){const bus=find('bus'),car=x===undefined?[]:[{x,y:bus.y,z:bus.z,halfLength:2.2,halfWidth:.9,speed:bus.speed,yaw:0}];transit.update(1/60,far,{x:0,y:0,z:0},car);check?.(find('bus'),car[0]);}};
+ try{
+  let closest=Infinity;
+  run(30,-6,(bus,car)=>closest=Math.min(closest,Math.abs(bus.x-car.x)));
+assert.ok(find('tram').z-find('bus').z<40,'the trolley is still ahead of the bus');
+  assert.ok(closest>2.2&&find('bus').shift<.05,`the bus holds its lane while the car is beside the track-clear lane (${closest.toFixed(2)} m)`);
+  let passed=false;for(let i=0;i<60&&!passed;i++){run(1);passed=find('bus').z>find('tram').z+20;}
+  assert.ok(passed&&find('bus').shift>.95,'with the car gone the bus moves over and passes the trolley');
+  closest=Infinity;run(15,-3,(bus,car)=>closest=Math.min(closest,Math.abs(bus.x-car.x)));
+  assert.ok(closest>2.2&&find('bus').shift>.95,`the bus stays in the track-clear lane while the car is in its own lane (${closest.toFixed(2)} m)`);
+  run(15);
+  assert.ok(find('bus').shift<.05,'with the car gone the bus returns to its lane');
+ }finally{transit.dispose();physics.dispose();}
+});
+
 test('opposite bus directions keep their own lanes and clear the Mission Hill trolley tracks',async()=>{
  const city=await loadMetroCity({tiles:[]});
  const data=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8'));
