@@ -109,7 +109,7 @@ function smooth(values:Float32Array,radius:number){
 }
 /** An MBTA shape is a service alignment near the street centerline, used by both
  * directions. A bus instead drives the right-hand lane of the street it follows (matched
- * like `routeDecks`: the street it is on while the shape stays within it, else the
+ * like `routeDecks`: the street it is on while the shape stays alongside it, else the
  * nearest one running along the shape, a one-way street only in its own direction),
  * and has a second lane clear of any parallel tram track: right of the tracks where
  * the curb allows, else left of them while it stays on its own side of the street,
@@ -124,15 +124,15 @@ export function routeLanes(city:CityData,route:Pick<Route,'points'|'distances'|'
   // Through a turn the lateral frame swings; the shift there is held from the straight approaches instead.
   const turn=Math.abs(Math.atan2((p[0]-a[0])*(b[1]-p[1])-(p[1]-a[1])*(b[0]-p[0]),(p[0]-a[0])*(b[0]-p[0])+(p[1]-a[1])*(b[1]-p[1])));
   beside.push(turn<.35?tracksBeside(tracks,p,hx,hz):[]);
-  const deck=route.decks[k];let best:{road:Road;x:number;z:number;score:number}|undefined;
+  const deck=route.decks[k];let best:{road:Road;x:number;z:number;score:number;past:boolean}|undefined;
   const match=(road:Road)=>{
    const hit=deck?roadProjection(road,p[0],p[1]):streetHit(road,p[0],p[1]);if(!hit||hit.distance>road.width/2+4)return;
    const r0=road.points[hit.index],r1=road.points[hit.index+1],rl=Math.hypot(r1[0]-r0[0],r1[1]-r0[1])||1,along=((r1[0]-r0[0])*hx+(r1[1]-r0[1])*hz)/rl;
-   if(road.oneway*along<0)return;return{road,x:hit.x,z:hit.z,score:hit.distance+(Math.abs(along)<.7?6:0)};
+   if(road.oneway*along<0)return;return{road,x:hit.x,z:hit.z,score:hit.distance+(Math.abs(along)<.7?6:0),past:(hit.index===0&&hit.t===0)||(hit.index===road.points.length-2&&hit.t===1)};
   };
   if(deck)best=match(deck);
   else{
-   const kept=street&&match(street);if(kept&&kept.score<6)best=kept;
+   const kept=street&&match(street);if(kept&&kept.score<6&&!kept.past)best=kept;
    for(const level of [false,true]){
     if(best)break;
     for(const road of roadsNear(city,p[0],p[1]))if(!!road.elevations===level){const m=match(road);if(m&&(!best||m.score<best.score))best=m;}
@@ -159,7 +159,15 @@ export function routeLanes(city:CityData,route:Pick<Route,'points'|'distances'|'
  // Hold each shift 20 m either side so the bus does not weave between track gaps, then ease it in.
  const held=new Float32Array(n);
  for(let k=0;k<n;k++)for(let j=Math.max(0,k-10);j<=Math.min(n-1,k+10);j++)if(Math.abs(shift[j])>Math.abs(held[k]))held[k]=shift[j];
- return{base:lane,delta:smooth(held,8),rx:smooth(rx,2),rz:smooth(rz,2)};
+ // Neither the hold nor the easing may carry a shift past the curb, or onto the far side of the street, of a stretch
+ // where it does not fit: there the bus stays in (or returns to) its street lane and queues behind a trolley. Each limit
+ // is the median of 5 samples (a junction sample matched to a side street is dropped), then the average of its strictest
+ // value within 8 m either way, so it eases in over a narrowing yet never exceeds the room there.
+ const window=(values:Float32Array,radius:number,pick:(v:number[])=>number)=>values.map((_,k)=>pick([...values.subarray(Math.max(0,k-radius),k+radius+1)]));
+ const median=(v:number[])=>v.sort((a,b)=>a-b)[v.length>>1],limit=(room:Float32Array,pick:(v:number[])=>number)=>smooth(window(window(room,2,median),4,pick),4);
+ const right=limit(outer.map((v,k)=>v-lane[k]),v=>Math.min(...v)),left=limit(inner.map((v,k)=>v-lane[k]),v=>Math.max(...v)),delta=smooth(held,8);
+ for(let k=0;k<n;k++)delta[k]=delta[k]>0?Math.max(0,Math.min(delta[k],right[k])):Math.min(0,Math.max(delta[k],left[k]));
+ return{base:lane,delta,rx:smooth(rx,2),rz:smooth(rz,2)};
 }
 /** A lane array sampled `distance` along the route. */
 function laneAt(values:Float32Array,distance:number){const at=Math.max(0,Math.min(values.length-1,distance/DECK_STEP)),i=Math.floor(at),j=Math.min(values.length-1,i+1);return values[i]+(values[j]-values[i])*(at-i);}

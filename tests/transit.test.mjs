@@ -219,6 +219,19 @@ test('a bus waits for a car alongside to clear the lane before changing lanes ei
  }finally{transit.dispose();physics.dispose();}
 });
 
+test('a track-clear lane found on a wide street is not carried over the curb of a narrower one',()=>{
+ // The street is 18 m between the curbs south to the z 200 junction and 9 m beyond; the southbound track runs 2.5 m west throughout.
+ // Only the wide stretch leaves room beside the track, so the bus's track-clear lane must end within the narrow one's curbs.
+ const city={bounds:{minX:-100,maxX:100,minZ:-400,maxZ:1100},roads:[{id:'wide',name:'Wide Street',points:[[0,-400],[0,200]],width:15,pavedWidth:18,oneway:0},{id:'narrow',name:'Narrow Street',points:[[0,200],[0,1100]],width:9,pavedWidth:9,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:60,z:0,yaw:0}};
+ const route=withDistances({points:[[0,-200],[0,600]]}),track=withDistances({points:[[-2.5,-100],[-2.5,900]]});route.decks=routeDecks(city,route);route.lanes=routeLanes(city,route,trackIndex([track]));
+ let widest=0;
+ for(let s=0;s<=route.length;s+=2){
+  const [x,z]=busPoint(route,s,1),curb=(z<=200?18:9)/2-1.3;widest=Math.max(widest,-x);
+  assert.ok(-x<=curb+.01,`at z ${z.toFixed(0)} the track-clear lane stays within the curb (${(-x).toFixed(2)} m west, curb allows ${curb.toFixed(2)})`);
+ }
+ assert.ok(widest>5,'the wide stretch still moves the bus clear of the track');
+});
+
 test('where the track leaves the street a bus held beside a car stops before the end of its lane instead of drifting',async()=>{
  // The trolley turns off the street at z 300, so the bus's track-clear lane (2.4 m beyond its own) narrows away by z 345.
  const city={bounds:{minX:-100,maxX:200,minZ:-400,maxZ:1100},roads:[{id:'street',name:'Shared Street',points:[[0,-400],[0,1100]],width:15,pavedWidth:18,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:150,z:0,yaw:0}};
