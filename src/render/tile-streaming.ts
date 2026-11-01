@@ -139,13 +139,15 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
   }
 
   async function rebuild(x: number, z: number) {
-    const keys = [...loaded.keys()]; if (active) keys.push(active.key);
-    abandon(); for (const key of [...loaded.keys()]) unload(key); fetched.clear();
+    // Rebuild from the decoded tiles already held (a build never changes them):
+    // downloading again could fail offline or after the cache expires, and a
+    // failed key is never retried, leaving a hole in the ground.
+    // Downloads not yet built stay queued in `fetched`.
+    const resident = new Map([...loaded].map(([key, built]) => [key, built.tile])); if (active) resident.set(active.key, active.tile);
+    abandon(); for (const key of [...loaded.keys()]) unload(key);
     focus = { x, z, until: performance.now() + 8000 };
-    for (const key of keys) {
-      if (loaded.has(key)) continue;
-      const [tx, tz] = key.split('_').map(Number), tile = await fetch(tx, tz, key)?.catch(() => undefined);
-      if (!tile || loaded.has(key) || active?.key === key || !fetched.has(key)) continue;
+    for (const [key, tile] of resident) {
+      if (loaded.has(key) || active?.key === key) continue;
       runToCompletion(start(key, tile));
       if (mobile) await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
