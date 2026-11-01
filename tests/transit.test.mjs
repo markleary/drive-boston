@@ -186,7 +186,7 @@ test('a bus changes lanes around a trolley dwelling in its lane and moves back o
   assert.ok(widest>5.2&&widest<7.2,`the bus uses the lane beside the track and stays off the curb (${widest.toFixed(2)} m west)`);
   for(let i=0;i<20*60;i++)transit.update(1/60,far,{x:0,y:0,z:0});
   const bus=transit.snapshot().find(a=>a.kind==='bus');
-  assert.ok(bus.shift<.05&&Math.abs(bus.x+3)<.2,`with the trolley far behind the bus returns to its lane (${bus.x.toFixed(2)})`);
+  assert.ok(Math.abs(bus.laneOffset)<.1&&Math.abs(bus.x+3)<.2,`with the trolley far behind the bus returns to its lane (${bus.x.toFixed(2)})`);
  }finally{transit.dispose();physics.dispose();}
 });
 
@@ -203,13 +203,34 @@ test('a bus waits for a car alongside to clear the lane before changing lanes ei
   let closest=Infinity;
   run(30,-6,(bus,car)=>closest=Math.min(closest,Math.abs(bus.x-car.x)));
 assert.ok(find('tram').z-find('bus').z<40,'the trolley is still ahead of the bus');
-  assert.ok(closest>2.2&&find('bus').shift<.05,`the bus holds its lane while the car is beside the track-clear lane (${closest.toFixed(2)} m)`);
+  assert.ok(closest>2.2&&Math.abs(find('bus').laneOffset)<.1,`the bus holds its lane while the car is beside the track-clear lane (${closest.toFixed(2)} m)`);
   let passed=false;for(let i=0;i<60&&!passed;i++){run(1);passed=find('bus').z>find('tram').z+20;}
-  assert.ok(passed&&find('bus').shift>.95,'with the car gone the bus moves over and passes the trolley');
+  assert.ok(passed&&find('bus').laneOffset>2.2,'with the car gone the bus moves over and passes the trolley');
   closest=Infinity;run(15,-3,(bus,car)=>closest=Math.min(closest,Math.abs(bus.x-car.x)));
-  assert.ok(closest>2.2&&find('bus').shift>.95,`the bus stays in the track-clear lane while the car is in its own lane (${closest.toFixed(2)} m)`);
+  assert.ok(closest>2.2&&find('bus').laneOffset>2.2,`the bus stays in the track-clear lane while the car is in its own lane (${closest.toFixed(2)} m)`);
   run(15);
-  assert.ok(find('bus').shift<.05,'with the car gone the bus returns to its lane');
+  assert.ok(Math.abs(find('bus').laneOffset)<.1,'with the car gone the bus returns to its lane');
+ }finally{transit.dispose();physics.dispose();}
+});
+
+test('where the track leaves the street a bus held beside a car stops before the end of its lane instead of drifting',async()=>{
+ // The trolley turns off the street at z 300, so the bus's track-clear lane (2.4 m beyond its own) narrows away by z 345.
+ const city={bounds:{minX:-100,maxX:200,minZ:-400,maxZ:1100},roads:[{id:'street',name:'Shared Street',points:[[0,-400],[0,1100]],width:15,pavedWidth:18,oneway:0}],buildings:[],landmarks:[],curbs:[],signals:[],sources:[],spawn:{x:150,z:0,yaw:0}};
+ const routes=[{id:'tram',kind:'tram',line:'Green-E',destination:'E TEST',directionId:0,points:[[-2.5,-100],[-2.5,300],[80,380]],length:515,stops:[{id:'t',name:'Trolley stop',distance:300,position:[-2.5,200]}]},{id:'bus',kind:'bus',line:'39',destination:'39 TEST',points:[[0,-200],[0,600]],length:800,stops:[]}];
+ const physics=await DrivingPhysics.create(city),transit=createTransit(new THREE.Scene(),city,physics,{routes,sources:[],notes:''}),far={x:1e6,y:1e6,z:1e6,speed:0,yaw:0};
+ const find=kind=>transit.snapshot().find(a=>a.kind===kind),step=car=>transit.update(1/60,far,{x:0,y:0,z:0},car?[car]:[]);
+ try{
+  for(let i=0;i<60*60&&!(find('bus').laneOffset>2.2&&find('bus').z>find('tram').z+5);i++)step();
+  assert.ok(find('bus').laneOffset>2.2,'the bus moves over to pass the dwelling trolley');
+  // A car now keeps pace in the bus's own lane, 3 m west of the centerline.
+  let closest=Infinity;
+  for(let i=0;i<30*60;i++){const bus=find('bus'),car={x:-3,y:bus.y,z:bus.z,halfLength:2.2,halfWidth:.9,speed:bus.speed,yaw:0};step(car);const now=find('bus');closest=Math.min(closest,Math.abs(now.x-car.x));}
+  const held=find('bus');
+  assert.ok(closest>2.2,`the bus never closes on the car beside it (${closest.toFixed(2)} m)`);
+  assert.ok(held.speed<.1&&held.z<345&&held.laneOffset>2.2,`it waits before its lane runs out (z ${held.z.toFixed(1)}, offset ${held.laneOffset.toFixed(2)})`);
+  for(let i=0;i<20*60;i++)step();
+  const bus=find('bus');
+  assert.ok(Math.abs(bus.laneOffset)<.1&&bus.z>360,'with the car gone it moves back and drives on');
  }finally{transit.dispose();physics.dispose();}
 });
 
