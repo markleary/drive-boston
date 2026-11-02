@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from land_approaches import AT_GRADE,SINK,TOWN_LINKS,level_land_approaches,restore_links,water_chain_ids
+from land_approaches import AT_GRADE,SINK,TOWN_LINKS,level_land_approaches,restore_links,restore_sources,water_chain_ids
 from water_crossings import DECK,RAMP_RISE,TERRAIN_RISE,grid_sampler,level_water_crossings,lifted,water_inputs
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
@@ -120,6 +120,30 @@ class TownLinks(unittest.TestCase):
   with self.assertRaises(ValueError):restore_links([street('osm-1-0',[[12,10],[0,-20]])],self.LINK)
 
 
+class RecordedSources(unittest.TestCase):
+ LINK=[{'road':'osm-1-0','way':1,'tail':[[320,30]],'join':'loop'}]
+
+ def roads(self):
+  def gully(x,z):return -1 if 6<x<18 else 1
+  def embankment(x,z):return gully(x,z)+5*max(0,1-abs(x-160)/30)
+  return embankment,[street('w',[[-40,0],[0,0]]),piece('s',[[0,0],[24,0]],1,0,flat),street('e',[[24,0],[60,0]]),piece('h',[[60,0],[75,0]],1,0,flat),street('h2',[[75,0],[100,0]]),
+   piece('r',[[100,0],[200,0]],0,1,flat),piece('d',[[200,0],[230,0]],1,1,flat),street('osm-1-0',[[312,10],[300,-20]]),street('loop',[[322,36],[350,40]])]
+
+ def test_records_restore_the_source_profiles_and_a_rerun_redoes_the_same_repairs(self):
+  ground,roads=self.roads();source=copy.deepcopy(roads);report=level_land_approaches(roads,ground,links=self.LINK)
+  self.assertEqual(sorted(report['changedRoads']),['h','osm-1-0','r','s']);self.assertTrue(report['seams'][0]['source']['elevations']);self.assertEqual(report['links'][0]['points'],[[322,36],[320,30]])
+  installed=copy.deepcopy(roads);restore_sources(roads,report);self.assertEqual(roads,source,'the records put every road back to its source profile')
+  again=level_land_approaches(roads,ground,links=self.LINK);self.assertEqual(roads,installed);self.assertEqual(again,report)
+
+ def test_a_record_that_no_longer_fits_its_road_is_rejected(self):
+  ground,roads=self.roads();report=level_land_approaches(roads,ground,links=self.LINK)
+  stale=copy.deepcopy(report);stale['floored'][0]['source']=stale['floored'][0]['source'][:-1]
+  with self.assertRaises(ValueError):restore_sources(copy.deepcopy(roads),stale)
+  stale=copy.deepcopy(report);stale['links'][0]['points']=[[322,36],[321,30]]
+  with self.assertRaises(ValueError):restore_sources(copy.deepcopy(roads),stale)
+  with self.assertRaises(ValueError):restore_sources([r for r in copy.deepcopy(roads) if r['id']!='h'],report)
+
+
 class ShippedPackage(unittest.TestCase):
  def test_the_installed_package_is_levelled_and_the_interchange_is_whole(self):
   city=json.loads((ROOT/'public/data/city.json').read_text());grid=city['elevation']
@@ -137,6 +161,10 @@ class ShippedPackage(unittest.TestCase):
   for id in ('16746-0-0','25549-0-0'):self.assertEqual((roads[id]['startLevel'],roads[id]['endLevel']),(0,0));self.assertLess(abs(roads[id]['elevations'][0]-ground(*roads[id]['points'][0])),.002)
   provenance=json.loads((ROOT/'public/data/provenance.json').read_text())['landApproaches']
   self.assertEqual(sorted(s['road'] for s in provenance['seams']),['14547-0-0','14549-0-0','16746-0-0','25549-0-0']);self.assertEqual([l['road'] for l in provenance['links']],[l['road'] for l in TOWN_LINKS])
+  replay=copy.deepcopy(city['roads']);restore_sources(replay,provenance);replayed=level_land_approaches(replay,ground,water_chain_ids(water))
+  for key in ('seams','floored','links'):self.assertEqual([{k:v for k,v in e.items() if k!='way'} for e in provenance[key]],replayed[key],f'the recorded {key} are exactly what a replay from their sources produces')
+  by={r['id']:r for r in replay}
+  for id in replayed['changedRoads']:self.assertEqual(by[id],roads[id],f'{id} replays to the installed road')
 
 
 if __name__=='__main__':unittest.main()

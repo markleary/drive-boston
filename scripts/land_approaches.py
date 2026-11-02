@@ -37,6 +37,11 @@ water; this module repairs three things on land, after it:
   short of any road. `TOWN_LINKS` restores that vertex and snaps the end to
   the loop's shared node.
 
+Every repair records the road's source profile (`source` on a seam or floored
+record, the added `points` on a link), and `restore_sources` puts the roads
+back before a rerun redoes the same repairs, so the records always describe
+the installed roads and `validate-city.py` can replay them.
+
 Water-crossing chains (levelled or skipped by `water_crossings`), pieces with
 a dedicated builder and tunnels are never touched. The terrain is not changed:
 the grader never grades under an elevated piece, so the corridor under a piece
@@ -161,19 +166,42 @@ def level_land_approaches(roads,ground,excluded=(),links=TOWN_LINKS,apply=True):
  for road,index,continuing in seam_stubs(roads,excluded):
   landing=-1 if index==0 else 0;low=road['elevations'][landing];top=ground(*road['points'][index])
   new=grade_profile(road,ground,landing,low,top);surface=all(abs(y-ground(*p))<=AT_GRADE for p,y in zip(road['points'],new))
-  report['seams'].append({'road':road['id'],'name':road['name'],'continues':sorted(continuing),'nodeHeight':round(top,4),'lowered':round(road['elevations'][index]-top,4),'surface':surface});report['changedRoads'].append(road['id']);excluded.add(road['id'])
+  source={'elevations':list(road['elevations']),'startLevel':road.get('startLevel'),'endLevel':road.get('endLevel'),'bridge':road.get('bridge')}
+  report['seams'].append({'road':road['id'],'name':road['name'],'continues':sorted(continuing),'nodeHeight':round(top,4),'lowered':round(road['elevations'][index]-top,4),'surface':surface,'source':source});report['changedRoads'].append(road['id']);excluded.add(road['id'])
   if not apply:continue
   if surface:
    for key in ('elevations','bridge','startLevel','endLevel'):road.pop(key,None)
   else:road['elevations']=new;road['startLevel' if index==0 else 'endLevel']=0
  for road,new in floor_pieces(roads,ground,excluded):
-  report['floored'].append({'road':road['id'],'name':road['name'],'raised':round(max(b-a for a,b in zip(road['elevations'],new)),4)});report['changedRoads'].append(road['id'])
+  report['floored'].append({'road':road['id'],'name':road['name'],'raised':round(max(b-a for a,b in zip(road['elevations'],new)),4),'source':list(road['elevations'])});report['changedRoads'].append(road['id'])
   if apply:road['elevations']=new
  for road,index,addition,node in restore_links(roads,links):
-  report['links'].append({'road':road['id'],'name':road['name'],'node':node,'added':len(addition)});report['changedRoads'].append(road['id'])
+  report['links'].append({'road':road['id'],'name':road['name'],'node':node,'added':len(addition),'end':index,'points':addition});report['changedRoads'].append(road['id'])
   if apply:road['points']=addition+road['points'] if index==0 else road['points']+addition
  report['changedRoads']=sorted(set(report['changedRoads']))
  return report
+
+
+def restore_sources(roads,recorded):
+ """Put the roads of an earlier run's records back to their source profiles: seam stubs and floored pieces get their recorded elevations, levels and deck back, joined ramps lose their added points. Raises ValueError for a record that no longer fits its road."""
+ by={r['id']:r for r in roads}
+ for seam in recorded.get('seams',[]):
+  road=by.get(seam['road']);source=seam.get('source')
+  if road is None or not source or len(source['elevations'])!=len(road['points']):raise ValueError(f"land approach record for {seam['road']} no longer fits the package")
+  road['elevations']=list(source['elevations'])
+  for key in ('startLevel','endLevel','bridge'):
+   if source.get(key) is None:road.pop(key,None)
+   else:road[key]=source[key]
+ for piece in recorded.get('floored',[]):
+  road=by.get(piece['road']);source=piece.get('source')
+  if road is None or not source or len(source)!=len(road['points']):raise ValueError(f"land approach record for {piece['road']} no longer fits the package")
+  road['elevations']=list(source)
+ for link in recorded.get('links',[]):
+  road=by.get(link['road']);added=link.get('points');end=link.get('end')
+  if road is None or not added or end not in (0,-1):raise ValueError(f"town link record for {link['road']} no longer fits the package")
+  n=len(added);points=road['points']
+  if (points[:n] if end==0 else points[-n:])!=added:raise ValueError(f"town link record for {link['road']} no longer fits the package")
+  road['points']=points[n:] if end==0 else points[:-n]
 
 
 def water_chain_ids(report):
