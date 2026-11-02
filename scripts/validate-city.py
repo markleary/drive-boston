@@ -7,7 +7,7 @@ destination. Needs the data virtualenv (numpy, shapely):
 
   .venv-data/bin/python scripts/validate-city.py [--data-dir public/data]
 """
-import argparse, gzip, heapq, json, math, pathlib, struct, sys
+import argparse, copy, gzip, heapq, json, math, pathlib, struct, sys
 import hashlib
 from collections import defaultdict
 import numpy as np
@@ -26,6 +26,7 @@ from rutherford_connections import validate_rutherford
 from leverett_connections import validate_leverett
 from road_structure_clearance import validate_bridge_clearance
 from water_crossings import level_water_crossings,water_inputs
+from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids
 from harvard_terrain import repair_memorial_terrain
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
 data_dir=args.data_dir;city=json.loads((data_dir/'city.json').read_text());provenance=json.loads((data_dir/'provenance.json').read_text())
@@ -213,6 +214,18 @@ validate_bridge_clearance(city['roads'],elevation)
 water_polygons,water_level=water_inputs(city);decks=level_water_crossings(city['roads'],water_polygons,elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
 recorded=provenance.get('waterCrossingDecks');assert recorded and [c['roads'] for c in recorded['chains']]==[c['roads'] for c in decks['chains']] and all(abs(x-y)<.001 for a,b in zip(recorded['chains'],decks['chains']) for x,y in zip(a['deck'],b['deck'])),'provenance must describe the installed water-crossing decks'
+land=level_land_approaches(city['roads'],elevation,water_chain_ids(decks),apply=False)
+assert not land['changedRoads'],f"{len(land['changedRoads'])} land approaches need level-land-approaches.py: {', '.join(land['changedRoads'][:6])}"
+recorded=provenance.get('landApproaches');assert recorded and {'seams','floored','links'}<=set(recorded),'provenance must describe the installed land approaches'
+roads_map={r['id']:r for r in city['roads']};replay=copy.deepcopy(city['roads']);restore_sources(replay,recorded);replayed=level_land_approaches(replay,elevation,water_chain_ids(decks))
+for key in ('seams','floored','links'):assert [{k:v for k,v in e.items() if k!='way'} for e in recorded[key]]==replayed[key],f"provenance {key} do not match a replay of the land approaches from their recorded sources"
+replay_map={r['id']:r for r in replay}
+for id in replayed['changedRoads']:assert replay_map[id]==roads_map[id],f"{id} differs from the replay of its recorded land-approach source"
+for seam in recorded['seams']:
+ road=roads_map[seam['road']];assert ('elevations' not in road) if seam['surface'] else (road.get('startLevel'),road.get('endLevel'))==(0,0),f"{seam['road']} is recorded as a levelled seam stub but still carries a lifted end"
+assert [l['road'] for l in recorded['links']]==[l['road'] for l in TOWN_LINKS],'every declared town link must be installed'
+for link in TOWN_LINKS:
+ ramp=roads_map[link['road']];join=roads_map[link['join']];assert any(ramp['points'][i] in (join['points'][0],join['points'][-1]) for i in (0,-1)),f"{link['road']} does not reach {link['join']}"
 cells=defaultdict(list)
 for r in city['roads']:
  assert len(r['points'])>=2 and r['oneway'] in (-1,0,1) and 3<=r['width']<=20,r['id']
