@@ -20,6 +20,8 @@ import {applyWaterMotion,waterMotion} from './water-motion.ts';
 export {parkSurface} from './area-surfaces.ts';
 import {waterHeight} from '../simulation/water-level.ts';
 import {inTunnelApproach} from '../simulation/tunnels.ts';
+import {inGreenway,replacesGreenwayPark,outsideGreenwayPath} from '../simulation/greenway.ts';
+import {greenwayDetailSteps} from './greenway';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -56,7 +58,7 @@ export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkO
 export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:ParkOptions={}):Generator<void,THREE.Group>{
   const group=new THREE.Group();group.name='Boston parks and waterways';const pace=options.pace;
   const bounds=options.bounds;
-  const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3);
+  const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3&&!replacesGreenwayPark(p));
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
   const paths=(city.parkPaths??[]).filter(p=>options.pathOwned?options.pathOwned(p):true);
   // Lawns and plazas lie a few centimetres above the terrain (depth bias 4) and
@@ -120,7 +122,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
         }
       }
     }else{
-      const p=path.points[0];drapedRibbonInto(batches.at(pathMaterial,p[0],p[1]),city,path.points,path.width,.052);
+      for(const points of outsideGreenwayPath(path.points)){const p=points[0];drapedRibbonInto(batches.at(pathMaterial,p[0],p[1]),city,points,path.width,.052);}
     }
   }
   // Spatially index roads, buildings and paths so landscape preparation stays
@@ -142,7 +144,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   const waterBounds=waters.map(w=>({area:w,...areaBounds(w)}));
   const wet=(p:Point2)=>waterBounds.some(w=>p[0]>=w.minX-2&&p[0]<=w.maxX+2&&p[1]>=w.minZ-2&&p[1]<=w.maxZ+2&&insideArea(p,w.area));
-  const safe=(p:Point2)=>!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
+  const safe=(p:Point2)=>!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
   const treePoints:THREE.Vector3[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
@@ -187,7 +189,8 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     }
   }
   for(const mesh of batches.meshes()){mesh.castShadow=mesh.material!==pathMaterial;mesh.receiveShadow=true;group.add(mesh);}
-  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length,benches,lamps,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting and furnishings are procedural'};
+  const greenwayGroup=yield* greenwayDetailSteps(city,options);if(greenwayGroup.userData.parcels)group.add(greenwayGroup);
+  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting and furnishings are procedural'};
   (options.target??scene).add(group);return group;
 }
 

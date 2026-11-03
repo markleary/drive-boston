@@ -20,6 +20,7 @@ import { type createMaterials, facadeStyleIndex, hash, seeded } from './material
 import { tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
 import { drapedRibbonInto, drapedStripInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurface } from './terrain-ground';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
+import { greenway, obsoleteGreenwayCurb, inGreenway } from '../simulation/greenway.ts';
 import { canopyHitsDeck, STREET_CANOPY } from '../simulation/deck-canopy.ts';
 import { spatialInstances } from './spatial-batches';
 import { PartBatches, box } from './geometry-writer';
@@ -82,6 +83,9 @@ export function createTileBuilder(ctx: TileContext) {
   const missionChurchMaterials=createMissionChurchMaterials();
   const symphonyHallMaterials=createSymphonyHallMaterials(), southStationMaterials=createSouthStationMaterials();
   const parkStone = new THREE.MeshStandardMaterial({ color: '#a5a397', roughness: .9 });
+  // Reuse the brick texture, but not the ordinary sidewalk's depth bias that
+  // deliberately puts it behind asphalt. Frontage paving must win that overlap.
+  const frontageBrick=materials.brick.clone();frontageBrick.polygonOffset=false;
   const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
   const chelseaLiftSteel = new THREE.MeshStandardMaterial({ color: '#9ea7a3', roughness: .72, metalness: .3 });
   const isChelseaLiftFrame = (building: Building) => building.id === 'osm-way-196751230';
@@ -239,6 +243,10 @@ export function createTileBuilder(ctx: TileContext) {
       // driveway faces (above the lawn and the sidewalks they were cut around,
       // below the street asphalt) and concrete curb islands, merged per material.
       const paved: [THREE.BufferGeometry[], THREE.Material, string, Point2[][][], number][] = [[[], materials.sidewalk, 'Sidewalks', tile.sidewalks.filter(w => w.material !== 'brick').map(w => w.rings), .03], [[], materials.brick, 'Brick sidewalks', tile.sidewalks.filter(w => w.material === 'brick').map(w => w.rings), .03], [[], materials.asphalt, 'Driveways', tile.driveways, .035], [[], materials.sidewalk, 'Curb islands', tile.islands, .05]];
+      // Cross Street's brick access lane shares the plaza surface. Its source
+      // road ribbon otherwise paints asphalt over the plaza and strands its
+      // real curb in an apparent traffic lane. Keep the curb and vehicle access.
+      paved.push([[],frontageBrick,'Cross Street brick frontage',greenway.frontages.filter(a=>a.tile===key).map(a=>a.rings),.09]);
       for (const [list, , , rings, y] of paved) for (const polygon of rings) {
         if (due(pace)) yield 'roads';
         const geometry = clipPortalSurface(city, parkSurface(city, polygon, y)); if (geometry.attributes.position?.count) list.push(geometry); else geometry.dispose();
@@ -260,7 +268,7 @@ export function createTileBuilder(ctx: TileContext) {
           const a = points[i - 1], b = points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .05) continue;
           const n = Math.max(1, Math.ceil(length / 3)), part = box(.18, .17, length / n), yaw = Math.atan2(dx, dz);
           for (let j = 0; j < n; j++) {
-            const t = (j + .5) / n, x = a[0] + dx * t, z = a[1] + dz * t;if(inTunnelApproach(city,x,z))continue;
+            const t = (j + .5) / n, x = a[0] + dx * t, z = a[1] + dz * t;if(inTunnelApproach(city,x,z)||obsoleteGreenwayCurb(x,z))continue;
             const writer = batches.at(materials.curb, x, z), from = writer.count;
             // Each corner settles onto the ground under it; the faces then take their tilted normals.
             writer.box(part, matrix.makeRotationY(yaw).setPosition(x, .085, z));
@@ -344,7 +352,7 @@ export function createTileBuilder(ctx: TileContext) {
     {
       const treePositions: THREE.Vector3[] = [];
       const random = seeded(342 + hash(key) % 1000);
-      const occupied = (x: number, z: number) => inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
+      const occupied = (x: number, z: number) => inGreenway(x,z) || inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
       const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
       for (const road of roads.filter(r=>!r.tunnel)) for (let i = 1; i < road.points.length; i++) {
         const a = road.points[i - 1], b = road.points[i], radius = (road.pavedWidth ?? road.width) / 2 + .8, segment = { a, b, radius };
