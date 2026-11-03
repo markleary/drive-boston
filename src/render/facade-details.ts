@@ -12,6 +12,7 @@ import { sampleElevation } from '../simulation/terrain.ts';
 import { pointInside } from '../simulation/roads.ts';
 import { otherBuildingHulls } from '../simulation/city-tiles.ts';
 import { planMasonryStoop } from './porch-stairs.ts';
+import { inTunnelApproach } from '../simulation/tunnels.ts';
 
 interface WallTriangle { a: THREE.Vector3; b: THREE.Vector3; c: THREE.Vector3; normal: THREE.Vector3; minY: number; maxY: number; u:[number,number,number]; }
 interface WallHit { depth: number; normal: THREE.Vector3; u:number; }
@@ -199,7 +200,10 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
         const lower=sampler.sample(mx,mz,nx,nz,base+1.7);if(!lower||Math.abs(lower.depth-depth)>.25)continue;
         const ground=(x:number,z:number)=>sampleElevation(city,x,z);
         const neighbors=otherBuildingHulls(city,building,mx,mz,35);
-        const stairs=planMasonryStoop({origin:[mx,mz],tangent:[tx,tz],normal:[nx,nz],frontDepth:depth,width:1.82,depth:1.5,frontage:length,along:length/2-along,setback:road.distance-road.road.width/2,landingY:base+1.12},ground,p=>!neighbors.some(other=>pointInside(p,other.footprint)));
+        // The elevation grid still exists underneath a clipped excavation. It
+        // cannot support a doorstep, flight or landing beside an open ramp.
+        const clear=(p:[number,number])=>!inTunnelApproach(city,...p)&&!neighbors.some(other=>pointInside(p,other.footprint));
+        const stairs=planMasonryStoop({origin:[mx,mz],tangent:[tx,tz],normal:[nx,nz],frontDepth:depth,width:1.82,depth:1.5,frontage:length,along:length/2-along,setback:road.distance-road.road.width/2,landingY:base+1.12},ground,clear);
         if(!stairs)continue;
         stoops++;
         draw(box(1.48,2.75,.12),wood,0,2.48,.09);
@@ -222,7 +226,7 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
           add(box(.06,.06,Math.hypot(run,drop)),iron,stairs.start[0]+stairs.direction[0]*run/2+acrossX,base+1.12-drop/2+.88,stairs.start[1]+stairs.direction[1]*run/2+acrossZ,stairYaw,Math.atan2(drop,run));
         }
         // Low frontage fences are seated on the local yard as well.
-        for(let xx=-half+.3;xx<half;xx+=.28){if(Math.abs(xx)<1.2)continue;const y=ground(mx+tx*xx+nx*(depth+1.05),mz+tz*xx+nz*(depth+1.05))-base;draw(box(.035,.8,.035),iron,xx,y+.4,1.05);}
+        for(let xx=-half+.3;xx<half;xx+=.28){if(Math.abs(xx)<1.2||!clear([mx+tx*xx+nx*(depth+1.05),mz+tz*xx+nz*(depth+1.05)]))continue;const y=ground(mx+tx*xx+nx*(depth+1.05),mz+tz*xx+nz*(depth+1.05))-base;draw(box(.035,.8,.035),iron,xx,y+.4,1.05);}
       }
     }
   }

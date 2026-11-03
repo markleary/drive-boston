@@ -5,6 +5,19 @@ import {roadProjection} from '../src/simulation/road-surfaces';
 import {carSteeringLimit} from '../src/physics/vehicle';
 
 const snapshot=(page:Page)=>page.evaluate(()=>(window as any).__backbay.snapshot());
+async function installTunnelDriver(page:Page,saved:{x:number;z:number;yaw:number;roadId?:string}){
+  await page.addInitScript(s=>{
+    localStorage.setItem('backbay-drive-v1',JSON.stringify(s));(window as any).__tunnelSteer=0;
+    Object.defineProperty(navigator,'getGamepads',{value:()=>{
+      const steer=(window as any).__tunnelSteer as number;
+      // A connected standard pad participates in the real input reader. Undo
+      // padStick's .16 dead zone so the route follower requests its intended angle.
+      return[{index:0,id:'Tunnel test driver',connected:true,mapping:'standard',
+        axes:[steer?-Math.sign(steer)*(.16+.84*Math.abs(steer)):0,0,0,0],
+        buttons:Array.from({length:17},()=>({value:0,pressed:false}))}];
+    }});
+  },saved);
+}
 function interiorStation(road:Road){
   const length=tunnelStations(road).at(-1)!;
   const intervals=road.tunnel!.covered??[[0,length]],longest=intervals.slice().sort((a,b)=>(b[1]-b[0])-(a[1]-a[0]))[0];
@@ -35,10 +48,7 @@ test('Central Artery desktop interiors, surface ramp, Zakim connection and south
   const data=await(await request.get('/data/central-artery.json')).json(),roads=data.roads as Road[];
   const main=roads.filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd).sort((a,b)=>(tunnelStations(b).at(-1)??0)-(tunnelStations(a).at(-1)??0))[0];expect(main).toBeTruthy();
   const station=interiorStation(main),p=tunnelPointAt(main,station);
-  await page.addInitScript(s=>{
-    localStorage.setItem('backbay-drive-v1',JSON.stringify(s));(window as any).__tunnelSteer=0;
-    Object.defineProperty(navigator,'getGamepads',{value:()=>[{axes:[-(window as any).__tunnelSteer],buttons:Array.from({length:8},()=>({value:0,pressed:false}))}]});
-  },{x:p.x,z:p.z,yaw:p.yaw,roadId:main.id});
+  await installTunnelDriver(page,{x:p.x,z:p.z,yaw:p.yaw,roadId:main.id});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
   await page.waitForTimeout(1400);let s=await snapshot(page);expect(s.state.y).toBeLessThan(p.y+2);expect(s.bridges.tunnels.roads).toBe(roads.length);expect(s.tiles.failed).toBe(0);
   await page.screenshot({path:testInfo.outputPath('central-artery-interior-desktop.png')});
@@ -84,10 +94,7 @@ test('all surface portals and the Lincoln / Essex through intersection',async({p
   const data=await(await request.get('/data/central-artery.json')).json(),roads=data.roads as Road[];
   const lincoln:Road={id:'lincoln-through-regression',name:'Lincoln Street',width:7,oneway:1,points:[[1387.184,-274.217],[1384.843,-259.449],[1383.208,-252.193],[1377.154,-227.254]]};
   const start=tunnelPointAt(lincoln,0);
-  await page.addInitScript(s=>{
-    localStorage.setItem('backbay-drive-v1',JSON.stringify(s));(window as any).__tunnelSteer=0;
-    Object.defineProperty(navigator,'getGamepads',{value:()=>[{axes:[-(window as any).__tunnelSteer],buttons:Array.from({length:8},()=>({value:0,pressed:false}))}]});
-  },{x:start.x,z:start.z,yaw:start.yaw});
+  await installTunnelDriver(page,{x:start.x,z:start.z,yaw:start.yaw});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();await page.waitForTimeout(1200);
   await arrive(page,lincoln,3);await page.screenshot({path:testInfo.outputPath('lincoln-street-clear-through-intersection.png')});
   await follow(page,lincoln,2,tunnelStations(lincoln).at(-1)!-1);
@@ -158,10 +165,7 @@ test('North Street exit continues onto its surface street beyond the ramp endpoi
   const surface=((await(await request.get('/data/city.json')).json()).roads as Road[]).find(r=>r.id==='13160-0-0')!;
   const continuation=surface.points.slice(0,-1).reverse();
   const continued:Road={...ramp,points:[...ramp.points,...continuation],elevations:[...ramp.elevations!,...continuation.map(()=>end.y)]};
-  await page.addInitScript(s=>{
-    localStorage.setItem('backbay-drive-v1',JSON.stringify(s));(window as any).__tunnelSteer=0;
-    Object.defineProperty(navigator,'getGamepads',{value:()=>[{axes:[-(window as any).__tunnelSteer],buttons:Array.from({length:8},()=>({value:0,pressed:false}))}]});
-  },{x:p.x,z:p.z,yaw:p.yaw,roadId:ramp.id});
+  await installTunnelDriver(page,{x:p.x,z:p.z,yaw:p.yaw,roadId:ramp.id});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
   const state=await follow(page,continued,length-45,length+15);
   expect((state.x-end.x)*Math.sin(end.yaw)+(state.z-end.z)*Math.cos(end.yaw),'drive onto the street, beyond merely reaching the ramp endpoint').toBeGreaterThan(9);

@@ -303,9 +303,9 @@ function box(builder:ReturnType<typeof meshBuilder>,a:Point2,b:Point2,lowA:numbe
   const p:Vertex[]=[[a[0]-nx,lowA,a[1]-nz],[b[0]-nx,lowB,b[1]-nz],[b[0]-nx,highB,b[1]-nz],[a[0]-nx,highA,a[1]-nz],[a[0]+nx,lowA,a[1]+nz],[b[0]+nx,lowB,b[1]+nz],[b[0]+nx,highB,b[1]+nz],[a[0]+nx,highA,a[1]+nz]];
   for(const [a,b,c,d]of [[0,3,2,1],[4,5,6,7],[0,4,7,3],[1,2,6,5],[3,7,6,2],[0,1,5,4]])builder.quad(p[a],p[b],p[c],p[d]);
 }
-function tunnelEdgeAt(road:Road,station:number,side:number){
+function tunnelEdgeAt(road:Road,station:number,side:number,inset=0){
   const stations=tunnelStations(road);let i=1;while(i<stations.length-1&&stations[i]<station)i++;
-  const t=(station-stations[i-1])/(stations[i]-stations[i-1]||1),a=deckEdge(road,i-1,side),b=deckEdge(road,i,side);
+  const t=(station-stations[i-1])/(stations[i]-stations[i-1]||1),a=deckEdge(road,i-1,side,inset),b=deckEdge(road,i,side,inset);
   return{x:a[0]+(b[0]-a[0])*t,z:a[1]+(b[1]-a[1])*t,y:deckEdgeElevation(road,i-1,side)+(deckEdgeElevation(road,i,side)-deckEdgeElevation(road,i-1,side))*t};
 }
 function sliceStations(road:Road,start:number,end:number){return[start,...tunnelStations(road).filter(s=>s>start+.001&&s<end-.001),end];}
@@ -340,6 +340,49 @@ function unionWalls(city:CityData,road:Road,mesh:TunnelMesh):TunnelMesh{
   }
   return output.result();
 }
+
+type WallTop={station:number;top:number};
+/** A retaining parapet uses straight grades above the terrain, rather than
+ * tracing every depression left by street grading between neighboring ramps.
+ * The upper hull keeps the lowest such envelope: its grades only decrease,
+ * so there are no repeated humps/dips, and no averaging below the safety lip.
+ * Each covered span or surface landing ends the profile independently. */
+function openWallProfiles(city:CityData,road:Road,side:number,required:(station:number)=>number){
+  const total=tunnelStations(road).at(-1)!,grid=terrainGrid(city);
+  const cuts=[...new Set([0,total,...(road.tunnel!.covered??[[0,total]]).flat(),...(road.tunnel!.surfaceLandings??[]).flat()].map(s=>Math.max(0,Math.min(total,s))))].sort((a,b)=>a-b);
+  const profiles:WallTop[][]=[];
+  for(let i=1;i<cuts.length;i++){
+    const lo=cuts[i-1],hi=cuts[i],mid=(lo+hi)/2;
+    if(hi-lo<.001||tunnelCoveredAt(road,mid)||tunnelSurfaceLandingAt(road,mid))continue;
+    const count=Math.ceil(hi-lo),vertices=sliceStations(road,lo,hi),samples=[...vertices,...Array.from({length:count+1},(_,j)=>lo+(hi-lo)*j/count)];
+    // Terrain is linear between grid lines and the x+z cell diagonals. Include
+    // their exact crossings so a crest between metre probes cannot pierce the lip.
+    if(grid)for(let j=1;j<vertices.length;j++){
+      const a=tunnelEdgeAt(road,vertices[j-1],side,-.08),b=tunnelEdgeAt(road,vertices[j],side,-.08);
+      for(const [start,end,origin]of [[a.x,b.x,grid.originX],[a.z,b.z,grid.originZ],[a.x+a.z,b.x+b.z,grid.originX+grid.originZ]]){
+        if(Math.abs(end-start)<1e-8)continue;
+        for(let k=Math.ceil((Math.min(start,end)-origin)/grid.cellSize);k<=Math.floor((Math.max(start,end)-origin)/grid.cellSize);k++){
+          const t=(origin+k*grid.cellSize-start)/(end-start);
+          if(t>1e-8&&t<1-1e-8)samples.push(vertices[j-1]+(vertices[j]-vertices[j-1])*t);
+        }
+      }
+    }
+    samples.sort((a,b)=>a-b);
+    const hull:WallTop[]=[];
+    for(const station of samples){
+      if(hull.length&&station-hull.at(-1)!.station<1e-7)continue;
+      const next={station,top:required(station)};
+      while(hull.length>1){
+        const a=hull[hull.length-2],b=hull[hull.length-1];
+        if((b.top-a.top)*(next.station-b.station)>(next.top-b.top)*(b.station-a.station)+1e-9)break;
+        hull.pop();
+      }
+      hull.push(next);
+    }
+    profiles.push(hull);
+  }
+  return profiles;
+}
 /** Collision and visual shell share identical walls, covered ceiling slabs,
  * guarded portal headers, terminal Jersey barriers and sealed black backwalls. */
 export function tunnelGeometry(city:CityData,road:Road){
@@ -348,20 +391,23 @@ export function tunnelGeometry(city:CityData,road:Road){
   const clearance=road.tunnel.clearance,stations=tunnelStations(road),total=stations.at(-1)!;
   const surfaceTerminal=(s:number)=>{const p=tunnelPointAt(road,s);return !tunnelCoveredAt(road,s)&&Math.abs(p.y-sampleElevation(city,p.x,p.z))<.6;};
   const openStart=!road.tunnel.capStart&&surfaceTerminal(0),openEnd=!road.tunnel.capEnd&&surfaceTerminal(total);
+  const profiles=new Map([-1,1].map(side=>[side,openWallProfiles(city,road,side,s=>{
+    const p=tunnelEdgeAt(road,s,side,-.08),ground=sampleElevation(city,p.x,p.z),terminal=Math.min(openStart?s:Infinity,openEnd?total-s:Infinity);
+    const outside=tunnelEdgeAt(road,s,side,-.7);
+    // Preserve the curb-height street junction where intact ground is beside
+    // the road. The upper envelope never lowers the guard over an excavation.
+    if(terminal<12&&Math.abs(p.y-ground)<.4&&!inTunnelPortal(city,outside.x,outside.z))return p.y+.08+.72*Math.min(1,terminal/12);
+    return Math.max(p.y,ground)+.8;
+  })]));
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
     const start=deckEdge(road,i-1,side,-.08),end=deckEdge(road,i,side,-.08),ya=deckEdgeElevation(road,i-1,side),yb=deckEdgeElevation(road,i,side),lo=stations[i-1],hi=stations[i];
-    const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(s=>s>lo&&s<hi)].sort((a,b)=>a-b);
+    const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...new Set([...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(s=>s>lo&&s<hi),...profiles.get(side)!.flat().map(p=>p.station).filter(s=>s>lo&&s<hi)])].sort((a,b)=>a-b);
     for(let j=1;j<breaks.length;j++){
       if(tunnelSurfaceLandingAt(road,(breaks[j-1]+breaks[j])/2))continue;
-      const covered=tunnelCoveredAt(road,(breaks[j-1]+breaks[j])/2),at=(s:number)=>{
+      const midpoint=(breaks[j-1]+breaks[j])/2,covered=tunnelCoveredAt(road,midpoint),profile=profiles.get(side)!.find(p=>midpoint>=p[0].station&&midpoint<=p.at(-1)!.station),at=(s:number)=>{
         const t=(s-lo)/(hi-lo),x=start[0]+(end[0]-start[0])*t,z=start[1]+(end[1]-start[1])*t,y=ya+(yb-ya)*t,ground=sampleElevation(city,x,z);
         let top=covered?y+clearance+.45:Math.max(y+.8,ground+.8);
-        const terminal=Math.min(openStart?s:Infinity,openEnd?total-s:Infinity),outsideA=deckEdge(road,i-1,side,-.7),outsideB=deckEdge(road,i,side,-.7);
-        const outsideX=outsideA[0]+(outsideB[0]-outsideA[0])*t,outsideZ=outsideA[1]+(outsideB[1]-outsideA[1])*t;
-        // Surface streets meet these source endpoints at an angle. Lower the
-        // last few metres of parapet into a curb only where ground exists on
-        // the other side; keep the full guard beside another deep excavation.
-        if(!covered&&terminal<12&&Math.abs(y-ground)<.4&&!inTunnelPortal(city,outsideX,outsideZ))top=y+.08+.72*Math.min(1,terminal/12);
+        if(profile){let k=1;while(k<profile.length-1&&profile[k].station<s)k++;const a=profile[k-1],b=profile[k];top=a.top+(b.top-a.top)*(s-a.station)/(b.station-a.station);}
         return{x,z,y,top};
       };
       const a=at(breaks[j-1]),b=at(breaks[j]);if(breaks[j]-breaks[j-1]>.001)box(walls,[a.x,a.z],[b.x,b.z],a.y-.3,b.y-.3,a.top,b.top,.4);

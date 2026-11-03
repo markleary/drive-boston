@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {planPorchStairs} from '../src/render/porch-stairs.ts';
+import {planPorchStairs,planMasonryStoop} from '../src/render/porch-stairs.ts';
 import {prepareNeighborhoodArchitecture,architectureFor} from '../src/render/neighborhood-profiles.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
-import {pointInside} from '../src/simulation/roads.ts';
+import {pointInside,closestRoad} from '../src/simulation/roads.ts';
+import {inTunnelApproach} from '../src/simulation/tunnels.ts';
+import {otherBuildingHulls} from '../src/simulation/city-tiles.ts';
 
 import {loadCentralCity} from './helpers/metro-city.mjs';
 const city=await loadCentralCity();
@@ -133,4 +135,22 @@ test('neighbor geometry through a tread center cannot be straddled by clear corn
   const narrowWall=[[-.04,1.85],[.04,1.85],[.04,8],[-.04,8]],clear=p=>!pointInside(p,narrowWall);
   const plan=planPorchStairs(site,terrain,clear);
   assertGrounded(plan,site,terrain,clear);assert.notEqual(plan.entry,'front');
+});
+
+test('the Purchase Street building redirects its stoops away from the tunnel excavation',()=>{
+  const building=city.buildings.find(b=>b.id==='BOS-AOCQM-7TYPA-JSEPZ');assert.ok(building,'the screenshot building remains in the surveyed tile');
+  const [a,b]=building.footprint,dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz),normal=[dz/length,-dx/length],tangent=[normal[1],-normal[0]];
+  const road=closestRoad(city,(a[0]+b[0])/2,(a[1]+b[1])/2,true),spans=Math.ceil(length/6);let redirected=0;
+  for(let s=0;s<spans;s++){
+    const along=(s+.5)*length/spans,origin=[a[0]+dx*along/length,a[1]+dz*along/length],neighbors=otherBuildingHulls(city,building,...origin,35);
+    const neighborClear=p=>!neighbors.some(other=>pointInside(p,other.footprint)),clear=p=>!inTunnelApproach(city,...p)&&neighborClear(p);
+    const site={origin,tangent,normal,frontDepth:0,width:1.82,depth:1.5,frontage:length,along:length/2-along,setback:road.distance-road.road.width/2,landingY:building.baseElevation+1.12};
+    const old=planMasonryStoop(site,ground,neighborClear),plan=planMasonryStoop(site,ground,clear);
+    assert.ok(old&&plan,'the measured frontage still permits a grounded entrance');
+    assert.ok([old.platform,...old.steps,old.landing].some(block=>[block.center,...block.corners].some(p=>inTunnelApproach(city,...p))),'the old flight reproduces the obstruction');
+    assert.notEqual(plan.entry,'front','a front flight would descend into the open ramp');
+    for(const block of [plan.platform,...plan.steps,plan.landing])for(const p of sampleBlock(block,block===plan.platform?normal:plan.direction))assert.ok(clear(p),'the full replacement footprint stays on intact ground');
+    redirected++;
+  }
+  assert.equal(redirected,6,'all six frontage sites at the reported excavation are covered');
 });
