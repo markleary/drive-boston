@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 import {tileCollisionIndices} from '../src/render/tile-geometry.ts';
+import {pavementEdges} from '../src/simulation/tile-format.ts';
 import {loadMetroCity,windowCity,readJson,installExactMeshes} from './helpers/metro-city.mjs';
 
 const source=readJson('museum-approaches-source.json'),bounds={minX:250,maxX:1050,minZ:-2700,maxZ:-1450};
@@ -25,6 +26,19 @@ function dense(points){
  }
  return[...out,points.at(-1)];
 }
+
+test('splitting the dam traffic junction preserves continuous measured pavement and sidewalk edges',()=>{
+ const north=city.roads.find(r=>r.id==='museum-dam-north-connection'),dam=city.roads.find(r=>r.id==='osm-508565737-0'),link=city.roads.find(r=>r.id==='museum-dam-south-connection');
+ assert.deepEqual(north.points.at(-1),dam.points[0]);assert.deepEqual(dam.points[0],link.points[0]);
+ const strip=road=>{
+  const owners=[...metro.loadedTiles.values()].flatMap(tile=>tile.pavements.filter(p=>p.road===road.id).map(p=>({tile,p})));
+  assert.equal(owners.length,1,`one pavement owner for ${road.id}`);
+  assert.deepEqual(owners[0].p.walk,[0,0],'both existing sidewalk bands remain');
+  return pavementEdges(owners[0].tile,owners[0].p);
+ };
+ const a=strip(north),b=strip(dam);
+ for(const side of ['left','right'])assert.ok(Math.hypot(a[side].at(-1)[0]-b[side][0][0],a[side].at(-1)[1]-b[side][0][1])<.001,`${side} pavement edge meets across tile owners`);
+});
 
 test('all three Museum approaches overlap the actual survey floor and retain bounded grades',()=>{
  for(const entry of source.routes){
