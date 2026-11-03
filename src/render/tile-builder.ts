@@ -9,6 +9,7 @@ import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
 import { pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
 import { junctionIndexSteps, planCrosswalkSteps, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
+import { curbRoadClearance } from '../simulation/road-curbs.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
@@ -262,13 +263,14 @@ export function createTileBuilder(ctx: TileContext) {
     // buffers. Mobile keeps the sidewalk surface and shared terrain/collisions.
     if (!ctx.mobile) {
       const batches = new PartBatches(500), matrix = new THREE.Matrix4();
+      const crossesRoad = curbRoadClearance(city, roads);
       for (const points of tile.curbs) {
         if (due(pace)) yield 'curbs';
         for (let i = 1; i < points.length; i++) {
           const a = points[i - 1], b = points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .05) continue;
           const n = Math.max(1, Math.ceil(length / 3)), part = box(.18, .17, length / n), yaw = Math.atan2(dx, dz);
           for (let j = 0; j < n; j++) {
-            const t = (j + .5) / n, x = a[0] + dx * t, z = a[1] + dz * t;if(inTunnelApproach(city,x,z)||obsoleteGreenwayCurb(x,z))continue;
+            const t = (j + .5) / n, x = a[0] + dx * t, z = a[1] + dz * t;if(inTunnelApproach(city,x,z)||obsoleteGreenwayCurb(x,z)||crossesRoad(x,z,dx/length,dz/length))continue;
             const writer = batches.at(materials.curb, x, z), from = writer.count;
             // Each corner settles onto the ground under it; the faces then take their tilted normals.
             writer.box(part, matrix.makeRotationY(yaw).setPosition(x, .085, z));

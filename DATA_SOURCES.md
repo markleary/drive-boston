@@ -159,6 +159,8 @@ git archive 20856dfb6688e2d350af6fd13e1b2e2550ba8d8d public/data | tar -x -C /tm
 .venv-data/bin/python scripts/building_clearance_package.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/build-chelsea-places.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/build-street-surfaces.py --data-dir /tmp/boston-staging --source-dir data-source-cache
+cp public/data/museum-approaches-source.json /tmp/boston-staging/
+.venv-data/bin/python scripts/repair-museum-roads.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/validate-city.py --data-dir /tmp/boston-staging
 ```
 
@@ -314,3 +316,14 @@ npx playwright test tests/tunnels.spec.ts
 ```
 
 The installed `city.json` includes `"tunnels":{"file":"central-artery.json"}`. Keep that manifest entry and both tunnel sidecars when replacing a regenerated city package. The sidecar records its source fixture SHA-256 and route-level source IDs, lengths, maximum grades and connected ramp endpoint elevations.
+
+
+### Museum of Science / Leverett Circle roadway joins
+
+`repair-museum-roads.py`, run after the street-surface builder, joins the Boston southbound dam carriageway to the Cambridge continuation and tapers the northbound deck to its measured 16.18 m pavement width. The retained outer road endpoints remain fixed. Charles River Dam Road is split at the merge so both pieces expose the shared endpoint to the ambient traffic graph; its measured pavement and sidewalk strip is partitioned at the same station and assigned to the appropriate tiles. The short southbound surface link supplies its own pavement record, and the repair updates tile ownership and provenance.
+
+`museum-approaches-source.json` retains Boston Infrastructure/OpenData layer 8 features 9005, 8834, 10431, 13135, 8452, 14455, 8962 and 14456, including source attributes, geographic coordinates and projected paths. These excluded below-grade paths identify the three missing Storrow/Leverett approaches. The existing survey has the raised game datum described above; these are **estimated raised gameplay approaches, not a reconstruction of the real tunnels**. The west alignment moves up to 36 m around the retained Science Park station; the east alignment moves up to 12 m to separate its rising branch. The branch starts its merge 25 m before the clipped source origin. Each approach matches nine measured survey cross-sections over 16 m, stays below 13% grade, and follows the terrain through any shared street mouth before rising. The profile and alignment adjustments are explicit in the source file. Ambient traffic remains excluded because the original survey continuation has no routing graph.
+
+Crosswalk thinning now compares carriageways that share a junction node and leave in the same direction; opposite sides of the junction remain. Surface ramp links cannot create pedestrian crossings. Decorative curb caps are suppressed where they cross a same-level roadway, including connected source boundaries and widened decks, while parallel edges, dead-end caps and curbs below elevated roads remain.
+
+Validation replays the retained approach sources and checks grades, crossing clearance and the source hash. `tests/museum-roads.test.mjs` drives every approach through both joins in both directions with the retained station and highway collision meshes, and verifies the adjoining surface roads and dam link. `tests/road-curbs.test.mjs`, `tests/crosswalks.test.mjs` and `tests/museum-roads.spec.ts` cover the reported seam, duplicate crossings, production rendering and streaming return.

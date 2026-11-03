@@ -3,7 +3,7 @@ import test from 'node:test';
 import {roadGraph} from '../src/simulation/traffic.ts';
 import {sampleDriveSurface} from '../src/simulation/road-surfaces.ts';
 import {closestRoad} from '../src/simulation/roads.ts';
-import {loadCentralCity} from './helpers/metro-city.mjs';
+import {loadCentralCity,loadMetroCity} from './helpers/metro-city.mjs';
 
 const road=(id,a,b,extra={})=>({id,name:'Main Avenue',width:16,oneway:0,points:[a,b],...extra});
 const city=roads=>({bounds:{minX:-100,maxX:200,minZ:-100,maxZ:100},spawn:{x:0,z:0,yaw:0},roads,buildings:[],signals:[]});
@@ -80,4 +80,12 @@ test('real Cambridge traffic continues past the former Massachusetts Avenue term
  const formerTerminal=route.find(e=>e.road.id===id(86792411));
  assert.ok(edges.some(e=>e.start===formerTerminal.end&&e.end!==formerTerminal.start&&e.road.id===id(1267768719)),'the observed stopped car now has a legal forward continuation at the fork');
  assert.ok(route.filter(e=>e.length<12).length>=5,'the regression must exercise the real short source ways');
+});
+
+test('Museum dam traffic can enter the southbound carriageway and return north into Cambridge',async()=>{
+ const {edges}=roadGraph(await loadMetroCity({tiles:[]}));
+ follow(edges,['osm-508565737-0','museum-dam-south-connection','14556-0-0']);
+ follow(edges,['14555-0-0','museum-dam-north-connection','osm-508565737-0']);
+ assert.equal(edges.filter(e=>e.road.id==='museum-dam-south-connection').length,1,'the southbound link stays one-way');
+ assert.equal(edges.filter(e=>e.road.id==='museum-dam-north-connection').length,2,'the split dam segment retains both directions');
 });
