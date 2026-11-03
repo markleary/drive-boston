@@ -124,3 +124,21 @@ test('Boylston Street\'s carriageways split between tiles -4_2 and -5_2 keep one
   assert.equal(boylston.length,1,`one crosswalk across the roadway at x -4203, not one per tile (${boylston.map(c=>c.tile+':'+c.road.id)})`);
   for(const a of kept)for(const b of kept){if(a===b||a.tile===b.tile||Math.abs(a.tx*b.tx+a.tz*b.tz)<.8)continue;const d=Math.hypot(a.at[0]-b.at[0],a.at[1]-b.at[1]);assert.ok(d>=MIN_SPACING||Math.hypot(a.node[0]-b.node[0],a.node[1]-b.node[1])<1,`${a.road.name} and ${b.road.name} ${d.toFixed(1)} m apart across the border`);}
 });
+
+test('shared-node carriageways at Charles River Dam Road keep one crossing per approach',async()=>{
+ const city=await loadMetroCity({tiles:['0_-3']}),tile=city.loadedTiles.get('0_-3');
+ const records=new Map([...tile.pavements,...tile.borderPavements].map(p=>[p.road,p]));
+ const edges=r=>records.has(r.id)?pavementEdges(tile,records.get(r.id)):undefined;
+ const roads=city.roads.filter(r=>r.points.some(p=>p[0]>-150&&p[0]<400&&p[1]>-2350&&p[1]<-1900));
+ const index=junctionIndex(city.roads,city.signals),others=[...records.values()].map(p=>pavementEdges(tile,p));
+ const kept=planCrosswalks(roads,index,edges,others).filter(c=>Math.hypot(c.node[0]-125.917,c.node[1]+2121.896)<1);
+ assert.equal(kept.length,4,'two same-node carriageway pairs previously left six crossings');
+ assert.equal(kept.filter(c=>c.road.name.includes('Land')).length,1);
+ assert.equal(kept.filter(c=>c.road.name.includes("Brien")).length,1);
+ assert.deepEqual(planCrosswalks([...roads].reverse(),index,edges,others).filter(c=>Math.hypot(c.node[0]-125.917,c.node[1]+2121.896)<1).map(c=>c.road.id),kept.map(c=>c.road.id));
+});
+
+test('a surface carriageway link does not invent a pedestrian crossing at a merge',()=>{
+ const main=road('main',[[0,0],[30,0],[80,0]],16,'Charles River Dam Road'),link=road('link',[[30,0],[60,12]],10,'Charles River Dam Road',{kind:'tertiary_link'});
+ assert.deepEqual(plan([main,link]),[]);
+});

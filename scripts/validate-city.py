@@ -24,6 +24,7 @@ from road_connections import validate_source_connections
 from longfellow_connections import validate_longfellow_connections
 from rutherford_connections import validate_rutherford
 from leverett_connections import validate_leverett
+from museum_approaches import validate_approaches
 from road_structure_clearance import validate_bridge_clearance
 from water_crossings import level_water_crossings,water_inputs
 from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids
@@ -210,6 +211,9 @@ validate_source_connections(city['roads'],lambda p:elevation(*p))
 validate_longfellow_connections(city['roads'],lambda p:elevation(*p))
 validate_rutherford(city,json.loads((ROOT/'public/data/road-connections-source.json').read_text()),heights)
 validate_leverett(city,json.loads((ROOT/'public/data/leverett-connections-source.json').read_text()),heights)
+museum_source=data_dir/'museum-approaches-source.json'
+validate_approaches(city,json.loads(museum_source.read_text()),heights)
+assert provenance['museumRoadConnections']['sourceSHA256']==hashlib.sha256(museum_source.read_bytes()).hexdigest(),'Museum approach provenance differs from the retained source'
 validate_bridge_clearance(city['roads'],elevation)
 water_polygons,water_level=water_inputs(city);decks=level_water_crossings(city['roads'],water_polygons,elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"

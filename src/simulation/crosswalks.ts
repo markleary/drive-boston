@@ -97,7 +97,7 @@ function roadEnd(road: Road, points: Point2[], index: JunctionIndex, edgesOf: (r
       reach = Math.max(reach, Math.min(30, (b.road.pavedWidth ?? b.road.width) / 2 / Math.abs(c)));
     }
   }
-  const streets = crossing.filter(b => !NO_CROSSWALK.test(b.road.name) && !b.road.elevations && b.road.width >= 5);
+  const streets = crossing.filter(b => !NO_CROSSWALK.test(b.road.name) && !b.road.kind?.endsWith('_link') && !b.road.elevations && b.road.width >= 5);
   const signal = index.signalNear(n), widest = Math.max(0, ...streets.map(b => b.road.width));
   const stripe = streets.length > 0 && (!through.length || signal || widest >= COMPARABLE * road.width);
   return { reach, offset: reach + CROSSWALK_SETBACK, stripe, priority: (signal ? 100 : 0) + (through.length ? 0 : 10) + widest };
@@ -112,7 +112,7 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
   const candidates: Crosswalk[] = [];
   for (const [i, road] of roads.entries()) {
     if (i % 50 === 49) yield;
-    if (road.elevations || road.width < MIN_WIDTH || NO_CROSSWALK.test(road.name)) continue;
+    if (road.elevations || road.kind?.endsWith('_link') || road.width < MIN_WIDTH || NO_CROSSWALK.test(road.name)) continue;
     const points = road.points, last = points.length - 1; if (polylineLength(points) < MIN_ROAD) continue;
     // Junction vertices: both ends, and every mid-vertex another road reaches (OpenStreetMap ways are not split at every T).
     const junctions = [0, ...points.slice(1, last).map((p, i) => i + 1).filter(i => index.legsAt(points[i]).some(l => l.road !== road)), last];
@@ -132,14 +132,16 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
   // Deterministic whatever order the roads came in and whichever tile holds a road's record (a neighbour sees only its
   // median width), so two tiles planning the same border candidates keep the same one: the wider street's first.
   const breadth = (c: Crosswalk) => c.road.pavedWidth ?? c.road.width;
-  candidates.sort((a, b) => b.priority - a.priority || breadth(b) - breadth(a) || (a.road.id < b.road.id ? -1 : a.road.id > b.road.id ? 1 : 0) || a.at[0] - b.at[0] || a.at[1] - b.at[1]);
+  candidates.sort((a, b) => b.priority - a.priority || breadth(b) - breadth(a) || (b.span[1] - b.span[0]) - (a.span[1] - a.span[0]) || (a.road.id < b.road.id ? -1 : a.road.id > b.road.id ? 1 : 0) || a.at[0] - b.at[0] || a.at[1] - b.at[1]);
   const kept: Crosswalk[] = [];
   const center = (c: Crosswalk): Point2 => [c.at[0] + c.tx * STRIPE_LENGTH / 2, c.at[1] + c.tz * STRIPE_LENGTH / 2];
   for (const c of candidates) {
     const cc = center(c), crowded = kept.some(k => {
-      // The two sides of one junction are both wanted however narrow the cross street (a signal at a 5 m lane).
-      if (Math.hypot(k.node[0] - c.node[0], k.node[1] - c.node[1]) < 1) return false;
       const dot = k.tx * c.tx + k.tz * c.tz; if (Math.abs(dot) < .8) return false;
+      // Opposite sides of one junction are both wanted, even at a narrow lane.
+      // Twin carriageways can also share that node before diverging: those
+      // point the same way and must still compete for their shared pavement.
+      if (dot < 0 && Math.hypot(k.node[0] - c.node[0], k.node[1] - c.node[1]) < 1) return false;
       const kc = center(k), dx = kc[0] - cc[0], dz = kc[1] - cc[1]; if (Math.abs(dx * c.tx + dz * c.tz) >= MIN_SPACING) return false;
       const n = -dx * c.tz + dz * c.tx, lo = dot > 0 ? n + k.span[0] : n - k.span[1], hi = dot > 0 ? n + k.span[1] : n - k.span[0];
       return Math.min(hi, c.span[1]) - Math.max(lo, c.span[0]) > 2;
