@@ -199,12 +199,14 @@ export function createTileBuilder(ctx: TileContext) {
         if (road.elevations) continue; stats.roads++;
         if (due(pace)) yield 'roads';
         const pavement = pavementOf(road), width = road.pavedWidth ?? road.width, edges = pavement && pavement.edges.length >= 8 ? pavementEdges(tile, pavement) : undefined;
-        if (pavement && edges) {
+        // Generated polygons resolve folds and junctions before tile clipping.
+        // Keep records for markings; legacy packages still draw their strips.
+        if (!tile.streetPavement && pavement && edges) {
           const { left, right } = edges;
           if (!pavement.walk?.[0]) strip(materials.sidewalk, band(left, right), left, .012);
           if (!pavement.walk?.[1]) strip(materials.sidewalk, right, band(right, left), .012);
           strip(materials.asphalt, left, right, .045);
-        } else {
+        } else if (!tile.streetPavement) {
           ribbon(materials.sidewalk, road.points, road.width + 5.8, .012);
           ribbon(materials.asphalt, road.points, road.width, .045);
         }
@@ -244,6 +246,8 @@ export function createTileBuilder(ctx: TileContext) {
       // driveway faces (above the lawn and the sidewalks they were cut around,
       // below the street asphalt) and concrete curb islands, merged per material.
       const paved: [THREE.BufferGeometry[], THREE.Material, string, Point2[][][], number][] = [[[], materials.sidewalk, 'Sidewalks', tile.sidewalks.filter(w => w.material !== 'brick').map(w => w.rings), .03], [[], materials.brick, 'Brick sidewalks', tile.sidewalks.filter(w => w.material === 'brick').map(w => w.rings), .03], [[], materials.asphalt, 'Driveways', tile.driveways, .035], [[], materials.sidewalk, 'Curb islands', tile.islands, .05]];
+      if (tile.streetPavement) paved.push([[],materials.asphalt,'Streets',tile.streetPavement,.045],[[],materials.sidewalk,'Street sidewalks',tile.streetSidewalks ?? [],.012]);
+      if (tile.deckPavement) paved.push([[],materials.asphalt,'Paved embankments',tile.deckPavement,.03]);
       // Cross Street's brick access lane shares the plaza surface. Its source
       // road ribbon otherwise paints asphalt over the plaza and strands its
       // real curb in an apparent traffic lane. Keep the curb and vehicle access.

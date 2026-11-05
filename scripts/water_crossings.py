@@ -44,8 +44,8 @@ TERRAIN_RISE=.3
 RAMP_RISE=.05
 RAMP_TAPER=10
 LANDING_SHARE=.01
-ALLOWED_KINDS={'elevated','water-crossing','restored-water-span'}
-ALLOWED_IDS=('structure-','water-link-')
+ALLOWED_KINDS={'elevated','water-crossing','restored-water-span','source-boundary-link'}
+ALLOWED_IDS=('structure-','water-link-','source-seam-')
 OWNED_NAMES={'Longfellow Bridge'}
 
 

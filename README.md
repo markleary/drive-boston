@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite, then select **Start driving**. No API keys, accounts, or runtime map services are needed. All geographic assets ship with the application. The package totals approximately 100 MB before transfer compression, but a session only downloads the 7.1 MB city index, the 11 MB terrain grid, the 4 MB far-building hulls, and the 1 km building tiles near the player (about 330 KB each, 202 in all). Subsequent visits can reuse the browser cache.
+Open the local URL printed by Vite, then select **Start driving**. No API keys, accounts, or runtime map services are needed. All geographic assets ship with the application. The data package totals approximately 108 MB before transfer compression, but a session only downloads the 7.1 MB city index, the 11 MB terrain grid, the 4 MB far-building hulls, and the 1 km building tiles near the player (about 368 KB each, 202 in all). Subsequent visits can reuse the browser cache.
 
 ```sh
 npm run build
@@ -25,6 +25,10 @@ The web manifest, Android icons, and Apple home-screen tags allow installation f
 The public prototype is hosted at **https://markleary.github.io/drive-boston/**. The GitHub Actions workflow in `.github/workflows/deploy.yml` builds the site and publishes `dist/` to GitHub Pages on every push to `main`, so merging a pull request deploys it; the workflow can also be started by hand from the repository's Actions tab. The repository's Pages source must be set to GitHub Actions (Settings, Pages) for those deployments to be accepted; the former `gh-pages` branch is no longer used. The workflow only builds and deploys; it does not run the test suites.
 
 To check a build locally, run `npm ci`, `npm run build`, and `npm run preview`.
+
+Map generation compiles shared street junctions and tile-edge polygons, reconnects source-confirmed GIS/OSM gaps, grades connected ramp pieces, and paves terrain where it meets a bridge approach. Before shipping a map extension, run `npm run validate:data` and `npm run audit:roads -- --output /tmp/road-generation-audit.json --strict` after the generation chain in `CLAUDE.md`. The strict audit currently flags unresolved steep approaches listed in [the generation report](reports/road-generation.json); it must not be treated as a passing certification of the entire map. See [DATA_SOURCES.md](DATA_SOURCES.md#road-generation-continuity-audit) for the generation rules and limits.
+
+Sullivan Square's Mystic/Main Street rail crossing, Maffa Way corridor and two station parking/access gaps have dated generation-input corrections checked against 2025 aerial imagery and the supplied satellite references. The bridge follows a straight axis between its preserved street landings, with a constant estimated 12 m deck width and about 1.2% grade. Maffa Way keeps an estimated 14 m carriageway under I-93 and past the station parking lots; obsolete curb outlines cannot pinch it. Both parking sections between Maffa and Main have even sidewalk and curb borders with their access aisles kept open. Physics, generator and data checks run on pull requests and before deployment; the road-audit baseline gate rejects new or worsened defects. The separate strict audit still reports 21 steep segments elsewhere.
 
 ## Play
 

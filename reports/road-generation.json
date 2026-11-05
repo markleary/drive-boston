@@ -1,0 +1,548 @@
+{
+  "roads": 20704,
+  "tiles": 202,
+  "polygonParts": 11397,
+  "tileSeams": 361,
+  "profileSamples": 293835,
+  "remainingProfiles": [
+    {
+      "road": "8803-0-0",
+      "name": "Broadway",
+      "maxGrade": 0.9366,
+      "gradePoint": [
+        1384.481,
+        738.657
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.05,
+        "point": [
+          1386.14,
+          744.528
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "inland viaduct"
+    },
+    {
+      "road": "10448-0-0",
+      "name": "Broadway",
+      "maxGrade": 0.2887,
+      "gradePoint": [
+        1138.931,
+        697.299
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.008,
+        "point": [
+          1119.469,
+          696.773
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "inland viaduct"
+    },
+    {
+      "road": "9280-0-0",
+      "name": "Cambridge Street",
+      "maxGrade": 0.1927,
+      "gradePoint": [
+        212.433,
+        -1250.187
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.061,
+        "point": [
+          226.561,
+          -1255.313
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "11550-0-0",
+      "name": "Commonwealth Avenue",
+      "maxGrade": 0.2105,
+      "gradePoint": [
+        -3003.529,
+        -26.351
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.011,
+        "point": [
+          -3025.203,
+          -33.711
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "11551-0-0",
+      "name": "Commonwealth Avenue",
+      "maxGrade": 0.2501,
+      "gradePoint": [
+        -3040.949,
+        -52.747
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.001,
+        "point": [
+          -3059.883,
+          -55.901
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "15051-0-0",
+      "name": "Commonwealth Avenue",
+      "maxGrade": 0.3058,
+      "gradePoint": [
+        -2904.154,
+        -9.971
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.035,
+        "point": [
+          -2889.953,
+          -5.464
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "25455-0-0",
+      "name": "Essex Street",
+      "maxGrade": 0.7003,
+      "gradePoint": [
+        -2973.533,
+        -14.954
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.013,
+        "point": [
+          -2979.152,
+          -8.683
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "25493-0-0",
+      "name": "Essex Street",
+      "maxGrade": 0.6847,
+      "gradePoint": [
+        -2982.466,
+        -16.611
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.0,
+        "point": [
+          -2983.657,
+          -9.769
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "15811-0-0",
+      "name": "Southampton Street",
+      "maxGrade": 0.5833,
+      "gradePoint": [
+        1148.098,
+        2196.186
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.119,
+        "point": [
+          1155.827,
+          2193.136
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "15817-0-0",
+      "name": "Southampton Street",
+      "maxGrade": 0.5197,
+      "gradePoint": [
+        1092.056,
+        2181.327
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.07,
+        "point": [
+          1084.236,
+          2174.142
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "osm-93020592-0",
+      "name": "Boston Avenue",
+      "maxGrade": 0.648,
+      "gradePoint": [
+        -4625.715,
+        -7444.742
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.474,
+        "point": [
+          -4623.109,
+          -7453.125
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "osm-1571759929-0",
+      "name": "Newton Street",
+      "maxGrade": 0.2253,
+      "gradePoint": [
+        -1744.308,
+        -3075.838
+      ],
+      "terrainAboveDeck": {
+        "depth": 1.156,
+        "point": [
+          -1746.073,
+          -3071.785
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "osm-1571759930-0",
+      "name": "Newton Street",
+      "maxGrade": 0.2104,
+      "gradePoint": [
+        -1747.168,
+        -3067.376
+      ],
+      "terrainAboveDeck": {
+        "depth": 2.435,
+        "point": [
+          -1741.856,
+          -3061.796
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "osm-1388687881-0",
+      "name": "Unnamed trunk ramp",
+      "maxGrade": 0.2639,
+      "gradePoint": [
+        -2846.696,
+        87.273
+      ],
+      "terrainAboveDeck": {
+        "depth": 1.588,
+        "point": [
+          -2835.228,
+          83.645
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "osm-1388687882-0",
+      "name": "Carlton Street",
+      "maxGrade": 0.2057,
+      "gradePoint": [
+        -2840.932,
+        83.844
+      ],
+      "terrainAboveDeck": {
+        "depth": 2.153,
+        "point": [
+          -2849.435,
+          81.556
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "23433-0-bridge",
+      "name": "Boylston Street",
+      "maxGrade": 0.2255,
+      "gradePoint": [
+        -1402.706,
+        391.988
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.01,
+        "point": [
+          -1392.45,
+          390.453
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": true,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "19411-0-bridge",
+      "name": "Boylston Street",
+      "maxGrade": 0.2263,
+      "gradePoint": [
+        -1401.747,
+        389.836
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.006,
+        "point": [
+          -1391.379,
+          390.179
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": true,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "19934-0-bridge",
+      "name": "Boylston Street",
+      "maxGrade": 0.1888,
+      "gradePoint": [
+        -1396.362,
+        381.739
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.007,
+        "point": [
+          -1386.145,
+          384.102
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": true,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "24128-0-bridge",
+      "name": "Bowker Overpass",
+      "maxGrade": 0.2505,
+      "gradePoint": [
+        -1440.001,
+        -14.505
+      ],
+      "terrainAboveDeck": {
+        "depth": 0.089,
+        "point": [
+          -1435.779,
+          -37.537
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": true,
+      "waterChainPolicy": "dedicated builder"
+    },
+    {
+      "road": "osm-8617171-0",
+      "name": "Carter Street",
+      "maxGrade": 0.2572,
+      "gradePoint": [
+        3149.787,
+        -5836.836
+      ],
+      "terrainAboveDeck": {
+        "depth": 1.453,
+        "point": [
+          3151.362,
+          -5833.698
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    },
+    {
+      "road": "osm-926934451-0",
+      "name": "County Road",
+      "maxGrade": 0.297,
+      "gradePoint": [
+        3102.402,
+        -5836.776
+      ],
+      "terrainAboveDeck": {
+        "depth": 2.247,
+        "point": [
+          3107.773,
+          -5832.458
+        ]
+      },
+      "unpavedTerrainIntrusion": {
+        "depth": 0
+      },
+      "dedicatedBuilder": false
+    }
+  ],
+  "fixedConstraintConflicts": [
+    {
+      "roads": [
+        "10446-0-0",
+        "10448-0-0",
+        "10899-0-0",
+        "11039-0-0",
+        "11129-0-0",
+        "13525-0-0",
+        "13526-0-0",
+        "19123-0-0",
+        "19124-0-0",
+        "8803-0-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 3.276
+    },
+    {
+      "roads": [
+        "15811-0-0",
+        "15812-0-0",
+        "15817-0-0",
+        "15819-0-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 2.888
+    },
+    {
+      "roads": [
+        "osm-8856378-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 0.015
+    },
+    {
+      "roads": [
+        "osm-8604791-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 0.693
+    },
+    {
+      "roads": [
+        "osm-8605502-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 0.804
+    },
+    {
+      "roads": [
+        "osm-9038805-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 0.018
+    },
+    {
+      "roads": [
+        "osm-1471521528-0",
+        "osm-591294833-0",
+        "osm-9429794-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 2.581
+    },
+    {
+      "roads": [
+        "osm-1293291150-0",
+        "osm-82329789-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 0.242
+    },
+    {
+      "roads": [
+        "osm-1571759929-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 0.78
+    },
+    {
+      "roads": [
+        "osm-1571759930-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 1.465
+    },
+    {
+      "roads": [
+        "osm-1388687878-0",
+        "osm-1388687881-0",
+        "osm-1388687882-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 1.456
+    },
+    {
+      "roads": [
+        "osm-8617171-0",
+        "osm-926934451-0",
+        "osm-926935187-0",
+        "osm-926957204-0",
+        "osm-96021923-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 3.04
+    }
+  ]
+}

@@ -712,6 +712,8 @@ def install(data_dir,source_dir,xy,log=print):
  city_path=data_dir/'city.json';city=json.loads(city_path.read_text());size=city['tiles']['size'];tile_dir=data_dir/city['tiles']['directory']
  headers={};payloads={}
  for key in city['tiles']['keys']:headers[key],payloads[key]=unpack(tile_dir/f't_{key}.bin')
+ from reviewed_road_inputs import restore_street_sources
+ restore_street_sources(headers)
  # A centerline an earlier run moved out of a curbed park edge starts again from its source line, so every run sees the same input.
  for r in city['roads']:
   if 'sourcePoints' in r:r['points']=r.pop('sourcePoints')
@@ -762,9 +764,11 @@ def install(data_dir,source_dir,xy,log=print):
    if tile is not None and r['id'] not in tile['roads'] and line.intersects(box(tx*size,tz*size,(tx+1)*size,(tz+1)*size)):tile['roads'].append(r['id']);relisted+=1
  edges=cast_edges(surface,curb_lines,tree=curb_tree);forced=mask_park_edges(edges,surface,city['parks']);masked=sum(int(m.sum()) for m in forced.values());log('Cast',len(edges),'roads; stations still inside curbed park edges paved beyond the curb',masked,'; roads listed in a further tile',relisted,flush=True)
  records=pavement_records(surface,edges,walks_tree,forced);log('Pavement records',len(records),flush=True)
+ from street_meshes import weld_records
+ welded=weld_records(surface,records,road_key);log('Welded aligned street ends',welded,flush=True)
  islands,faces,stats=curb_islands(curb_lines,surface,city['parks'],[b['center'] for t in headers.values() for b in t['buildings']],walks_tree,(lines,lots));log('Islands',stats,flush=True)
  drives=driveway_surfaces(lines,widths,lots,faces,coverage,walks_tree,curb_lines);log('Driveway surfaces',len(drives),flush=True)
- for tile in headers.values():tile['pavements']=[];tile['borderPavements']=[];tile['sidewalks']=[];tile['islands']=[];tile['driveways']=[]
+ for tile in headers.values():tile['pavements']=[];tile['borderPavements']=[];tile['sidewalks']=[];tile['islands']=[];tile['driveways']=[];tile.pop('reviewedDrivewayParts',None)
  measured=0;owner={}
  for r in surface:
   rec=records[road_key(r)];m=road_midpoint(r['points']);tx,tz=math.floor(m[0]/size),math.floor(m[1]/size);tile=headers.get(tile_key(tx,tz));owner[road_key(r)]=tile_key(tx,tz)
@@ -795,6 +799,10 @@ def install(data_dir,source_dir,xy,log=print):
     tile=headers.get(tile_key(tx,tz))
     if tile is None:continue
     for part in polygon_parts(polygon.simplify(.03).intersection(box(tx*size,tz*size,(tx+1)*size,(tz+1)*size))):tile[field].append(polygon_rings(part))
+ from street_meshes import compile_headers
+ from deck_contacts import packaged_contacts
+ contacts,contact_roads=packaged_contacts(city,data_dir)
+ mesh_stats=compile_headers(headers,city['roads'],contacts);mesh_stats['deckContactRoads']=len(contact_roads);log('Compiled street polygons',mesh_stats,flush=True)
  changed=[]
  for key in city['tiles']['keys']:
   header,payload=unpack(tile_dir/f't_{key}.bin')
@@ -806,6 +814,7 @@ def install(data_dir,source_dir,xy,log=print):
  city_path.write_text(json.dumps(city,separators=(',',':'))+'\n')
  summary={'surveyCurbs':survey,'townCurbs':added,'staleCurbs':len(stale),'staleCurbMetres':round(stale_length),'movedCenterlines':moved_roads,'movedStations':moved,'parkEdgeStations':masked,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'staleSidewalks':walk_stats['stale'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'borderPavements':borders,'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'faces':stats}
  pp=data_dir/'provenance.json';provenance=json.loads(pp.read_text())
+ provenance['streetMeshes']={'version':1,**mesh_stats}
  provenance['streetSurfaces']={**summary,'source':source['url'],'method':f'Roadway edges measured every {STEP:g} m from each surface centerline to the nearest curb within half the nominal width plus {CAP_EXTRA:g} m, driveway tongues under 7 m suppressed, gaps to 40 m interpolated, unmeasured stretches ramped to the nominal width; sidewalk inventory polygons grown {SIDEWALK_TUCK} m and clipped to tiles, a polygon mostly in parkland that holds a disc {OUTLINE_DIAMETER:g} m across (wider than four declared widths) reduced to its declared width ({WALK_FALLBACK} m when blank) along the boundary; OpenStreetMap service roads measured to the surveyed curbs within half their tagged or class width ({SERVICE_WIDTH:g} m default) plus {DRIVEWAY_REACH:g} m, an unmeasured side completed to the median curb-to-curb width of that line, with surface parking lots and the closed curb faces a service road enters or a lot covers (up to {DRIVEWAY_AREA:g} m2), dissolved and cut around inventory sidewalks; other closed curb faces without a centerline or building filled with concrete when outside parks and inventory sidewalks and under {ISLAND_AREA:g} m2 or {ISLAND_WIDTH} m wide; town curbs regenerated from the pavement union with {FILLET:g} m fillets; Boston curb stretches of {STALE_LENGTH:g} m or more lying in parkland (parks grown 3 m) beyond the measuring reach of every street, service road (8 m) and lot (4 m) dropped as remnants of removed roadways, with the inventory sidewalk parts beyond that reach, in parkland and mostly within {STALE_WALK:g} m of such a stretch; a centerline running inside a park with a curb within {PARK_EDGE:g} m on the park boundary moved onto the roadway {PARK_EDGE_LANE:g} m beyond that curb (or to the middle of a narrower roadway ending at the next curb), tapering over {PARK_EDGE_RAMP:g} m with its endpoints fixed, before measuring, where that leaves fewer such stations (the source line kept as sourcePoints); a station such a move cannot take out of the park paved between that curb and the next curb beyond it on the same side (the nominal width past the curb without one), never interpolated from or floored by its neighbours; records of other tiles sharing the roadway at a crosswalk station ({CROSSWALK_STATION:g} m along the line from each end of a road tile-builder.ts stripes, {CROSSWALK_ROAD:g} m or longer, {CROSSWALK_WIDTH:g} m wide, not an alley: an edge crossing the station\'s across line within {BORDER_REACH:g} m, running within cosine {SHARED_ALIGNMENT:g} of the road) copied into that tile as border records.'}
  pp.write_text(json.dumps(provenance,separators=(',',':'))+'\n')
  return {**summary,'changedTiles':len(changed)}
