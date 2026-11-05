@@ -2,9 +2,10 @@
 """Audit generated road surfaces and every elevated roadway, without a fixed map extent.
 
 Writes a deterministic, coordinate-bearing report. --strict fails on remaining
-profile problems, including those that need source/approach design rather than
-an automatic repair. Run after the complete generation chain, before shipping
-an extension. Ordinary data validation also validates compiled surface polygons.
+profile problems and fixed-landing constraint conflicts, including those that
+need source/approach design rather than an automatic repair. Run after the
+complete generation chain, before shipping an extension. Ordinary data
+validation also validates compiled surface polygons.
 """
 import argparse,gzip,json,math,pathlib
 import numpy as np
@@ -108,10 +109,10 @@ def main():
   if issue['road'] in protected:issue['waterChainPolicy']=protected[issue['road']]
  report={'roads':len(city['roads']),**summary,'profileSamples':count,'remainingProfiles':issues,'fixedConstraintConflicts':provenance.get('landApproaches',{}).get('unresolvedProfiles',[])}
  if a.output:a.output.write_text(json.dumps(report,indent=2)+'\n')
- print(json.dumps({**summary,'roads':len(city['roads']),'profileSamples':count,'remainingProfiles':len(issues)},indent=2))
+ print(json.dumps({**summary,'roads':len(city['roads']),'profileSamples':count,'remainingProfiles':len(issues),'fixedConstraintConflicts':len(report['fixedConstraintConflicts'])},indent=2))
  if baseline is not None:
   failures=regressions(report,baseline)
   if failures:raise SystemExit('\n'.join(failures))
- if a.strict and issues:raise SystemExit('Road profile review required; see --output report for road IDs and coordinates.')
+ if a.strict and (issues or report['fixedConstraintConflicts']):raise SystemExit('Road profile or constraint review required; see --output report for road IDs and coordinates.')
 
 if __name__=='__main__':main()
