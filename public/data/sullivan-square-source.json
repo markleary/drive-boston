@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "reviewed": "2026-11-05",
+  "reference": {
+    "name": "MassGIS spring 2025 aerial imagery",
+    "url": "https://www.mass.gov/info-details/massgis-data-2025-aerial-imagery",
+    "tiles": "https://tiles.arcgis.com/tiles/hGdibHYSPO59RG1h/arcgis/rest/services/Massachusetts_Aerial_Imagery_2025/MapServer",
+    "note": "Existing layout, not the proposed Rutherford Avenue redevelopment. Imagery used as reference only; no imagery is bundled. Coordinates use the city's local metre frame. Outlines and bridge heights are game approximations, not a survey."
+  },
+  "bridgeChains": [
+    {
+      "id": "mystic-main-rail-crossing",
+      "roads": [
+        "18578-0-0",
+        "7630-0-0",
+        "14628-0-0",
+        "osm-82332101-0"
+      ],
+      "landings": [
+        [
+          -168.037,
+          -3998.594
+        ],
+        [
+          -219.913,
+          -4054.141
+        ]
+      ],
+      "maxGrade": 0.08,
+      "straight": true,
+      "width": 12,
+      "maxPlanShift": 3.5,
+      "reason": "The aerial and user-provided satellite reference show a straight railway overpass. Align the four pieces to the axis between the retained outer landings, with one estimated 12 m deck width. The internal GIS/OSM join has no ground-street landing. Retain the outer landing heights and solve the continuous span."
+    }
+  ],
+  "streetCorridors": [
+    {
+      "id": "maffa-way-through-sullivan",
+      "roads": [
+        "14647-0-0",
+        "10293-0-0",
+        "10294-0-0",
+        "16190-0-0",
+        "17717-0-0",
+        "17716-0-0",
+        "16191-0-0"
+      ],
+      "landings": [
+        [
+          -251.344,
+          -3968.398
+        ],
+        [
+          66.826,
+          -3755.214
+        ]
+      ],
+      "width": 14,
+      "reason": "The aerial and user-provided satellite reference show continuous pavement under I-93 and past the Sullivan station parking lots. Old inventory curb outlines cross the current carriageway and reduce the measured width to 2.4 m. Use one estimated 14 m corridor along the connected centerline, removing only survey curbs and concrete inside it."
+    }
+  ],
+  "pavedAreas": [
+    {
+      "id": "sullivan-north-parking-access",
+      "osmParkingWay": 460666411,
+      "reason": "The northwest bus/access turn and the adjacent surface lot share pavement; the OSM lot stops short of the service ribbon. Trace the paved envelope and retain the inventory sidewalks inside it.",
+      "ring": [
+        [
+          -55.98,
+          -3849.06
+        ],
+        [
+          -53.46,
+          -3850.02
+        ],
+        [
+          -46.62,
+          -3872.9
+        ],
+        [
+          -47.94,
+          -3877.66
+        ],
+        [
+          -97,
+          -3915.5
+        ],
+        [
+          -104,
+          -3916.5
+        ],
+        [
+          -111,
+          -3911.5
+        ],
+        [
+          -124.5,
+          -3893.8
+        ]
+      ]
+    },
+    {
+      "id": "sullivan-station-parking-west-edge",
+      "osmParkingWay": 460666410,
+      "reason": "The aerial shows pavement between the west edge of the parking area and the curbed busway. The OSM parking outline leaves a grass wedge. Retain the curbed walkway as an exclusion.",
+      "ring": [
+        [
+          -114.13,
+          -3856.32
+        ],
+        [
+          -119,
+          -3856
+        ],
+        [
+          -128,
+          -3841
+        ],
+        [
+          -127.8,
+          -3731
+        ],
+        [
+          -119.69,
+          -3728.64
+        ],
+        [
+          -108.92,
+          -3723.19
+        ],
+        [
+          -71.48,
+          -3742.6
+        ],
+        [
+          -67.42,
+          -3749.54
+        ],
+        [
+          -68.06,
+          -3815.39
+        ],
+        [
+          -70.95,
+          -3823.39
+        ]
+      ]
+    }
+  ],
+  "parkingSidewalks": [
+    {
+      "id": "sullivan-maffa-main-north-lot",
+      "osmParkingWay": 460666411,
+      "width": 2.4,
+      "ring": [
+        [
+          -55.979,
+          -3849.06
+        ],
+        [
+          -53.455,
+          -3850.017
+        ],
+        [
+          -46.619,
+          -3872.899
+        ],
+        [
+          -47.936,
+          -3877.658
+        ],
+        [
+          -96.907,
+          -3907.284
+        ],
+        [
+          -102.309,
+          -3907.357
+        ],
+        [
+          -112.795,
+          -3894.653
+        ]
+      ],
+      "entrances": [
+        {
+          "points": [
+            [
+              -68.203,
+              -3901.184
+            ],
+            [
+              -72.227,
+              -3893.91
+            ],
+            [
+              -78.919,
+              -3881.892
+            ]
+          ],
+          "width": 6
+        }
+      ],
+      "reason": "Uniform sidewalk and curbs separate the lot from Maffa Way and Main Street, retaining its northern access aisle and the adjacent bus access.",
+      "replaceMargin": 4
+    },
+    {
+      "id": "sullivan-maffa-main-south-lot",
+      "osmParkingWay": 460666412,
+      "width": 2.4,
+      "ring": [
+        [
+          -30.746,
+          -3870.313
+        ],
+        [
+          -36.551,
+          -3851.978
+        ],
+        [
+          -40.485,
+          -3833.497
+        ],
+        [
+          -11.216,
+          -3804.807
+        ],
+        [
+          3.493,
+          -3791.329
+        ],
+        [
+          18.982,
+          -3780.02
+        ],
+        [
+          22.537,
+          -3780.571
+        ],
+        [
+          27.601,
+          -3790.46
+        ],
+        [
+          38.396,
+          -3818.628
+        ],
+        [
+          35.649,
+          -3824.691
+        ]
+      ],
+      "entrances": [
+        {
+          "points": [
+            [
+              -1.293,
+              -3859.274
+            ],
+            [
+              -4.49,
+              -3854.737
+            ],
+            [
+              -11.98,
+              -3844.081
+            ]
+          ],
+          "width": 6
+        },
+        {
+          "points": [
+            [
+              -36.909,
+              -3819.763
+            ],
+            [
+              -33.847,
+              -3825.055
+            ],
+            [
+              -29.447,
+              -3832.686
+            ]
+          ],
+          "width": 6
+        }
+      ],
+      "reason": "Uniform sidewalk and curbs around the southern section, retaining the Main Street and Maffa Way access aisles. Width and outlines are game approximations checked against the supplied satellite view.",
+      "replaceMargin": 4
+    }
+  ]
+}

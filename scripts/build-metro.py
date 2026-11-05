@@ -435,6 +435,10 @@ def build_roads(cache,coverage,districts,grid,wet,deep,water_union,osm_roads):
     if bridge_tag:road['bridge']['sourceLayer']=bridge_layer
    roads.append(road)
  log('OSM town roads',len(roads)-boston_count,'snapped ends',snapped)
+ from source_seams import connect_source_seams
+ originals={str(e['id']):LineString([xy(p['lon'],p['lat']) for p in e.get('geometry',[])]) for _,e,_ in osm_roads if len(e.get('geometry',[]))>1}
+ links=connect_source_seams(roads,originals,lambda x,z:float(grid.sample([x],[z])[0]))
+ log('Source-confirmed boundary links',len(links))
  log('Deck ends lowered to reach island streets',rescue_islands(roads,grid,(-291.674,36.660)))
  return roads,omitted,{'boston':{'source':'Boston GIS street centerlines (layer 8)','count':boston_count},'towns':{'source':'OpenStreetMap highway ways (trunk to living_street); service, pedestrian and motorway classes omitted','count':len(roads)-boston_count,'snappedEnds':snapped},'droppedDegenerate':dropped}
 

@@ -1,0 +1,29 @@
+name: Validate roads and physics
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: npm ci
+      - run: npm run build
+      - run: python -m venv .venv-data
+      - run: .venv-data/bin/pip install -r scripts/requirements.txt
+      - run: npm run test:physics
+      - run: PYTHONPATH=scripts .venv-data/bin/python -m unittest discover -s scripts -p 'test_*.py'
+      - run: npm run validate:data
+      - run: npm run audit:roads -- --baseline reports/road-generation.json --output /tmp/road-generation.json

@@ -160,7 +160,7 @@ def restore_links(roads,links=TOWN_LINKS):
  return changes
 
 
-def level_land_approaches(roads,ground,excluded=(),links=TOWN_LINKS,apply=True):
+def level_land_approaches(roads,ground,excluded=(),links=TOWN_LINKS,apply=True,profile_excluded=None):
  """Repair the seam stubs, sunk approaches and clipped town ramps among `roads`. `ground(x,z)` is the graded terrain; `excluded` holds the water-crossing chain ids. Returns a report; with apply=False nothing is changed."""
  report={'seams':[],'floored':[],'links':[],'changedRoads':[]};excluded=set(excluded)
  for road,index,continuing in seam_stubs(roads,excluded):
@@ -178,6 +178,18 @@ def level_land_approaches(roads,ground,excluded=(),links=TOWN_LINKS,apply=True):
  for road,index,addition,node in restore_links(roads,links):
   report['links'].append({'road':road['id'],'name':road['name'],'node':node,'added':len(addition),'end':index,'points':addition});report['changedRoads'].append(road['id'])
   if apply:road['points']=addition+road['points'] if index==0 else road['points']+addition
+ from connected_road_profiles import connected_profiles
+ from reviewed_road_inputs import reviewed_profiles,install_fields
+ reviewed=reviewed_profiles(roads,ground);report['reviewed']=[]
+ for piece in reviewed:
+  report['reviewed'].append({k:v for k,v in piece.items() if k!='result'});report['changedRoads'].append(piece['road'])
+  if apply:install_fields(next(r for r in roads if r['id']==piece['road']),piece['result'])
+ profiles,unresolved=connected_profiles(roads,ground,(excluded if profile_excluded is None else set(profile_excluded)|{s['road'] for s in report['seams']})|{p['road'] for p in reviewed})
+ report['profiles']=[];report['unresolvedProfiles']=unresolved
+ for road,new in profiles:
+  report['profiles'].append({'road':road['id'],'name':road['name'],'source':list(road['elevations'])})
+  report['changedRoads'].append(road['id'])
+  if apply:road['elevations']=new
  report['changedRoads']=sorted(set(report['changedRoads']))
  return report
 
@@ -185,6 +197,15 @@ def level_land_approaches(roads,ground,excluded=(),links=TOWN_LINKS,apply=True):
 def restore_sources(roads,recorded):
  """Put the roads of an earlier run's records back to their source profiles: seam stubs and floored pieces get their recorded elevations, levels and deck back, joined ramps lose their added points. Raises ValueError for a record that no longer fits its road."""
  by={r['id']:r for r in roads}
+ for piece in recorded.get('profiles',[]):
+  road=by.get(piece['road']);source=piece.get('source')
+  if road is None or not source or len(source)!=len(road['points']):raise ValueError(f"connected profile record for {piece['road']} no longer fits the package")
+  road['elevations']=list(source)
+ from reviewed_road_inputs import install_fields
+ for piece in recorded.get('reviewed',[]):
+  road=by.get(piece['road']);source=piece['source']
+  if road is None or len(source['elevations'])!=len(road['points']):raise ValueError(f"reviewed profile record for {piece['road']} no longer fits the package")
+  install_fields(road,source)
  for seam in recorded.get('seams',[]):
   road=by.get(seam['road']);source=seam.get('source')
   if road is None or not source or len(source['elevations'])!=len(road['points']):raise ValueError(f"land approach record for {seam['road']} no longer fits the package")
@@ -207,3 +228,12 @@ def restore_sources(roads,recorded):
 def water_chain_ids(report):
  """Road ids of every chain the water-crossing step levelled or deliberately skipped."""
  return {id for chain in report['chains']+report['skipped'] for id in chain['roads']}
+
+
+def levelled_water_ids(report):
+ """Protected water/dedicated chains; inland viaducts can use the graph solver.
+
+ A dedicated chain may also carry rail crossings or other authored interfaces
+ on its generic source pieces, so those pieces stay with the owning builder.
+ """
+ return {id for chain in report['chains']+[c for c in report['skipped'] if c['reason']!='inland viaduct'] for id in chain['roads']}

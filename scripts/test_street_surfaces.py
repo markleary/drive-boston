@@ -3,7 +3,7 @@ fillets and an idempotent install into a small synthetic package.
 
   PYTHONPATH=scripts .venv-data/bin/python -m unittest scripts/test_street_surfaces.py
 """
-import importlib.util,json,math,pathlib,tempfile,types,unittest
+import gzip,importlib.util,json,math,pathlib,tempfile,types,unittest
 import numpy as np
 from shapely.geometry import LineString,Polygon
 from shapely.ops import unary_union
@@ -208,6 +208,8 @@ class InstallTest(unittest.TestCase):
    roads=[road('b-1',[[100,500],[990,500]],10,'Boston Street'),road('b-2',[[100,300],[400,300]],10,'Island Street'),road('osm-1-0',[[1100,100],[1100,900]],8,'Town Street'),road('osm-2-0',[[1010,500],[1190,500]],8,'Cross Street'),road('osm-3-0',[[1150,530],[950,530]],8,'Boston Street'),road('deck',[[100,100],[400,100]],10,'Deck')]
    roads[5]['elevations']=[8,8]
    city={'roads':roads,'neighborhoods':[{'name':'Boston','rings':[[[0,0],[1000,0],[1000,1000],[0,1000]]],'town':False},{'name':'Town','rings':[[[1000,0],[2000,0],[2000,1000],[1000,1000]]],'town':True}],'coverage':[[[0,0],[2000,0],[2000,1000],[0,1000]]],'parks':[{'name':'Old Loop','rings':[[[100,650],[400,650],[400,750],[100,750]]]},{'name':'Island','rings':[[[150,290],[350,290],[350,301.5],[150,301.5]]]}],'sources':[],'tiles':{'size':1000,'directory':'tiles','keys':['0_0','1_0']}}
+   city['elevation']={'width':3,'height':2,'cellSize':1000,'originX':0,'originZ':0,'file':'elevation.bin','scale':.01}
+   (data/'elevation.bin').write_bytes(gzip.compress(np.zeros(6,dtype='<i2').tobytes(),mtime=0))
    (data/'city.json').write_text(json.dumps(city));(data/'provenance.json').write_text('{}')
    legacy=ss.legacy_town_curbs(roads,{'Town':Polygon(city['neighborhoods'][1]['rings'][0])})
    # Boston: a survey curb pair 7 m from the centerline (wider than the 5 m guess) with a short driveway tongue on the left (+z) side, an inventory sidewalk on the right; a closed island; the town has legacy mitred curbs.

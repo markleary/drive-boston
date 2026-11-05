@@ -27,8 +27,9 @@ from leverett_connections import validate_leverett
 from museum_approaches import validate_approaches
 from road_structure_clearance import validate_bridge_clearance
 from water_crossings import level_water_crossings,water_inputs
-from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids
+from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids,levelled_water_ids
 from harvard_terrain import repair_memorial_terrain
+from road_generation_audit import validate_surfaces
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
 data_dir=args.data_dir;city=json.loads((data_dir/'city.json').read_text());provenance=json.loads((data_dir/'provenance.json').read_text())
 assert provenance.get('region')=='metro','validate-city.py checks metro packages written by scripts/build-metro.py'
@@ -116,9 +117,10 @@ policies={'catalog-metres-and-source-floor','source-floor-no-catalog-ground','le
 west,north,east,south=provenance['legacyCoreBounds']
 buildings={};footprints_by_tile=defaultdict(list);curbs=0;park_paths=0;triangles=0;grounded=0;supported=[];scaled=0
 pavements=0;borders=0;sidewalks=0;bricks=0;islands=0;driveways=0;measured_roads={r['id'] for r in city['roads'] if r.get('pavedWidth')};road_ids={r['id'] for r in city['roads']}
-clearance_index=RoadClearanceIndex(city['roads'])
+clearance_index=RoadClearanceIndex(city['roads']);surface_headers={}
 for key in keys:
  tx,tz=map(int,key.split('_'));reproducible(f'{tiles["directory"]}/{tileformat.tile_name(tx,tz)}');header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
+ surface_headers[key]={k:header[k] for k in ('tx','tz','size','streetPavement','streetSidewalks','deckPavement','sidewalks','islands','driveways')}
  assert (header['tx'],header['tz'],header['size'])==(tx,tz,size) and len(entries)==far_counts.get(key,0)
  curbs+=len(header['curbs']);park_paths+=len(header['parkPaths']);assert all(isinstance(r,str) for r in header['roads'])
  # Curb-bounded roadways, inventory sidewalks and islands (build-street-surfaces.py).
@@ -169,6 +171,7 @@ for key in keys:
   elif b['source']!='osm-extrusion':assert abs(bottom-base)<=step/2+.002,f"floating primary building {b['id']}: {bottom-base:.3f} m gap";grounded+=1
   footprints_by_tile[(tx,tz)].append((b['id'],b['footprint'],min(v[0] for v in b['footprint']),max(v[0] for v in b['footprint']),min(v[1] for v in b['footprint']),max(v[1] for v in b['footprint'])))
 assert len(buildings)==far_total
+surface_audit=validate_surfaces(surface_headers)
 for b in supported:
  parent=buildings.get(b['partOf']);assert parent,f"{b['id']} claims an absent parent"
  own=Polygon(b['footprint']).buffer(0);overlap=own.intersection(Polygon(parent['footprint']).buffer(0)).area/max(.01,own.area)
@@ -218,11 +221,14 @@ validate_bridge_clearance(city['roads'],elevation)
 water_polygons,water_level=water_inputs(city);decks=level_water_crossings(city['roads'],water_polygons,elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
 recorded=provenance.get('waterCrossingDecks');assert recorded and [c['roads'] for c in recorded['chains']]==[c['roads'] for c in decks['chains']] and all(abs(x-y)<.001 for a,b in zip(recorded['chains'],decks['chains']) for x,y in zip(a['deck'],b['deck'])),'provenance must describe the installed water-crossing decks'
-land=level_land_approaches(city['roads'],elevation,water_chain_ids(decks),apply=False)
+land=level_land_approaches(city['roads'],elevation,water_chain_ids(decks),apply=False,profile_excluded=levelled_water_ids(decks))
 assert not land['changedRoads'],f"{len(land['changedRoads'])} land approaches need level-land-approaches.py: {', '.join(land['changedRoads'][:6])}"
 recorded=provenance.get('landApproaches');assert recorded and {'seams','floored','links'}<=set(recorded),'provenance must describe the installed land approaches'
-roads_map={r['id']:r for r in city['roads']};replay=copy.deepcopy(city['roads']);restore_sources(replay,recorded);replayed=level_land_approaches(replay,elevation,water_chain_ids(decks))
-for key in ('seams','floored','links'):assert [{k:v for k,v in e.items() if k!='way'} for e in recorded[key]]==replayed[key],f"provenance {key} do not match a replay of the land approaches from their recorded sources"
+roads_map={r['id']:r for r in city['roads']};replay=copy.deepcopy(city['roads']);restore_sources(replay,recorded);replayed=level_land_approaches(replay,elevation,water_chain_ids(decks),profile_excluded=levelled_water_ids(decks))
+from reviewed_road_inputs import source_hash
+assert recorded.get('reviewedSourceSHA256')==source_hash(),'reviewed road inputs changed without regeneration'
+assert provenance.get('streetMeshes',{}).get('reviewedSourceSHA256')==source_hash(),'reviewed pavement inputs changed without surface regeneration'
+for key in ('seams','floored','links','profiles','reviewed'):assert [{k:v for k,v in e.items() if k!='way'} for e in recorded.get(key,[])]==replayed[key],f"provenance {key} do not match a replay of the land approaches from their recorded sources"
 replay_map={r['id']:r for r in replay}
 for id in replayed['changedRoads']:assert replay_map[id]==roads_map[id],f"{id} differs from the replay of its recorded land-approach source"
 for seam in recorded['seams']:
@@ -230,6 +236,12 @@ for seam in recorded['seams']:
 assert [l['road'] for l in recorded['links']]==[l['road'] for l in TOWN_LINKS],'every declared town link must be installed'
 for link in TOWN_LINKS:
  ramp=roads_map[link['road']];join=roads_map[link['join']];assert any(ramp['points'][i] in (join['points'][0],join['points'][-1]) for i in (0,-1)),f"{link['road']} does not reach {link['join']}"
+for road in city['roads']:
+ if not road.get('sourceSeam'):continue
+ for end,id in zip((0,-1),road['sourceSeam']['roads']):
+  parent=roads_map[id];indices=[i for i in (0,-1) if parent['points'][i]==road['points'][end]]
+  assert indices,f"{road['id']} does not reach its source parent {id}"
+  if road.get('elevations'):assert abs(road['elevations'][end]-parent['elevations'][indices[0]])<.0002,f"{road['id']} has a height step at {id}"
 cells=defaultdict(list)
 for r in city['roads']:
  assert len(r['points'])>=2 and r['oneway'] in (-1,0,1) and 3<=r['width']<=20,r['id']

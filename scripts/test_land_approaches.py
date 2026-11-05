@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from land_approaches import AT_GRADE,SINK,TOWN_LINKS,level_land_approaches,restore_links,restore_sources,water_chain_ids
+from land_approaches import AT_GRADE,SINK,TOWN_LINKS,level_land_approaches,restore_links,restore_sources,water_chain_ids,levelled_water_ids
 from water_crossings import DECK,RAMP_RISE,TERRAIN_RISE,grid_sampler,level_water_crossings,lifted,water_inputs
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
@@ -93,7 +93,7 @@ class SunkApproaches(unittest.TestCase):
   self.assertLess(max(grades),.2,f'no DEM step survives as a deck step: {max(grades):.3f}')
 
  def test_a_piece_within_the_sink_margin_keeps_its_profile(self):
-  roads=[piece('r',[[0,0],[100,0]],0,1,flat)];roads[0]['elevations'][3]=flat(0,0)-(SINK-.01);before=copy.deepcopy(roads)
+  roads=[piece('r',[[0,0],[100,0]],0,0,flat)];roads[0]['elevations'][3]=flat(0,0)-(SINK-.01);before=copy.deepcopy(roads)
   self.assertEqual(level_land_approaches(roads,flat,links=[])['changedRoads'],[]);self.assertEqual(roads,before)
   roads[0]['elevations'][3]=flat(0,0)-(SINK+.01);self.assertEqual(level_land_approaches(roads,flat,links=[])['changedRoads'],['r'])
   self.assertGreaterEqual(roads[0]['elevations'][3],flat(0,0))
@@ -149,7 +149,7 @@ class ShippedPackage(unittest.TestCase):
   city=json.loads((ROOT/'public/data/city.json').read_text());grid=city['elevation']
   heights=np.frombuffer(gzip.decompress((ROOT/'public/data'/grid['file']).read_bytes()),dtype='<i2')*grid.get('scale',.01);ground=grid_sampler(grid,heights)
   polygons,water_level=water_inputs(city);water=level_water_crossings(city['roads'],polygons,ground,water_level,apply=False)
-  report=level_land_approaches(city['roads'],ground,water_chain_ids(water),apply=False)
+  report=level_land_approaches(city['roads'],ground,water_chain_ids(water),apply=False,profile_excluded=levelled_water_ids(water))
   self.assertEqual(report['changedRoads'],[],'the installed package must already be levelled')
   roads={r['id']:r for r in city['roads']}
   for id in ('14547-0-0','14549-0-0'):self.assertNotIn('elevations',roads[id],'Huntington Avenue meets Washington Street on the ground')
@@ -161,7 +161,7 @@ class ShippedPackage(unittest.TestCase):
   for id in ('16746-0-0','25549-0-0'):self.assertEqual((roads[id]['startLevel'],roads[id]['endLevel']),(0,0));self.assertLess(abs(roads[id]['elevations'][0]-ground(*roads[id]['points'][0])),.002)
   provenance=json.loads((ROOT/'public/data/provenance.json').read_text())['landApproaches']
   self.assertEqual(sorted(s['road'] for s in provenance['seams']),['14547-0-0','14549-0-0','16746-0-0','25549-0-0']);self.assertEqual([l['road'] for l in provenance['links']],[l['road'] for l in TOWN_LINKS])
-  replay=copy.deepcopy(city['roads']);restore_sources(replay,provenance);replayed=level_land_approaches(replay,ground,water_chain_ids(water))
+  replay=copy.deepcopy(city['roads']);restore_sources(replay,provenance);replayed=level_land_approaches(replay,ground,water_chain_ids(water),profile_excluded=levelled_water_ids(water))
   for key in ('seams','floored','links'):self.assertEqual([{k:v for k,v in e.items() if k!='way'} for e in provenance[key]],replayed[key],f'the recorded {key} are exactly what a replay from their sources produces')
   by={r['id']:r for r in replay}
   for id in replayed['changedRoads']:self.assertEqual(by[id],roads[id],f'{id} replays to the installed road')
