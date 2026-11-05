@@ -16,6 +16,23 @@ from road_structure_clearance import crossing_points,road_height
 MAX_GRADE=.18
 
 
+def crossing_floors(a,b,t,length,required,base,upper,floor):
+ """Bound both ends so their interpolation at t is at least required.
+
+ Pick a slope within the fixed-landing grade envelope, preferring the source
+ slope. The weighted endpoint bounds equal the crossing height regardless of
+ vertex spacing. If no slope fits, the ordinary floor/upper conflict check
+ rejects the component instead of silently lowering the crossing.
+ """
+ if t<=1e-9:floor[a]=max(floor[a],required);return
+ if t>=1-1e-9:floor[b]=max(floor[b],required);return
+ before,after=t*length,(1-t)*length
+ low=max(-MAX_GRADE,(required-upper[a])/before);high=min(MAX_GRADE,(upper[b]-required)/after)
+ slope=max(-MAX_GRADE,min(MAX_GRADE,(base[b]-base[a])/length))
+ if low<=high:slope=max(low,min(high,slope))
+ floor[a]=max(floor[a],required-slope*before);floor[b]=max(floor[b],required+slope*after)
+
+
 def connected_profiles(roads,ground,excluded=()):
  excluded=set(excluded)
  eligible=[r for r in roads if r.get('elevations') and not r.get('tunnel') and r['id'] not in excluded and not owned(r)]
@@ -59,7 +76,7 @@ def connected_profiles(roads,ground,excluded=()):
  for n in pins:floor[n]=base[n]
  # Preserve clearance at independently crossing streets, even when a source
  # stub's estimated height is reduced to fit the approach distance available.
- others=[r for r in roads if not r.get('tunnel')];lines=[LineString(r['points']) for r in others];tree=STRtree(lines)
+ others=[r for r in roads if not r.get('tunnel')];lines=[LineString(r['points']) for r in others];tree=STRtree(lines);crossings=[]
  for r in eligible:
   line=LineString(r['points'])
   for j in tree.query(line,predicate='intersects'):
@@ -71,9 +88,12 @@ def connected_profiles(roads,ground,excluded=()):
     lower=road_height(other,p,ground);old=road_height(r,p,ground);thickness=r['bridge'].get('thickness',.75)
     if old-lower-thickness<2.5:continue
     required=lower+thickness+min(4.5,old-lower-thickness)
-    for i,q in enumerate(r['points']):
-     if math.dist(p,q)<=4:
-      n=nodes[(*xy(q),round(r['elevations'][i],2))];floor[n]=max(floor[n],required)
+    for i,(a,b) in enumerate(zip(r['points'],r['points'][1:])):
+     length=math.dist(a,b)
+     if length<1e-9 or LineString([a,b]).distance(hit)>1e-7:continue
+     t=max(0,min(1,sum((p[k]-a[k])*(b[k]-a[k]) for k in (0,1))/length**2))
+     na=nodes[(*xy(a),round(r['elevations'][i],2))];nb=nodes[(*xy(b),round(r['elevations'][i+1],2))]
+     crossings.append((na,nb,t,length,required))
  upper=[math.inf]*len(points);queue=[]
  for n in pins:upper[n]=base[n];heapq.heappush(queue,(base[n],n))
  while queue:
@@ -82,6 +102,7 @@ def connected_profiles(roads,ground,excluded=()):
   for other,distance in graph[n]:
    candidate=value+MAX_GRADE*distance
    if candidate<upper[other]:upper[other]=candidate;heapq.heappush(queue,(candidate,other))
+ for a,b,t,length,required in crossings:crossing_floors(a,b,t,length,required,base,upper,floor)
  seen=set();changes=[];unresolved=[]
  for seed in range(len(points)):
   if seed in seen:continue
