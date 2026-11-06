@@ -13,6 +13,8 @@ import { inTransitCorridor } from '../simulation/transit-corridors.ts';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
 import { createActivityProfile } from '../simulation/activity.ts';
 import { createPedestrianModel } from './pedestrian-model.ts';
+import type { ConstructionZone } from '../simulation/construction-zones.ts';
+import { sampleRoadElevation } from '../simulation/road-surfaces.ts';
 
 interface Segment { road: Road; a: Point2; b: Point2; length: number; tx: number; tz: number; index: number; }
 interface WalkRoute { road: string; start: Point2; end: Point2; length: number; yaw: number; }
@@ -72,7 +74,7 @@ function spreadByBlock<T>(items:T[],point:(item:T)=>Point2,size=650):T[]{
 }
 
 /** Ambient walkers follow verified sidewalk stretches; they do not enter traffic. */
-export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: DrivingPhysics) {
+export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: DrivingPhysics, constructionZones: readonly ConstructionZone[] = []) {
   const group = new THREE.Group(); group.name = 'StreetLife'; scene.add(group);
   const peopleGroup = new THREE.Group(); peopleGroup.name = 'Pedestrians'; group.add(peopleGroup);
   const parkedGroup = new THREE.Group(); parkedGroup.name = 'ParkedVehicles'; group.add(parkedGroup);
@@ -211,6 +213,13 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     for (let d = 21; d < segment.length - 21; d += 18) for (const side of [-1, 1]) {
       const offset = side * (paved(segment.road) / 2 - 1.1);
       const x = segment.a[0] + segment.tx * d - segment.tz * offset, z = segment.a[1] + segment.tz * d + segment.tx * offset;
+      // The worksite reserves both its closed lane and the passing lane. A
+      // parked car beside the cones must not narrow that remaining corridor.
+      if (constructionZones.some(zone => {
+        const dx=x-zone.x,dz=z-zone.z,sin=Math.sin(zone.yaw),cos=Math.cos(zone.yaw);
+        return Math.abs(dx*sin+dz*cos)<zone.length/2+8 && Math.abs(dx*cos-dz*sin)<zone.pavedWidth/2+2 &&
+          Math.abs(sampleRoadElevation(city,zone.road,x,z)-sampleElevation(city,x,z))<2;
+      })) continue;
       const direction = segment.road.oneway || side;
       const yaw = Math.atan2(segment.tx * direction, segment.tz * direction);
       candidates.push({ segment, x, z, side, yaw, score: Math.hypot(x - city.spawn.x, z - city.spawn.z) + random() * 250 });
