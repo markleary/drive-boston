@@ -14,6 +14,7 @@ import {createMinimapLabeler} from './minimap-labels';
 import {createTouchDrivingControls, TOUCH_DRIVING_MARKUP, type TouchDrivingMode} from './touch-driving';
 import {createFlightTouchControls} from './touch-flight';
 import {padGlyph as g,spatialNeighbor,type PadButton,type PadDirection,type PadFrame} from './gamepad';
+import {abbreviateStreet,createNavigator,type Guidance,type TurnDirection} from '../simulation/navigation.ts';
 
 export interface InterfaceCallbacks {
   onReset(): void;
@@ -52,6 +53,26 @@ const icons = {
   target: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>',
 };
 const svg = (name: keyof typeof icons) => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name]}</svg>`;
+// GPS maneuver arrows, drawn turning right; left turns (and the U-turn, made to the left) mirror them.
+const turnIcons: Record<string, string> = {
+  straight: '<path d="M12 20V4M6.5 9.5 12 4l5.5 5.5"/>',
+  right: '<path d="M7 21v-7a5 5 0 0 1 5-5h7M15 5l4 4-4 4"/>',
+  'slight-right': '<path d="M9 21v-6.5L17 6.5M11.5 6h6v6"/>',
+  'sharp-right': '<path d="M8 21V9a4 4 0 0 1 7-2.6l3.5 6.1M18.5 6.8v5.7h-5.7"/>',
+  uturn: '<path d="M8 21V9a4 4 0 0 1 8 0v9M12.5 14.5 16 18l3.5-3.5"/>',
+  arrive: '<path d="M12 21s-6.5-5.8-6.5-11a6.5 6.5 0 0 1 13 0c0 5.2-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.2"/>',
+};
+const turnSvg = (turn: TurnDirection | 'arrive') => `<svg viewBox="0 0 24 24" aria-hidden="true"${turn.endsWith('left') || turn === 'uturn' ? ' class="mirror"' : ''}>${turnIcons[turn === 'arrive' ? turn : turn.replace('left', 'right')]}</svg>`;
+/** US units, as the speedometer: feet up to 1,000 ft, then tenths of a mile. */
+export function formatRouteDistance(meters: number) {
+  const feet = meters * 3.28084;
+  if (feet < 1000) return `${feet < 100 ? Math.max(10, Math.round(feet / 10) * 10) : Math.round(feet / 50) * 50} ft`;
+  const miles = meters / 1609.344; return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
+}
+export function formatRouteTime(seconds: number) {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
 const cameraNames: Record<CameraMode, string> = { chase: 'Chase camera', hood: 'Hood camera', aerial: 'Aerial camera' };
 // Title screen copy. Status lines follow the displayed percentage; tips rotate while the screen is up.
 const LOAD_STEPS: [number, string][] = [[12,'Paving the Mass Pike'],[26,'Placing 4,000 orange cones'],[40,'Streaming Back Bay brownstones'],[54,'Timing the lights on Comm Ave'],[68,'Filling the Zakim with traffic'],[82,'Removing turn signals from local drivers'],[100,'Lighting up the Custom House clock']];
@@ -71,7 +92,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   host.classList.add('not-started');
   host.innerHTML = `
     <div class="hud brand"><div class="brand-symbol" aria-hidden="true">B</div><div><div class="brand-name">BOSTON</div><div class="brand-subtitle" id="neighborhood-label">Back Bay, Massachusetts</div></div></div>
-    <div class="hud location-pill"><span class="location-dot"></span><span class="location-text"><span id="location-label">Copley Square</span><span class="next-street hidden" id="next-street"><span class="next-prefix">Next</span><span id="next-street-label"></span></span></span></div>
+    <div class="hud location-pill" id="location-pill"><span class="location-dot"></span><span class="location-text"><span id="location-label">Copley Square</span><span class="next-street hidden" id="next-street"><span class="next-prefix">Next</span><span id="next-street-label"></span></span></span><span class="gps-guide hidden" id="gps-guide" data-testid="gps-guide"><span class="gps-arrow" id="gps-arrow"></span><span class="gps-copy"><span class="gps-line"><strong class="gps-distance" id="gps-distance"></strong><span class="gps-instruction" id="gps-instruction"></span></span><span class="gps-summary" id="gps-summary"></span></span><span class="sr-only" id="gps-announce" role="status" aria-live="polite"></span></span></div>
     <nav class="hud travel-switch" aria-label="Travel mode"><button data-travel="drive" data-testid="mode-drive" class="active" aria-pressed="true" aria-label="Drive mode">Drive <kbd>1</kbd></button><button data-travel="bike" data-testid="mode-bike" aria-pressed="false" aria-label="Ultra Bee bike mode">Ultra Bee <kbd>2</kbd></button><button data-travel="helicopter" data-testid="mode-helicopter" aria-pressed="false" aria-label="Helicopter mode">Helicopter <kbd>3</kbd></button><span class="pad-only pad-switch">${g('DpadLR')}</span></nav>
     <nav class="hud toolbar" aria-label="Drive controls">
       <button class="tool-btn wide" id="open-map" aria-label="Open map" title="Map · M">${svg('map')}<span>Map <span class="key">M</span><span class="pad-only">${g('View')}</span></span></button>
@@ -108,7 +129,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       </div>
     </section>
     <section class="modal-scrim hidden" id="credits-modal" role="dialog" aria-modal="true" aria-labelledby="credits-title"><div class="panel"><button class="close-btn" id="close-credits" aria-label="Back to settings">${svg('close')}</button><div class="eyebrow">An independent prototype</div><h2 id="credits-title">A real place.</h2><div class="credits-copy"><p>Built around Boston’s real streets, building shapes, and hills. Façades and street details are artistic interpretations; this is an exploration game, not a navigation service.</p><ul id="source-list"></ul><p>Original game implementation with Three.js and Rapier.</p></div></div></section>
-    <section class="map-modal hidden" id="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-header"><div><div class="eyebrow">The Boston atlas</div><h2 id="map-title">Find your next turn.</h2></div><button class="close-map" id="close-map">Back to driving <kbd>M</kbd><span class="pad-only">${g('B')}</span></button></div><canvas id="fullmap" aria-label="Interactive map of Boston streets, buildings and landmarks"></canvas><div class="map-tools"><button id="map-zoom-in" aria-label="Zoom map in">+</button><button id="map-zoom-out" aria-label="Zoom map out">−</button><button id="map-center" aria-label="Center map on car">${svg('target')}</button><button id="map-overview" aria-label="Show all Boston destinations" title="Show all destinations">${svg('map')}</button></div><aside class="map-places" id="map-places"><div class="map-places-heading">Places to explore<span>Choose a place to start nearby</span></div><div class="map-destinations" id="map-destinations" role="navigation" aria-label="Landmark destinations"></div></aside><div class="map-note">Drag to explore · Scroll to zoom</div></section>
+    <section class="map-modal hidden" id="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-header"><div><div class="eyebrow">The Boston atlas</div><h2 id="map-title">Find your next turn.</h2></div><button class="close-map" id="close-map">Back to driving <kbd>M</kbd><span class="pad-only">${g('B')}</span></button></div><canvas id="fullmap" aria-label="Interactive map of Boston streets, buildings and landmarks"></canvas><div class="map-tools"><button id="map-zoom-in" aria-label="Zoom map in">+</button><button id="map-zoom-out" aria-label="Zoom map out">−</button><button id="map-center" aria-label="Center map on car">${svg('target')}</button><button id="map-overview" aria-label="Show all Boston destinations" title="Show all destinations">${svg('map')}</button></div><aside class="map-places" id="map-places"><div class="map-route" id="map-route"><p class="map-route-hint" id="map-route-hint"></p><div class="map-route-card hidden" id="map-route-card" data-testid="map-route-card"><span class="map-route-label">GPS destination</span><strong id="map-route-name"></strong><span class="map-route-meta" id="map-route-meta"></span><button class="map-route-clear" id="clear-destination" data-testid="clear-destination">Clear destination</button></div></div><div class="map-places-heading">Places to explore<span>Choose a place to start nearby</span></div><div class="map-destinations" id="map-destinations" role="navigation" aria-label="Landmark destinations"></div></aside><div class="map-note">Drag to explore · Scroll to zoom</div></section>
     ${TOUCH_DRIVING_MARKUP}
     <div class="flight-touch suspended" id="flight-touch" aria-label="Touch helicopter controls"><div class="flight-movement"><span class="touch-control-caption">Move</span><div class="flight-pad"><button class="touch-btn" data-touch="accelerate" aria-label="Fly forward">↑</button><button class="touch-btn" data-touch="reverse" aria-label="Fly backward">↓</button><button class="touch-btn" data-touch="left" aria-label="Move helicopter left">←</button><button class="touch-btn" data-touch="right" aria-label="Move helicopter right">→</button></div></div><div class="flight-actions"><span class="touch-control-caption">Turn / altitude</span><div class="flight-pad"><button class="touch-btn" data-touch="yaw-left" aria-label="Rotate helicopter left">↶</button><button class="touch-btn" data-touch="yaw-right" aria-label="Rotate helicopter right">↷</button><button class="touch-btn" data-touch="descend" aria-label="Descend">⇩</button><button class="touch-btn" data-touch="ascend" aria-label="Ascend">⇧</button></div></div></div>
     <section class="modal-scrim hidden" id="graphics-modal" role="dialog" aria-modal="true" aria-labelledby="graphics-title">
@@ -130,6 +151,9 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const mini = el<HTMLCanvasElement>('minimap'), full = el<HTMLCanvasElement>('fullmap');
   const miniContext = mini.getContext('2d')!, fullContext = full.getContext('2d')!;
   const minimapLabels=createMinimapLabeler(city.roads);
+  // GPS: a destination set from the atlas, its route on both maps and the next maneuver in the location pill.
+  const nav=createNavigator(city);
+  let guidance:Guidance|null=null,lastGuidance=0,guideIcon='',announced='',reroutes=0;
   let started = false, ready = false, mapOpen = false, settingsOpen = false, creditsOpen = false;
   let graphicsInterrupted = false, graphicsRestored = false;
   let graphicsFocus: HTMLElement | null = null;
@@ -159,7 +183,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(persist)try{localStorage.setItem('boston-touch-controls-v1',mode);}catch{/* Optional preferences. */}
   }
   setTouchMode(touchMode);
-  function updateTouchAvailability(){const touch=touchMedia.matches||touchSeen;host.classList.toggle('touch-enabled',touch);host.querySelector('.map-note')!.textContent=mapNote();resize();}
+  function updateTouchAvailability(){const touch=touchMedia.matches||touchSeen;host.classList.toggle('touch-enabled',touch);renderMapHints();resize();}
   on(touchMedia,'change',updateTouchAvailability);
   on(document,'pointerdown',event=>{if((event as PointerEvent).pointerType==='touch'&&!touchSeen){touchSeen=true;updateTouchAvailability();}},{capture:true,passive:true});
   for(const type of ['selectstart','contextmenu'])on(host,type,event=>{
@@ -211,7 +235,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       el('settings-modal').classList.add('hidden'); el('credits-modal').classList.add('hidden');
       mapCenter = [(city.bounds.minX + city.bounds.maxX) / 2, (city.bounds.minZ + city.bounds.maxZ) / 2];
       mapZoom = 1;
-      focusModal('map-modal', 'close-map'); resize(); drawFullMap();
+      renderRouteCard(); focusModal('map-modal', 'close-map'); resize(); if (nav.active) frameRoute(); drawFullMap();
     } else { clearMapGesture();el('map-modal').classList.add('hidden'); restoreFocus(); }
     updatePause();
   }
@@ -273,7 +297,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   /** HUD hint and settings reference for the current vehicle and input device. */
   function renderControlTips(){
     const flying=travelMode==='helicopter',riding=travelMode==='bike';
-    host.querySelector('.map-note')!.textContent=mapNote();
+    renderMapHints();
     if(inputMode==='gamepad'){renderGamepadTips(flying,riding);return;}
     el('drive-hint').innerHTML = flying
       ? '<span><kbd>W</kbd><kbd>S</kbd> Forward / back</span><span><kbd>A</kbd><kbd>D</kbd> Strafe</span><span><kbd>Q</kbd><kbd>E</kbd> Turn</span><span><kbd>Space</kbd> Up</span><span><kbd>Shift</kbd> Down</span>'
@@ -299,7 +323,12 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     rows.push(['Change camera',g('Y')],['Car / Ultra Bee / helicopter',g('DpadLR')],[`Reset ${vehicle}`,g('DpadDown')],['Map / pause',g('View')+g('Menu')],['Menus: move / select / back',g('Dpad')+g('A')+g('B')]);
     el('controls-help').innerHTML=rows.map(([label,buttons])=>`<span>${label}</span><span class="pad-keys">${buttons}</span>`).join('');
   }
-  function mapNote(){return inputMode==='gamepad'?'Left stick to pan · Triggers to zoom · D-pad to choose a place':host.classList.contains('touch-enabled')?'Drag to explore · Pinch to zoom':'Drag to explore · Scroll to zoom';}
+  function mapNote(){return inputMode==='gamepad'?'Left stick to pan · Triggers to zoom · RB to set a destination · D-pad to choose a place':host.classList.contains('touch-enabled')?'Drag to explore · Pinch to zoom · Tap a street for directions':'Drag to explore · Scroll to zoom · Click a street for directions';}
+  function renderMapHints(){
+    host.querySelector('.map-note')!.textContent=mapNote();
+    el('map-route-hint').textContent=inputMode==='gamepad'?'Press RB to set a GPS destination at the center of the map.':`${host.classList.contains('touch-enabled')?'Tap':'Click'} any street on the map for GPS directions.`;
+    drawFullMap();
+  }
   function setInputMode(mode:'keyboard'|'gamepad'){
     if(inputMode===mode)return;
     inputMode=mode;host.classList.toggle('gamepad',mode==='gamepad');renderControlTips();
@@ -340,6 +369,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       if(pressed('B')||pressed('View')){setMap(false);return;}
       if(pressed('Menu')){setSettings(true);return;}
       if(pressed('Y'))el('map-center').click();else if(pressed('X'))el('map-overview').click();
+      else if(pressed('RB'))setDestination(...mapCenter);else if(pressed('LB')&&nav.active)clearDestination('Destination cleared');
       // The left stick pans about 700 screen pixels a second; the D-pad picks places.
       if(frame.lx||frame.ly){const step=frame.dt*700/fullScale();mapCenter=[mapCenter[0]+frame.lx*step,mapCenter[1]+frame.ly*step];drawFullMap();}
       if(frame.rt||frame.lt)zoom(Math.exp((frame.rt-frame.lt)*frame.dt*2.2));
@@ -367,6 +397,56 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if (notify) toast(hidden ? 'Interface hidden · Press H to show it' : 'Interface shown');
   }
   function reset() { callbacks.onReset(); toast(travelMode === 'helicopter' ? 'Ready to lift off.' : 'Back on the road.'); }
+  /** Routes to the street nearest (x,z), from the map or a test. Returns the snapped point, or null away from every street. */
+  function setDestination(x:number,z:number){
+    const point=nav.setDestination(x,z,state,travelMode);
+    if(!point){toast('No streets near there');return null;}
+    guidance=nav.update(state,travelMode);lastGuidance=performance.now();reroutes=nav.snapshot().reroutes;
+    renderRouteCard();renderGuide();drawFullMap();drawMiniMap();
+    const plan=nav.plan;
+    toast(plan?`Route set · ${formatRouteDistance(plan.length)} · ${formatRouteTime(plan.duration)}`:`Destination set · ${formatRouteDistance(guidance?.distance??0)} away`);
+    return point;
+  }
+  function clearDestination(message?:string){
+    const focused=host.querySelector('#clear-destination')===document.activeElement;
+    nav.clear();guidance=null;renderRouteCard();renderGuide();drawFullMap();drawMiniMap();
+    if(focused)el('close-map').focus();
+    if(message)toast(message);
+  }
+  /** The atlas card: where the route goes and how far, with the button that clears it. */
+  function renderRouteCard(){
+    const active=nav.active;
+    el('map-route-card').classList.toggle('hidden',!active);el('map-route-hint').classList.toggle('hidden',active);
+    if(!active)return;
+    const point=nav.destination!,plan=nav.plan,street=nav.street;
+    el('map-route-name').textContent=street??neighborhoodAt(...point);
+    const trip=plan&&travelMode!=='helicopter'?`${formatRouteDistance(guidance?.remaining??plan.length)} · ${formatRouteTime(guidance?.time??plan.duration)}`:`${formatRouteDistance(Math.hypot(point[0]-state.x,point[1]-state.z))} away`;
+    el('map-route-meta').textContent=`${street?`${neighborhoodAt(...point)} · `:''}${trip}`;
+  }
+  const setText=(id:string,text:string)=>{const node=el(id);if(node.textContent!==text)node.textContent=text;};
+  /** The location pill turns into the GPS display while a destination is set: the next maneuver, its distance, and what remains. */
+  function renderGuide(){
+    const show=nav.active&&!!guidance;
+    host.classList.toggle('navigating',show);el('location-pill').classList.toggle('navigating',show);el('gps-guide').classList.toggle('hidden',!show);
+    if(!show||!guidance){announced='';return;}
+    const here=abbreviateStreet(el('location-label').textContent??'');
+    let icon:TurnDirection|'arrive'='straight',distance=formatRouteDistance(guidance.distance),instruction:string,summary:string;
+    if(guidance.mode==='direct'){instruction=`Destination to the ${guidance.heading}`;summary=here;}
+    else if(!guidance.step){instruction='Finding a route';summary=here;}
+    else{const step=guidance.step;icon=step.kind==='arrive'?'arrive':step.turn;instruction=step.text;summary=`${here} · ${formatRouteDistance(guidance.remaining)} · ${formatRouteTime(guidance.time)}`;}
+    setText('gps-distance',distance);setText('gps-instruction',instruction);setText('gps-summary',summary);
+    if(guideIcon!==icon){el('gps-arrow').innerHTML=turnSvg(icon);guideIcon=icon;}
+    // Flying, the arrow points at the destination relative to the nose.
+    el('gps-arrow').style.transform=guidance.mode==='direct'?`rotate(${(guidance.bearing??0).toFixed(3)}rad)`:'';
+    if(instruction!==announced){announced=instruction;el('gps-announce').textContent=guidance.mode==='road'?`${instruction}, ${distance}`:`${instruction}, ${distance} away`;}
+  }
+  function drawPin(ctx:CanvasRenderingContext2D,[x,y]:Point2,size:number){
+    ctx.save();ctx.translate(x,y);ctx.scale(size,size);
+    ctx.beginPath();ctx.moveTo(0,0);ctx.bezierCurveTo(-2.5,-5.5,-9,-10,-9,-16);ctx.arc(0,-16,9,Math.PI,0);ctx.bezierCurveTo(9,-10,2.5,-5.5,0,0);ctx.closePath();
+    ctx.shadowColor='#12262433';ctx.shadowBlur=5;ctx.shadowOffsetY=1.5;ctx.fillStyle='#d6453a';ctx.fill();
+    ctx.shadowColor='transparent';ctx.strokeStyle='#fffaf0';ctx.lineWidth=2;ctx.stroke();
+    ctx.beginPath();ctx.arc(0,-16,3.4,0,Math.PI*2);ctx.fillStyle='#fffaf0';ctx.fill();ctx.restore();
+  }
   // Title screen progress. Boot reports a few coarse stages, so the shown value eases toward the
   // latest stage, then creeps toward the next while a long step runs. The scene fades in with it.
   let loadTarget=0,loadShown=0,loadSince=performance.now(),loadStep=0,loadFrame=0,loadFailed=false,tipIndex=Math.floor(Math.random()*LOAD_TIPS.length);
@@ -501,6 +581,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       ctx.fillStyle = building.landmark ? '#b9a28b' : '#bbc3b7'; ctx.fill();
       if (large && scale > .8) { ctx.strokeStyle = '#8a9b8e55'; ctx.lineWidth = .55; ctx.stroke(); }
     }
+    // The GPS route still ahead, cased in white; a dashed straight line while flying.
+    const route=nav.remaining();
+    if(route.length>1){
+      const width=large?Math.max(4,Math.min(10,9*scale)):Math.max(5,Math.min(8,8*scale));
+      ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();route.forEach((point,i)=>{const p=project(point);if(i)ctx.lineTo(...p);else ctx.moveTo(...p);});
+      if(travelMode==='helicopter')ctx.setLineDash([width*1.5,width*1.6]);
+      ctx.strokeStyle='#fffdf6';ctx.lineWidth=width+4;ctx.stroke();ctx.strokeStyle='#2a78d4';ctx.lineWidth=width;ctx.stroke();ctx.restore();
+    }
     const labels:{left:number;right:number;top:number;bottom:number}[]=[];
     const canLabel=(left:number,right:number,top:number,bottom:number)=>left>viewport.left&&right<viewport.right&&top>viewport.top&&bottom<viewport.bottom&&!labels.some(label=>left<label.right+6&&right>label.left-6&&top<label.bottom+4&&bottom>label.top-4);
     if(large&&scale<.45){
@@ -551,6 +639,20 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
         }
       }
     }
+    const destination=nav.destination;
+    if(destination){
+      const p=project(destination),radius=Math.min(w,h)/2,angle=Math.atan2(p[1]-h/2,p[0]-w/2);
+      // Beyond the round minimap's edge, an arrow on the rim points the way.
+      if(!large&&Math.hypot(p[0]-w/2,p[1]-h/2)>radius-16){
+        ctx.save();ctx.translate(w/2+Math.cos(angle)*(radius-12),h/2+Math.sin(angle)*(radius-12));ctx.rotate(angle);
+        ctx.beginPath();ctx.moveTo(8,0);ctx.lineTo(-5,-6.5);ctx.lineTo(-2,0);ctx.lineTo(-5,6.5);ctx.closePath();
+        ctx.fillStyle='#d6453a';ctx.strokeStyle='#fffaf0';ctx.lineWidth=1.5;ctx.lineJoin='round';ctx.fill();ctx.stroke();ctx.restore();
+      }else drawPin(ctx,p,large?1:.8);
+    }
+    if(large&&inputMode==='gamepad'){
+      // RB sets the destination under this crosshair.
+      ctx.save();ctx.translate(centerX,centerY);ctx.strokeStyle='#233b3b';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(0,0,7,0,Math.PI*2);ctx.moveTo(-13,0);ctx.lineTo(-9,0);ctx.moveTo(9,0);ctx.lineTo(13,0);ctx.moveTo(0,-13);ctx.lineTo(0,-9);ctx.moveTo(0,9);ctx.lineTo(0,13);ctx.stroke();ctx.restore();
+    }
     const player = project([state.x,state.z]);
     ctx.fillStyle='#233b3b13';ctx.beginPath();ctx.arc(player[0],player[1],large?20:17,0,Math.PI*2);ctx.fill();
     ctx.save();ctx.translate(...player);ctx.rotate(Math.PI-state.yaw);ctx.fillStyle='#234b4a';ctx.strokeStyle='#fff9ee';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(6.5,7);ctx.lineTo(0,4);ctx.lineTo(-6.5,7);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
@@ -565,15 +667,29 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   }
   function drawMiniMap() { if(!started||isPaused()||document.hidden||host.classList.contains('hud-off')||mini.clientWidth===0)return;drawMap(miniContext,mini,[state.x,state.z],mini.clientWidth / (travelMode === 'helicopter' ? 460 + Math.max(0, altitude - 30) * 2 : 460),false); }
   function drawFullMap() { if (mapOpen) drawMap(fullContext,full,mapCenter,fullScale(),true); }
+  /** Opening the atlas with a destination set shows the car and the route ahead instead of the whole city. */
+  function frameRoute(){
+    const points=[[state.x,state.z] as Point2,...nav.remaining()];let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+    for(const [x,z] of points){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}
+    const base=fullScale()/mapZoom,fit=Math.min((mapViewport.right-mapViewport.left)/(maxX-minX+160),(mapViewport.bottom-mapViewport.top)/(maxZ-minZ+160));
+    mapCenter=[(minX+maxX)/2,(minZ+maxZ)/2];mapZoom=Math.max(.65,Math.min(20,fit/base));
+  }
   function zoom(factor: number) { mapZoom = Math.max(.65, Math.min(Math.max(24,mapExtent/150), mapZoom * factor)); drawFullMap(); }
+  click('clear-destination', () => clearDestination('Destination cleared'));
   click('map-zoom-in', () => zoom(1.3)); click('map-zoom-out', () => zoom(1/1.3)); click('map-center', () => { mapCenter=[state.x,state.z];mapZoom=Math.max(1.8,Math.min(20,mapExtent/850));drawFullMap(); });
   click('map-overview',()=>{mapCenter=[(city.bounds.minX+city.bounds.maxX)/2,(city.bounds.minZ+city.bounds.maxZ)/2];mapZoom=1;drawFullMap();});
   on(full, 'wheel', event => { const e = event as WheelEvent; e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 1/1.12); }, { passive:false });
   const mapPointers=new Map<number,Point2>();
-  function clearMapGesture(){const pointers=[...mapPointers.keys()];mapPointers.clear();for(const id of pointers)if(full.hasPointerCapture(id))full.releasePointerCapture(id);}
+  // A press that neither drags nor pinches is a tap, which sets the GPS destination there.
+  let mapTap:{id:number;x:number;y:number;time:number}|null=null;
+  function clearMapGesture(){mapTap=null;const pointers=[...mapPointers.keys()];mapPointers.clear();for(const id of pointers)if(full.hasPointerCapture(id))full.releasePointerCapture(id);}
+  function mapWorldPoint(clientX:number,clientY:number):Point2{const rect=full.getBoundingClientRect(),scale=fullScale();return [mapCenter[0]+(clientX-rect.left-(mapViewport.left+mapViewport.right)/2)/scale,mapCenter[1]+(clientY-rect.top-(mapViewport.top+mapViewport.bottom)/2)/scale];}
+  function mapScreenPoint(x:number,z:number):Point2{const rect=full.getBoundingClientRect(),scale=fullScale();return [rect.left+(mapViewport.left+mapViewport.right)/2+(x-mapCenter[0])*scale,rect.top+(mapViewport.top+mapViewport.bottom)/2+(z-mapCenter[1])*scale];}
   const mapGesture=()=>{const points=[...mapPointers.values()];return{mid:points.length===2?[(points[0][0]+points[1][0])/2,(points[0][1]+points[1][1])/2] as Point2:points[0],distance:points.length===2?Math.hypot(points[1][0]-points[0][0],points[1][1]-points[0][1]):0};};
-  on(full,'pointerdown',event=>{const e=event as PointerEvent;if(e.button!==0||mapPointers.size>=2)return;e.preventDefault();mapPointers.set(e.pointerId,[e.clientX,e.clientY]);full.setPointerCapture(e.pointerId);});
-  on(full,'pointermove',event=>{const e=event as PointerEvent;if(!mapOpen||!mapPointers.has(e.pointerId))return;e.preventDefault();const before=mapGesture(),scale=fullScale();mapPointers.set(e.pointerId,[e.clientX,e.clientY]);const after=mapGesture();const rect=full.getBoundingClientRect(),cx=rect.left+(mapViewport.left+mapViewport.right)/2,cy=rect.top+(mapViewport.top+mapViewport.bottom)/2;const anchor:Point2=[mapCenter[0]+(before.mid[0]-cx)/scale,mapCenter[1]+(before.mid[1]-cy)/scale];if(before.distance>0&&after.distance>0)mapZoom=Math.max(.65,Math.min(Math.max(24,mapExtent/150),mapZoom*after.distance/before.distance));const nextScale=fullScale();mapCenter=[anchor[0]-(after.mid[0]-cx)/nextScale,anchor[1]-(after.mid[1]-cy)/nextScale];drawFullMap();});
+  on(full,'pointerdown',event=>{const e=event as PointerEvent;if(e.button!==0||mapPointers.size>=2)return;e.preventDefault();mapTap=mapPointers.size?null:{id:e.pointerId,x:e.clientX,y:e.clientY,time:performance.now()};mapPointers.set(e.pointerId,[e.clientX,e.clientY]);full.setPointerCapture(e.pointerId);});
+  on(full,'pointerup',event=>{const e=event as PointerEvent,tap=mapTap;mapTap=null;if(mapOpen&&tap?.id===e.pointerId&&performance.now()-tap.time<800&&Math.hypot(e.clientX-tap.x,e.clientY-tap.y)<=8)setDestination(...mapWorldPoint(e.clientX,e.clientY));});
+  on(full,'pointercancel',()=>{mapTap=null;});
+  on(full,'pointermove',event=>{const e=event as PointerEvent;if(!mapOpen||!mapPointers.has(e.pointerId))return;e.preventDefault();if(mapTap&&Math.hypot(e.clientX-mapTap.x,e.clientY-mapTap.y)>8)mapTap=null;const before=mapGesture(),scale=fullScale();mapPointers.set(e.pointerId,[e.clientX,e.clientY]);const after=mapGesture();const rect=full.getBoundingClientRect(),cx=rect.left+(mapViewport.left+mapViewport.right)/2,cy=rect.top+(mapViewport.top+mapViewport.bottom)/2;const anchor:Point2=[mapCenter[0]+(before.mid[0]-cx)/scale,mapCenter[1]+(before.mid[1]-cy)/scale];if(before.distance>0&&after.distance>0)mapZoom=Math.max(.65,Math.min(Math.max(24,mapExtent/150),mapZoom*after.distance/before.distance));const nextScale=fullScale();mapCenter=[anchor[0]-(after.mid[0]-cx)/nextScale,anchor[1]-(after.mid[1]-cy)/nextScale];drawFullMap();});
   for(const event of ['pointerup','pointercancel','lostpointercapture'])on(full,event,e=>{mapPointers.delete((e as PointerEvent).pointerId);});
   function clearFlightInput(){flightTouch.reset();}
   on(window,'blur',()=>{clearFlightInput();clearMapGesture();if(started&&!isPaused())setSettings(true);});
@@ -634,10 +750,20 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       }
       el('next-street').classList.toggle('hidden',!nextShown||el('next-street-label').textContent===label);
     }
+    if(nav.active&&now-lastGuidance>100){
+      lastGuidance=now;guidance=nav.update(state,travelMode,now);
+      const count=nav.snapshot().reroutes;if(count>reroutes&&!isPaused())toast('Rerouting');reroutes=count;
+      if(guidance?.arrived)clearDestination('You have arrived');else renderGuide();
+    }
   }
   updateTouchAvailability();updatePause();
   return {
-    update,isPaused,isMapOpen:()=>mapOpen,handleGamepad,isTouchEnabled:()=>host.classList.contains('touch-enabled'),
+    update,isPaused,isMapOpen:()=>mapOpen,handleGamepad,
+    /** Browser specs: set or clear the GPS destination as the atlas does, read the route and HUD, and find a world point on the open atlas. */
+    gps:{setDestination,clear:()=>clearDestination(),mapScreenPoint,
+      snapshot:()=>({...nav.snapshot(),guidance,remaining:nav.remaining().length,
+        hud:{visible:!el('gps-guide').classList.contains('hidden'),distance:el('gps-distance').textContent,instruction:el('gps-instruction').textContent,summary:el('gps-summary').textContent},
+        card:{visible:!el('map-route-card').classList.contains('hidden'),name:el('map-route-name').textContent,meta:el('map-route-meta').textContent}})},isTouchEnabled:()=>host.classList.contains('touch-enabled'),
     getTouchInput:():DriveInput=>touchDriving.getInput(),
     getFlightTouchInput:()=>flightTouch.getInput(),
     setLoading(message:string,progress?:number){el('loading-track').setAttribute('aria-valuetext',message);if(progress!==undefined){loadTarget=Math.max(loadTarget,Math.min(1,progress));loadSince=performance.now();}},

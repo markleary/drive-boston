@@ -255,3 +255,37 @@ html,body{height:100dvh}
 #interface.gamepad .welcome-start:focus{outline-color:var(--accent)}
 
 .car-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.car-choices button{min-height:44px}
+/* GPS. While a destination is set the location pill becomes the turn-by-turn display (so it keeps the
+   pill's place in every layout) and the atlas lists the route with the button that clears it. */
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.location-pill.navigating{padding:8px 16px 8px 8px;border-radius:14px;background:#233b3bd6}
+.location-pill.navigating .location-dot,.location-pill.navigating .location-text{display:none}
+.gps-guide{display:flex;align-items:center;gap:11px;text-align:left;min-width:0}
+.gps-arrow{flex:none;width:36px;height:36px;border-radius:10px;background:#2a78d4;display:grid;place-items:center;box-shadow:inset 0 0 0 1px #ffffff2e}
+.gps-arrow svg{width:24px;height:24px;fill:none;stroke:#fff;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.gps-arrow svg.mirror{transform:scaleX(-1)}
+.gps-copy{display:flex;flex-direction:column;gap:4px;min-width:0}
+.gps-line{display:flex;align-items:baseline;gap:9px;font-size:13px;letter-spacing:.01em}
+.gps-distance{flex:none;font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.gps-instruction{font-weight:600;min-width:0}
+.gps-summary{font-size:9.5px;letter-spacing:.05em;opacity:.75;font-variant-numeric:tabular-nums}
+#interface.navigating .toast{margin-top:14px}
+@media(max-height:500px){#interface.navigating .location-pill{display:flex}}
+@media(max-width:700px){.location-pill.navigating{padding:6px 12px 6px 6px}.gps-arrow{width:30px;height:30px;border-radius:8px}.gps-arrow svg{width:20px;height:20px}.gps-line{font-size:11.5px;gap:7px}.gps-distance{font-size:14px}.gps-summary{font-size:8.5px}}
+#interface.touch-enabled .location-pill.navigating{padding:6px 12px 6px 6px;border-radius:12px}
+#interface.touch-enabled .gps-line{font-size:12px}
+.map-route{flex:0 0 auto;border-bottom:1px solid #233b3b12}
+.map-route-hint{margin:0;padding:12px 16px;font-size:10px;line-height:1.5;color:#5f7468;display:flex;gap:9px;align-items:center}
+.map-route-hint:before{content:'';flex:none;width:8px;height:8px;border-radius:50%;background:#2a78d4;box-shadow:0 0 0 3px #2a78d42e}
+.map-route-card{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;align-items:center;padding:14px 16px 15px;background:#2a78d40d}
+.map-route-label{grid-column:1/-1;font-size:8.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#2a78d4}
+.map-route-card strong{font-family:Georgia,serif;font-weight:400;font-size:19px;line-height:1.2;overflow-wrap:anywhere}
+.map-route-meta{font-size:10px;color:#5f7468;font-variant-numeric:tabular-nums}
+.map-route-clear{justify-self:start;margin-top:7px;border:1px solid #233b3b30;background:#fffdf5;color:var(--ink);border-radius:18px;padding:8px 14px;font-size:10.5px;font-weight:600;white-space:nowrap;transition:background .2s,border-color .2s,color .2s}
+.map-route-clear:hover{background:#fff;border-color:#d6453a;color:#b5372d}
+/* The phone sheet spans the screen, so the button sits beside the name to save height. */
+@media(max-width:700px){.map-route-hint{padding:8px 12px;font-size:9px}.map-route-card{grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:9px 12px}.map-route-card strong{grid-column:1;font-size:15px}.map-route-meta{grid-column:1}.map-route-clear{grid-column:2;grid-row:2/4;margin:0;align-self:center}}
+@media(orientation:portrait){#interface.touch-enabled .map-route-card{grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:9px 12px}#interface.touch-enabled .map-route-card strong{grid-column:1;font-size:15px}#interface.touch-enabled .map-route-meta{grid-column:1}#interface.touch-enabled .map-route-clear{grid-column:2;grid-row:2/4;margin:0;align-self:center}}
+#interface.touch-enabled .map-route-clear{min-height:44px;touch-action:manipulation}
+/* Toasts stay readable over the atlas, which answers a map tap with one ("No streets near there"). */
+.toast{z-index:4}
