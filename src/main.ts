@@ -41,6 +41,8 @@ import { createGamepadReader, padDriveInput, padFlightInput } from './ui/gamepad
 import { closestRoad } from './simulation/roads';
 import { routeGraph } from './simulation/navigation';
 import { createTraffic } from './simulation/traffic';
+import {createConstruction} from './simulation/construction';
+import {planConstructionZones} from './simulation/construction-zones';
 import {prepareNPCVehicles} from './render/npc-vehicles';
 import { createTransit, type TransitData } from './simulation/transit';
 import { meshBuildingIds, usesExactBuildingCollision } from './simulation/building-collisions';
@@ -240,23 +242,27 @@ async function boot(){
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
     const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
-    physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;traffic=createTraffic(scene,city,physics);
+    const constructionZones=planConstructionZones(city,{seed:crypto.getRandomValues(new Uint32Array(1))[0],transitRoutes:transitData.routes});
+    const construction=createConstruction(scene,city,physics,constructionZones,{hasGround:(x,z)=>!streamer||streamer.loaded.has(`${Math.floor(x/city.tiles!.size)}_${Math.floor(z/city.tiles!.size)}`)});
+    construction.update(physics.getState());
+    physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;traffic=createTraffic(scene,city,physics,constructionZones);
     transit=createTransit(scene,city,physics,transitData);
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
-    const streetLife=createStreetLife(scene,city,physics);setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
+    const streetLife=createStreetLife(scene,city,physics,constructionZones);setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
     // What the chassis was touching when it was knocked: a car outranks a bus,
     // which outranks a wall; only the bare ground counts as a landing.
     const classifyImpact=(impact:Impact):ImpactKind=>{
       let kind:ImpactKind='ground';
       for(const handle of impact.colliders){
         if(traffic!.colliders.has(handle)||streetLife.parkedColliders.has(handle))return 'vehicle';
-        if(transit!.colliders.has(handle))kind='heavy';else if(kind==='ground'&&!physics!.terrainColliders.has(handle))kind='static';
+        if(transit!.colliders.has(handle)||construction.equipmentColliders.has(handle))kind='heavy';else if(kind==='ground'&&!physics!.terrainColliders.has(handle))kind='static';
       }
       return kind;
     };
     await contextGate.run(()=>{ensureGraphics();world!.setQuality(quality==='high');});
     populateNeighborhood=()=>{
       const player=physics!.getState(),observer=travelMode==='helicopter'?flight!.state:player;
+      construction.update(observer,player);
       traffic!.populateAt(observer,player,transit!.obstacles());streetLife.populateAt(observer,player);
     };
     populateNeighborhood();
@@ -392,7 +398,7 @@ async function boot(){
       camera.near=flying?1:.15;camera.lookAt(look);camera.updateProjectionMatrix();cameraSnap=false;
       playerCar!.setCameraPosition(camera.position);
       const flightShadows=flying&&quality==='high'&&!mobile;
-      world!.update(target,elapsed,!mobile||!paused,flightShadows);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
+      world!.update(target,elapsed,!mobile||!paused,flightShadows);construction.update(state,carState);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
       for(const impact of physics!.takeImpacts())if(!paused)audio.impact(classifyImpact(impact),impact.severity);
       for(const speed of streetLife.takeHits())if(!paused)audio.impact('pedestrian',speed);
@@ -408,7 +414,7 @@ async function boot(){
       const observer=travelMode==='helicopter'?flight!.state:physics!.getState();
       return {traffic:traffic!.population(observer),pedestrians:streetLife.population(observer)};
     };
-    const diagnostic={get ready(){return true;},snapshot:()=>({carId,state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),touchInput:ui.getTouchInput(),flightTouchInput:ui.getFlightTouchInput(),camera:cameraMode,carBodyVisible:playerCar!.bodyVisible,vehicleScreenBounds:cameraMode==='hood'||(travelMode==='drive'&&!playerCar!.bodyVisible)?null:vehicleScreenBounds(travelMode==='helicopter'?helicopter.group:travelMode==='bike'?bike.group:playerCar!.group,camera,innerWidth,innerHeight),cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},shadows:world!.shadowCoverage,farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,parkedVehicles:streetLife.parked.map(v=>({...v})),walkers:streetLife.pedestrians.map(p=>({x:p.position.x,y:p.position.y,z:p.position.z,yaw:p.yaw,knocked:p.knocked?.phase??null})),audio:audio.getStatus(),distance}),city,
+    const diagnostic={get ready(){return true;},snapshot:()=>({carId,state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),touchInput:ui.getTouchInput(),flightTouchInput:ui.getFlightTouchInput(),camera:cameraMode,carBodyVisible:playerCar!.bodyVisible,vehicleScreenBounds:cameraMode==='hood'||(travelMode==='drive'&&!playerCar!.bodyVisible)?null:vehicleScreenBounds(travelMode==='helicopter'?helicopter.group:travelMode==='bike'?bike.group:playerCar!.group,camera,innerWidth,innerHeight),cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},shadows:world!.shadowCoverage,farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,construction:construction.snapshot(),trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,parkedVehicles:streetLife.parked.map(v=>({...v})),walkers:streetLife.pedestrians.map(p=>({x:p.position.x,y:p.position.y,z:p.position.z,yaw:p.yaw,knocked:p.knocked?.phase??null})),audio:audio.getStatus(),distance}),city,
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
       travelTo:(x:number,z:number,yaw=0,roadId?:string)=>travelTo(x,z,()=>physics!.reset(x,z,yaw,roadId)),
       /** Browser specs: the GPS destination, route and turn-by-turn HUD (see `gps` in ui/interface.ts). */
@@ -416,7 +422,7 @@ async function boot(){
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
       flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw)),
       /** Browser specs: the live scene graph and renderer, for attributing resource growth to its owner group. */
-      scene,renderer,tireTracks,
+      scene,renderer,tireTracks,construction,
       /** Browser specs: draw every resident object once, with frustum culling off and distance-hidden objects shown (lights stay as they are so no shader variant recompiles). three.js uploads a geometry's GL buffers on its first draw, so without this the renderer's geometry count and buffer bytes track what the camera has happened to see rather than what the scene holds. */
       drawResident:()=>{const culled:THREE.Object3D[]=[],hidden:THREE.Object3D[]=[];scene.traverse(o=>{if(o.frustumCulled){o.frustumCulled=false;culled.push(o);}if(!o.visible&&!(o as THREE.Light).isLight){o.visible=true;hidden.push(o);}});try{renderer.render(scene,camera);}finally{for(const o of culled)o.frustumCulled=true;for(const o of hidden)o.visible=false;}}};
     Object.assign(window,{__backbay:diagnostic});
