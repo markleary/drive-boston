@@ -746,7 +746,7 @@ PLACE_BUILDINGS={'symphony-hall':'BOS-383I7-LINV0-9U4AI'}
 FACADE_BUILDING_IDS=set(PLACE_BUILDINGS.values())
 # Arrivals that should frame a facade instead of stopping at the nearest kerb:
 # the carriageway to arrive on and the point (metres) to approach.
-ARRIVALS={'symphony-hall':('9276-0-0',[-893.5,909.3]),'south-station':('16420-0-0',[1560,-297])}
+ARRIVALS={'symphony-hall':('9276-0-0',[-893.5,909.3]),'south-station':('16420-0-0',[1560,-297]),'td-garden':('15123-0-0',[1186,-1633])}
 DETACHED={'maverick-square':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport','logan-airport':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport'}
 
 def build_landmarks(roads,buildings,grid,landmark_hits):

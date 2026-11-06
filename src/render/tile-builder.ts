@@ -39,6 +39,7 @@ import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
 import { isStateHouse, createStateHouseShellMaterials, splitStateHouseShell } from './state-house';
 import { isSymphonyHall, createSymphonyHallMaterials, splitSymphonyHallShell } from './symphony-hall';
 import { isSouthStation, createSouthStationMaterials, splitSouthStationShell } from './south-station';
+import { isTdGarden, splitTdGardenShell, tdGardenFinish } from './td-garden';
 import { createPrudentialPenthouseMaterial, isPrudential, splitPrudentialShell } from './prudential';
 import { createMissionChurchMaterials, isMissionChurch, splitMissionChurchShell } from './mission-church';
 import { landmarkShellMaterial } from './metro-landmarks';
@@ -341,6 +342,11 @@ export function createTileBuilder(ctx: TileContext) {
           if (isStateHouse(b)) { for (const part of splitStateHouseShell(geometry, isRoof)) bucket(stateHouseMaterials[part.kind], part.geometry, 0, 0, 'state-house'); geometry.dispose(); continue; }
           if (isSymphonyHall(b)) { for (const part of splitSymphonyHallShell(geometry, b, isRoof)) bucket(symphonyHallMaterials[part.kind], part.geometry, b.center[0], b.center[1], 'symphony-hall'); geometry.dispose(); continue; }
           if (isSouthStation(b)) { for (const part of splitSouthStationShell(geometry, isRoof)) bucket(part.kind === 'other' ? choose(isRoof) : southStationMaterials[part.kind], part.geometry, b.center[0], b.center[1], part.kind === 'other' ? '' : 'south-station'); geometry.dispose(); continue; }
+          if (isTdGarden(b)) {
+            // The passage's street wall is left out (the collider keeps it): the entrance hall stands behind it.
+            for (const part of splitTdGardenShell(geometry, isRoof)) { if (part.kind === 'open') { part.geometry.dispose(); continue; } bucket(part.kind === 'other' ? choose(isRoof) : tdGardenFinish(part.kind, ctx.mobile), part.geometry, b.center[0], b.center[1], part.kind === 'other' ? '' : 'td-garden'); }
+            geometry.dispose(); continue;
+          }
           const material = choose(isRoof), parts = !isRoof && isPrudential(b) ? splitPrudentialShell(geometry, b) : [{ kind: 'facade', geometry }];
           for (const part of parts) bucket(part.kind === 'penthouse' ? prudentialPenthouse : material, part.geometry, b.center[0], b.center[1]);
           if (parts[0].geometry !== geometry) geometry.dispose();

@@ -17,7 +17,7 @@ const SHELLS: Record<string, { style?: number; key?: 'glass' | 'library' | 'chur
   'old-state-house': { style: 0, roofColor: '#555b58' }, 'city-hall': { style: 8 }, 'museum-of-science': { style: 8 }, 'south-station': { style: 3 }, 'park-street-church': { style: 0, roofColor: '#4a4f4c' },
   'kings-chapel': { style: 4 }, 'old-south-meeting-house': { style: 0, roofColor: '#4a4f4c' }, 'millennium-tower': { key: 'glass' }, 'convention-center': { style: 9 }, 'zakim-bridge': { color: '#c5c9c6' },
   'mit-dome': { key: 'library', roofColor: '#9aa29f' }, 'widener-library': { key: 'library' }, 'stata-center': { style: 9, roofColor: '#8c9094' }, 'cambridge-city-hall': { style: 2, roofColor: '#4e4a44' }, 'massachusetts-hall': { style: 0, roofColor: '#4a4f4c' },
-  'bunker-hill-monument': { color: '#9c9a92' }, 'td-garden': { style: 8 }, 'jfk-library': { color: '#e3e3dc', roofColor: '#cfd0ca' }, 'harvard-stadium': { color: '#b7b2a6' }, 'memorial-hall': { style: 1, roofColor: '#56504a' },
+  'bunker-hill-monument': { color: '#9c9a92' }, 'jfk-library': { color: '#e3e3dc', roofColor: '#cfd0ca' }, 'harvard-stadium': { color: '#b7b2a6' }, 'memorial-hall': { style: 1, roofColor: '#56504a' },
   'dorchester-heights-monument': { color: '#e8e6df' }, 'fort-independence': { color: '#8f8d85' }, 'prospect-hill-tower': { color: '#8a857a' }, 'logan-terminal': { style: 9 },
 };
 const plainMaterials = new Map<string, THREE.MeshStandardMaterial>();
@@ -35,8 +35,10 @@ export function landmarkShellMaterial(building: Building | undefined, isRoof: bo
 export interface MetroLandmarkDetails { group: THREE.Group; collisions: { id: string; vertices: Float32Array; indices: Uint32Array }[]; setNight(night: boolean): void; }
 
 // South Station's headhouse carries its own lettering and lamps (south-station.ts).
-const SIGNS: Record<string, string> = { 'td-garden': 'TD GARDEN', 'quincy-market': 'QUINCY MARKET', 'museum-of-science': 'MUSEUM OF SCIENCE', 'harvard-stadium': 'HARVARD STADIUM', 'jfk-library': 'JOHN F. KENNEDY LIBRARY', 'convention-center': 'BOSTON CONVENTION & EXHIBITION CENTER', 'logan-terminal': 'LOGAN AIRPORT' };
-const CROWNS = new Set(['custom-house', 'millennium-tower', 'stata-center', 'td-garden', 'convention-center']);
+// The TD Garden has its own finishes, signs and lights (td-garden.ts): one mesh holds the arena and both Causeway
+// Street towers, so a crown under its 155 m parapet or a plate on its longest wall lands nowhere near the arena.
+const SIGNS: Record<string, string> = { 'quincy-market': 'QUINCY MARKET', 'museum-of-science': 'MUSEUM OF SCIENCE', 'harvard-stadium': 'HARVARD STADIUM', 'jfk-library': 'JOHN F. KENNEDY LIBRARY', 'convention-center': 'BOSTON CONVENTION & EXHIBITION CENTER', 'logan-terminal': 'LOGAN AIRPORT' };
+const CROWNS = new Set(['custom-house', 'millennium-tower', 'stata-center', 'convention-center']);
 const MONUMENTS: Record<string, { kind: 'obelisk' | 'tower' | 'round'; height: number; width: number; color: string; minimumSurveyed: number }> = {
   'bunker-hill-monument': { kind: 'obelisk', height: 67, width: 9.1, color: '#a09e96', minimumSurveyed: 40 },
   'dorchester-heights-monument': { kind: 'tower', height: 35, width: 7.5, color: '#e8e6df', minimumSurveyed: 20 },
