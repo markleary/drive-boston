@@ -550,7 +550,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
    if landmark:entry['landmark']=landmark;landmark_hits[landmark]=c['id']
    if 'parent' in c:entry['partOf']=c['parent']['id'];entry['sourceBaseOffset']=offset
    if c['id'] in STRUCTURE_IDS:cx,cz=c['center'];entry['footprint']=[[round(cx+dx,3),round(cz+dz,3)] for dx,dz in ((-3,-3),(3,-3),(3,3),(-3,3))];entry['structure']=True
-   elif (height>60 and c['polygon'].area>15000) or c['polygon'].area>100000:FAR_FRAGMENTS[c['id']]=far_fragments(vertices,base,height)
+   elif (height>60 and c['polygon'].area>15000) or c['polygon'].area>100000:MASSING_IDS.add(c['id'])
    audit={'min':round(c['sourceMin'],4),'max':round(c['sourceMax'],4),'ground':round(anchor,4),'policy':policy,'offset':offset,'catalogGround':ground}
    if 'parent' in c:audit['root']=root['id']
    emit(entry,record,audit);stats[policy]+=1
@@ -837,44 +837,29 @@ def write_tiles(out,buildings,geometry,curbs,park_paths,roads):
 # a token footprint so a 2 km convex hull never blocks streets, sidewalks or the
 # helicopter. Both structures and the Logan terminal complex are KEY (exact-mesh) ids.
 STRUCTURE_IDS={'BOS-2E9SM-83L3W-UVT08'}
-FAR_FRAGMENTS={}
-def far_fragments(vertices,base,height,cell=20):
- """Stepped far massing for a sprawling complex: the convex hull of a podium with
- towers would draw as one slab, so connected 20 m cells reaching 10/25/50/75% of
- the height become terraced hulls, each capped at the next band. The primary far
- entry is then hidden (flag bit 2) and the terraces follow it as fragments (bit 3)."""
- cells=defaultdict(float);points=defaultdict(list)
- for x,y,z in vertices:k=(math.floor(x/cell),math.floor(z/cell));cells[k]=max(cells[k],y-base);points[k].append((x,z))
- bands=(.1,.25,.5,.75);out=[]
- for n,band in enumerate(bands):
-  cap=bands[n+1]*height if n+1<len(bands) else height;todo={k for k,h in cells.items() if h>=band*height}
-  while todo:
-   seed=todo.pop();group=[seed];stack=[seed]
-   while stack:
-    i,j=stack.pop()
-    for near in ((i+1,j),(i-1,j),(i,j+1),(i,j-1)):
-     if near in todo:todo.discard(near);group.append(near);stack.append(near)
-   poly=hull([p for k in group for p in points[k]])
-   if len(poly)>=3:out.append({'footprint':[rounded(p) for p in poly],'height':round(min(cap,max(cells[k] for k in group)),2)})
- return out
+# Sprawling complexes: the convex hull of a podium with towers, or of a campus
+# joined by walkways, would draw as one slab over the streets between its wings,
+# so the far entry is hidden (flag bit 2) and build-far-massing.py, run once the
+# roadway widths are measured, follows it with rectangular massing fragments.
+MASSING_IDS=set()
 LANDMARK_FIELDS={'id','name','center','height','footprint','baseElevation','district','landmark','anchor','kind','amenity','sourceName','collision','buildingPassage'}
 
 def write_far(out,buildings):
  """Coarse far-distance representation: convex footprints with height, base
  and facade family per tile, decimetre precision, for the whole metro in one
  small file (DBF2). Flags: bit 0 landmark, bit 1 exact-mesh complex, bit 2 no
- far box (structures and complexes drawn by their fragments), bit 3 massing
- fragment of a complex (not a building of its own: tile counts exclude them)."""
+ far box (structures and sprawling complexes), bit 3 massing fragment of a
+ complex (not a building of its own: tile counts exclude them), which
+ build-far-massing.py writes after each hidden complex later in the chain."""
  by_tile=defaultdict(list);index_footprints(buildings)
  for b in buildings:by_tile[tileformat.tile_of(b['center'][0],b['center'][1],TILE)].append(b)
  body=bytearray();directory=[]
  for (tx,tz),entries in sorted(by_tile.items()):
-  directory.append({'key':f'{tx}_{tz}','offset':len(body),'count':sum(1+len(FAR_FRAGMENTS.get(b['id'],())) for b in entries)});ox,oz=tx*TILE,tz*TILE
+  directory.append({'key':f'{tx}_{tz}','offset':len(body),'count':len(entries)});ox,oz=tx*TILE,tz*TILE
   for b in entries:
-   fragments=FAR_FRAGMENTS.get(b['id'],());flags=(1 if b.get('landmark') else 0)|(2 if exact_far_collision(b) else 0)|(4 if b.get('structure') or fragments else 0)
-   for part,extra in [(b,0)]+[(f,8) for f in fragments]:
-    pts=part['footprint'][:60];body.extend(struct.pack('<HHhBB',len(pts),min(65535,int(round(part['height']*100))),int(round(b['baseElevation']*100)),flags|extra,facade_style(b)))
-    for x,z in pts:body.extend(struct.pack('<hh',int(round((x-ox)*10)),int(round((z-oz)*10))))
+   flags=(1 if b.get('landmark') else 0)|(2 if exact_far_collision(b) else 0)|(4 if b.get('structure') or b['id'] in MASSING_IDS else 0)
+   pts=b['footprint'][:60];body.extend(struct.pack('<HHhBB',len(pts),min(65535,int(round(b['height']*100))),int(round(b['baseElevation']*100)),flags,facade_style(b)))
+   for x,z in pts:body.extend(struct.pack('<hh',int(round((x-ox)*10)),int(round((z-oz)*10))))
  header=json.dumps({'size':TILE,'tiles':directory},separators=(',',':')).encode()
  raw=b'DBF2'+struct.pack('<I',len(header))+header
  raw+=b'\0'*((-len(raw))%4)+bytes(body)

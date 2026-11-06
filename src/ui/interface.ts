@@ -6,7 +6,8 @@ import {createDiagnostics} from './diagnostics';
 import type {HUDPerformanceData} from './diagnostic-report';
 import {closestRoad} from '../simulation/roads';
 import {nextIntersection} from '../simulation/next-intersection';
-import {isMetroCity,type IndexedBuilding} from '../simulation/city-tiles.ts';
+import {isMetroCity} from '../simulation/city-tiles.ts';
+import {drawsFarMassing} from '../simulation/far-format.ts';
 import {buildingPlans,type BuildingPlan} from '../simulation/building-plans.ts';
 import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
@@ -206,7 +207,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   // Huntington Avenue and the streets around it), so the map draws the complex by its massing
   // fragments instead, beneath the streets since they are coarse terraces.
   type MapBuilding=Pick<Building,'footprint'|'center'>&{landmark?:string|boolean;n?:number;fragment?:boolean};
-  const mapBuildings=(minX:number,maxX:number,minZ:number,maxZ:number,scale:number):MapBuilding[]=>metro?(scale<.09?[]:metro.index.query(minX,maxX,minZ,maxZ).filter((b:IndexedBuilding)=>!b.hidden||b.fragment).slice(0,9000)):city.buildings;
+  const mapBuildings=(minX:number,maxX:number,minZ:number,maxZ:number,scale:number):MapBuilding[]=>metro?(scale<.09?[]:metro.index.query(minX,maxX,minZ,maxZ).filter(drawsFarMassing).slice(0,9000)):city.buildings;
   // Streamed exact-mesh buildings draw their roof outline in place of their hull and fragments.
   const planPaths=new WeakMap<BuildingPlan,Path2D>();
   const planPath=(plan:BuildingPlan)=>{

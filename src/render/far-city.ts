@@ -1,16 +1,17 @@
 import * as THREE from 'three';
 import type { CityData } from '../types';
 import type { MetroCity } from '../simulation/city-tiles.ts';
-import type { FarBuilding, FarTile } from '../simulation/far-format.ts';
+import { drawsFarMassing, type FarBuilding, type FarTile } from '../simulation/far-format.ts';
 import { terrainGrid } from '../simulation/terrain.ts';
 import { FACADE_STYLES } from './materials.ts';
 import { clipPortalSurface } from './terrain-ground.ts';
 import { farPassageFootprints, isTunnelPassageFar } from '../simulation/tunnel-passages.ts';
 
 /** Distant representation of the whole metro: one flat-shaded box per hull
- * (its minimum-area oriented rectangle) and a coarse terrain sheet, both per
- * 1 km chunk. The streamer hides a chunk's pair while its detailed tile is
- * built, and nothing here depends on which tiles are loaded. */
+ * (its minimum-area oriented rectangle; a sprawling complex by its massing
+ * fragments instead) and a coarse terrain sheet, both per 1 km chunk. The
+ * streamer hides a chunk's pair once its detailed tile is built, and nothing
+ * here depends on which tiles are loaded. */
 export interface FarCityView { group: THREE.Group; setChunkDetailed(key: string, detailed: boolean): void; update(position: THREE.Vector3, altitude: number): void; chunkCount: number; buildingCount: number; stats(): { residentChunks: number; buildings: number; geometryBytes: number }; }
 
 const FAR_STEP = 5; // grid cells per coarse terrain vertex (30 m at 6 m cells)
@@ -38,8 +39,9 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     chunks.set(key, { detailed: false, count: 0, center: new THREE.Vector3((tx + .5) * size, 0, (tz + .5) * size) });
   }
   function buildBuildings(tile: FarTile) {
+    // A hidden complex is boxed by its massing fragments, which share its chunk and so hide with its tile.
     // A tunnel-passage building is boxed by the pieces its detailed shell keeps (see tunnel-passages.ts).
-    const list = tile.buildings.filter(b => !b.hidden && b.height >= 3 && b.footprint.length >= 3).flatMap(b => isTunnelPassageFar(tile.key, b) ? farPassageFootprints(city, b).map(footprint => ({ ...b, footprint })) : [b]);
+    const list = tile.buildings.filter(b => drawsFarMassing(b) && b.height >= 3 && b.footprint.length >= 3).flatMap(b => isTunnelPassageFar(tile.key, b) ? farPassageFootprints(city, b).map(footprint => ({ ...b, footprint })) : [b]);
     if (!list.length) return;
     // Five faces per box (no floor), flat normals from a non-indexed layout: 30 vertices.
     const count = list.length, positions = new Float32Array(count * 30 * 3), normals = new Float32Array(count * 30 * 3), color = new Uint8Array(count * 30 * 3);
