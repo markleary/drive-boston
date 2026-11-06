@@ -58,6 +58,8 @@ Neighborhood names and boundaries follow the [City of Boston neighborhood GIS la
 
 Hard braking and sideways slides leave temporary tire marks for both cars and the Ultra Bee: rubber streaks on pavement and ragged, churned-soil tracks on lawns. Marks fade away after about 24 seconds on pavement or 35 seconds on grass; airborne wheels leave no tracks.
 
+Random roadworks close one curbside lane with tapered lines of reflective orange cones, warning signs, and parked dump trucks or excavators. Sites require measured pavement wide enough for two lanes in the same direction, keep junctions and transit routes clear, and leave an open lane that NPC traffic merges into. Cones can be knocked over; heavy equipment has solid collision shapes. The layout changes on reload and stays fixed during a session, with only nearby sites loaded. Lane eligibility is inferred from pavement width; roads without measurements stay clear.
+
 A standard (Xbox-layout) controller works everywhere, including the title screen: press **A** to start. Browsers only reveal a controller after one of its buttons is pressed with the page focused, so a freshly plugged-in pad shows up on its first press. While a controller is the last device used, the HUD hints, settings reference, map caption and title screen show Xbox button badges instead of keys; pressing a keyboard key switches them back. Unplugging the controller mid-drive pauses the game.
 
 | Controller | Action |

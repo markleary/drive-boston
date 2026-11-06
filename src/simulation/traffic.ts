@@ -15,6 +15,7 @@ import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
 import {createRouteSignalLookup} from './traffic-route-signals.ts';
+import {constructionLanePoints,type ConstructionZone} from './construction-zones.ts';
 
 interface Edge { id: number; start: number; end: number; points: Point2[]; length:number; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; }
 /** `source` keeps the unrounded lane points (and the source vertex of each rounded
@@ -94,13 +95,9 @@ export function roadGraph(city: CityData) {
 }
 
 /** The lane centerline an edge's traffic follows: offset from the road centerline within the measured roadway. */
-export function lane(edge: Edge): Point2[] {
+export function lane(edge: Edge,constructionZones:readonly ConstructionZone[]=[]): Point2[] {
   const paved = edge.road.pavedWidth ?? edge.width, offset = edge.laneOffset ?? (edge.oneway ? Math.min(2, paved * .14) : Math.min(3, paved * .23));
-  return edge.points.map((p, i, points) => {
-    const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
-    const dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz) || 1;
-    return [p[0] - dz / len * offset, p[1] + dx / len * offset];
-  });
+  return constructionLanePoints(edge.road,edge.points,offset,constructionZones);
 }
 
 /** `owners[i]` is the road of the lane that reaches vertex i, so the segment
@@ -168,8 +165,16 @@ export function join(points:Point2[],roads:Road[],next:Point2[],road:Road){
 }
 
 /** Lightweight local traffic; all routes follow the imported directed road graph. */
-export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics) {
+export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[]) {
   const { nodes, edges } = roadGraph(city);
+  const zonesByRoad=new Map<string,ConstructionZone[]>(),lanes=new Map<Edge,Point2[]>();
+  for(const zone of constructionZones){const list=zonesByRoad.get(zone.roadId)??[];list.push(zone);zonesByRoad.set(zone.roadId,list);}
+  // Retain densified worksite lanes only; ordinary metro streets need no new
+  // city-wide geometry cache on memory-constrained phones.
+  const laneFor=(edge:Edge)=>{
+    const zones=zonesByRoad.get(edge.road.id);if(!zones)return lane(edge);
+    let points=lanes.get(edge);if(!points){points=lane(edge,zones);lanes.set(edge,points);}return points;
+  };
   const spawnEdges=edges.filter(edge=>edge.length>=12);
   const activityAt=createActivityProfile(city);
   const outgoing = new Map<number, Edge[]>(), connections = new Map<number, Set<number>>();
@@ -233,7 +238,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       const sameLane=sameStreet.filter(next=>next.laneOffset===edge.laneOffset);
       edge = choose(sameStreet.length && random() < .65 ? (sameLane.length?sameLane:sameStreet) : options);
       if(edge.length>=12)n++;else connectors++;
-      join(points,roads,lane(edge),edge.road);
+      join(points,roads,laneFor(edge),edge.road);
     }
     return edge;
   }
@@ -244,7 +249,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   }
   function route(first?: Edge): Path {
     const edge = first ?? choose(spawnEdges);
-    const points = lane(edge),roads=points.map(()=>edge.road),last=follow(edge,points,roads);
+    const points = [...laneFor(edge)],roads=points.map(()=>edge.road),last=follow(edge,points,roads);
     return finish(roundedPath(points,roads),last);
   }
   /** Continue a route that is running out near the player, so the car drives on
