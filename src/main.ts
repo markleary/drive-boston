@@ -39,6 +39,7 @@ import { createStreetLife } from './render/street-life';
 import { createInterface } from './ui/interface';
 import { createGamepadReader, padDriveInput, padFlightInput } from './ui/gamepad';
 import { closestRoad } from './simulation/roads';
+import { routeGraph } from './simulation/navigation';
 import { createTraffic } from './simulation/traffic';
 import {prepareNPCVehicles} from './render/npc-vehicles';
 import { createTransit, type TransitData } from './simulation/transit';
@@ -233,6 +234,9 @@ async function boot(){
     }
     // Populate Rapier's query structures before aircraft spawn/clearance checks.
     physics.world.step();
+    // The GPS graph walks every road and samples the graded terrain; build it while loading
+    // so the first destination tap routes at once instead of stalling the atlas.
+    routeGraph(city);
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
     const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
@@ -407,6 +411,8 @@ async function boot(){
     const diagnostic={get ready(){return true;},snapshot:()=>({carId,state:physics!.getState(),flight:flight!.state,terrain:terrainRange(city),groundHeight:sampleElevation(city,physics!.getState().x,physics!.getState().z),roadGrading,flightGroundHeight:sampleElevation(city,flight!.state.x,flight!.state.z),travelMode,paused:ui.isPaused(),touchInput:ui.getTouchInput(),flightTouchInput:ui.getFlightTouchInput(),camera:cameraMode,carBodyVisible:playerCar!.bodyVisible,vehicleScreenBounds:cameraMode==='hood'||(travelMode==='drive'&&!playerCar!.bodyVisible)?null:vehicleScreenBounds(travelMode==='helicopter'?helicopter.group:travelMode==='bike'?bike.group:playerCar!.group,camera,innerWidth,innerHeight),cameraPosition:{x:camera.position.x,y:camera.position.y,z:camera.position.z},lighting,quality,mobile,rendering:{postprocessing:!mobile,dynamicReflections:!mobile,shadowMapSize:world!.shadowMapSize,pixelRatio:renderer.getPixelRatio()},shadows:world!.shadowCoverage,farCity:world!.far?.stats(),fps,frameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,graphicsContext:{lost:contextLost,losses:contextLosses,builds:graphicsBuilds},physicsColliders:physics!.world.colliders.len(),sceneObjects:(()=>{let n=0;scene.traverse(()=>n++);return n;})(),buildings:city.buildings.length,roads:city.roads.length,landmarks:city.landmarks.length,neighborhoods:city.neighborhoods?.length??0,storefronts:streetscape?.userData.storefrontCount??streamer?.stats().storefronts,facades:facadeDetails?.userData??{facades:streamer?.stats().facades},rooftops:rooftops?.userData??{units:streamer?.stats().rooftops},park:park.group.userData,cityParks:cityParks?.userData??{trees:streamer?.stats().parkTrees},cityLandmarks:cityLandmarks.userData,metroLandmarks:metroLandmarks?.group.userData,embrace:embrace.group.userData,prudential:prudential?.group.userData,neighborhoodArchitecture:neighborhoodDetails?.userData??{porches:streamer?.stats().porches},groundCover:groundCover.group.userData,signalCount:world!.signals.length,tiles:streamer?.stats(),metro,windowInteriors:world!.materials.interiors(),bridges:world!.roadStructures.userData,transit:transit!.snapshot(),transitCount:transit!.count,trafficCount:traffic!.count,traffic:traffic!.snapshot(),population:population(),exactBuildingColliders:world!.buildingCollisions.length+(world!.streamer?.stats().exactMeshes??0),pedestrians:streetLife.count,pedestrianRelocations:streetLife.relocations,parkedCars:streetLife.parkedCount,parkedVehicles:streetLife.parked.map(v=>({...v})),walkers:streetLife.pedestrians.map(p=>({x:p.position.x,y:p.position.y,z:p.position.z,yaw:p.yaw,knocked:p.knocked?.phase??null})),audio:audio.getStatus(),distance}),city,
       /** Browser specs: stream the tiles around a point and place the car there, as a map destination does. */
       travelTo:(x:number,z:number,yaw=0,roadId?:string)=>travelTo(x,z,()=>physics!.reset(x,z,yaw,roadId)),
+      /** Browser specs: the GPS destination, route and turn-by-turn HUD (see `gps` in ui/interface.ts). */
+      gps:ui.gps,
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
       flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw)),
       /** Browser specs: the live scene graph and renderer, for attributing resource growth to its owner group. */
