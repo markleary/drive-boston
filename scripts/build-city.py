@@ -8,6 +8,7 @@ import argparse, csv, io, json, math, pathlib, struct, zipfile, hashlib, subproc
 from collections import Counter
 from building_semantics import apply_building_identity
 from mesh_winding import orient_patches,orient_shells
+from building_undersides import close_undersides
 from pyproj import Transformer
 from shapely.geometry import Point, LineString, Polygon, box
 from shapely.ops import unary_union
@@ -70,6 +71,7 @@ class GLB:
   idx=len(self.doc['accessors']);self.doc['accessors'].append(a);return idx
  def add(self,r,vertices,faces):
   faces=orient_patches(vertices,orient_shells(vertices,faces)[0])[0]
+  faces=close_undersides(vertices,faces,r.get('_baseElevation',0))[0]
   groups=[{'p':[],'n':[],'uv':[],'idx':[],'seen':{}},{'p':[],'n':[],'uv':[],'idx':[],'seen':{}}]
   for face in faces:
    a,b,c=[vertices[i] for i in face]

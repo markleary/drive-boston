@@ -14,6 +14,7 @@ from __future__ import annotations
 import gzip, io, json, math, pathlib, struct
 import numpy as np
 from mesh_winding import orient_patches,orient_shells
+from building_undersides import close_undersides
 
 MAGIC=b'DBT2'
 SCALE=.01
@@ -44,8 +45,13 @@ def mesh_record(vertices,faces,anchor,base,repair_winding=True):
  # Imported surveys are authored independently and can contain an inverted
  # shell beside correctly oriented parts, or walls wound into the building under
  # a roof that faces the sky. Repair at the final packaged scale; positions,
- # topology and the facade/roof split remain unchanged.
- if repair_winding:positions=unique[used]*scale+np.asarray(anchor);f=orient_patches(positions,orient_shells(positions,f)[0])[0]
+ # topology and the facade/roof split remain unchanged by orientation repair.
+ # Missing elevated floors use the same vertices and the roof material. Open
+ # survey structures opt out of both repairs via repair_winding=False.
+ if repair_winding:
+  positions=unique[used]*scale+np.asarray(anchor);f=orient_patches(positions,orient_shells(positions,f)[0])[0]
+  count=len(f);f=close_undersides(positions,f,base)[0]
+  roof=np.concatenate([roof,np.ones(len(f)-count,dtype=bool)])
  return unique[used].astype(np.int16),f[~roof].astype(np.uint32),f[roof].astype(np.uint32),scale
 
 def write_tile(path,header,geometry):
