@@ -6,7 +6,8 @@ import {createDiagnostics} from './diagnostics';
 import type {HUDPerformanceData} from './diagnostic-report';
 import {closestRoad} from '../simulation/roads';
 import {nextIntersection} from '../simulation/next-intersection';
-import {isMetroCity} from '../simulation/city-tiles.ts';
+import {isMetroCity,type IndexedBuilding} from '../simulation/city-tiles.ts';
+import {buildingPlans,type BuildingPlan} from '../simulation/building-plans.ts';
 import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
 import {HELICOPTER} from '../simulation/helicopter';
@@ -201,8 +202,18 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const metro=isMetroCity(city)?city:undefined;
   // Footprints come from the hull index in a metro, so the map shows every
   // building whether or not its tile is streamed in; zoomed far out they are skipped.
-  type MapBuilding=Pick<Building,'footprint'|'center'>&{landmark?:string|boolean};
-  const mapBuildings=(minX:number,maxX:number,minZ:number,maxZ:number,scale:number):MapBuilding[]=>metro?(scale<.09?[]:metro.index.query(minX,maxX,minZ,maxZ).slice(0,9000)):city.buildings;
+  // A hidden hull is a bridge or the convex hull of a whole complex (the Prudential's spans
+  // Huntington Avenue and the streets around it), so the map draws the complex by its massing
+  // fragments instead, beneath the streets since they are coarse terraces.
+  type MapBuilding=Pick<Building,'footprint'|'center'>&{landmark?:string|boolean;n?:number;fragment?:boolean};
+  const mapBuildings=(minX:number,maxX:number,minZ:number,maxZ:number,scale:number):MapBuilding[]=>metro?(scale<.09?[]:metro.index.query(minX,maxX,minZ,maxZ).filter((b:IndexedBuilding)=>!b.hidden||b.fragment).slice(0,9000)):city.buildings;
+  // Streamed exact-mesh buildings draw their roof outline in place of their hull and fragments.
+  const planPaths=new WeakMap<BuildingPlan,Path2D>();
+  const planPath=(plan:BuildingPlan)=>{
+    let path=planPaths.get(plan);if(path)return path;path=new Path2D();const t=plan.triangles;
+    for(let i=0;i<t.length;i+=6){path.moveTo(t[i],t[i+1]);path.lineTo(t[i+2],t[i+3]);path.lineTo(t[i+4],t[i+5]);path.closePath();}
+    planPaths.set(plan,path);return path;
+  };
   const mapExtent=Math.max(city.bounds.maxX-city.bounds.minX,city.bounds.maxZ-city.bounds.minZ);
   const neighborhoodAt=(x:number,z:number)=>areaAt(neighborhoods,x,z)?.name??'Boston';
   let latestStats:InterfaceStats={};
@@ -424,16 +435,16 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     el('map-route-meta').textContent=`${street?`${neighborhoodAt(...point)} · `:''}${trip}`;
   }
   const setText=(id:string,text:string)=>{const node=el(id);if(node.textContent!==text)node.textContent=text;};
-  /** The location pill turns into the GPS display while a destination is set: the next maneuver, its distance, and what remains. */
+  /** The location pill turns into the GPS display while a destination is set: the next maneuver, its distance, and the destination with what remains. */
   function renderGuide(){
     const show=nav.active&&!!guidance;
     host.classList.toggle('navigating',show);el('location-pill').classList.toggle('navigating',show);el('gps-guide').classList.toggle('hidden',!show);
     if(!show||!guidance){announced='';return;}
-    const here=abbreviateStreet(el('location-label').textContent??'');
+    const street=nav.street,to=`To ${street?abbreviateStreet(street):neighborhoodAt(...nav.destination!)}`;
     let icon:TurnDirection|'arrive'='straight',distance=formatRouteDistance(guidance.distance),instruction:string,summary:string;
-    if(guidance.mode==='direct'){instruction=`Destination to the ${guidance.heading}`;summary=here;}
-    else if(!guidance.step){instruction='Finding a route';summary=here;}
-    else{const step=guidance.step;icon=step.kind==='arrive'?'arrive':step.turn;instruction=step.text;summary=`${here} · ${formatRouteDistance(guidance.remaining)} · ${formatRouteTime(guidance.time)}`;}
+    if(guidance.mode==='direct'){instruction=`Destination to the ${guidance.heading}`;summary=to;}
+    else if(!guidance.step){instruction='Finding a route';summary=to;}
+    else{const step=guidance.step;icon=step.kind==='arrive'?'arrive':step.turn;instruction=step.text;summary=`${to} · ${formatRouteDistance(guidance.remaining)} · ${formatRouteTime(guidance.time)}`;}
     setText('gps-distance',distance);setText('gps-instruction',instruction);setText('gps-summary',summary);
     if(guideIcon!==icon){el('gps-arrow').innerHTML=turnSvg(icon);guideIcon=icon;}
     // Flying, the arrow points at the destination relative to the nose.
@@ -567,6 +578,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       ctx.strokeStyle='#72857366';ctx.lineWidth=.8;ctx.setLineDash([3,5]);
       for(const area of neighborhoods){traceRings(area.rings);ctx.stroke();}ctx.setLineDash([]);
     }
+    const plans=metro&&scale>=.09?[...buildingPlans(metro)].filter(inView):[],replaced=new Set(plans.flatMap(plan=>plan.hulls));
+    const footprints=mapBuildings(viewMinX,viewMaxX,viewMinZ,viewMaxZ,scale).filter(b=>b.footprint.length&&!replaced.has(b.n??-1)&&inside(project(b.center),large?180:90));
+    const fillFootprint=(building:MapBuilding)=>{
+      ctx.beginPath(); building.footprint.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0],q[1]); }); ctx.closePath();
+      ctx.fillStyle = building.landmark ? '#b9a28b' : '#bbc3b7'; ctx.fill();
+      if (large && scale > .8) { ctx.strokeStyle = '#8a9b8e55'; ctx.lineWidth = .55; ctx.stroke(); }
+    };
+    for(const building of footprints)if(building.fragment)fillFootprint(building);
     const visibleRoads=mapRoads.filter(inView).sort((a,b)=>Number(!!b.road.tunnel)-Number(!!a.road.tunnel));
     for (const {road} of visibleRoads) {
       if (road.points.length < 2) continue;
@@ -575,11 +594,11 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#c3ccc0'; ctx.lineWidth = Math.max(2, (road.width + 4) * scale); ctx.stroke();
       ctx.strokeStyle = '#faf8f0'; ctx.lineWidth = Math.max(1.4, road.width * scale); ctx.stroke();
     }
-    for (const building of mapBuildings(viewMinX,viewMaxX,viewMinZ,viewMaxZ,scale)) {
-      if (!building.footprint.length || !inside(project(building.center), large ? 180 : 90)) continue;
-      ctx.beginPath(); building.footprint.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0],q[1]); }); ctx.closePath();
-      ctx.fillStyle = building.landmark ? '#b9a28b' : '#bbc3b7'; ctx.fill();
-      if (large && scale > .8) { ctx.strokeStyle = '#8a9b8e55'; ctx.lineWidth = .55; ctx.stroke(); }
+    for(const building of footprints)if(!building.fragment)fillFootprint(building);
+    if(plans.length){
+      ctx.save();ctx.setTransform(dpr*scale,0,0,dpr*scale,dpr*(centerX-center[0]*scale),dpr*(centerY-center[1]*scale));
+      for(const plan of plans){ctx.fillStyle=plan.landmark?'#b9a28b':'#bbc3b7';ctx.fill(planPath(plan));}
+      ctx.restore();
     }
     // The GPS route still ahead, cased in white; a dashed straight line while flying.
     const route=nav.remaining();
