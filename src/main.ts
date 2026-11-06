@@ -39,6 +39,7 @@ import { createStreetLife } from './render/street-life';
 import { createInterface } from './ui/interface';
 import { createGamepadReader, padDriveInput, padFlightInput } from './ui/gamepad';
 import { closestRoad } from './simulation/roads';
+import { routeGraph } from './simulation/navigation';
 import { createTraffic } from './simulation/traffic';
 import {prepareNPCVehicles} from './render/npc-vehicles';
 import { createTransit, type TransitData } from './simulation/transit';
@@ -233,6 +234,9 @@ async function boot(){
     }
     // Populate Rapier's query structures before aircraft spawn/clearance checks.
     physics.world.step();
+    // The GPS graph walks every road and samples the graded terrain; build it while loading
+    // so the first destination tap routes at once instead of stalling the atlas.
+    routeGraph(city);
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
     const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
