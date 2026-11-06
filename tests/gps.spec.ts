@@ -58,7 +58,7 @@ test('GPS: a map tap routes there, the HUD gives directions, and Clear destinati
   await expect(guide).toBeVisible();
   await expect(page.locator('#gps-instruction')).toHaveText(/^(Turn|Bear|Continue|Make|Merge|Take) .+ on [A-Z]/);
   await expect(page.locator('#gps-distance')).toHaveText(/^[\d.]+ (ft|mi)$/);
-  await expect(page.locator('#gps-summary')).toHaveText(/ · [\d.]+ mi · \d+ min$/);
+  await expect(page.locator('#gps-summary')).toHaveText(/^To Lansdowne St · [\d.]+ mi · \d+ min$/);
   await expect(page.locator('#location-label')).toBeHidden();
   await expect.poll(()=>routePixels(page,'#minimap')).toBeGreaterThan(40);
   await page.screenshot({path:testInfo.outputPath('gps-hud.png')});
@@ -91,6 +91,7 @@ test('GPS: the helicopter points straight at the destination, and arriving ends 
   await expect(page.getByTestId('mode-helicopter')).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('#gps-instruction')).toHaveText(/^Destination to the (north|east|northeast)$/);
   await expect(page.locator('#gps-arrow')).toHaveAttribute('style',/rotate\(/);
+  await expect(page.locator('#gps-summary')).toHaveText(/^To [A-Z]/);
   await page.screenshot({path:testInfo.outputPath('gps-helicopter.png')});
   await page.keyboard.press('1');
   await expect(page.locator('#gps-instruction')).toHaveText(/^(Turn|Bear|Continue|Make|Merge|Take) /);

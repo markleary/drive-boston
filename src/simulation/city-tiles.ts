@@ -22,11 +22,18 @@ export function buildingAt(city: CityData, x: number, z: number): Building | Far
  * instead of comparing an absent `id` with the detailed building's ID. */
 export function otherBuildingHulls(city:CityData,building:Building,x:number,z:number,radius:number):(Building|FarBuilding)[]{
   if(!isMetroCity(city))return city.buildings.filter(b=>b.id!==building.id&&Math.hypot(b.center[0]-x,b.center[1]-z)<radius);
-  return city.index.near(x,z,radius).filter(b=>!(
-    !b.fragment&&Math.abs(b.base-(building.baseElevation??0))<.011&&Math.abs(b.height-building.height)<.011&&
-    b.footprint.length===Math.min(60,building.footprint.length)&&
-    b.footprint.every((p,i)=>Math.hypot(p[0]-building.footprint[i][0],p[1]-building.footprint[i][1])<.08)
-  ));
+  return city.index.near(x,z,radius).filter(b=>!isOwnHull(b,building));
+}
+const isOwnHull=(b:FarBuilding,building:Building)=>
+  !b.fragment&&Math.abs(b.base-(building.baseElevation??0))<.011&&Math.abs(b.height-building.height)<.011&&
+  b.footprint.length===Math.min(60,building.footprint.length)&&
+  b.footprint.every((p,i)=>Math.hypot(p[0]-building.footprint[i][0],p[1]-building.footprint[i][1])<.08);
+/** A detailed building's hull in the index and, when that hull is a hidden complex, the massing
+ * fragments written right after it (terraced hulls that stand in for the complex's slab). */
+export function ownFarHulls(city:MetroCity,building:Building):IndexedBuilding[]{
+  const own=city.index.near(building.center[0],building.center[1],1).find(b=>isOwnHull(b,building));if(!own)return [];
+  const out=[own];if(own.hidden)for(let n=own.n+1;n<city.index.all.length&&city.index.all[n].fragment;n++)out.push(city.index.all[n] as IndexedBuilding);
+  return out;
 }
 
 export type Reader = (name: string) => Promise<ArrayBuffer>;

@@ -7,6 +7,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Building, CityArea, CityData, Point2, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } from '../simulation/city-tiles.ts';
+import { addBuildingPlan, removeBuildingPlans } from '../simulation/building-plans.ts';
 import { pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
 import { junctionIndexSteps, planCrosswalkSteps, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
 import { curbRoadClearance } from '../simulation/road-curbs.ts';
@@ -323,6 +324,8 @@ export function createTileBuilder(ctx: TileContext) {
         };
         if (usesExactBuildingCollision(b)) {
           colliders.push(physics.addStaticMesh(data.positions, tileCollisionIndices(data))); stats.exactMeshes++;
+          // The map draws this shell's outline instead of its convex hull, which would cover the streets it spans.
+          if (!b.structure) addBuildingPlan(city, b, data);
           if(b.landmark==='zakim-bridge'){
             const viaduct=addSurveyViaductSupports(group,city,data);
             for(const mesh of viaduct.collisions)colliders.push(physics.addStaticMesh(mesh.vertices,mesh.indices));
@@ -451,7 +454,7 @@ export function createTileBuilder(ctx: TileContext) {
 
   function dispose(built: BuiltTile, owned: THREE.Material[]) {
     physics.removeColliders(built.colliders); built.colliders.length = 0;
-    removeTileBuildings(city, built.tile); for (const b of built.tile.buildings) ctx.buildingMap.delete(b.id);
+    removeTileBuildings(city, built.tile); removeBuildingPlans(city, built.tile.buildings); for (const b of built.tile.buildings) ctx.buildingMap.delete(b.id);
     ctx.trees.remove(built.key); ctx.parkTrees.remove(built.key);
     disposeTileResources(built.group, owned);
   }
@@ -460,7 +463,7 @@ export function createTileBuilder(ctx: TileContext) {
   function abandon(partial: PartialTile) {
     physics.removeColliders(partial.colliders);
     partial.colliders.length = 0;
-    removeTileBuildings(city, partial.tile); for (const b of partial.tile.buildings) ctx.buildingMap.delete(b.id);
+    removeTileBuildings(city, partial.tile); removeBuildingPlans(city, partial.tile.buildings); for (const b of partial.tile.buildings) ctx.buildingMap.delete(b.id);
     ctx.trees.remove(partial.key); ctx.parkTrees.remove(partial.key);
     disposeTileResources(partial.group, partial.ownedMaterials);
   }
