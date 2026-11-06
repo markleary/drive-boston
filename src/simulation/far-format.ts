@@ -8,10 +8,14 @@ import type { Point2 } from '../types';
  * uint8 flags, uint8 style> then points as <int16 dx dm, int16 dz dm>
  * relative to the tile origin (tx*size, tz*size). Flags: bit 0 landmark, bit 1
  * exact-mesh complex, bit 2 hidden (no far box: a structure such as the Zakim
- * Bridge, or a complex drawn by its fragments), bit 3 massing fragment, a
- * terraced hull of the hidden primary before it rather than a building of its
- * own (`count` and the manifest's buildingCount exclude fragments). */
+ * Bridge, or a sprawling complex drawn by its fragments), bit 3 massing
+ * fragment, a rectangle of the hidden complex before it rather than a building
+ * of its own (`count` and the manifest's buildingCount exclude fragments).
+ * Fragments repeat their complex's flags, bit 2 included, so test
+ * `drawsFarMassing` rather than `hidden` (scripts/far_massing.py). */
 export interface FarBuilding { tx: number; tz: number; height: number; base: number; landmark: boolean; exactMesh: boolean; hidden: boolean; fragment: boolean; style: number; footprint: Point2[]; center: Point2; }
+/** Whether an entry draws on the far city and the map: every hull except a hidden one, whose fragments stand in for it. */
+export const drawsFarMassing = (b: Pick<FarBuilding, 'hidden' | 'fragment'>) => !b.hidden || b.fragment;
 export interface FarTile { key: string; tx: number; tz: number; buildings: FarBuilding[]; }
 export interface FarCity { size: number; tiles: Map<string, FarTile>; count: number; }
 

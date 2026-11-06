@@ -18,6 +18,7 @@ ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scr
 from mesh_winding import orient_patches,orient_shells
 from building_clearance import RoadClearanceIndex
 from building_collision_policy import exact_far_collision
+from far_massing import Corridors,encode,read_far,shell_massing
 from harvard_bridge import validate_harvard_profile
 from harvard_cambridge import validate_cambridge
 from road_connections import validate_source_connections
@@ -108,6 +109,13 @@ for entry in far_header['tiles']:
  far_counts[entry['key']]=primaries;far_total+=primaries
  far_flags[entry['key']]=flags_for_tile
 assert far_total==city['tiles']['buildingCount'] and far_fragments>20 and far_hidden>=3,'sprawling complexes must ship terraced far massing'
+# Each hidden primary with the fragments after it, for the build-far-massing.py rerun check in the tile loop.
+far_massing={}
+for key,records in read_far(raw)[1].items():
+ for record in records:
+  if record[6]&8:far_massing[key][-1][1]+=record
+  else:far_massing.setdefault(key,[]).append([record,b''])
+massing_corridors=Corridors(city['roads']);massing_complexes=0
 
 # ---- tiles
 tiles=city['tiles'];keys=tiles['keys'];tile_dir=data_dir/tiles['directory'];size=tiles['size']
@@ -147,6 +155,10 @@ for key in keys:
   if crossing_roads:
    assert b.get('collision')=='mesh',f"{b['id']} convex proxy crosses a street; regenerate building clearance metadata"
   assert bool(far_flags[key][ordinal]&2)==exact_far_collision(b),f"{b['id']} far proxy collision policy is stale"
+  if far_flags[key][ordinal]&4:
+   primary,shipped=far_massing[key][ordinal];massing_complexes+=not b.get('structure')
+   assert shipped or b.get('structure'),f"{b['id']} is hidden from the far city without massing fragments"
+   assert encode(shell_massing(b,massing_corridors),primary,tx*size,tz*size)==shipped,f"{b['id']} far massing is stale; rerun build-far-massing.py"
   p=b['positions'];base=b['baseElevation'];assert len(p)==b['v']>0 and np.isfinite(p).all()
   if not b.get('structure'):
    shell=np.concatenate([b['facade'],b['roof']])
@@ -335,4 +347,5 @@ for landmark in city['landmarks']:
  print(f"Connected {landmark['name']}: {best:.0f} m by road; elevation {elevation(*landmark['position']):.2f} m.")
 tile_bytes=sum(p.stat().st_size for p in tile_dir.glob('*.bin'))
 print(f"Validated {len(buildings)} buildings ({scaled} coarser-quantized complexes, {grounded} grounded primary meshes, {len(supported)} supported upper parts, {triangles} triangles) in {len(keys)} tiles ({tile_bytes/1e6:.1f} MB), {len(city['roads'])} roads, {curbs} curbs, {park_paths} park paths, {len(city['signals'])} signals, {len(city['landmarks'])} destinations.")
+print(f"Far massing verified: {far_fragments} fragments for {massing_complexes} sprawling complexes match a build-far-massing.py rerun.")
 print(f"Terrain verified: {w}x{h} at {cell} m, graded range {heights.min():.2f}..{heights.max():.2f} m, {changed} cells graded (max cut {grid['grading']['maxCut']} m, fill {grid['grading']['maxFill']} m). Spawn is {clearance:.2f} m from the nearest building.")
