@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type {CityData} from '../types';
-import {sampleDriveSurface} from '../simulation/road-surfaces.ts';
+import {sampleDriveSurface,sampleVehicleSurface} from '../simulation/road-surfaces.ts';
 import {TRACK_LIFETIME,type TireContact,type TireSurface} from '../simulation/tire-tracks.ts';
 
 export const TRACK_CAPACITY=4096;
-type Trail={contact:TireContact;surface:TireSurface;distance:number;across?:THREE.Vector3};
+type Trail={contact:TireContact;surface:TireSurface;distance:number;across?:THREE.Vector3;survey:boolean};
 
 /** One bounded dynamic mesh for every tire. No per-mark objects or textures;
  * shader time fades old rubber and ragged soil back into the ground. */
@@ -36,6 +36,10 @@ export function createTireTracks(scene:THREE.Scene,city:CityData,surfaceAt:(x:nu
   const mesh=new THREE.Mesh(geometry,material);mesh.name='Temporary tire tracks';mesh.frustumCulled=false;mesh.renderOrder=3;mesh.userData.noAO=true;scene.add(mesh);
   const trails=new Map<number,Trail>(),births=new Float64Array(capacity),surfaces:(TireSurface|undefined)[]=new Array(capacity);
   let cursor=0,count=0,revision=-1,totalPavement=0,totalGrass=0;
+  /** The Zakim's survey mesh is drawn and collided by itself. Its trace only tells that a wheel is on the
+   * deck (the mesh lies within about 0.1 m of it), so a mark's end there lies on the plane of that wheel's
+   * own contact with the mesh, never at the trace's height. */
+  const onSurvey=(p:TireContact)=>!!sampleVehicleSurface(city,p.x,p.z,p.y+.15).road?.surveyDeck;
   function update(contacts:TireContact[],time:number,poseRevision:number){
     clock.value=time;
     if(revision!==poseRevision){trails.clear();revision=poseRevision;}
@@ -45,14 +49,14 @@ export function createTireTracks(scene:THREE.Scene,city:CityData,surfaceAt:(x:nu
       const surface=surfaceAt(contact.x,contact.y,contact.z);if(!surface){trails.delete(contact.wheel);continue;}
       active.add(contact.wheel);
       const previous=trails.get(contact.wheel),dx=previous?contact.x-previous.contact.x:0,dz=previous?contact.z-previous.contact.z:0,length=Math.hypot(dx,dz);
-      if(!previous||previous.surface!==surface||length>2||Math.abs(contact.y-previous.contact.y)>.7){trails.set(contact.wheel,{contact,surface,distance:0});continue;}
+      if(!previous||previous.surface!==surface||length>2||Math.abs(contact.y-previous.contact.y)>.7){trails.set(contact.wheel,{contact,surface,distance:0,survey:onSurvey(contact)});continue;}
       if(length<.09)continue;
-      const across=new THREE.Vector3(dz,0,-dx).normalize().multiplyScalar(contact.width*(surface==='grass'?.78:.5));
+      const survey=onSurvey(contact),across=new THREE.Vector3(dz,0,-dx).normalize().multiplyScalar(contact.width*(surface==='grass'?.78:.5));
       const startAcross=previous.across??across;
-      const ends=[previous.contact,contact],widths=[startAcross,across],distance=previous.distance+length,slot=cursor;
+      const ends=[previous.contact,contact],widths=[startAcross,across],surveyed=[previous.survey,survey],distance=previous.distance+length,slot=cursor;
       for(let end=0;end<2;end++)for(let side=0;side<2;side++){
         const p=ends[end],a=widths[end],sign=side===0?-1:1,x=p.x+a.x*sign,z=p.z+a.z*sign;
-        const height=sampleDriveSurface(city,x,z,p.y+.15).height;
+        const height=surveyed[end]?p.y-(p.normal.x*(x-p.x)+p.normal.z*(z-p.z))/p.normal.y:sampleDriveSurface(city,x,z,p.y+.15).height;
         const vertex=slot*4+end*2+side;
         positions.set([x,height+.082,z],vertex*3);uvs.set([side,end===0?previous.distance:distance],vertex*2);data.set([time,Math.min(contact.intensity,previous.contact.intensity),surface==='grass'?1:0],vertex*3);
       }
@@ -60,7 +64,7 @@ export function createTireTracks(scene:THREE.Scene,city:CityData,surfaceAt:(x:nu
       position.needsUpdate=true;uv.needsUpdate=true;track.needsUpdate=true;
       births[slot]=time;surfaces[slot]=surface;if(surface==='grass')totalGrass++;else totalPavement++;
       cursor=(cursor+1)%capacity;count=Math.min(capacity,count+1);geometry.setDrawRange(0,count*6);
-      trails.set(contact.wheel,{contact,surface,distance,across});
+      trails.set(contact.wheel,{contact,surface,distance,across,survey});
     }
     for(const wheel of trails.keys())if(!active.has(wheel))trails.delete(wheel);
   }

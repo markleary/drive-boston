@@ -115,7 +115,8 @@ export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sa
  * (the Zakim) where no road record lies: a trace over it (`city.surveyRoads`, within
  * 0.1 m of the mesh across its lanes) counts as the support there, so a car change, the
  * bike or a saved arrival keeps the deck and a knocked traffic car keeps its tyres on it.
- * Nothing drawn or collided uses it. */
+ * Skid marks use it to find the deck but lie on the wheel's own contact with the mesh;
+ * nothing else drawn or collided uses it. */
 export function sampleVehicleSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
   const surface=sampleDriveSurface(city,x,z,yReference,roadId);
   if(roadId!==undefined&&surface.road?.id===roadId)return surface;
