@@ -4,7 +4,7 @@ import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
-import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, registerDriveSurface, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
+import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, sampleVehicleSurface, registerDriveSurface, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
 import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
 import {tireSlipIntensity,type TireContact} from '../simulation/tire-tracks.ts';
@@ -160,7 +160,7 @@ export class DrivingPhysics {
     if(id===this.selectedCar)return;
     this.selectedCar=id;
     if(this.bike)return;
-    const state=this.getState(),surface=sampleDriveSurface(this.city,state.x,state.z,state.y);
+    const state=this.getState(),surface=sampleVehicleSurface(this.city,state.x,state.z,state.y);
     this.world.removeVehicleController(this.controller);this.configureCar();
     this.body.recomputeMassPropertiesFromColliders();
     if(this.canResetAt(state.x,state.z,state.yaw,surface.road?.id))this.reset(state.x,state.z,state.yaw,surface.road?.id);
@@ -174,7 +174,7 @@ export class DrivingPhysics {
     this.bike = kind === 'ultrabee' ? new BikeDynamics(this.world, this.body, this.chassisCollider) : undefined;
     if (this.bike) this.controller = this.bike.controller; else this.configureCar();
     this.body.recomputeMassPropertiesFromColliders();
-    this.reset(state.x, state.z, state.yaw, sampleDriveSurface(this.city,state.x,state.z,state.y).road?.id);
+    this.reset(state.x, state.z, state.yaw, sampleVehicleSurface(this.city,state.x,state.z,state.y).road?.id);
   }
 
   addStaticMesh(vertices: Float32Array, indices: Uint32Array) {
@@ -376,9 +376,9 @@ export class DrivingPhysics {
   private recoverFromCrash(position:{x:number;y:number;z:number}){
     const spawnHeight=this.bike?ULTRA_BEE.spawnHeight:this.carSpec.spawnHeight;
     if([position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
-      const crashSurface=sampleDriveSurface(this.city,position.x,position.z,position.y);
-      // Keep recovery inside the already-streamed neighborhood.
-      const road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,accept:spot=>{
+      const crashSurface=sampleVehicleSurface(this.city,position.x,position.z,position.y);
+      // Keep recovery inside the already-streamed neighborhood (and on a survey mesh's traces only after a crash on one, where the mesh is loaded).
+      const road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,survey:!!crashSurface.road?.surveyDeck,accept:spot=>{
         if(spot.x<this.bounds.minX+1||spot.x>this.bounds.maxX-1||spot.z<this.bounds.minZ+1||spot.z>this.bounds.maxZ-1)return false;
         const surface=sampleDriveSurface(this.city,spot.x,spot.z,undefined,spot.road.id),n=surface.normal;
         // Level compatibility is a constraint, not a distance tradeoff. Compare

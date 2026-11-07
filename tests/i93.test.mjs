@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
-import {sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
+import {sampleRoadElevation,sampleVehicleSurface} from '../src/simulation/road-surfaces.ts';
 import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
 import {loadMetroCity,windowCity,installExactMeshes} from './helpers/metro-city.mjs';
 
@@ -71,6 +71,32 @@ test('southbound: off the Charlestown lower deck onto the Zakim survey at City S
  const last=sb.at(-1),trace=all.find(r=>r.surveyDeck&&same(r.points[0],last.points.at(-1)));assert.ok(trace,'a survey trace starts where the lower deck ends');
  const route=dense(join(tail(stations(last),150),head(stations(trace),70)));
  await drive(route,last.id,{survey:true});
+});
+
+test('the bike, a car change, a saved arrival and a crash on the Zakim survey keep the vehicle on its deck',async()=>{
+ // 400 m along the northbound trace: the main span, 32 m over the Charles. No road record lies under the
+ // mesh there, so every reset that only asked the road records put the vehicle in the river.
+ const trace=byId.get('i93-zakim-nb-01'),points=dense(stations(trace));
+ let d=0,k=1;while(k<points.length-1&&d<400){d+=Math.hypot(points[k].x-points[k-1].x,points[k].z-points[k-1].z);k++;}
+ const at=points[k],yaw=Math.atan2(points[k+5].x-at.x,points[k+5].z-at.z),physics=await world(points.slice(k-20,k+20),true),city=physics.city;
+ const settle=()=>{for(let i=0;i<60;i++)physics.step({...released,brake:1},1/60);};
+ const onDeck=label=>{const {y}=physics.getState();assert.ok(y-at.y>-.3&&y-at.y<1.6,`${label}: on the deck (y ${y.toFixed(2)}, deck ${at.y.toFixed(2)})`);};
+ try{
+  physics.reset(at.x,at.z,yaw,trace.id);physics.body.setTranslation({x:at.x,y:at.y+.85,z:at.z},true);settle();onDeck('placed on the deck');
+  physics.setVehicleType('ultrabee');settle();onDeck('the bike');
+  physics.setVehicleType('car');settle();onDeck('back in the car');
+  physics.setCar('supra-mk4');settle();onDeck('a car change');
+  // main.ts saves the vehicle surface's road with the arrival and resets onto it on reload.
+  const s=physics.getState(),saved={x:s.x,z:s.z,yaw:s.yaw,roadId:sampleVehicleSurface(city,s.x,s.z,s.y).road?.id};
+  assert.equal(saved.roadId,trace.id,'the saved arrival names the trace');
+  physics.reset(saved.x+30,saved.z,saved.yaw);assert.ok(physics.getState().y<at.y-20,'a reset without it drops to the water');
+  assert.ok(physics.canResetAt(saved.x,saved.z,saved.yaw,saved.roadId),'the saved arrival is clear');
+  physics.reset(saved.x,saved.z,saved.yaw,saved.roadId);settle();onDeck('the saved arrival');
+  // Overturned for 2.5 s, the car is set upright on the deck it crashed on.
+  physics.body.setRotation({x:0,y:0,z:1,w:0},true);for(let i=0;i<200;i++)physics.step(released,1/60);
+  const {rotation}=physics.getState();assert.ok(1-2*(rotation.x**2+rotation.z**2)>.9,'the crash was recovered');
+  settle();onDeck('after the crash');
+ }finally{physics.dispose();}
 });
 
 test('northbound exit 23 leaves the carriageway at its gore and lands on the street',async()=>{

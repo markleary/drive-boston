@@ -12,7 +12,7 @@ import { sampleElevation, terrainRange } from './simulation/terrain';
 import { prepareRoadTerrain, type RoadGradingStats } from './simulation/road-grading.ts';
 import { buildingAt, isMetroCity, resolveCity } from './simulation/city-tiles.ts';
 import { addMetroLandmarkDetails } from './render/metro-landmarks';
-import { sampleDriveSurface } from './simulation/road-surfaces';
+import { sampleDriveSurface, sampleVehicleSurface } from './simulation/road-surfaces';
 import { tunnelAt } from './simulation/tunnels';
 import { createWorld } from './render/world';
 import { addLandmarkDetails } from './render/landmarks';
@@ -189,9 +189,11 @@ async function boot(){
         if(!saved||![saved.x,saved.z,saved.yaw].every(Number.isFinite))return;
         const occupant=buildingAt(city,saved.x,saved.z);
         const tunnel=typeof saved.roadId==='string'&&!!sampleDriveSurface(city,saved.x,saved.z,undefined,saved.roadId).road?.tunnel;
-        const blocked=!tunnel&&occupant&&('id' in occupant?!usesExactBuildingCollision(occupant):!occupant.exactMesh);
+        // A survey trace (the Zakim deck) runs over the hulls beneath it, as a tunnel runs under them.
+        const survey=typeof saved.roadId==='string'&&!!city.surveyRoads?.some(r=>r.id===saved.roadId);
+        const blocked=!tunnel&&!survey&&occupant&&('id' in occupant?!usesExactBuildingCollision(occupant):!occupant.exactMesh);
         const footbridge=typeof saved.roadId==='string'&&saved.roadId.startsWith('footbridge:');
-        if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&(tunnel||footbridge||closestRoad(city,saved.x,saved.z).distance<10)&&!blocked)
+        if(saved.x>city.bounds.minX+10&&saved.x<city.bounds.maxX-10&&saved.z>city.bounds.minZ+10&&saved.z<city.bounds.maxZ-10&&(tunnel||survey||footbridge||closestRoad(city,saved.x,saved.z).distance<10)&&!blocked)
           return {x:saved.x as number,z:saved.z as number,yaw:saved.yaw as number,roadId:typeof saved.roadId==='string'?saved.roadId:undefined};
       }catch{/* Storage is optional. */}
     })();
@@ -222,6 +224,9 @@ async function boot(){
           const size=city.tiles.size,owners=new Map<string,{tx:number;tz:number}>();
           for(const hull of city.index.query(saved.x-3,saved.x+3,saved.z-3,saved.z+3))owners.set(`${hull.tx}_${hull.tz}`,hull);
           const tx=Math.floor(saved.x/size),tz=Math.floor(saved.z/size);owners.set(`${tx}_${tz}`,{tx,tz});
+          // An arrival on a survey trace stands on the survey mesh, which streams with the tile under its centre.
+          const deck=city.surveyRoads?.find(r=>r.id===saved.roadId)?.surveyDeck,mesh=deck?city.landmarkBuildings?.find(b=>b.id===deck):undefined;
+          if(mesh){const mx=Math.floor(mesh.center[0]/size),mz=Math.floor(mesh.center[1]/size);owners.set(`${mx}_${mz}`,{tx:mx,tz:mz});}
           for(const [key,owner]of owners){
             if(!streamer.loaded.has(key))loaded=await streamer.ensureAround((owner.tx+.5)*size,(owner.tz+.5)*size,0)&&loaded;
             if(!streamer.loaded.has(key))loaded=false;
@@ -276,7 +281,7 @@ async function boot(){
       traffic!.populateAt(observer,player,transit!.obstacles());streetLife.populateAt(observer,player);
     };
     populateNeighborhood();
-    const save=()=>{if(!physics)return;const s=physics.getState();try{localStorage.setItem('backbay-drive-v1',JSON.stringify({x:s.x,z:s.z,yaw:s.yaw,roadId:sampleDriveSurface(city,s.x,s.z,s.y).road?.id}));}catch{/* Optional. */}};
+    const save=()=>{if(!physics)return;const s=physics.getState();try{localStorage.setItem('backbay-drive-v1',JSON.stringify({x:s.x,z:s.z,yaw:s.yaw,roadId:sampleVehicleSurface(city,s.x,s.z,s.y).road?.id}));}catch{/* Optional. */}};
     window.addEventListener('pagehide',()=>{save();captureSession();journal.close();});
     // A bfcache restoration resumes this document and its existing journal.
     // Persist the active state immediately, before a possible renderer exit.

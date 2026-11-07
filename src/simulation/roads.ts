@@ -19,8 +19,9 @@ type RoadPosition={x:number;z:number;yaw:number;distance:number;road:Road};
 /** Optional height/clearance constraints are used for crash recovery; ordinary
  * map/traffic lookups retain their horizontal nearest-road behavior. `majorOnly`
  * (the street a facade, door or signal faces) never answers a motorway; `survey`
- * also considers the traces over drivable survey meshes (`city.surveyRoads`),
- * for street names and GPS anchors only, never to place a car on a surface. */
+ * also considers the traces over drivable survey meshes (`city.surveyRoads`), for
+ * street names, GPS anchors and recovering the player's vehicle after a crash on
+ * that mesh, never for anything drawn or collided. */
 export function closestRoad(city: CityData, x: number, z: number, majorOnly = false, options:{height?:number;maxDistance?:number;survey?:boolean;accept?:(position:RoadPosition)=>boolean}={}) {
   let best = { x:city.spawn.x, z:city.spawn.z, yaw:city.spawn.yaw, distance:Infinity, road:city.roads[0] };
   let bestScore=Infinity;

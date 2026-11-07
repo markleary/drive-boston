@@ -94,9 +94,10 @@ function elevatedNear(city:CityData,x:number,z:number){
 }
 
 /** Highest support no more than 0.4m above the supplied reference. A car below
- * an overpass stays below it; explicit road IDs make deck destination resets unambiguous. */
+ * an overpass stays below it; explicit road IDs make deck destination resets unambiguous
+ * (a survey trace's ID too: only sampleVehicleSurface picks one unasked). */
 export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
-  const registered=streamedSurfaces.get(city),chosen=roadId?city.roads?.find(r=>r.id===roadId)??registered?.get(roadId)?.road:undefined;
+  const registered=streamedSurfaces.get(city),chosen=roadId?city.roads?.find(r=>r.id===roadId)??city.surveyRoads?.find(r=>r.id===roadId)??registered?.get(roadId)?.road:undefined;
   if(chosen&&roadProjection(chosen,x,z).distance<=roadWidthAt(chosen,x,z)/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
   const ground=sampleElevation(city,x,z),below=tunnelAt(city,x,z,yReference),portal=inTunnelPortal(city,x,z);
   let height=(portal||below&&ground>yReference+.4)?-Infinity:ground,normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
@@ -109,6 +110,21 @@ export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sa
   // A point outside every road footprint still has a stable terrain fallback.
   if(!Number.isFinite(height))height=ground;
   return{height,normal,road};
+}
+/** sampleDriveSurface for the player's own vehicle, which may stand on a drivable
+ * survey mesh (the Zakim) where no road record lies: a trace over it (`city.surveyRoads`,
+ * within 0.1 m of the mesh across its lanes) counts as the support there, so a car
+ * change, the bike or a saved arrival keeps the deck. Nothing drawn or collided uses it. */
+export function sampleVehicleSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
+  const surface=sampleDriveSurface(city,x,z,yReference,roadId);
+  if(roadId!==undefined&&surface.road?.id===roadId)return surface;
+  let best=surface;
+  for(const road of city.surveyRoads??[]){
+    if(roadProjection(road,x,z).distance>roadWidthAt(road,x,z)/2+.05)continue;
+    const h=sampleRoadElevation(city,road,x,z);
+    if(h>best.height&&h<=yReference+.4)best={height:h,normal:roadNormal(city,road,x,z),road};
+  }
+  return best;
 }
 
 /** Optional per-section widths taper shore ramps without a step in the deck edge. */
