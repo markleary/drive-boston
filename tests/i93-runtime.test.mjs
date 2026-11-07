@@ -4,7 +4,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import {Ray} from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
-import {createTraffic,roadGraph,MOTORWAY_CRUISE,RAMP_CRUISE} from '../src/simulation/traffic.ts';
+import {createTraffic,roadGraph,MOTORWAY_CRUISE,RAMP_CRUISE,MOTORWAY_REACH} from '../src/simulation/traffic.ts';
 import {motorwayLanes,stations,pointAtDistance,CLOSURE_SETBACK,SINK_BEYOND,LANE_WIDTH} from '../src/simulation/motorway.ts';
 import {closedEndBarriers,laneMarkings,LANE_DASH,JERSEY} from '../src/simulation/road-surfaces.ts';
 import {planConstructionZones,planMotorwayZones,constructionLocal,MOTORWAY_SPACING,MOTORWAY_WORK_LENGTH,MOTORWAY_TAPER_LENGTH} from '../src/simulation/construction-zones.ts';
@@ -149,6 +149,35 @@ test('a car on a survey trace is hidden while the survey mesh is not drawn, and 
   }finally{traffic.dispose();physics.dispose();}
   assert.deepEqual([...asked],['BOS-SURVEY'],'only cars on the trace ask about its mesh');
   assert.ok(seen.hidden>0&&seen.shown>0&&seen.elsewhere>0,JSON.stringify(seen));
+});
+
+/** A tunnel carriageway covered for its first 1000 m, then open to the sky up a 600 m
+ * portal approach to the ground (0 everywhere), and on at grade to a closed end; the
+ * player starts above ground on the approach, 400 m past the portal. */
+const portal=()=>{
+  const points=line([0,0],[0,-1600]),along=stations(points);
+  return fixture([
+    {id:'tunnel-nb',name:'I-93 North · Tunnel',kind:'motorway',points,width:12.8,oneway:1,elevations:along.map(s=>-9+9*Math.max(0,s-1000)/600),tunnel:{clearance:5.2,covered:[[0,1000]],capStart:true}},
+    {id:'surface-nb',name:'I-93 North · Northtown',kind:'motorway',points:line([0,-1600],[0,-1900]),width:14.95,oneway:1,lanes:3,closed:'end'},
+  ],undefined,{x:0,z:-1400,yaw:Math.PI});
+};
+
+test('a tunnel record is underground only where it is covered, so its portal approach carries the open highway traffic',async()=>{
+  const city=portal(),physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics);
+  const tunnel=car=>!car.parked&&car.road==='I-93 North · Tunnel';
+  try{
+    const spawn=physics.getState();assert.ok(spawn.y>-4,`the spawn is above ground (${spawn.y.toFixed(2)} m)`);
+    assert.equal(traffic.population(spawn).highway,2,'the approach counts as the highway for a driver on it');
+    const cars=traffic.snapshot();
+    assert.ok(cars.some(car=>tunnel(car)&&car.z<-1000),'highway cars are placed on the approach');
+    assert.ok(!cars.some(car=>tunnel(car)&&car.z>-999&&Math.abs(car.z-spawn.z)<MOTORWAY_REACH),'and none in view under the cover');
+    // A driver in the bore (9 m down) gets tunnel traffic only, as before.
+    const bore={x:0,y:-8.4,z:-500,yaw:Math.PI},before=traffic.snapshot();
+    traffic.populateAt(bore);
+    const moved=traffic.snapshot().filter((car,i)=>!car.parked&&Math.hypot(car.x-before[i].x,car.z-before[i].z)>1);
+    assert.equal(traffic.population(bore).highway,2);
+    assert.ok(moved.length&&moved.every(car=>tunnel(car)&&car.z>-1000),`cars move into the bore around its driver (${moved.length})`);
+  }finally{traffic.dispose();physics.dispose();}
 });
 
 test('a closed end is a row of Jersey barriers across the whole deck, facing the open road, that a car cannot drive through',async()=>{

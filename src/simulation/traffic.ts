@@ -17,6 +17,7 @@ import { createActivityProfile } from './activity.ts';
 import {createRouteSignalLookup} from './traffic-route-signals.ts';
 import {constructionLanePoints,type ConstructionZone} from './construction-zones.ts';
 import {isMotorway,speedClass,motorwayLanes,CLOSURE_SETBACK,SINK_BEYOND,pointAtDistance,stations} from './motorway.ts';
+import {tunnelCoveredAt,tunnelStations} from './tunnels.ts';
 
 /** `sink`: the edge ends at a closed end or tunnel cap, whose barrier its cars
  * drive through and vanish behind; `source`: cars emerge from one at its start. */
@@ -345,20 +346,30 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   // Sibling lanes of one edge, for the lane a highway car is in counted from either side.
   const laneSets=new Map<string,number[]>(),laneKey=(edge:Edge)=>`${edge.road.id}|${edge.start}|${edge.end}`;
   for(const edge of edges)if(edge.laneOffset!==undefined){const key=laneKey(edge),list=laneSets.get(key);if(list)list.push(edge.laneOffset);else laneSets.set(key,[edge.laneOffset]);}
-  // Highway carriageway stations every 25 m, for how close an observer is to the highway.
-  const highwayEdges=edges.filter(edge=>speedClass(edge.road)===2&&edge.length>=12),HIGHWAY_CELL=100,highwayCells=new Map<string,{p:Point2;y:number;tunnel:boolean}[]>();
+  // Highway carriageway stations every 25 m, for how close an observer is to the highway (`covered`: under a tunnel's cover).
+  const highwayEdges=edges.filter(edge=>speedClass(edge.road)===2&&edge.length>=12),HIGHWAY_CELL=100,highwayCells=new Map<string,{p:Point2;y:number;tunnel:boolean;covered:boolean}[]>();
   for(const road of new Set(highwayEdges.map(edge=>edge.road))){
     const along=stations(road.points),total=along[along.length-1];
-    for(let s=0;s<=total;s+=25){const {p}=pointAtDistance(road.points,s,along),key=`${Math.floor(p[0]/HIGHWAY_CELL)},${Math.floor(p[1]/HIGHWAY_CELL)}`,entry={p,y:sampleRoadElevation(city,road,...p),tunnel:!!road.tunnel},list=highwayCells.get(key);if(list)list.push(entry);else highwayCells.set(key,[entry]);}
+    for(let s=0;s<=total;s+=25){const {p}=pointAtDistance(road.points,s,along),key=`${Math.floor(p[0]/HIGHWAY_CELL)},${Math.floor(p[1]/HIGHWAY_CELL)}`,entry={p,y:sampleRoadElevation(city,road,...p),tunnel:!!road.tunnel,covered:tunnelCoveredAt(road,s)},list=highwayCells.get(key);if(list)list.push(entry);else highwayCells.set(key,[entry]);}
   }
-  /** An observer more than 4 m below the ground is in a tunnel, and sees only tunnel traffic. */
+  /** An observer more than 4 m below the ground is in a tunnel and sees the tunnel
+   * records' traffic; one above ground sees every station open to the sky, a
+   * tunnel's portal approaches included (`tunnel.covered` leaves them out). */
   const underground=(o:{x:number;y?:number;z:number})=>o.y!==undefined&&o.y<sampleElevation(city,o.x,o.z)-4;
+  /** Whether a record has a stretch open to the sky: any but a tunnel covered end to end. */
+  const open=(road:Road)=>!road.tunnel||!!road.tunnel.covered;
+  /** Whether (x, z) on `road` lies under its tunnel's cover. */
+  function coveredAt(road:Road,x:number,z:number){
+    if(!road.tunnel?.covered)return !!road.tunnel;
+    const {index,t}=roadProjection(road,x,z),along=tunnelStations(road);
+    return tunnelCoveredAt(road,along[index]+(along[index+1]-along[index])*t);
+  }
   /** 2 on a highway carriageway (within 30 m and 6 m of its level), 1 beside one (260 m, 18 m), else 0. */
   function motorwayLevel(observer:{x:number;y?:number;z:number}){
     if(!highwayCells.size)return 0;
     const below=underground(observer),cx=Math.floor(observer.x/HIGHWAY_CELL),cz=Math.floor(observer.z/HIGHWAY_CELL);let level=0;
     for(let dx=-3;dx<=3;dx++)for(let dz=-3;dz<=3;dz++)for(const sample of highwayCells.get(`${cx+dx},${cz+dz}`)??[]){
-      if(sample.tunnel!==below)continue;
+      if(below?!sample.tunnel:sample.covered)continue;
       const d=Math.hypot(sample.p[0]-observer.x,sample.p[1]-observer.z),dy=observer.y===undefined?0:Math.abs(sample.y-observer.y);
       if(d<30&&dy<6)return 2;if(d<260&&dy<18)level=1;
     }
@@ -524,17 +535,18 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   /** The fleet as obstacles, for a car's following speed outside the step loop. */
   const fleetObstacles=():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw}));
   /** A station on a highway lane between `min` and `max` metres from the
-   * observer, on its level (in a tunnel or in the open), clear of the player
-   * and of every car by the highway headway; lanes weighted by length. */
+   * observer, on its level (a tunnel record in a tunnel, anywhere open to the
+   * sky above ground), clear of the player and of every car by the highway
+   * headway; lanes weighted by length. */
   function motorwayPlacement(observer:Pick<VehicleState,'x'|'z'>&{y?:number},player:Pick<VehicleState,'x'|'z'>,min:number,max:number,except?:Actor,external:TrafficObstacle[]=[],attempts=24):Placement|undefined{
-    const below=underground(observer),candidates=highwayEdges.filter(edge=>!!edge.road.tunnel===below&&edge.points.some(p=>Math.hypot(p[0]-observer.x,p[1]-observer.z)<max+40));
+    const below=underground(observer),candidates=highwayEdges.filter(edge=>(below?!!edge.road.tunnel:open(edge.road))&&edge.points.some(p=>Math.hypot(p[0]-observer.x,p[1]-observer.z)<max+40));
     if(!candidates.length)return;
     const total=candidates.reduce((sum,edge)=>sum+edge.length,0);
     const clear=(p:Point2)=>Math.hypot(p[0]-player.x,p[1]-player.z)>=35&&!actors.some(actor=>actor!==except&&Math.hypot(actor.x-p[0],actor.z-p[1])<MOTORWAY_HEADWAY)&&!external.some(other=>Math.hypot(other.x-p[0],other.z-p[1])<(other.halfLength??2.1)+5);
     for(let attempt=0;attempt<attempts;attempt++){
       let pick=random()*total,edge=candidates[0];for(const c of candidates){edge=c;if((pick-=c.length)<=0)break;}
       const lanePoints=laneFor(edge),along=stations(lanePoints),s=random()*along[along.length-1],p=pointAtDistance(lanePoints,s,along).p,radius=Math.hypot(p[0]-observer.x,p[1]-observer.z);
-      if(radius<min||radius>max||!clear(p))continue;
+      if(radius<min||radius>max||!clear(p)||!below&&coveredAt(edge.road,p[0],p[1]))continue;
       const path=route(edge),d=Math.min(s,path.length-1);
       if(path.sinkAt!==undefined&&d>path.sinkAt-40)continue;
       const q=at(path,d);if(!clear(q))continue;
@@ -645,7 +657,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   const byCollider=new Map(actors.flatMap(actor=>actor.colliders.map(collider=>[collider.handle,actor] as const)));
   // Each lane leaving a closed start emits a car from its barrier every 1.5 to
   // 4 s, on its own random stream so the fleet's draws are unchanged.
-  const emitters=edges.filter(edge=>edge.source).map(edge=>({edge,point:pointAtDistance(laneFor(edge),CLOSURE_SETBACK).p,timer:0}));
+  const emitters=edges.filter(edge=>edge.source).map(edge=>{const point=pointAtDistance(laneFor(edge),CLOSURE_SETBACK).p;return{edge,point,covered:coveredAt(edge.road,point[0],point[1]),timer:0};});
   let emitSeed=91447;const emitRandom=()=>{emitSeed=(Math.imul(emitSeed,1664525)+1013904223)>>>0;return emitSeed/4294967296;};
   const matrix = new THREE.Matrix4();
   const rotation = new THREE.Quaternion(), laneRotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3(1, 1, 1), lift = new THREE.Vector3(), meshPosition = new THREE.Vector3();
@@ -1048,7 +1060,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         emitter.timer-=dt;if(emitter.timer>0)continue;
         emitter.timer=1.5+emitRandom()*2.5;
         const p=emitter.point;
-        if(highway>=MOTORWAY_DENSITY[Math.max(1,level)]||!!emitter.edge.road.tunnel!==below||Math.hypot(p[0]-observer.x,p[1]-observer.z)>EMIT_RANGE||Math.hypot(p[0]-player.x,p[1]-player.z)<20||actors.some(actor=>Math.hypot(actor.x-p[0],actor.z-p[1])<28))continue;
+        if(highway>=MOTORWAY_DENSITY[Math.max(1,level)]||(below?!emitter.edge.road.tunnel:emitter.covered)||Math.hypot(p[0]-observer.x,p[1]-observer.z)>EMIT_RANGE||Math.hypot(p[0]-player.x,p[1]-player.z)<20||actors.some(actor=>Math.hypot(actor.x-p[0],actor.z-p[1])<28))continue;
         // A car parked behind a closed end first, else the farthest one well out of view.
         let pick=actors.find(actor=>actor.parked);
         if(!pick){let far=localRadius*1.35;for(const actor of actors){const d=Math.hypot(actor.x-observer.x,actor.z-observer.z);if(d>far&&!actor.knocked&&Math.hypot(actor.x-player.x,actor.z-player.z)>35){far=d;pick=actor;}}}
