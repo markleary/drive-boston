@@ -15,11 +15,21 @@ test('connected short GIS fragments label a named through road once and ignore p
   assert.equal(abbreviateRoadName('Commonwealth Avenue'),'Commonwealth Ave');
 });
 
+test('a namesake elsewhere does not lend a street its rank',()=>{
+  // Downtown's 7 m High Street once ranked by every High Street in the package, Medford's 16 m one included.
+  const street=(id,name,width,points)=>({id,name,width,oneway:0,points});
+  const roads=[street('a','High Street',7,[[-200,-30],[200,-30]]),street('b','Purchase Street',10,[[-200,40],[200,40]]),
+    street('c','High Street',16,[[-3000,4000],[3000,4000]]),street('d','High Street',7,[[-200,-30],[-200,-400]])];
+  const labels=createMinimapLabeler(roads)({center:[0,0],scale:216/460,width:216,height:216,measureText,maxLabels:1});
+  assert.deepEqual(labels.map(label=>label.name),['Purchase Street']);
+});
+
 test('real Boston minimap fixtures show useful major streets in distinct neighborhoods',()=>{
   const cases=[
     {center:[city.spawn.x,city.spawn.z],expected:['Boylston Street','Dartmouth Street','Newbury Street']},
     {center:[-2193.769866,2303.505],expected:['Parker Hill Avenue','Hillside Street']},
-    {center:[1917.3601,-700.6415],expected:['Atlantic Avenue','Franklin Street']},
+    // Downtown's Franklin Street is a 7 m Boston segment; the two 10 m arteries rank first.
+    {center:[1917.3601,-700.6415],expected:['Atlantic Avenue','Purchase Street']},
   ];
   for(const {center,expected}of cases){
     const labels=labeler({center,scale:216/460,width:216,height:216,measureText});

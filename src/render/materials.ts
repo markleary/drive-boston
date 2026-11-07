@@ -3,6 +3,7 @@ import type { Building, LightingMode } from '../types';
 import { architectureFor } from './neighborhood-profiles.ts';
 import { applyWindowInteriors, interiorLighting, setInteriorLighting, windowGrid } from './window-interiors.ts';
 import { isReligiousBuilding } from '../simulation/building-identities.ts';
+import { createHouseMaterials, type HouseMaterials } from './house-materials.ts';
 
 export interface FacadeStyle {
   id:string; base:string; kind:'brick'|'stone'|'panel'|'wood'; detail:'brick'|'arched'|'brownstone'|'classical'|'terracotta'|'loft'|'office'|'modern'|'gothic'|'clapboard';
@@ -24,8 +25,11 @@ export const FACADE_STYLES:FacadeStyle[]=[
   {id:'church-stone-lancets',base:'#89745f',kind:'stone',detail:'gothic',columns:2,windowWidth:1.16,windowHeight:2.34,trim:'#c1ad89',frame:'#474c45'},
   ...['#a8b5a2','#b5b5ad','#9baeb5','#d2c5aa','#afaaa5'].map((base,i)=>({id:`triple-decker-clapboard-${i}`,base,kind:'wood' as const,detail:'clapboard' as const,columns:2,windowWidth:1.24,windowHeight:1.86,trim:'#e1dfd1',frame:'#e1e3d8'})),
 ];
+/** facadeStyleIndex of every generated northern house: they share the palette-tinted house material (house-materials.ts), not a FACADE_STYLES entry. */
+export const HOUSE_FACADE=FACADE_STYLES.length;
 export function facadeStyleIndex(building?:Building):number {
   if(!building)return 0;
+  if(building.houseStyle)return HOUSE_FACADE;
   // Reviewed identities, use tags and names take precedence over height.
   // Landmark Trinity is separately assigned its authored masonry.
   if(isReligiousBuilding(building))return 10;
@@ -38,7 +42,7 @@ export function facadeStyleIndex(building?:Building):number {
   if(building.height<12)return [0,1,2,6][n%4];
   return [0,0,1,2,3,5][n%6];
 }
-export const facadeStyleFor=(building:Building)=>FACADE_STYLES[facadeStyleIndex(building)];
+export const facadeStyleFor=(building:Building)=>FACADE_STYLES[facadeStyleIndex(building)]??FACADE_STYLES[11];
 
 /** Re-project each coherent wall orientation from a local building origin.
  * The source GLB used each triangle's normal with absolute district coordinates;
@@ -62,7 +66,8 @@ export function stabilizeFacadeUVs(geometry:THREE.BufferGeometry,building?:Build
   const orientations:{nx:number;nz:number}[]=[],cosTolerance=Math.cos(Math.PI/36);
   const origin=building?.center??[0,0];
   const profile=architectureFor(building),verticalScale=profile?profile.floorHeight*2:6;
-  const wallTop=((building?.eaveHeight??building?.height??1e6)-(profile?.raisedBase??0))/verticalScale*6;
+  // A generated garage shows plain siding: no window row fits under its wall top.
+  const wallTop=building?.houseStyle==='garage'?0:((building?.eaveHeight??building?.height??1e6)-(profile?.raisedBase??0))/verticalScale*6;
   // Carried per vertex so batched houses can share a material while retaining
   // their own eaves. The shader omits a whole row if its head/trim cannot fit.
   geometry.setAttribute('facadeTop',new THREE.BufferAttribute(new Float32Array(p.count).fill(wallTop),1));
@@ -338,8 +343,11 @@ export function createMaterials(mobile=false) {
   const curb = new THREE.MeshStandardMaterial({ color: '#a9a89b', roughness: .94 });
   const paint = new THREE.MeshStandardMaterial({ color: '#dbd7c4', roughness: .94 });
   const yellow = new THREE.MeshStandardMaterial({ color: '#c6a850', roughness: .94 });
+  // Northern house paint and roofs are painted on first use (a northern tile streaming in).
+  let houseMaterials: HouseMaterials | undefined, lighting: LightingMode = 'golden';
   return { facades, glass, library, church, roof, asphalt, sidewalk, brick, curb, paint, yellow,
-    setLighting(mode: LightingMode) { setInteriorLighting(mode); for (const m of facades) m.emissiveIntensity = mode === 'night' ? .78 : .008; },
+    houses() { if (!houseMaterials) { houseMaterials = createHouseMaterials(mobile); houseMaterials.facade.emissiveIntensity = lighting === 'night' ? .78 : .008; } return houseMaterials; },
+    setLighting(mode: LightingMode) { lighting = mode; setInteriorLighting(mode); for (const m of facades) m.emissiveIntensity = mode === 'night' ? .78 : .008; if (houseMaterials) houseMaterials.facade.emissiveIntensity = mode === 'night' ? .78 : .008; },
     interiors() { const v = interiorLighting.value; return { styles: facades.filter(m => m.userData.windowInteriors).length, glow: v.x, litFraction: v.y, daylight: v.z }; },
   };
 }

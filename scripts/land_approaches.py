@@ -43,7 +43,11 @@ back before a rerun redoes the same repairs, so the records always describe
 the installed roads and `validate-city.py` can replay them.
 
 Water-crossing chains (levelled or skipped by `water_crossings`), pieces with
-a dedicated builder and tunnels are never touched. The terrain is not changed:
+a dedicated builder and tunnels are never touched, nor are the upper decks of
+the northern grade separations (`north_overpasses.SITES`): the next step,
+level-north-overpasses.py, cuts the street beneath them to clear them as they
+stand, so a profile drawn here against the uncut street would not survive a
+replay against the cut one. The terrain is not changed:
 the grader never grades under an elevated piece, so the corridor under a piece
 that becomes a surface road keeps its DEM, which this module only accepts
 within `AT_GRADE` of the piece. Estimated game profiles, not surveyed decks.
@@ -162,7 +166,9 @@ def restore_links(roads,links=TOWN_LINKS):
 
 def level_land_approaches(roads,ground,excluded=(),links=TOWN_LINKS,apply=True,profile_excluded=None):
  """Repair the seam stubs, sunk approaches and clipped town ramps among `roads`. `ground(x,z)` is the graded terrain; `excluded` holds the water-crossing chain ids. Returns a report; with apply=False nothing is changed."""
- report={'seams':[],'floored':[],'links':[],'changedRoads':[]};excluded=set(excluded)
+ from north_overpasses import SITES
+ kept={i for site in SITES for i in site['upper']}
+ report={'seams':[],'floored':[],'links':[],'changedRoads':[]};excluded=set(excluded)|kept
  for road,index,continuing in seam_stubs(roads,excluded):
   landing=-1 if index==0 else 0;low=road['elevations'][landing];top=ground(*road['points'][index])
   new=grade_profile(road,ground,landing,low,top);surface=all(abs(y-ground(*p))<=AT_GRADE for p,y in zip(road['points'],new))
@@ -184,7 +190,7 @@ def level_land_approaches(roads,ground,excluded=(),links=TOWN_LINKS,apply=True,p
  for piece in reviewed:
   report['reviewed'].append({k:v for k,v in piece.items() if k!='result'});report['changedRoads'].append(piece['road'])
   if apply:install_fields(next(r for r in roads if r['id']==piece['road']),piece['result'])
- profiles,unresolved=connected_profiles(roads,ground,(excluded if profile_excluded is None else set(profile_excluded)|{s['road'] for s in report['seams']})|{p['road'] for p in reviewed})
+ profiles,unresolved=connected_profiles(roads,ground,(excluded if profile_excluded is None else set(profile_excluded)|kept|{s['road'] for s in report['seams']})|{p['road'] for p in reviewed})
  report['profiles']=[];report['unresolvedProfiles']=unresolved
  for road,new in profiles:
   report['profiles'].append({'road':road['id'],'name':road['name'],'source':list(road['elevations'])})

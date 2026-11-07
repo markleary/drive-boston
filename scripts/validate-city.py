@@ -29,6 +29,7 @@ from museum_approaches import validate_approaches
 from road_structure_clearance import validate_bridge_clearance
 from water_crossings import level_water_crossings,water_inputs
 from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids,levelled_water_ids
+import north_overpasses
 from harvard_terrain import repair_memorial_terrain
 from road_generation_audit import validate_surfaces
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
@@ -42,7 +43,7 @@ bounds=city['bounds'];spawn=city['spawn'];sp=[spawn['x'],spawn['z']]
 coverage=unary_union([Polygon(p) for p in city['coverage']]);covered=prep(coverage.buffer(.05))
 assert len(city['coverage'])==provenance['coveragePolygons']>=1 and all(len(p)>3 for p in city['coverage'])
 assert abs(coverage.area-provenance['coverageAreaSquareMeters'])<coverage.area*.02,'coverage outlines (exteriors only) must match the compiled union'
-towns={'Cambridge','Somerville','Brookline','Chelsea'};excluded={'Roslindale','West Roxbury','Hyde Park','Harbor Islands'}
+towns={'Cambridge','Somerville','Brookline','Chelsea','Everett','Medford','Malden','Melrose'};excluded={'Roslindale','West Roxbury','Hyde Park','Harbor Islands'}
 names={n['name'] for n in city['neighborhoods']}
 assert towns<=names and not names&excluded,'town and excluded-neighborhood policy'
 assert {'Back Bay','Beacon Hill','Downtown','Chinatown','Mission Hill','Fenway','Longwood','Dorchester','Roxbury','Jamaica Plain','South Boston','East Boston','Charlestown','Allston','Brighton','Mattapan','North End','West End','South End'}<=names
@@ -121,7 +122,7 @@ massing_corridors=Corridors(city['roads']);massing_complexes=0
 tiles=city['tiles'];keys=tiles['keys'];tile_dir=data_dir/tiles['directory'];size=tiles['size']
 assert len(keys)==len(set(keys)) and {f't_{k}.bin' for k in keys}=={p.name for p in tile_dir.glob('*.bin')},'tile manifest must match the files shipped'
 assert set(far_counts)<=set(keys),'far hull tiles must be manifest tiles (tiles holding only curbs, paths or roads have no hulls)'
-policies={'catalog-metres-and-source-floor','source-floor-no-catalog-ground','legacy-backbay-feet','cambridge-catalog-feet-and-source-floor','osm-type-default','osm-levels','osm-height-tag'}
+policies={'assessor-style','assessor-storeys','catalog-metres-and-source-floor','source-floor-no-catalog-ground','legacy-backbay-feet','cambridge-catalog-feet-and-source-floor','osm-type-default','osm-levels','osm-height-tag'}
 west,north,east,south=provenance['legacyCoreBounds']
 buildings={};footprints_by_tile=defaultdict(list);curbs=0;park_paths=0;triangles=0;grounded=0;supported=[];scaled=0
 pavements=0;borders=0;sidewalks=0;bricks=0;islands=0;driveways=0;measured_roads={r['id'] for r in city['roads'] if r.get('pavedWidth')};road_ids={r['id'] for r in city['roads']}
@@ -170,7 +171,8 @@ for key in keys:
    assert 0<b['eaveHeight']<=b['height']+.02,f"{b['id']} lacks a valid wall/eave height"
    eave=base+b['eaveHeight']
    assert abs(eave-b['norm']['max'])<.011,f"{b['id']} eave differs from the extrusion audit"
-   for faces in [b['facade'],b['roof']]:
+   # Assessor-shaped houses (house_shapes.py) face each wing and tower away from its own part, which can face the footprint centre; their winding is verified by orient_shells/orient_patches above.
+   for faces in [b['facade'],b['roof']] if not b['norm']['policy'].startswith('assessor') else []:
     a,c,d=p[faces[:,0]],p[faces[:,1]],p[faces[:,2]];n=np.cross(c-a,d-a);length=np.linalg.norm(n,axis=1)
     ends=(np.maximum.reduce([a[:,1],c[:,1],d[:,1]])>eave+.02)&(np.abs(n[:,1])<length*.05)
     outward=((a+c+d)/3)[:,[0,2]]-np.asarray(b['center'])
@@ -230,6 +232,9 @@ museum_source=data_dir/'museum-approaches-source.json'
 validate_approaches(city,json.loads(museum_source.read_text()),heights)
 assert provenance['museumRoadConnections']['sourceSHA256']==hashlib.sha256(museum_source.read_bytes()).hexdigest(),'Museum approach provenance differs from the retained source'
 validate_bridge_clearance(city['roads'],elevation)
+if north_overpasses.applies(city['roads']):
+ recorded=provenance.get('northOverpasses');assert recorded,'provenance must describe the northern overpass repairs; run level-north-overpasses.py'
+ assert north_overpasses.replay(data_dir,city,recorded),'northern overpass streets, decks or terrain differ from a replay of their recorded sources; run level-north-overpasses.py'
 water_polygons,water_level=water_inputs(city);decks=level_water_crossings(city['roads'],water_polygons,elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
 recorded=provenance.get('waterCrossingDecks');assert recorded and [c['roads'] for c in recorded['chains']]==[c['roads'] for c in decks['chains']] and all(abs(x-y)<.001 for a,b in zip(recorded['chains'],decks['chains']) for x,y in zip(a['deck'],b['deck'])),'provenance must describe the installed water-crossing decks'
@@ -254,6 +259,45 @@ for road in city['roads']:
   parent=roads_map[id];indices=[i for i in (0,-1) if parent['points'][i]==road['points'][end]]
   assert indices,f"{road['id']} does not reach its source parent {id}"
   if road.get('elevations'):assert abs(road['elevations'][end]-parent['elevations'][indices[0]])<.0002,f"{road['id']} has a height step at {id}"
+# Streets split at a town line (connect-source-seams.py town seams): each recorded join still meets the street it was carried to.
+seam_joins=provenance.get('townSeams',{}).get('joins',[]);at_vertex=defaultdict(list)
+assert {j['road'] for j in seam_joins}<={r['id'] for r in city['roads'] if r.get('townSeam')},'provenance must list the town seams; run connect-source-seams.py'
+for r in city['roads']:
+ for q in r['points']:at_vertex[(round(q[0],3),round(q[1],3))].append(r['id'])
+for j in seam_joins:
+ met=at_vertex[(round(j['point'][0],3),round(j['point'][1],3))]
+ assert len(met)>=2 and j['road'] in met and j['to'] in met and (j['road']!=j['to'] or met.count(j['road'])>=2),f"town seam {j['road']} no longer meets {j['to']} at {j['point']}"
+# Bridges split at a town line (town_bridge_joints): the two pieces still meet lifted and level with each other.
+for joint in provenance.get('townSeams',{}).get('bridgeJoints',{}).get('joints',[]):
+ pieces=[(r,i) for r in city['roads'] if r['id']==joint['road'] for i in (0,-1) if r['points'][i]==joint['point']]
+ assert len(pieces)==2 and all(r.get('townSeam') and r.get('elevations') and r.get('startLevel' if i==0 else 'endLevel')==1 for r,i in pieces),f"bridge {joint['road']} is no longer joined at {joint['point']}"
+ assert abs(pieces[0][0]['elevations'][pieces[0][1]]-pieces[1][0]['elevations'][pieces[1][1]])<.0002,f"bridge {joint['road']} has a height step at {joint['point']}"
+# Bridges cut mid-span by the edge of the map (edge_bridge_stubs): the edge end lifted, no step at the joints back to the landing.
+for bridge in provenance.get('townSeams',{}).get('edgeBridges',{}).get('bridges',[]):
+ at=lambda p,id:[(r,i) for r in city['roads'] if r['id']==id and r.get('townSeam') and r.get('elevations') for i in (0,-1) if r['points'][i]==p]
+ edge=at(bridge['edge'],bridge['roads'][0]);assert len(edge)==1 and edge[0][0].get('startLevel' if edge[0][1]==0 else 'endLevel')==1,f"edge bridge {bridge['roads'][0]} lost its lifted edge end"
+ piece,end=edge[0]
+ for nxt in bridge['roads'][1:]:
+  q=piece['points'][-1 if end==0 else 0];lift=piece['elevations'][-1 if end==0 else 0];joined=at(q,nxt)
+  assert len(joined)==1 and abs(joined[0][0]['elevations'][joined[0][1]]-lift)<.0002,f"edge bridge {bridge['roads'][0]} has a step at {nxt}"
+  piece,end=joined[0]
+# Restored water spans (connect-source-seams.py): recorded, joined end to end, lifted where they meet a deck.
+spans=[r for r in city['roads'] if r.get('clippedSpan')];crossings=provenance.get('clippedWaterSpans',{}).get('crossings',[])
+assert sorted(i for c in crossings for i in c['roads'])==sorted(r['id'] for r in spans),'provenance must list the restored water spans; run connect-source-seams.py'
+ends_at=defaultdict(list)
+for r in city['roads']:
+ for i in (0,-1):ends_at[tuple(r['points'][i])].append((r,i))
+for crossing in crossings:
+ for terminal in crossing['terminals']:
+  joined=[(r,i) for r,i in ends_at[tuple(terminal['point'])] if r['id']==terminal['road'] and not r.get('clippedSpan')]
+  assert joined,f"water span {crossing['roads'][0]} does not reach {terminal['road']}"
+  for r,i in joined:assert not r.get('elevations') or r.get('startLevel' if i==0 else 'endLevel')==1,f"{r['id']} meets water span {crossing['roads'][0]} without a lifted end"
+for span in spans:
+ assert span['bridge']['kind']=='restored-water-span' and len(span['elevations'])==len(span['points']),f"{span['id']} must be a restored deck piece"
+ for i in (0,-1):
+  others=[(r,j) for r,j in ends_at[tuple(span['points'][i])] if r is not span];assert others,f"{span['id']} ends in mid-air"
+  for r,j in others:
+   if r.get('elevations'):assert abs(r['elevations'][j]-span['elevations'][i])<.0002,f"{span['id']} has a height step at {r['id']}"
 cells=defaultdict(list)
 for r in city['roads']:
  assert len(r['points'])>=2 and r['oneway'] in (-1,0,1) and 3<=r['width']<=20,r['id']
@@ -303,7 +347,7 @@ clearance=min(distance_to_segment(sp,a,b) for _,poly in buildings_near(*sp,40) f
 
 # ---- destinations
 ids={l['id'] for l in city['landmarks']}
-assert {'hancock','trinity','library','brigham-circle','mission-hill','fenway-park','kenmore-square','state-house','downtown-crossing','chinatown-gate','boston-common','public-garden','huntington-mfa','bowker-overpass','harvard-square','harvard-yard','mit-great-dome','kendall-square','davis-square','union-square','prospect-hill','coolidge-corner','brookline-village','bunker-hill-monument','jfk-library','franklin-park-zoo','arnold-arboretum','castle-island','logan-airport','td-garden','faneuil-hall','old-north-church','custom-house'}<=ids
+assert {'hancock','trinity','library','brigham-circle','mission-hill','fenway-park','kenmore-square','state-house','downtown-crossing','chinatown-gate','boston-common','public-garden','huntington-mfa','bowker-overpass','harvard-square','harvard-yard','mit-great-dome','kendall-square','davis-square','union-square','prospect-hill','coolidge-corner','brookline-village','bunker-hill-monument','jfk-library','franklin-park-zoo','arnold-arboretum','castle-island','logan-airport','td-garden','faneuil-hall','old-north-church','custom-house','everett-square','medford-square','malden-center','oak-grove','melrose-ymca','ell-pond','melrose-highlands'}<=ids
 assert len(ids)==len(city['landmarks'])
 assert next(l for l in city['landmarks'] if l['id']=='mission-hill').get('driveStart'),'missing safe hill arrival'
 for landmark in city['landmarks']:
@@ -345,7 +389,27 @@ for landmark in city['landmarks']:
  assert reachable,f"disconnected destination: {landmark['name']}"
  best=min(distance[k]+math.dist(positions[k],point) for k in reachable)
  print(f"Connected {landmark['name']}: {best:.0f} m by road; elevation {elevation(*landmark['position']):.2f} m.")
+# ---- static rail track (rail.json, build-rail-tracks.py): optional, checked against the package it was built on
+rail_path=data_dir/'rail.json';rail=None
+if rail_path.exists():
+ from rail_tracks import package_digest
+ rail=json.loads(rail_path.read_text());assert rail.get('version')==1 and rail['tracks'],'rail.json format'
+ assert rail.get('inputs',{}).get('package')==package_digest(city,gzip.decompress((data_dir/grid['file']).read_bytes()),gzip.decompress((data_dir/grid['source']).read_bytes())),'rail.json was built on other streets or terrain; rerun build-rail-tracks.py'
+ rail_ids={t['id'] for t in rail['tracks']};rail_burial=0
+ for t in rail['tracks']:
+  pts=np.asarray(t['points'],float);assert len(pts)>=2 and np.isfinite(pts).all(),f"{t['id']} track points"
+  for key in ('bridges','covered','crossings'):assert all(0<=r['start']<r['end']<=t['length']+.01 for r in t[key]),f"{t['id']} {key} span outside the track"
+  # Outside covered spans the bed may only let narrow terrain spikes poke through (rail_tracks NARROW, LIFT_CAP).
+  for d,(x,z,y) in zip(np.linspace(0,t['length'],len(pts)),pts):
+   if not any(c['start']-4<=d<=c['end']+4 for c in t['covered']):rail_burial=max(rail_burial,elevation(x,z)-y)
+ assert rail_burial<3.5,f'rails run {rail_burial:.2f} m under the graded terrain outside a covered span'
+ for c in rail['crossings']:
+  street=[r for r in city['roads'] if r.get('name','')==c['name'] and not r.get('elevations') and min(distance_to_segment([c['x'],c['z']],a,b) for a,b in zip(r['points'],r['points'][1:]))<=r['width']/2+1]
+  assert set(c['tracks'])<=rail_ids and street and abs(c['y']-elevation(c['x'],c['z']))<.5,f"level crossing off its street: {c['name']}"
+ for b in rail['bumpers']:
+  t=next(t for t in rail['tracks'] if t['id']==b['track']);assert min(math.dist([b['x'],b['z']],t['points'][k][:2]) for k in (0,-1))<.5,f"bumper off the end of {b['track']}"
 tile_bytes=sum(p.stat().st_size for p in tile_dir.glob('*.bin'))
 print(f"Validated {len(buildings)} buildings ({scaled} coarser-quantized complexes, {grounded} grounded primary meshes, {len(supported)} supported upper parts, {triangles} triangles) in {len(keys)} tiles ({tile_bytes/1e6:.1f} MB), {len(city['roads'])} roads, {curbs} curbs, {park_paths} park paths, {len(city['signals'])} signals, {len(city['landmarks'])} destinations.")
 print(f"Far massing verified: {far_fragments} fragments for {massing_complexes} sprawling complexes match a build-far-massing.py rerun.")
+if rail:print(f"Rail verified: {len(rail['tracks'])} tracks, {sum(len(t['bridges']) for t in rail['tracks'])} bridge spans and {len(rail['crossings'])} level crossings match the package streets and terrain (deepest uncovered bed {rail_burial:.2f} m under a terrain spike).")
 print(f"Terrain verified: {w}x{h} at {cell} m, graded range {heights.min():.2f}..{heights.max():.2f} m, {changed} cells graded (max cut {grid['grading']['maxCut']} m, fill {grid['grading']['maxFill']} m). Spawn is {clearance:.2f} m from the nearest building.")

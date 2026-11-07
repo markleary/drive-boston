@@ -3,6 +3,7 @@ import { closestRoad, pointInside } from '../simulation/roads.ts';
 import { isMetroCity, type MetroCity } from '../simulation/city-tiles.ts';
 import { streetCharacter } from './street-character.ts';
 import { isReligiousBuilding } from '../simulation/building-identities.ts';
+import { houseFloors, housePalette } from './house-styles.ts';
 
 export interface TripleDeckerProfile {
   kind:'triple-decker'; palette:number; floorHeight:number; raisedBase:number;
@@ -10,12 +11,14 @@ export interface TripleDeckerProfile {
 }
 /** A detached-scale house that gets the clapboard family without porch details: its street or shape gave no verified front. */
 export interface WoodFrameProfile { kind:'wood-frame'; palette:number; floorHeight:number; raisedBase:number; }
-export type ArchitectureProfile=TripleDeckerProfile|WoodFrameProfile;
+/** A generated northern house (see house-styles.ts): its storeys and footing set the facade grid; palette indexes HOUSE_PALETTES. */
+export interface HouseProfile { kind:'house'; palette:number; floorHeight:number; raisedBase:number; }
+export type ArchitectureProfile=TripleDeckerProfile|WoodFrameProfile|HouseProfile;
 const profiles=new WeakMap<Building,ArchitectureProfile>();
 const prepared=new WeakMap<CityData,{tripleDeckers:number;woodFrames:number;ids:string[]}>();
 const considered=new WeakSet<Building>();
 /** Dense wood-frame districts where detached three-story houses are the norm. */
-const DISTRICTS=/^(Mission Hill|Jamaica Plain|Roxbury|Dorchester|Mattapan|South Boston|Charlestown|East Boston|Allston|Brighton|Somerville|Cambridge|Brookline|Chelsea)$/;
+const DISTRICTS=/^(Mission Hill|Jamaica Plain|Roxbury|Dorchester|Mattapan|South Boston|Charlestown|East Boston|Allston|Brighton|Somerville|Cambridge|Brookline|Chelsea|Everett|Medford|Malden|Melrose)$/;
 const HILL_STREETS=/Parker Hill|Calumet|Hillside|Iroquois|Oswald|Sachem|Pontiac|Harleston|Alleghany|Carmel|Burney|Wensley|Fisher|Delle|Wait|Pequot|Cherokee|Wigglesworth|Worthington|Parker Street/i;
 /** OpenStreetMap building tags that are never a wood-frame house, whatever their size. */
 const NOT_HOUSE=/^(retail|commercial|industrial|office|garages?|church|school|university|college|hospital|warehouse|public|civic|dormitory|hotel|shed|roof|carport|parking|service|train_station|transportation|kindergarten|religious|government|supermarket)$/;
@@ -37,6 +40,10 @@ export function prepareNeighborhoodArchitecture(city:CityData,buildings?:Buildin
   const metro=isMetroCity(city);
   const districts=(city.neighborhoods??[]).filter(n=>metro?DISTRICTS.test(n.name):n.name==='Mission Hill').flatMap(n=>n.rings.map(ring=>({ring,minX:Math.min(...ring.map(p=>p[0])),maxX:Math.max(...ring.map(p=>p[0])),minZ:Math.min(...ring.map(p=>p[1])),maxZ:Math.max(...ring.map(p=>p[1]))})));
   const ids:string[]=[],woodIds:string[]=[];
+  // Generated houses carry their own typology, storeys and footing.
+  for(const b of buildings??city.buildings)if(b.houseStyle&&!considered.has(b)){
+    considered.add(b);const {floorHeight,foundation}=houseFloors(b);profiles.set(b,{kind:'house',palette:housePalette(b),floorHeight,raisedBase:foundation});
+  }
   if(!districts.length){const result={tripleDeckers:0,woodFrames:0,ids};if(!buildings)prepared.set(city,result);return result;}
   // A neighborhood may be several polygons (Charlestown's main body is its second ring), so every ring counts.
   const inDistrict=(p:Point2)=>districts.some(d=>p[0]>=d.minX&&p[0]<=d.maxX&&p[1]>=d.minZ&&p[1]<=d.maxZ&&pointInside(p,d.ring));
@@ -62,7 +69,7 @@ export function prepareNeighborhoodArchitecture(city:CityData,buildings?:Buildin
     for(let i=0;i<p.length;i++){
       const a=p[i],c=p[(i+1)%p.length],dx=c[0]-a[0],dz=c[1]-a[1],length=Math.hypot(dx,dz);if(length<5.5||length>15)continue;
       const x=(a[0]+c[0])/2,z=(a[1]+c[1])/2,nx=dz/length,nz=-dx/length,road=closestRoad(city,x,z,true);
-      if(!houseStreet(road.road))continue;
+      if(!road.road||!houseStreet(road.road))continue;
       const facing=((road.x-x)*nx+(road.z-z)*nz)/Math.max(.01,road.distance),setback=road.distance-road.road.width/2;
       if(facing<.78||setback<1.4||setback>20)continue;
       const value=facing*10-Math.abs(length-9)*.15-setback*.05;

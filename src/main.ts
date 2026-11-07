@@ -30,6 +30,7 @@ import { addCityLandmarkDetails } from './render/city-landmarks';
 import { addTheEmbrace } from './render/the-embrace';
 import { addPrudentialCrown } from './render/prudential';
 import { addTdGardenDetails } from './render/td-garden';
+import { setMelroseNight } from './render/melrose-landmarks';
 import { addNeighborhoodDetails } from './render/neighborhood-architecture';
 import { updateFoliage } from './render/foliage';
 import { createGroundCover } from './render/ground-cover';
@@ -46,6 +47,7 @@ import {createConstruction} from './simulation/construction';
 import {planConstructionZones} from './simulation/construction-zones';
 import {prepareNPCVehicles} from './render/npc-vehicles';
 import { createTransit, type TransitData } from './simulation/transit';
+import { createRailTracks, loadRailData } from './render/rail-tracks';
 import { meshBuildingIds, usesExactBuildingCollision } from './simulation/building-collisions';
 import { reserveTransitCorridors } from './simulation/transit-corridors';
 import { DriveAudio, type ImpactKind } from './simulation/audio';
@@ -99,7 +101,7 @@ async function boot(){
       if(mode!=='helicopter')physics.setVehicleType(mode==='bike'?'ultrabee':'car');
       travelMode=mode;keys.clear();cancelCameraDrag();audio.setMode(mode);cameraMode='chase';ui.setCamera(cameraMode);cameraSnap=true;lookOffset=0;orbitPitch=.3;zoom=1;
     },
-    onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');setParkedNight(mode==='night');transit?.setNight(mode==='night');prudential?.setNight(mode==='night');metroLandmarks?.setNight(mode==='night');tdGarden?.setNight(mode==='night');},
+    onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');setParkedNight(mode==='night');transit?.setNight(mode==='night');prudential?.setNight(mode==='night');metroLandmarks?.setNight(mode==='night');tdGarden?.setNight(mode==='night');setMelroseNight(mode==='night');},
     onPause(){keys.clear();cancelCameraDrag();},
     onStart(){audio.start();journal.start();captureSession();},
     onSound(enabled){audio.enabled=enabled;},
@@ -193,6 +195,8 @@ async function boot(){
           return {x:saved.x as number,z:saved.z as number,yaw:saved.yaw as number,roadId:typeof saved.roadId==='string'?saved.roadId:undefined};
       }catch{/* Storage is optional. */}
     })();
+    // Optional: a package without rail.json simply has no railway track.
+    const railRequest=loadRailData(`${import.meta.env.BASE_URL}data/rail.json`);
     const transitResponse=await fetch(`${import.meta.env.BASE_URL}data/transit.json`);if(!transitResponse.ok)throw new Error('Transit data could not be loaded. Please reload.');
     const transitData:TransitData=await transitResponse.json();reserveTransitCorridors(city,transitData.routes);
     const fleetResponse=await fetch(`${import.meta.env.BASE_URL}models/traffic-fleet.glb`);if(!fleetResponse.ok)throw new Error('The traffic models could not be loaded. Please reload.');await prepareNPCVehicles(await fleetResponse.arrayBuffer());
@@ -206,7 +210,7 @@ async function boot(){
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
     const embrace=addTheEmbrace(scene,city);physics.addStaticMesh(embrace.collision.vertices,embrace.collision.indices);
     metroLandmarks=metro?addMetroLandmarkDetails(scene,city):undefined;for(const mesh of metroLandmarks?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
-    tdGarden=addTdGardenDetails(scene,city,mobile);tdGarden?.setNight((lighting as LightingMode)==='night');for(const mesh of tdGarden?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
+    tdGarden=addTdGardenDetails(scene,city,mobile);tdGarden?.setNight((lighting as LightingMode)==='night');setMelroseNight((lighting as LightingMode)==='night');for(const mesh of tdGarden?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
     let restored=false;
     if(saved){
       let loaded=true;
@@ -249,6 +253,7 @@ async function boot(){
     construction.update(physics.getState());
     physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;traffic=createTraffic(scene,city,physics,constructionZones);
     transit=createTransit(scene,city,physics,transitData);
+    const railData=await railRequest,rail=railData?createRailTracks(scene,city,physics,railData,{mobile}):undefined;
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     const streetLife=createStreetLife(scene,city,physics,constructionZones);setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
     // What the chassis was touching when it was knocked: a car outranks a bus,
@@ -400,7 +405,7 @@ async function boot(){
       camera.near=flying?1:.15;camera.lookAt(look);camera.updateProjectionMatrix();cameraSnap=false;
       playerCar!.setCameraPosition(camera.position);
       const flightShadows=flying&&quality==='high'&&!mobile;
-      world!.update(target,elapsed,!mobile||!paused,flightShadows);construction.update(state,carState);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
+      world!.update(target,elapsed,!mobile||!paused,flightShadows);rail?.update(target.x,target.z);construction.update(state,carState);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);updateFoliage(scene,target,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
       for(const impact of physics!.takeImpacts())if(!paused)audio.impact(classifyImpact(impact),impact.severity);
       for(const speed of streetLife.takeHits())if(!paused)audio.impact('pedestrian',speed);
@@ -425,6 +430,8 @@ async function boot(){
       flyTo:(x:number,y:number,z:number,yaw=0)=>travelTo(x,z,()=>flight!.reset({x,y,z},yaw)),
       /** Browser specs: the live scene graph and renderer, for attributing resource growth to its owner group. */
       scene,renderer,tireTracks,construction,
+      /** Browser specs: built rail cells and colliders, and the nearest drawn track to (x, z). */
+      railTracks:(x?:number,z?:number)=>rail?.snapshot(x,z),
       /** Browser specs: draw every resident object once, with frustum culling off and distance-hidden objects shown (lights stay as they are so no shader variant recompiles). three.js uploads a geometry's GL buffers on its first draw, so without this the renderer's geometry count and buffer bytes track what the camera has happened to see rather than what the scene holds. */
       drawResident:()=>{const culled:THREE.Object3D[]=[],hidden:THREE.Object3D[]=[];scene.traverse(o=>{if(o.frustumCulled){o.frustumCulled=false;culled.push(o);}if(!o.visible&&!(o as THREE.Light).isLight){o.visible=true;hidden.push(o);}});try{renderer.render(scene,camera);}finally{for(const o of culled)o.frustumCulled=true;for(const o of hidden)o.visible=false;}}};
     Object.assign(window,{__backbay:diagnostic});

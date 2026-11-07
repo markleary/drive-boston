@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Compile the Greater Boston runtime data set: every Boston neighborhood except
 Roslindale, West Roxbury, Hyde Park and the Harbor Islands, plus Cambridge,
-Somerville, Brookline and Chelsea. Same methods as build-city.py (official centerlines
+Somerville, Brookline, Chelsea, Everett, Medford, Malden and Melrose. Same methods
+as build-city.py (official centerlines
 with name and class based widths, surveyed OBJ building models seated on the
 USGS DEM), extended with Cambridge's OBJ models, OpenStreetMap buildings and
-streets for the towns without open 3D models, generic bridge decks derived from
-source level topology and water crossings, and streamed world tiles.
+streets for the towns without open 3D models (the northern towns' houses take
+their style, storeys and roof from the MassGIS assessor parcel they stand on;
+see house_shapes.py), generic bridge decks derived from source level topology and
+water crossings, and streamed world tiles.
 Requires: pip install -r scripts/requirements.txt (see DATA_SOURCES.md).
 """
 from __future__ import annotations
@@ -24,18 +27,25 @@ from building_semantics import apply_building_identity,facade_style,index_footpr
 from building_clearance_package import prepare_buildings,prepare_package
 from building_collision_policy import KEY_BUILDING_IDS,exact_far_collision
 from osm_road_tags import bridge_source_layer,road_width,source_layer
+from house_shapes import eave_height,house_mesh,parse_stories,typology
+from mesh_winding import orient_patches
 spec=importlib.util.spec_from_file_location('city_compiler',ROOT/'scripts/build-city.py');central=importlib.util.module_from_spec(spec);spec.loader.exec_module(central)
 xy,rounded,hull,load_layer,feature_polygons,polygon_rings,polygon_parts,context_polygons,visible_floor,geographic_polygon=central.xy,central.rounded,central.hull,central.load_layer,central.feature_polygons,central.polygon_rings,central.polygon_parts,central.context_polygons,central.visible_floor,central.geographic_polygon
 FT=central.FT;ORIGIN=central.ORIGIN;TO_GEO=central.TO_GEO
 TILE=1000
 DECK=6.4
 EXCLUDED=['Roslindale','West Roxbury','Hyde Park','Harbor Islands']
-TOWNS={'CAMBRIDGE':'Cambridge','SOMERVILLE':'Somerville','BROOKLINE':'Brookline','CHELSEA':'Chelsea'}
+TOWNS={'CAMBRIDGE':'Cambridge','SOMERVILLE':'Somerville','BROOKLINE':'Brookline','CHELSEA':'Chelsea','EVERETT':'Everett','MEDFORD':'Medford','MALDEN':'Malden','MELROSE':'Melrose'}
+# Towns whose OSM extracts carry full multipolygon member geometry (Overpass `body`).
+FULL_GEOMETRY={'Chelsea','Everett','Medford','Malden','Melrose'}
+# The final extension north of the Mystic: OSM footprints dressed from assessor parcels.
+NORTH={'Everett','Medford','Malden','Melrose'}
 SOURCES=[
  *central.SOURCES,
  {'name':'City of Boston official surrounding town polygons','url':'https://gisportal.boston.gov/arcgis/rest/services/Basemaps/Boston_Basemap_Cached_WM/MapServer/17','license':'City of Boston open data; source attribution retained'},
  {'name':'Cambridge GIS 3D building models (OBJ), 2023 edition','url':'https://www.cambridgema.gov/GIS/3D/3ddata','license':'City of Cambridge open data; no textures used'},
- {'name':'OpenStreetMap streets, buildings, parks, water and paths for Cambridge, Somerville, Brookline and Chelsea','url':'https://www.openstreetmap.org/copyright','license':'© OpenStreetMap contributors; ODbL 1.0'},
+ {'name':'OpenStreetMap streets, buildings, parks, water and paths for Cambridge, Somerville, Brookline, Chelsea, Everett, Medford, Malden and Melrose','url':'https://www.openstreetmap.org/copyright','license':'© OpenStreetMap contributors; ODbL 1.0'},
+ {'name':'MassGIS Standardized Assessors\' Parcels (Level 3): house style, year built and storeys for Everett, Medford, Malden and Melrose','url':'https://www.mass.gov/info-details/massgis-data-property-tax-parcels','license':'MassGIS public data; source attribution retained'},
 ]
 NAME_WIDTHS={'Boylston':13,'Newbury':10,'Commonwealth':9,'Marlborough':9,'Beacon':12,'Dartmouth':11,'Clarendon':11,'Berkeley':12,'Exeter':10,'Huntington':15,'Saint James':12,'Stuart':13,'Arlington':14,'Columbus':12,'Tremont':12,'Parker':9,'Parker Hill':8,'Francis':12,'Longwood':12,'Calumet':8,'Fisher':8,'Hillside':8,'Saint Alphonsus':9}
 CLASS_WIDTHS={'A15':14,'A21':12,'A25':12,'A31':10,'A35':10,'A41':7,'A45':7,'A40':7,'A30':10}
@@ -141,7 +151,11 @@ def main():
  log('Terrain grid',grid.width,'x',grid.height)
  # ---- water and parks (needed before roads so crossings can become bridges)
  parks=context_polygons(cache,14,'SITE_NAME',coverage,'park')
- water_records=[(w,Polygon(w['rings'][0],w['rings'][1:]).buffer(0)) for w in context_polygons(cache,12,'NAME',geographic_polygon(envelope),'water')]
+ hydro=context_polygons(cache,12,'NAME',geographic_polygon(envelope),'water')
+ # The northern strip's hydro polygons (the Mystic Lakes, Spot Pond, the Malden River) come from a second query.
+ if (cache/'basemap-12-north.json').exists():
+  known={w['id'] for w in hydro};hydro+=[w for w in context_polygons(cache,'12-north','NAME',geographic_polygon(envelope),'water') if w['id'] not in known]
+ water_records=[(w,Polygon(w['rings'][0],w['rings'][1:]).buffer(0)) for w in hydro]
  osm_parks,osm_water,osm_paths,osm_signals,osm_buildings,osm_roads=load_osm(cache,districts,coverage)
  for name,polygon in osm_water:water_records.append(({'name':name},polygon))
  water_union=unary_union([p for _,p in water_records]).intersection(geographic_polygon(envelope));water=[]
@@ -190,6 +204,8 @@ def main():
  polygons=polygon_parts(coverage);outlines=[[rounded(v) for v in polygon.exterior.coords[:-1]] for polygon in polygons]
  corners=[xy(x,y) for x in [envelope[0],envelope[2]] for y in [envelope[1],envelope[3]]]
  world_bounds={'minX':round(min(p[0] for p in corners),3),'maxX':round(max(p[0] for p in corners),3),'minZ':round(min(p[1] for p in corners),3),'maxZ':round(max(p[1] for p in corners),3)}
+ # The projected envelope's north-west corner reaches 13 m west of the terrain lattice, whose origin stays on the core's; the world ends where the terrain does.
+ world_bounds={'minX':max(world_bounds['minX'],float(grid.ox)),'maxX':min(world_bounds['maxX'],float(grid.ox+(grid.width-1)*grid.cell)),'minZ':max(world_bounds['minZ'],float(grid.oz)),'maxZ':min(world_bounds['maxZ'],float(grid.oz+(grid.height-1)*grid.cell))}
  neighborhoods=[]
  for name in dict.fromkeys(districts.names):
   area=unary_union([p for p,n in zip(districts.polygons,districts.names) if n==name]).simplify(1,preserve_topology=True)
@@ -236,7 +252,7 @@ def osm_polygons(element,require_complete=False):
   return polygon_parts(Polygon(pts).buffer(0))
  if element['type']=='relation':
   if require_complete and (not element.get('members') or any(m['type']=='way' and not m.get('geometry') for m in element['members'])):
-   raise ValueError(f"OSM relation {element['id']} lacks member geometry; refresh the Chelsea extract with out body geom")
+   raise ValueError(f"OSM relation {element['id']} lacks member geometry; refresh the extract with out body geom")
   outers=[];inners=[]
   for m in element.get('members',[]):
    if m['type']!='way' or not m.get('geometry'):continue
@@ -282,7 +298,7 @@ def load_osm(cache,districts,coverage):
    context=[e for e in context if (e['type'],e['id'])!=(supplemental['type'],supplemental['id'])]+[supplemental]
   for e in context:
    tags=e.get('tags',{})
-   for n,poly in enumerate(osm_polygons(e,require_complete=name=='Chelsea')):
+   for n,poly in enumerate(osm_polygons(e,require_complete=name in FULL_GEOMETRY)):
     if not inside.intersects(poly):continue
     clipped=poly.intersection(area)
     for k,part in enumerate(polygon_parts(clipped)):
@@ -302,18 +318,21 @@ def load_osm(cache,districts,coverage):
   for e in osm_elements(cache,key+'-buildings'):
    tags=e.get('tags',{})
    if tags.get('building') in [None,'no'] or tags.get('location')=='underground':continue
-   for n,poly in enumerate(osm_polygons(e,require_complete=name=='Chelsea')):
+   for n,poly in enumerate(osm_polygons(e,require_complete=name in FULL_GEOMETRY)):
     if poly.area<8:continue
     centroid=poly.representative_point()
     if not inside.covers(centroid) or boston.covers(centroid):continue
     buildings.append((name,e,tags,poly,n))
- for e in osm_elements(cache,'metro-water'):
+ for e in osm_elements(cache,'metro-water')+osm_elements(cache,'north-water'):
   tags=e.get('tags',{})
   if tags.get('natural')!='water':continue
   for poly in osm_polygons(e):
    if poly.area>=15:water.append((tags.get('name'),poly))
  covered=prep(coverage)
- for e in osm_elements(cache,'metro-paths'):
+ seen_paths=set()
+ for e in osm_elements(cache,'metro-paths')+osm_elements(cache,'north-paths'):
+  if e['id'] in seen_paths:continue
+  seen_paths.add(e['id'])
   tags=e.get('tags',{});pts=[xy(p['lon'],p['lat']) for p in e.get('geometry') or []]
   if e['type']!='way' or len(pts)<2 or tags.get('area')=='yes' or tags.get('highway') not in ['footway','path','pedestrian','steps','cycleway']:continue
   if not covered.intersects(LineString(pts)):continue
@@ -512,6 +531,64 @@ def synthetic_curbs(roads,districts):
   log('Synthetic curbs for',name,len(result))
  return result
 
+# ----------------------------------------------------------- assessor parcels
+class Parcels:
+ """MassGIS assessor parcels of the northern towns, indexed for footprint lookups.
+ A condominium repeats its parcel polygon once per unit record (one LOC_ID), so
+ records are grouped: the style most units share, the earliest year built and
+ the most storeys stand for the building."""
+ def __init__(self,cache):
+  self.polygons=[];self.records=[]
+  for town in sorted(NORTH):
+   path=cache/f'parcels-{town.lower()}.json'
+   if not path.exists():raise RuntimeError(f'Missing assessor parcels: {path.name}; run fetch-metro-sources.py')
+   groups=defaultdict(list)
+   for f in json.loads(path.read_text())['features']:
+    if not f.get('geometry') or f['geometry']['type'] not in ('Polygon','MultiPolygon'):continue
+    props=f['properties'];groups[props.get('LOC_ID') or props.get('MAP_PAR_ID') or str(props['OBJECTID'])].append(f)
+   for key in sorted(groups):
+    group=groups[key];props=[g['properties'] for g in group]
+    styles=Counter((p.get('STYLE') or '').strip() for p in props if (p.get('STYLE') or '').strip())
+    uses=Counter(str(p.get('USE_CODE') or '') for p in props)
+    years=[int(p['YEAR_BUILT']) for p in props if p.get('YEAR_BUILT') and 1650<=int(p['YEAR_BUILT'])<=2030]
+    stories=[parse_stories(p.get('STORIES')) for p in props];stories=[s for s in stories if s[0]]
+    record={'town':town,'style':styles.most_common(1)[0][0] if styles else '','use':uses.most_common(1)[0][0],'year':min(years) if years else None,
+     'stories':max(s[0] for s in stories) if stories else None,'attic':any(s[1] for s in stories),'units':sum(int(p.get('UNITS') or 0) for p in props),'parcel':props[0].get('MAP_PAR_ID')}
+    record['typology']=typology(record['style'],record['year'],record['use'])
+    for poly in feature_polygons(group[0]):
+     if poly.is_empty or poly.area<20:continue
+     self.polygons.append(poly);self.records.append(record)
+  self.tree=STRtree(self.polygons);self.prepared=[prep(p) for p in self.polygons]
+  log('Assessor parcels',len(self.polygons))
+ def at(self,point):
+  best=None
+  for i in self.tree.query(point):
+   if self.prepared[i].covers(point) and (best is None or self.polygons[i].area<self.polygons[best].area):best=i
+  return best
+
+def assign_houses(osm_buildings,parcels):
+ """House typology per northern footprint: the largest footprint on a parcel
+ (and any other at least half its size) takes the parcel's style; a small
+ outbuilding behind a house is a garage. Returns {identifier: house record}."""
+ on=defaultdict(list);result={}
+ for town,e,tags,poly,n in osm_buildings:
+  if town not in NORTH:continue
+  identifier=f"osm-{e['type']}-{e['id']}"+(f'-{n}' if n else '')
+  k=parcels.at(poly.representative_point())
+  if k is not None:on[k].append((identifier,tags,poly))
+ for k,entries in on.items():
+  record=parcels.records[k];largest=max(p.area for _,_,p in entries)
+  for identifier,tags,poly in entries:
+   kind=tags.get('building','yes');house=dict(record)
+   if kind in ('garage','garages','shed','carport') or (poly.area<45 and poly.area<.5*largest):
+    house['typology']='garage' if record['typology'] or kind in ('garage','garages') else None;house['stories']=1;house['attic']=False
+   elif poly.area<.5*largest:house['typology']=None;house['stories']=None
+   # A multi-unit block, school or store keeps the extruded massing; a few
+   # apartment blocks sit on parcels the assessor styles as old houses.
+   if house['typology'] and house['typology']!='garage' and (poly.area>420 or kind in ('apartments','commercial','retail','industrial','school','church','office','warehouse')):house['typology']=None
+   result[identifier]=house
+ return result
+
 # ------------------------------------------------------------------ buildings
 LANDMARK_IDS={'BOS-SVW9N-993CZ-MQI3K':'trinity','BOS-UKVLD-7CM74-Y9HBL':'library','BOS-6T6GA-7AUWF-K9HHY':'hancock','BOS-86B4E-VWXL2-YYYRR':'faneuil-hall','BOS-7NJX5-W2Y9P-OV9A0':'quincy-market','BOS-MFQR8-QVJIQ-WA52G':'custom-house','BOS-E9LMV-HNBSR-HE90Q':'old-north-church','BOS-VOQKB-AY4S3-7DNA0':'old-state-house','BOS-6JW0O-0UKVU-EA9CP':'city-hall','BOS-QXHWT-FEULR-NC03U':'museum-of-science','BOS-DIPUS-MOOL6-PJ4EY':'south-station','BOS-09YGL-4EWS8-OPPGI':'park-street-church','BOS-JBDU8-VZH4R-WXY1R':'kings-chapel','BOS-HM5AG-P0OP7-66YYQ':'old-south-meeting-house','BOS-168OQ-MKVVL-3QJXL':'millennium-tower','BOS-VE8WA-2KF3I-D31M4':'convention-center','BOS-2E9SM-83L3W-UVT08':'zakim-bridge','CAM_PX4ND-TBOZP-3FRN5':'mit-dome','CAM_20TZA-X87UC-ZWCKG':'widener-library','CAM_EXP00-RH2O7-V8A8B':'stata-center','CAM_OOY5L-PGU0F-QF3FN':'cambridge-city-hall','CAM_Y9GRZ-C4SE0-FGVNN':'massachusetts-hall'}
 LANDMARK_POINTS=[('bunker-hill-monument',-71.06078,42.37627),('td-garden',-71.06218,42.36626),('jfk-library',-71.03432,42.31652),('harvard-stadium',-71.12640,42.36668),('memorial-hall',-71.11440,42.37625),('dorchester-heights-monument',-71.04670,42.33310),('fort-independence',-71.01069,42.33857),('prospect-hill-tower',-71.09576,42.38109),('logan-terminal',-71.01650,42.36690)]
@@ -618,6 +695,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
   process_catalog(candidates,'cambridge-obj','cambridge-catalog-feet-and-source-floor',True)
   log('Cambridge tile',path.name,'candidates',len(candidates),'total buildings',len(buildings))
  # OpenStreetMap extrusions for towns without surveyed building models
+ houses=assign_houses(osm_buildings,Parcels(cache)) if any(t in NORTH for t,*_ in osm_buildings) else {}
  for town,e,tags,poly,n in osm_buildings:
   identifier=f"osm-{e['type']}-{e['id']}"+(f'-{n}' if n else '')
   if identifier in seen_ids:continue
@@ -626,15 +704,33 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
   footprint=hull(list(poly.exterior.coords))
   if len(footprint)<3:continue
   center=rounded([poly.centroid.x,poly.centroid.y]);base=building_base(grid,footprint,center)
-  vertices,faces=extrude(poly,base,height,tags)
+  house=houses.get(identifier);shape=None
+  if house and house['typology']:
+   eave=eave_height(house['typology'],house['stories'],house['attic'])
+   shape=house_mesh(poly,base,eave,house['typology'],stories=house['stories'],attic=house['attic'])
+  if shape:vertices,faces,roof_mask,roof_meta=shape;height=eave;policy='assessor-style'
+  else:
+   # A northern block without a tagged height takes its storeys from the parcel.
+   if house and house.get('stories') and policy=='osm-type-default':height=round(.6+house['stories']*(3.6 if tags.get('building') in ('commercial','retail','office','yes') else 3.1),2);policy='assessor-storeys'
+   vertices,faces=extrude(poly,base,height,tags);roof_mask=None
   if not faces:continue
   xs=[v[0] for v in vertices];zs=[v[2] for v in vertices];ax=round((min(xs)+max(xs))/2,3);az=round((min(zs)+max(zs))/2,3)
   if max(max(xs)-ax,max(zs)-az)>3200:stats['oversized-skipped']+=1;continue
-  record=tileformat.mesh_record(vertices,faces,[ax,base,az],base)
+  # Generated house shells are wound outward by construction (open eaves and soffits are not closed shells).
+  record=tileformat.mesh_record(vertices,faces,[ax,base,az],base,repair_winding=roof_mask is None,roof_mask=roof_mask)
+  if record is not None and shape and roof_meta['turrets'] and orient_patches(record[0]*record[3]+np.asarray([ax,base,az]),np.concatenate([record[1],record[2]]))[1]:
+   # A turret whose walls run inside the main roof reads as wound into the building; that house keeps its bay under the main roof.
+   shape=house_mesh(poly,base,eave,house['typology'],stories=house['stories'],attic=house['attic'],turrets=False)
+   if shape:vertices,faces,roof_mask,roof_meta=shape;record=tileformat.mesh_record(vertices,faces,[ax,base,az],base,repair_winding=False,roof_mask=roof_mask)
   if record is None:continue
   name=tags.get('name') or ' '.join(v for v in [tags.get('addr:housenumber'),tags.get('addr:street')] if v) or f'{town} building'
   entry={'id':identifier,'name':name,'center':center,'height':round(max(v[1] for v in vertices)-base,2),'eaveHeight':height,'footprint':footprint,'baseElevation':base,'district':town,'anchor':[ax,base,az],'source':'osm-extrusion','kind':tags.get('building','yes')}
   if tags.get('amenity'):entry['amenity']=tags['amenity']
+  if shape:
+   entry['houseStyle']=house['typology'];entry['roofShape']=roof_meta['roof']
+   if house['year']:entry['yearBuilt']=house['year']
+   if house['stories']:entry['stories']=house['stories']+(.5 if house['attic'] else 0)
+   if roof_meta['turrets']:entry['turrets']=roof_meta['turrets']
   emit(entry,record,{'min':base,'max':round(base+height,4),'ground':base,'policy':policy,'offset':0});stats[policy]+=1
  log('OSM buildings',sum(1 for b in buildings if b['source']=='osm-extrusion'))
  return buildings,geometry,dict(stats),landmark_hits
@@ -738,15 +834,31 @@ PLACES=[
  ('chelsea-square','Chelsea Square',-71.038883558,42.389904366,'Chelsea · the historic square beside Broadway, Park Street and Winnisimmet Street'),
  ('bellingham-square','Bellingham Square',-71.03414,42.39275,'Chelsea · Broadway, Washington Avenue and Hawthorn Street near City Hall'),
  ('mary-omalley-park','Mary O’Malley Waterfront Park',-71.051014255,42.388567290,'Chelsea · Commandants Way and the Mystic River waterfront west of the Tobin Bridge'),
+ ('everett-square','Everett Square',-71.05471,42.40831,'Everett · Broadway at Norwood Street beside City Hall'),
+ ('encore-boston-harbor','Encore Boston Harbor',-71.06882,42.39506,'Everett · bronze glass resort tower on the Mystic River at Broadway'),
+ ('wellington','Wellington · Station Landing',-71.07713,42.40202,'Medford · Orange Line station beside the Mystic River and the Fellsway'),
+ ('medford-square','Medford Square',-71.10989,42.41819,'Medford · Main Street, Riverside Avenue and the Chevalier Theatre'),
+ ('tufts-university','Tufts University · Goddard Chapel',-71.11939,42.40707,'Medford · the hilltop campus above College Avenue'),
+ ('malden-center','Malden Center',-71.07410,42.42676,'Malden · Pleasant Street beside the Orange Line and commuter rail station'),
+ ('fellsmere-park','Fellsmere Park',-71.08518,42.42844,'Malden · pond park in the west end below the Fells'),
+ ('oak-grove','Oak Grove',-71.07081,42.43720,'Malden · Orange Line terminal where the commuter rail runs on to Melrose'),
+ ('pine-banks','Pine Banks Park',-71.06233,42.44151,'Malden and Melrose · wooded park and ball fields on Main Street at the city line'),
+ ('melrose-ymca','Melrose YMCA',-71.06499,42.45494,'Downtown Melrose · 1895 red brick YMCA with a slate roof and copper trim on Main Street'),
+ ('melrose-city-hall','Melrose City Hall · Memorial Hall',-71.06478,42.45662,'Downtown Melrose · Main Street storefronts beside City Hall and Memorial Hall'),
+ ('ell-pond','Ell Pond',-71.06311,42.45942,'Melrose · gazebo and pond-side lawns off Main Street'),
+ ('bellevue-avenue','Bellevue Avenue',-71.05990,42.46300,'Melrose · large painted Victorians climbing the hill east of Ell Pond'),
+ ('melrose-highlands','Melrose Highlands',-71.06855,42.46880,'Melrose · Franklin Street Victorians around the Highlands depot'),
+ ('mount-hood','Mount Hood Park',-71.03274,42.45176,'Melrose · hilltop park, golf course and lookout tower near the Saugus line'),
 ]
-# Places whose surveyed building the renderer dresses by id (src/render/symphony-hall.ts)
-# without a landmark tag, so tiles and far hulls stay byte-identical; the building is
-# listed in city.landmarkBuildings for the facade module before its tile streams in.
-PLACE_BUILDINGS={'symphony-hall':'BOS-383I7-LINV0-9U4AI'}
+# Places whose surveyed building the renderer dresses by id (src/render/symphony-hall.ts,
+# src/render/melrose-landmarks.ts) without a landmark tag, so tiles and far hulls stay
+# byte-identical; the building is listed in city.landmarkBuildings for the facade module
+# before its tile streams in.
+PLACE_BUILDINGS={'symphony-hall':'BOS-383I7-LINV0-9U4AI','melrose-ymca':'osm-way-29803654','ell-pond':'osm-way-1090238612','mount-hood':'osm-way-181201049'}
 FACADE_BUILDING_IDS=set(PLACE_BUILDINGS.values())
 # Arrivals that should frame a facade instead of stopping at the nearest kerb:
 # the carriageway to arrive on and the point (metres) to approach.
-ARRIVALS={'symphony-hall':('9276-0-0',[-893.5,909.3]),'south-station':('16420-0-0',[1560,-297]),'td-garden':('15123-0-0',[1186,-1633])}
+ARRIVALS={'symphony-hall':('9276-0-0',[-893.5,909.3]),'south-station':('16420-0-0',[1560,-297]),'td-garden':('15123-0-0',[1186,-1633]),'encore-boston-harbor':('osm-1136392750-0',[631,-4991])}
 DETACHED={'maverick-square':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport','logan-airport':'Harbor tunnels are not modeled; reach East Boston by helicopter or teleport'}
 
 def build_landmarks(roads,buildings,grid,landmark_hits):

@@ -1,9 +1,9 @@
 {
-  "roads": 20704,
-  "tiles": 202,
-  "polygonParts": 11397,
-  "tileSeams": 361,
-  "profileSamples": 293835,
+  "roads": 24778,
+  "tiles": 265,
+  "polygonParts": 15300,
+  "tileSeams": 480,
+  "profileSamples": 309370,
   "remainingProfiles": [
     {
       "road": "8803-0-0",
@@ -206,26 +206,6 @@
         "point": [
           1084.236,
           2174.142
-        ]
-      },
-      "unpavedTerrainIntrusion": {
-        "depth": 0
-      },
-      "dedicatedBuilder": false
-    },
-    {
-      "road": "osm-93020592-0",
-      "name": "Boston Avenue",
-      "maxGrade": 0.648,
-      "gradePoint": [
-        -4625.715,
-        -7444.742
-      ],
-      "terrainAboveDeck": {
-        "depth": 0.474,
-        "point": [
-          -4623.109,
-          -7453.125
         ]
       },
       "unpavedTerrainIntrusion": {
@@ -481,20 +461,6 @@
     },
     {
       "roads": [
-        "osm-8605502-0"
-      ],
-      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
-      "excess": 0.804
-    },
-    {
-      "roads": [
-        "osm-9038805-0"
-      ],
-      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
-      "excess": 0.018
-    },
-    {
-      "roads": [
         "osm-1471521528-0",
         "osm-591294833-0",
         "osm-9429794-0"
@@ -543,6 +509,13 @@
       ],
       "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
       "excess": 3.04
+    },
+    {
+      "roads": [
+        "osm-9037998-0"
+      ],
+      "reason": "terrain/clearance exceeds the grade envelope from fixed landings",
+      "excess": 0.49
     }
   ]
 }

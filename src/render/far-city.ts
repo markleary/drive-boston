@@ -4,6 +4,7 @@ import type { MetroCity } from '../simulation/city-tiles.ts';
 import { drawsFarMassing, type FarBuilding, type FarTile } from '../simulation/far-format.ts';
 import { terrainGrid } from '../simulation/terrain.ts';
 import { FACADE_STYLES } from './materials.ts';
+import { HOUSE_FAR_STYLE, HOUSE_PALETTES } from './house-styles.ts';
 import { clipPortalSurface } from './terrain-ground.ts';
 import { farPassageFootprints, isTunnelPassageFar } from '../simulation/tunnel-passages.ts';
 
@@ -20,7 +21,9 @@ export { orientedBox } from '../simulation/oriented-box.ts';
 import { orientedBox } from '../simulation/oriented-box.ts';
 
 function styleColor(style: number) {
-  const base = new THREE.Color(FACADE_STYLES[Math.min(style, FACADE_STYLES.length - 1)]?.base ?? '#8a8278');
+  // From HOUSE_FAR_STYLE on, a style byte names a northern house palette (house-styles.ts).
+  const house = style >= HOUSE_FAR_STYLE ? HOUSE_PALETTES[style - HOUSE_FAR_STYLE] : undefined;
+  const base = new THREE.Color(house?.body ?? FACADE_STYLES[Math.min(style, FACADE_STYLES.length - 1)]?.base ?? '#8a8278');
   // Slightly lifted and desaturated: haze between the camera and a distant block.
   return base.lerp(new THREE.Color('#b9bcb8'), .22);
 }
@@ -32,7 +35,7 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
   const size = metro.tiles.size, buildingMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
   const groundMaterial = new THREE.MeshLambertMaterial({ color: '#b9bea8' });
   let buildingCount = 0;
-  const colors = FACADE_STYLES.map((_, i) => styleColor(i)), roofColor = new THREE.Color('#7d7a72');
+  const colors = Array.from({ length: HOUSE_FAR_STYLE + HOUSE_PALETTES.length }, (_, i) => styleColor(i)), roofColor = new THREE.Color('#7d7a72');
   const grid = terrainGrid(city);
   for (const key of metro.tiles.keys) {
     const [tx, tz] = key.split('_').map(Number);

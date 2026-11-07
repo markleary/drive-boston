@@ -20,20 +20,23 @@ MAGIC=b'DBT2'
 SCALE=.01
 SCALES=(.01,.02,.05,.1)
 
-def mesh_record(vertices,faces,anchor,base,repair_winding=True):
+def mesh_record(vertices,faces,anchor,base,repair_winding=True,roof_mask=None):
  """Quantize a building mesh: drop degenerate or buried triangles, split facade
  and roof by face normal, deduplicate vertices. Returns (positions int16 Nx3,
  facade uint32 Mx3, roof uint32 Kx3, scale) or None when nothing visible
  remains. The quantization step is the finest of SCALES that keeps every vertex
  within the int16 range of the anchor (1 cm up to 327 m, 10 cm up to 3.2 km),
- so extensive complexes such as the Prudential keep their single survey mesh."""
+ so extensive complexes such as the Prudential keep their single survey mesh.
+ `roof_mask` (one flag per face) overrides the normal split for generated shells."""
  v=np.asarray(vertices,dtype=np.float64).reshape(-1,3);f=np.asarray(faces,dtype=np.int64).reshape(-1,3)
  if len(f)==0 or len(v)==0:return None
  a,b,c=v[f[:,0]],v[f[:,1]],v[f[:,2]];n=np.cross(b-a,c-a);length=np.linalg.norm(n,axis=1)
  top=np.maximum(np.maximum(a[:,1],b[:,1]),c[:,1]);keep=(length>1e-7)&(top>=base+.01)
  f=f[keep];n=n[keep];length=length[keep]
  if len(f)==0:return None
- roof=np.abs(n[:,1]/length)>.65
+ # A generated shell names its roof faces (steep slate and gambrel slopes are
+ # roofs too); everything else splits by face normal.
+ roof=np.asarray(roof_mask,dtype=bool)[keep] if roof_mask is not None else np.abs(n[:,1]/length)>.65
  local=v-np.asarray(anchor,dtype=np.float64);reach=np.abs(local).max()
  scale=next((s for s in SCALES if reach/s<=32767),None)
  if scale is None:raise ValueError('Vertex exceeds the 3.2 km anchor range')

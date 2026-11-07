@@ -33,7 +33,8 @@ test('Somerville house streets receive the wood-frame typology whatever their wi
   // houses. Its OpenStreetMap width (13.7 m) and its downtown namesake must not
   // turn the street into a brick shopping street.
   const metro=await loadMetroCity({bounds:{minX:-3300,maxX:-2800,minZ:-4550,maxZ:-4050}});
-  const summer=metro.roads.filter(road=>road.name==='Summer Street'&&road.kind);
+  // city.roads holds every street in the package; the northern towns have their own residential Summer Streets.
+  const summer=metro.roads.filter(road=>road.name==='Summer Street'&&road.kind&&road.points.some(([x,z])=>x>=-3300&&x<=-2800&&z>=-4550&&z<=-4050));
   assert.ok(summer.length>=2&&summer.every(road=>road.kind==='secondary'||road.kind==='tertiary'),'the town street carries its OpenStreetMap class');
   const near=metro.buildings.filter(b=>Math.hypot(b.center[0]+3044.4,b.center[1]+4306.67)<120&&!b.landmark);
   const houses=near.filter(b=>{const p=b.footprint,area=Math.abs(p.reduce((s,a,i)=>{const c=p[(i+1)%p.length];return s+a[0]*c[1]-c[0]*a[1];},0))/2;return b.height>=8.3&&b.height<=14.4&&area>=65&&area<=245;});

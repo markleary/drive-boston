@@ -45,11 +45,12 @@ test('upper-road parapets stay intact above a lower or covered railway and tile 
 });
 
 test('shipped B bridge openings change only the two Essex Street edges crossing the rail median',async()=>{
-  const city=await loadMetroCity({tiles:[]}),roads=city.roads.filter(r=>r.elevations),before=new Map(roads.map(r=>[r.id,bridgeBarriers(city,r)]));
+  // Keyed by road object: a deck clipped at a town line keeps one id on both pieces (the Fellsway at the Somerville/Medford line).
+  const city=await loadMetroCity({tiles:[]}),roads=city.roads.filter(r=>r.elevations),before=new Map(roads.map(r=>[r,bridgeBarriers(city,r)]));
   reserveTransitCorridors(city,JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8')).routes);
   const changed=[];let removed=0;
   for(const road of roads){
-    const prior=before.get(road.id),current=bridgeBarriers(city,road);
+    const prior=before.get(road),current=bridgeBarriers(city,road);
     if(JSON.stringify(prior)===JSON.stringify(current))continue;
     changed.push(road.id);assert.equal(road.name,'Essex Street');
     removed+=prior.reduce((sum,p)=>sum+p.length,0)-current.reduce((sum,p)=>sum+p.length,0);

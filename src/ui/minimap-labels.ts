@@ -7,7 +7,7 @@ export interface MinimapLabelView {
   measureText:(text:string)=>number; fontSize?:number; maxLabels?:number;
   reserved?:{x:number;y:number;radius:number}[];
 }
-type Path={points:Point2[];stations:number[];length:number};
+type Path={points:Point2[];stations:number[];length:number;width:number};
 type Anchor={name:string;text:string;path:Path;station:number;point:Point2;priority:number};
 const clamp=(v:number,a:number,b:number)=>Math.max(a,Math.min(b,v));
 const nodeKey=(p:Point2)=>`${Math.round(p[0]*10)},${Math.round(p[1]*10)}`;
@@ -28,12 +28,12 @@ function at(path:Path,station:number):Point2{
 /** Join contiguous GIS fragments of one named road. Branches favor the straight
  * continuation, so a name follows the street rather than a short side spur. */
 function paths(roads:Road[]):Path[]{
-  const edges=roads.filter(r=>r.points.length>1).map(road=>({points:road.points,used:false}));
+  const edges=roads.filter(r=>r.points.length>1).map(road=>({points:road.points,width:road.width,used:false}));
   const endpoints=new Map<string,number[]>();
   edges.forEach((edge,i)=>{for(const p of [edge.points[0],edge.points.at(-1)!]){const key=nodeKey(p),list=endpoints.get(key)??[];list.push(i);endpoints.set(key,list);}});
   const result:Path[]=[];
   for(const edge of edges){
-    if(edge.used)continue;edge.used=true;const points=[...edge.points];
+    if(edge.used)continue;edge.used=true;const points=[...edge.points];let width=edge.width;
     const extend=()=>{for(;;){
       const end=points.at(-1)!,previous=points.at(-2)!,dx=end[0]-previous[0],dz=end[1]-previous[1],length=Math.hypot(dx,dz)||1;
       let best=-1,bestDot=-.2,reverse=false;
@@ -43,12 +43,12 @@ function paths(roads:Road[]):Path[]{
         const dot=((next[0]-end[0])*dx+(next[1]-end[1])*dz)/length/distance;
         if(dot>bestDot){best=i;bestDot=dot;reverse=flipped;}
       }
-      if(best<0)break;const next=edges[best];next.used=true;points.push(...(reverse?[...next.points].reverse():next.points).slice(1));
+      if(best<0)break;const next=edges[best];next.used=true;width=Math.max(width,next.width);points.push(...(reverse?[...next.points].reverse():next.points).slice(1));
     }};
     extend();points.reverse();extend();
     const clean=points.filter((p,i)=>i===0||Math.hypot(p[0]-points[i-1][0],p[1]-points[i-1][1])>.001);
     const stations=[0];for(let i=1;i<clean.length;i++)stations.push(stations[i-1]+Math.hypot(clean[i][0]-clean[i-1][0],clean[i][1]-clean[i-1][1]));
-    if(stations.at(-1)!>1)result.push({points:clean,stations,length:stations.at(-1)!});
+    if(stations.at(-1)!>1)result.push({points:clean,stations,length:stations.at(-1)!,width});
   }
   return result;
 }
@@ -62,10 +62,20 @@ export function createMinimapLabeler(roads:Road[]){
     const group=groups.get(road.name)??[];group.push(road);groups.set(road.name,group);
   }
   for(const [name,group]of groups){
-    const chains=paths(group),length=chains.reduce((sum,p)=>sum+p.length,0),width=Math.max(...group.map(r=>r.width));
-    if(width<8&&length<350)continue;
-    const priority=width*2+Math.log1p(length)*3,text=abbreviateRoadName(name);
-    for(const path of chains){
+    const chains=paths(group);
+    if(Math.max(...group.map(r=>r.width))<8&&chains.reduce((sum,p)=>sum+p.length,0)<350)continue;
+    // Pieces of one name whose ends lie within 300 m rank as one street (a street
+    // broken at a square, a divided road); a namesake elsewhere ranks apart, so
+    // downtown's short High Street does not borrow the priority of Medford's.
+    const parent=chains.map((_,i)=>i),find=(i:number):number=>parent[i]===i?i:(parent[i]=find(parent[i]));
+    const ends=chains.map(p=>[p.points[0],p.points.at(-1)!]);
+    for(let i=0;i<chains.length;i++)for(let j=i+1;j<chains.length;j++)
+      if(ends[i].some(a=>ends[j].some(b=>Math.hypot(a[0]-b[0],a[1]-b[1])<300)))parent[find(i)]=find(j);
+    const streets=new Map<number,{length:number;width:number}>();
+    chains.forEach((p,i)=>{const s=streets.get(find(i))??{length:0,width:0};s.length+=p.length;s.width=Math.max(s.width,p.width);streets.set(find(i),s);});
+    const text=abbreviateRoadName(name);
+    for(const [i,path] of chains.entries()){
+      const {length,width}=streets.get(find(i))!,priority=width*2+Math.log1p(length)*3;
       const count=Math.max(1,Math.ceil(path.length/36));
       for(let i=0;i<count;i++){
         const station=(i+.5)*path.length/count,point=at(path,station),anchor={name,text,path,station,point,priority};

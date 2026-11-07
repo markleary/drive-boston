@@ -99,7 +99,7 @@ export function* facadeDetailSteps(scene:THREE.Scene,city:CityData,options:Detai
     const nx=dz/length,nz=-dx/length,yaw=Math.atan2(nx,nz),tx=nz,tz=-nx;
     const x=(a[0]+b[0])/2,z=(a[1]+b[1])/2;
     const road=closestRoad(city,x,z,true);
-    if(road.distance<road.road.width/2+1.1||road.distance>road.road.width/2+22)return;
+    if(!road.road||road.distance<road.road.width/2+1.1||road.distance>road.road.width/2+22)return;
     if(((road.x-x)*nx+(road.z-z)*nz)/road.distance<.48)return;
     const character=streetCharacter(road.road.name,road.road.width,road.road.kind),commercial=character==='commercial',residential=character==='residential';
     if(!commercial&&!residential)return;

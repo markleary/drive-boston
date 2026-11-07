@@ -3,6 +3,13 @@
 
 The image service resamples authoritative elevation in metres into State Plane
 pixel centres. Nothing is requested by players at runtime. See DATA_SOURCES.md.
+
+`--anchor OX OZ WIDTH HEIGHT` extends an existing tiled lattice northward
+instead of recomputing it from the bounding box: the columns and the original
+rows keep their positions and 800-pixel export blocks (so cached requests are
+reused byte for byte), new blocks cover only the added northern rows, and the
+original rows keep their smoothed values exactly (their top edge stays
+edge-padded, as when they were first exported).
 """
 from __future__ import annotations
 import argparse, hashlib, io, json, math, pathlib, urllib.parse, urllib.request
@@ -24,13 +31,23 @@ def sample(values,width,height,x,z):
  return (values[iz*width+ix]*(1-fx)+values[iz*width+ix+1]*fx)*(1-fz)+(values[(iz+1)*width+ix]*(1-fx)+values[(iz+1)*width+ix+1]*fx)*fz
 
 def main():
- parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);parser.add_argument('--cell-size',type=float,default=6);parser.add_argument('--bbox',nargs=4,type=float,default=DEFAULT_BBOX);parser.add_argument('--tiled',action='store_true',help='Split the request into blocks of at most 800 pixels and stitch them (metro envelope)');args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('--output',type=pathlib.Path,required=True);parser.add_argument('--cell-size',type=float,default=6);parser.add_argument('--bbox',nargs=4,type=float,default=DEFAULT_BBOX);parser.add_argument('--tiled',action='store_true',help='Split the request into blocks of at most 800 pixels and stitch them (metro envelope)');parser.add_argument('--anchor',nargs=4,type=lambda v:int(float(v)) if float(v).is_integer() else float(v),metavar=('OX','OZ','WIDTH','HEIGHT'),help='Extend this existing lattice north (requires --tiled)');args=parser.parse_args()
  args.output.mkdir(parents=True,exist_ok=True);tofeet=Transformer.from_crs(4326,2249,always_xy=True)
  corners=[tofeet.transform(lon,lat) for lon in [args.bbox[0],args.bbox[2]] for lat in [args.bbox[1],args.bbox[3]]]
  xs=[(x-EAST)*FT for x,y in corners];zs=[-(y-NORTH)*FT for x,y in corners];cell=args.cell_size
  # Include a complete cell outside the geographic extent on each side.
  ox=math.floor(min(xs)/cell)*cell-cell;oz=math.floor(min(zs)/cell)*cell-cell
  width=math.ceil((max(xs)-ox)/cell)+2;height=math.ceil((max(zs)-oz)/cell)+2
+ north=0
+ if args.anchor:
+  if not args.tiled:raise SystemExit('--anchor requires --tiled')
+  ax,az,aw,ah=args.anchor;aw,ah=int(aw),int(ah)
+  # The extension only adds rows. State Plane grid north leans from true north,
+  # so a lat/lon box reaches a few cells past the anchored columns at its far
+  # north corners; the columns stay fixed (the northern towns lie well inside).
+  if oz+height*cell>az+ah*cell+cell:raise SystemExit(f'Bounding box leaves the anchored lattice south: {ox},{oz},{width},{height}')
+  if ox<ax or ox+width*cell>ax+aw*cell:print(f'Anchored columns kept: the box spans x {ox}..{ox+width*cell}, the lattice {ax}..{ax+aw*cell}',flush=True)
+  north=max(0,math.ceil((az-oz)/cell));ox,width=ax,aw;oz=az;height=ah
  xmin=EAST+(ox-cell/2)/FT;xmax=EAST+(ox+(width-.5)*cell)/FT
  ymax=NORTH-(oz-cell/2)/FT;ymin=NORTH-(oz+(height-.5)*cell)/FT
  def export(c0,c1,r0,r1,suffix=''):
@@ -57,17 +74,26 @@ def main():
   return list(image.get_flattened_data()),meta,tiff_path
  if args.tiled:
   import numpy as np
-  block=800;raw=np.zeros((height,width),dtype=np.float64);requests=[];hashes=[]
-  for r0 in range(0,height,block):
+  block=800;raw=np.zeros((north+height,width),dtype=np.float64);requests=[];hashes=[]
+  # Original blocks first (rows from the anchored origin), then the northern
+  # strip in blocks that end at the original top row.
+  spans=[(r0,min(height,r0+block),f'-{r0//block}') for r0 in range(0,height,block)]
+  spans+=[(max(-north,-(k+1)*block),-k*block,f'-n{k}') for k in range(math.ceil(north/block))]
+  for r0,r1,name in spans:
    for c0 in range(0,width,block):
-    r1=min(height,r0+block);c1=min(width,c0+block)
-    values,meta,tiff_path=export(c0,c1,r0,r1,f'-{r0//block}-{c0//block}')
-    raw[r0:r1,c0:c1]=np.array(values,dtype=np.float64).reshape(r1-r0,c1-c0);requests.append(meta['request']);hashes.append(hashlib.sha256(tiff_path.read_bytes()).hexdigest())
+    c1=min(width,c0+block)
+    values,meta,tiff_path=export(c0,c1,r0,r1,f'{name}-{c0//block}')
+    raw[north+r0:north+r1,c0:c1]=np.array(values,dtype=np.float64).reshape(r1-r0,c1-c0);requests.append(meta['request']);hashes.append(hashlib.sha256(tiff_path.read_bytes()).hexdigest())
   invalid=int(np.count_nonzero(~np.isfinite(raw)|(raw<-100)|(raw>500)))
   if invalid:raise RuntimeError(f'{invalid} invalid terrain samples; refusing fabricated terrain')
-  padded=np.pad(raw,1,mode='edge');k=np.array([1,2,1],dtype=np.float64)
-  horizontal=(padded[:,:-2]*k[0]+padded[:,1:-1]*k[1]+padded[:,2:]*k[2])
-  smoothed=(horizontal[:-2]*k[0]+horizontal[1:-1]*k[1]+horizontal[2:]*k[2])/16
+  def smooth(grid):
+   padded=np.pad(grid,1,mode='edge');k=np.array([1,2,1],dtype=np.float64)
+   horizontal=(padded[:,:-2]*k[0]+padded[:,1:-1]*k[1]+padded[:,2:]*k[2])
+   return (horizontal[:-2]*k[0]+horizontal[1:-1]*k[1]+horizontal[2:]*k[2])/16
+  smoothed=smooth(raw)
+  # The original rows keep the values they were first published with.
+  if north:smoothed[north:]=smooth(raw[north:])
+  oz-=north*cell;height+=north
   values=smoothed.reshape(-1).tolist();raw=raw.reshape(-1).tolist();meta={'tiledRequests':requests};tiff_hash=hashlib.sha256(''.join(hashes).encode()).hexdigest()
  else:
   raw,meta,tiff_path=export(0,width,0,height);tiff_hash=hashlib.sha256(tiff_path.read_bytes()).hexdigest()
@@ -82,11 +108,13 @@ def main():
    for col in range(width):
     values.append(sum(raw[max(0,min(height-1,row+dz))*width+max(0,min(width-1,col+dx))]*weights[dz+1]*weights[dx+1] for dz in [-1,0,1] for dx in [-1,0,1])/16)
  reference={'x':-291.674,'z':36.660,'name':'Original Boylston Street spawn'}
- datum=sample(values,width,height,(reference['x']-ox)/cell,(reference['z']-oz)/cell)
+ # The datum is sampled on the original rows so an anchored extension keeps it bit for bit.
+ skip=north*width if args.anchor else 0
+ datum=sample(values[skip:],width,height-north,(reference['x']-ox)/cell,(reference['z']-oz-north*cell)/cell)
  relative=[round(v-datum,3) for v in values]
  grid={'width':width,'height':height,'cellSize':cell,'originX':ox,'originZ':oz,'heights':relative}
  (args.output/'elevation.json').write_text(json.dumps(grid,separators=(',',':'))+'\n')
- provenance={'source':SERVICE,'license':'USGS public domain','verticalUnit':'metres','referenceAbsoluteMeters':datum,'referencePoint':reference,'grid':{k:v for k,v in grid.items() if k!='heights'},'bbox':args.bbox,'method':'USGS float32 bare-earth DEM; bilinear image resampling; 3x3 [1,2,1] separable smoothing; fixed Back Bay datum subtraction','tiffSHA256':tiff_hash,'rangeMeters':[min(relative),max(relative)],'rawAbsoluteRangeMeters':[min(raw),max(raw)],'request':meta}
+ provenance={'source':SERVICE,'license':'USGS public domain','verticalUnit':'metres','referenceAbsoluteMeters':datum,'referencePoint':reference,'grid':{k:v for k,v in grid.items() if k!='heights'},'bbox':args.bbox,'method':'USGS float32 bare-earth DEM; bilinear image resampling; 3x3 [1,2,1] separable smoothing; fixed Back Bay datum subtraction','tiffSHA256':tiff_hash,**({'anchor':{'originX':args.anchor[0],'originZ':args.anchor[1],'width':int(args.anchor[2]),'height':int(args.anchor[3]),'northRows':north}} if args.anchor else {}),'rangeMeters':[min(relative),max(relative)],'rawAbsoluteRangeMeters':[min(raw),max(raw)],'request':meta}
  (args.output/'terrain-provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
  print(json.dumps({k:v for k,v in provenance.items() if k!='request'},indent=2))
 
