@@ -224,9 +224,6 @@ async function boot(){
           const size=city.tiles.size,owners=new Map<string,{tx:number;tz:number}>();
           for(const hull of city.index.query(saved.x-3,saved.x+3,saved.z-3,saved.z+3))owners.set(`${hull.tx}_${hull.tz}`,hull);
           const tx=Math.floor(saved.x/size),tz=Math.floor(saved.z/size);owners.set(`${tx}_${tz}`,{tx,tz});
-          // An arrival on a survey trace stands on the survey mesh, which streams with the tile under its centre.
-          const deck=city.surveyRoads?.find(r=>r.id===saved.roadId)?.surveyDeck,mesh=deck?city.landmarkBuildings?.find(b=>b.id===deck):undefined;
-          if(mesh){const mx=Math.floor(mesh.center[0]/size),mz=Math.floor(mesh.center[1]/size);owners.set(`${mx}_${mz}`,{tx:mx,tz:mz});}
           for(const [key,owner]of owners){
             if(!streamer.loaded.has(key))loaded=await streamer.ensureAround((owner.tx+.5)*size,(owner.tz+.5)*size,0)&&loaded;
             if(!streamer.loaded.has(key))loaded=false;

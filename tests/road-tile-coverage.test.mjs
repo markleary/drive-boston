@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {RoadTileCoverage,roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
 import {tilesNear} from '../src/simulation/city-tiles.ts';
+import {loadMetroCity} from './helpers/metro-city.mjs';
 
 const city=JSON.parse(readFileSync(new URL('../public/data/city.json',import.meta.url)));
 const coverage=new RoadTileCoverage(city,()=>city.roads);
@@ -45,4 +46,17 @@ test('the desktop Tobin southbound arrival includes its distant supporting deck 
   const wanted=coverage.tilesNear(arrival.x,arrival.z,350);
   assert.equal(wanted.filter(t=>t.key===key).length,1,'synchronous arrival loads its supporting road exactly once');
   assert.equal(wanted.find(t=>t.key===key).distance,0,'the road crosses the arrival even though its owner is distant');
+});
+
+test('a survey trace brings its mesh owner, so a phone on the Charlestown end of the Zakim keeps the deck',async()=>{
+  const metro=await loadMetroCity({tiles:[]}),size=metro.tiles.size,trace=metro.surveyRoads.find(r=>r.id==='i93-zakim-nb-05');
+  const mesh=metro.landmarkBuildings.find(b=>b.id===trace.surveyDeck),tx=Math.floor(mesh.center[0]/size),tz=Math.floor(mesh.center[1]/size),owner=`${tx}_${tz}`;
+  // The trace's point farthest from the owner tile lies beyond a phone's 700 m unload radius.
+  const off=([x,z])=>Math.hypot(Math.max(tx*size-x,0,x-(tx+1)*size),Math.max(tz*size-z,0,z-(tz+1)*size)),[x,z]=trace.points.reduce((a,b)=>off(b)>off(a)?b:a);
+  assert.ok(off([x,z])>1000,`the fixture lies ${off([x,z]).toFixed(0)} m from ${owner}`);
+  const index=new RoadTileCoverage(metro,()=>metro.roads),without=new RoadTileCoverage({...metro,surveyRoads:[]},()=>metro.roads);
+  for(const radius of [180,450,700]){
+    assert.equal(index.tilesNear(x,z,radius).find(t=>t.key===owner)?.distance,0,`the mesh owner is wanted within ${radius} m`);
+    assert.ok(!without.tilesNear(x,z,radius).some(t=>t.key===owner),'and nothing but the trace brings it');
+  }
 });
