@@ -30,6 +30,7 @@ from road_structure_clearance import validate_bridge_clearance
 from water_crossings import level_water_crossings,water_inputs
 from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids,levelled_water_ids
 import north_overpasses
+import i93_north
 from harvard_terrain import repair_memorial_terrain
 from road_generation_audit import validate_surfaces
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
@@ -232,16 +233,28 @@ museum_source=data_dir/'museum-approaches-source.json'
 validate_approaches(city,json.loads(museum_source.read_text()),heights)
 assert provenance['museumRoadConnections']['sourceSHA256']==hashlib.sha256(museum_source.read_bytes()).hexdigest(),'Museum approach provenance differs from the retained source'
 validate_bridge_clearance(city['roads'],elevation)
-if north_overpasses.applies(city['roads']):
+# Interstate 93 (build-i93-north.py) runs after the stages replayed below: replay it and check its
+# records, then check those stages on the roads and grid as they left them (before_stage).
+i93=provenance.get('i93North');pre_roads,pre_heights=city['roads'],heights
+assert bool(i93)==any(i93_north.stage_owned(r) for r in city['roads']),'provenance must describe the I-93 stage; run build-i93-north.py'
+if i93:
+ i93_path=data_dir/i93_north.SOURCE_NAME;assert i93['source']['sha256']==hashlib.sha256(i93_path.read_bytes()).hexdigest(),'the I-93 source sidecar changed without regeneration'
+ i93_counts=i93_north.validate(city,i93,i93_north.tunnel_joins(data_dir,city),elevation)
+ assert i93_north.replay(data_dir,city,i93,json.loads(i93_path.read_text()),north_overpasses.tile_footprints(data_dir,city)),'I-93 roads, terrain cuts or survey cut differ from a replay of build-i93-north.py'
+ pre_roads,pre_heights=i93_north.before_stage(city['roads'],heights,i93,grid.get('scale',.01))
+ print(f"Validated I-93: {i93_counts['carriageways']} carriageway pieces, {i93_counts['ramps']} ramps ({i93_counts['streetLandings']} street landings) and {i93_counts['traces']} survey traces match a replay of build-i93-north.py.")
+def pre_elevation(x,z):return elevation(x,z,pre_heights)
+if north_overpasses.applies(pre_roads):
  recorded=provenance.get('northOverpasses');assert recorded,'provenance must describe the northern overpass repairs; run level-north-overpasses.py'
- assert north_overpasses.replay(data_dir,city,recorded),'northern overpass streets, decks or terrain differ from a replay of their recorded sources; run level-north-overpasses.py'
-water_polygons,water_level=water_inputs(city);decks=level_water_crossings(city['roads'],water_polygons,elevation,water_level,apply=False)
+ staged=i93_north.staged_heights(north_overpasses.load_grid(data_dir/grid['file']),i93) if i93 else None
+ assert north_overpasses.replay(data_dir,{**city,'roads':pre_roads},recorded,staged),'northern overpass streets, decks or terrain differ from a replay of their recorded sources; run level-north-overpasses.py'
+water_polygons,water_level=water_inputs(city);decks=level_water_crossings(pre_roads,water_polygons,pre_elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
 recorded=provenance.get('waterCrossingDecks');assert recorded and [c['roads'] for c in recorded['chains']]==[c['roads'] for c in decks['chains']] and all(abs(x-y)<.001 for a,b in zip(recorded['chains'],decks['chains']) for x,y in zip(a['deck'],b['deck'])),'provenance must describe the installed water-crossing decks'
-land=level_land_approaches(city['roads'],elevation,water_chain_ids(decks),apply=False,profile_excluded=levelled_water_ids(decks))
+land=level_land_approaches(pre_roads,pre_elevation,water_chain_ids(decks),apply=False,profile_excluded=levelled_water_ids(decks))
 assert not land['changedRoads'],f"{len(land['changedRoads'])} land approaches need level-land-approaches.py: {', '.join(land['changedRoads'][:6])}"
 recorded=provenance.get('landApproaches');assert recorded and {'seams','floored','links'}<=set(recorded),'provenance must describe the installed land approaches'
-roads_map={r['id']:r for r in city['roads']};replay=copy.deepcopy(city['roads']);restore_sources(replay,recorded);replayed=level_land_approaches(replay,elevation,water_chain_ids(decks),profile_excluded=levelled_water_ids(decks))
+roads_map={r['id']:r for r in pre_roads};replay=copy.deepcopy(pre_roads);restore_sources(replay,recorded);replayed=level_land_approaches(replay,pre_elevation,water_chain_ids(decks),profile_excluded=levelled_water_ids(decks))
 from reviewed_road_inputs import source_hash
 assert recorded.get('reviewedSourceSHA256')==source_hash(),'reviewed road inputs changed without regeneration'
 assert provenance.get('streetMeshes',{}).get('reviewedSourceSHA256')==source_hash(),'reviewed pavement inputs changed without surface regeneration'
@@ -312,7 +325,8 @@ for r in city['roads']:
    for j in range(int(min(a[1],b[1])//250),int(max(a[1],b[1])//250)+1):cells[(i,j)].append((r,a,b))
 assert any(r['name']=='Newbury Street' for r in city['roads']) and any(r['name']=='Massachusetts Avenue' for r in city['roads'])
 # Boston centerlines drop every limited-access name; the OSM towns keep surface trunks such as Concord Turnpike (Route 2) but never motorways.
-assert not any((r['name'].startswith('Interstate ') or 'Expressway' in r['name'] or 'Massachusetts Turnpike' in r['name'] or ('Turnpike' in r['name'] and not r['id'].startswith('osm-'))) for r in city['roads']),'highway or tunnel flattened into street network'
+# Interstate 93 north of the tunnel is its own stage (build-i93-north.py, validated above): its decks are the only interstate records.
+assert not any(not i93_north.stage_owned(r) and (r['name'].startswith(('Interstate ','I-')) or 'Expressway' in r['name'] or 'Massachusetts Turnpike' in r['name'] or ('Turnpike' in r['name'] and not r['id'].startswith('osm-'))) for r in city['roads']),'highway or tunnel flattened into street network'
 # Tunnels remain separately profiled instead of entering the terrain-grading
 # street graph. Validate their shipped sidecar and retained source provenance.
 if city.get('tunnels'):
@@ -323,7 +337,7 @@ if city.get('tunnels'):
  assert len(tunnels['landmarks'])==3 and all(l['driveStart']['roadId'] in ids for l in tunnels['landmarks'])
  assert sum(bool(r['tunnel'].get('capStart'))+bool(r['tunnel'].get('capEnd')) for r in tunnels['roads'])==2,'both southern bore ends must close'
  for r in tunnels['roads']:
-  assert len(r['points'])==len(r['elevations'])>=2 and r['oneway']==1 and r['traffic'] is False
+  assert len(r['points'])==len(r['elevations'])>=2 and r['oneway']==1 and 'traffic' not in r
   if r.get('deckEdgeElevations'):
    assert len(r['deckEdgeElevations'])==len(r['points']) and all(len(pair)==2 and all(math.isfinite(y) for y in pair) for pair in r['deckEdgeElevations']),f"invalid tunnel crossfall: {r['id']}"
   if r.get('deckWidths'):

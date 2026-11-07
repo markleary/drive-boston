@@ -71,6 +71,8 @@ export function createNPCVehicleBatches(parent:THREE.Group,capacity:number){
       details[index]=distance>(details[index]==='near'?110:90)?'far':'near';
       for(const batch of batches)for(let part=0;part<5;part++){const id=batch.instances[index][part];if(id<0)continue;const visible=batch.detail===details[index];batch.mesh.setVisibleAt(id,visible);batch.mesh.setMatrixAt(id,part?wheelMatrices[part-1]:matrix);if(visible&&batch.surface==='paint')batch.mesh.setColorAt(id,color);}
     },
+    /** Hide a car that left the road network (a closed end); drawing it again shows it. */
+    hide(index:number){previous[index]=undefined;for(const batch of batches)for(let part=0;part<5;part++){const id=batch.instances[index][part];if(id>=0)batch.mesh.setVisibleAt(id,false);}},
     flush(){for(const batch of batches)batch.mesh.computeBoundingSphere();},
     setNight(night:boolean){materials.lamp.emissiveIntensity=night?2.5:.45;materials.red.emissiveIntensity=night?1.5:.35;materials.amber.emissive.setHex(night?0xd37817:0);materials.amber.emissiveIntensity=night?.4:.12;},
     dispose(){for(const batch of batches){parent.remove(batch.mesh);if(batch.sharedKey){const shared=sharedBuffers.get(batch.sharedKey)!;if(--shared.owners)batch.mesh.geometry=new THREE.BufferGeometry();else sharedBuffers.delete(batch.sharedKey);}batch.mesh.dispose();}plates.dispose();Object.values(materials).forEach(m=>m.dispose());},

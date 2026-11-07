@@ -11,6 +11,7 @@ import {drawsFarMassing} from '../simulation/far-format.ts';
 import {buildingPlans,type BuildingPlan} from '../simulation/building-plans.ts';
 import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
+import {isMotorway} from '../simulation/motorway.ts';
 import {HELICOPTER} from '../simulation/helicopter';
 import {createMinimapLabeler} from './minimap-labels';
 import {createTouchDrivingControls, TOUCH_DRIVING_MARKUP, type TouchDrivingMode} from './touch-driving';
@@ -152,7 +153,9 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const click = (id: string, fn: () => void) => on(el(id), 'click', fn);
   const mini = el<HTMLCanvasElement>('minimap'), full = el<HTMLCanvasElement>('fullmap');
   const miniContext = mini.getContext('2d')!, fullContext = full.getContext('2d')!;
-  const minimapLabels=createMinimapLabeler(city.roads);
+  // The traces over the drivable Zakim survey mesh carry I-93 across the Charles on both maps.
+  const mapRoadList=city.surveyRoads?.length?[...city.roads,...city.surveyRoads]:city.roads;
+  const minimapLabels=createMinimapLabeler(mapRoadList);
   // GPS: a destination set from the atlas, its route on both maps and the next maneuver in the location pill.
   const nav=createNavigator(city);
   let guidance:Guidance|null=null,lastGuidance=0,guideIcon='',announced='',reroutes=0;
@@ -197,7 +200,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(event.cancelable&&event.target instanceof Element&&event.target.closest('#touch-steering,[data-drive-action]'))event.preventDefault();
   },{passive:false});
   const neighborhoods=indexAreas(city.neighborhoods??[]);
-  const mapRoads=city.roads.map(road=>({road,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
+  // Draw order: tunnels beneath the streets, motorway decks above them.
+  const mapRoads=mapRoadList.map(road=>({road,highway:isMotorway(road)&&!road.tunnel,rank:road.tunnel?0:isMotorway(road)?2:1,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
   const boxed=<T extends {rings:Point2[][]}>(areas:T[])=>areas.filter(a=>a.rings[0]?.length).map(area=>{const ring=area.rings[0];let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of ring){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}return{area,minX,maxX,minZ,maxZ};});
   const mapParks=boxed(city.parks??[]),mapWater=boxed(city.water??[]);
   const metro=isMetroCity(city)?city:undefined;
@@ -219,7 +223,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const neighborhoodAt=(x:number,z:number)=>areaAt(neighborhoods,x,z)?.name??'Boston';
   let latestStats:InterfaceStats={};
   const diagnostics=createDiagnostics(host,()=>{
-    const road=(travelMode!=='helicopter'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z,false,{height:state.y}).road;
+    const road=(travelMode!=='helicopter'?sampleDriveSurface(city,state.x,state.z,state.y).road:undefined)??closestRoad(city,state.x,state.z,false,{height:state.y,survey:true}).road;
     return{state:{...state},groundHeight:latestStats.groundHeight??0,road:{name:road.name,id:road.id},neighborhood:neighborhoodAt(state.x,state.z),camera,lighting,quality:latestStats.quality??'high',travelMode,
       performance:latestStats.performance??{fps:latestStats.fps??0,frameMs:0,drawCalls:0,triangles:0,geometries:0,textures:0,traffic:0,transit:0,pedestrians:0},graphicsInterruption:graphicsReport||undefined,previousSession:previousSessionReport||undefined};
   });
@@ -587,13 +591,13 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       if (large && scale > .8) { ctx.strokeStyle = '#8a9b8e55'; ctx.lineWidth = .55; ctx.stroke(); }
     };
     for(const building of footprints)if(building.fragment)fillFootprint(building);
-    const visibleRoads=mapRoads.filter(inView).sort((a,b)=>Number(!!b.road.tunnel)-Number(!!a.road.tunnel));
-    for (const {road} of visibleRoads) {
+    const visibleRoads=mapRoads.filter(inView).sort((a,b)=>a.rank-b.rank);
+    for (const {road,highway} of visibleRoads) {
       if (road.points.length < 2) continue;
       ctx.beginPath(); road.points.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); });
       if(road.tunnel){ctx.setLineDash([5,4]);ctx.strokeStyle='#778f8c';ctx.lineWidth=Math.max(1.3,road.width*scale*.65);ctx.stroke();ctx.setLineDash([]);continue;}
-      ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#c3ccc0'; ctx.lineWidth = Math.max(2, (road.width + 4) * scale); ctx.stroke();
-      ctx.strokeStyle = '#faf8f0'; ctx.lineWidth = Math.max(1.4, road.width * scale); ctx.stroke();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = highway ? '#c9ad62' : '#c3ccc0'; ctx.lineWidth = Math.max(2, (road.width + 4) * scale); ctx.stroke();
+      ctx.strokeStyle = highway ? '#f5dc96' : '#faf8f0'; ctx.lineWidth = Math.max(1.4, road.width * scale); ctx.stroke();
     }
     for(const building of footprints)if(!building.fragment)fillFootprint(building);
     if(plans.length){
@@ -756,7 +760,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       const neighborhood=neighborhoodAt(state.x,state.z);
       // Stacked carriageways share XY, so the driving HUD must follow the
       // vehicle's actual level instead of naming the first road underneath it.
-      const near=closestRoad(city,state.x,state.z,false,travelMode==='helicopter'?{}:{height:state.y});
+      const near=closestRoad(city,state.x,state.z,false,travelMode==='helicopter'?{survey:true}:{height:state.y,survey:true});
       const label=near.distance<=110&&near.road?.name?near.road.name:neighborhood;
       el('neighborhood-label').textContent=`${neighborhood}, Massachusetts`;
       if(travelMode==='helicopter')el('journey-label').textContent=`Above ${neighborhood}`;

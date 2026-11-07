@@ -16,15 +16,52 @@ import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
 import {createRouteSignalLookup} from './traffic-route-signals.ts';
 import {constructionLanePoints,type ConstructionZone} from './construction-zones.ts';
+import {isMotorway,speedClass,motorwayLanes,CLOSURE_SETBACK,SINK_BEYOND,pointAtDistance,stations} from './motorway.ts';
+import {tunnelCoveredAt,tunnelStations} from './tunnels.ts';
 
-interface Edge { id: number; start: number; end: number; points: Point2[]; length:number; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; }
+/** `sink`: the edge ends at a closed end or tunnel cap, whose barrier its cars
+ * drive through and vanish behind; `source`: cars emerge from one at its start. */
+interface Edge { id: number; start: number; end: number; points: Point2[]; length:number; name: string; width: number; oneway: boolean; road:Road; laneOffset?:number; sink?:boolean; source?:boolean; }
 /** `source` keeps the unrounded lane points (and the source vertex of each rounded
- * point) so a route can be extended in place; `last` is its final graph edge. */
-export interface Path { points: Point2[]; distances: number[]; length: number; stops: {distance:number;yaw:number}[]; roadAt:Road[]; component?: number; last?:Edge; source:{points:Point2[];roads:Road[];vertex:number[]}; }
+ * point) so a route can be extended in place; `last` is its final graph edge.
+ * `sinkAt` is the station just past the barrier where a route into a closed end vanishes,
+ * `changes` the stations where its speed class (street, ramp, highway) changes,
+ * `merges` where it passes an entrance gore (a carriageway record starting
+ * where two highway records end). */
+export interface Path { points: Point2[]; distances: number[]; length: number; stops: {distance:number;yaw:number}[]; roadAt:Road[]; component?: number; last?:Edge; source:{points:Point2[];roads:Road[];vertex:number[]}; sinkAt?:number; sourceAt?:number; changes?:{distance:number;road:Road}[]; merges?:number[]; }
 /** A struck car runs as a dynamic body (`knocked`) until it comes to rest, then
- * eases back onto its lane over `rejoin` from the pose it was left in. */
-interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; }
+ * eases back onto its lane over `rejoin` from the pose it was left in. A
+ * `parked` car has driven into a closed end and waits, hidden, to be placed again;
+ * a `hidden` one rides a survey trace whose mesh is not drawn. */
+interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; parked?:boolean; hidden?:boolean; }
 const COUNT = TRAFFIC_CAPACITY;
+/** Highway cruise ranges (m/s): a car's own temper, from its seeded street
+ * cruise, picks its speed within each, so it keeps its place in the order. */
+export const MOTORWAY_CRUISE:[number,number]=[24,29],RAMP_CRUISE:[number,number]=[13,17];
+/** Highway following (Gipps): reaction time (s), braking assumed of both cars
+ * (m/s²), standstill gap (m) and how far ahead (m) a car looks for its leader. */
+export const FOLLOW={reaction:1.1,brake:4,standstill:2.5,reach:160};
+/** The highest speed from which a car can still stop behind a leader `gap`
+ * metres ahead (bumper to bumper) driving at `lead` and braking as hard. */
+export function followSpeed(gap:number,lead:number){
+  const b=FOLLOW.brake,t=FOLLOW.reaction;
+  return Math.max(0,-b*t+Math.sqrt(b*b*t*t+lead*lead+2*b*Math.max(0,gap-FOLLOW.standstill)));
+}
+/** Cars kept on the highway around an observer driving on it (2) or beside it
+ * (1), within `MOTORWAY_REACH` metres, plus a share left for the streets. */
+export const MOTORWAY_DENSITY=[0,24,56],MOTORWAY_STREETS=18,MOTORWAY_REACH=500;
+/** Highway placements keep this plan distance (m) from every other car. */
+const MOTORWAY_HEADWAY=22;
+/** Chance per joint that a highway car moves over a lane, and that one in the
+ * two lanes nearest an exit takes it (two lanes; three or more). */
+export const LANE_CHANGE=.12,EXIT_SHARE=[.25,.35];
+/** Conflict look-ahead cap (m) of a car within `MERGE_WINDOW` metres before an
+ * entrance gore on its route, about its braking distance from 28 m/s (elsewhere
+ * CONFLICT.maxHorizon): a car closing on a ramp merge sees the ramp car
+ * converging early enough to settle the order by arrival. */
+const MOTORWAY_HORIZON=120,MERGE_WINDOW=400;
+/** A closed start emits a car per lane every 1.5 to 4 s while the observer is within this many metres. */
+const EMIT_RANGE=750;
 /** Closing speed (m/s) at which a touch becomes a knock rather than a nudge. */
 export const KNOCK_SPEED = 1.2;
 /** How far ahead (s) a striker is swept against lane keepers, so a struck car turns
@@ -51,47 +88,84 @@ export function roadGraph(city: CityData) {
     const index=nodes.length,key=`${cx},${cz}`;nodes.push(p);heights.push(height);
     const bucket=buckets.get(key);if(bucket)bucket.push(index);else buckets.set(key,[index]);return index;
   };
-  const candidates:{road:Road;points:Point2[];length:number;start:number;end:number}[]=[],incident=new Map<number,Set<number>>();
-  for (const road of city.roads) {
+  const candidates:{road:Road;points:Point2[];length:number;start:number;end:number;first:boolean;last:boolean}[]=[],incident=new Map<number,Set<number>>();
+  // Survey-deck traces (the Zakim viaduct) are graph edges only, outside city.roads.
+  const roads=city.surveyRoads?.length?[...city.roads,...city.surveyRoads]:city.roads;
+  // A ramp lands on an existing street vertex, often inside the street's record:
+  // split the street there (only there) so the ramp joins the graph.
+  const landings=new Map<number,{p:Point2;height:number}[]>(),cell=(cx:number,cz:number)=>(cx+100000)*200003+cz+100000;
+  let landMinX=Infinity,landMaxX=-Infinity,landMinZ=Infinity,landMaxZ=-Infinity;
+  for(const road of roads)if(isMotorway(road)&&road.traffic!==false&&road.points.length>=2)for(const p of [road.points[0],road.points[road.points.length-1]]){
+    const key=cell(Math.floor(p[0]/4),Math.floor(p[1]/4)),entry={p,height:sampleRoadElevation(city,road,...p)},list=landings.get(key);if(list)list.push(entry);else landings.set(key,[entry]);
+    landMinX=Math.min(landMinX,p[0]);landMaxX=Math.max(landMaxX,p[0]);landMinZ=Math.min(landMinZ,p[1]);landMaxZ=Math.max(landMaxZ,p[1]);
+  }
+  const landsAt=(road:Road,p:Point2)=>{
+    if(p[0]<landMinX-1||p[0]>landMaxX+1||p[1]<landMinZ-1||p[1]>landMaxZ+1)return false;
+    const cx=Math.floor(p[0]/4),cz=Math.floor(p[1]/4);let height:number|undefined;
+    for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++)for(const landing of landings.get(cell(cx+dx,cz+dz))??[])if(distance(landing.p,p)<1){height??=sampleRoadElevation(city,road,...p);if(Math.abs(landing.height-height)<1)return true;}
+    return false;
+  };
+  for (const road of roads) {
     if(road.traffic===false)continue;
     const arterial=/^(primary|secondary)$/.test(road.kind??'')&&!/^unnamed\b/i.test(road.name);
     const tobinRamp=road.bridge?.id==='tobin-approach'&&road.oneway!==0&&road.width>=5.5;
-    if (road.points.length<2 || (!tobinRamp&&(road.width < 7 || (road.width<8&&!arterial&&(activityAt(...road.points[0]).level!=='busy'||!/(street|avenue|road|boulevard|parkway)$/i.test(road.name))))) || /alley|private|ring road|cahners|copley place/i.test(road.name)) continue;
+    // Highway decks and ramps join whatever their width (a one-lane ramp is
+    // narrower than a minor street), and so does a street a ramp lands on, so
+    // the ramp has a way on. (`\balley` keeps Mystic Valley Parkway.)
+    if (road.points.length<2 || (!tobinRamp&&!isMotorway(road)&&(road.width < 7 || (road.width<8&&!arterial&&(activityAt(...road.points[0]).level!=='busy'||!/(street|avenue|road|boulevard|parkway)$/i.test(road.name))))&&!(landings.size&&road.points.some(p=>landsAt(road,p)))) || /\balley|private|ring road|cahners|copley place/i.test(road.name)) continue;
     const points = road.points.filter((p, i, a) => i === 0 || distance(p, a[i - 1]) > .5);
     if (points.length < 2) continue;
-    const length=points.slice(1).reduce((sum,p,i)=>sum+distance(points[i],p),0);if(length<1)continue;
-    const start = node(points[0],sampleRoadElevation(city,road,...points[0])), end = node(points[points.length - 1],sampleRoadElevation(city,road,...points[points.length-1]));
-    if(start===end&&length<12)continue;
-    const index=candidates.length;candidates.push({road,points,length,start,end});
-    for(const n of [start,end]){const list=incident.get(n)??new Set<number>();list.add(index);incident.set(n,list);}
+    const cuts=[0];if(landings.size)for(let i=1;i<points.length-1;i++)if(landsAt(road,points[i]))cuts.push(i);cuts.push(points.length-1);
+    for(let c=1;c<cuts.length;c++){
+      const piece=cuts.length===2?points:points.slice(cuts[c-1],cuts[c]+1);
+      const length=piece.slice(1).reduce((sum,p,i)=>sum+distance(piece[i],p),0);if(length<1)continue;
+      const start = node(piece[0],sampleRoadElevation(city,road,...piece[0])), end = node(piece[piece.length - 1],sampleRoadElevation(city,road,...piece[piece.length-1]));
+      if(start===end&&length<12)continue;
+      const index=candidates.length;candidates.push({road,points:piece,length,start,end,first:c===1,last:c===cuts.length-1});
+      for(const n of [start,end]){const list=incident.get(n)??new Set<number>();list.add(index);incident.set(n,list);}
+    }
   }
   // Source ways split at lane changes and bridge tags, sometimes only a few
   // metres apart. Keep those connecting pieces without populating short
   // isolated stubs; prune a dangling chain all the way back to its main road.
+  // A one-way highway record that nothing leaves at its travel end, which is
+  // not closed (a tunnel entrance whose survey trace is missing, as the Cross
+  // Street entrance's was), would park every car that takes it there: it goes
+  // too, and so does a highway record left leading only into it.
+  const closedAt=(road:Road,at:'start'|'end')=>road.closed===at||(at==='start'?!!road.tunnel?.capStart:!!road.tunnel?.capEnd);
+  const departs=(i:number,n:number)=>{const c=candidates[i];return (c.road.oneway>=0&&c.start===n)||(c.road.oneway<=0&&c.end===n);};
+  const deadEnd=(index:number)=>{
+    const c=candidates[index],n=c.road.oneway>0?c.end:c.start;
+    return isMotorway(c.road)&&c.road.oneway!==0&&!(c.road.oneway>0?c.last&&closedAt(c.road,'end'):c.first&&closedAt(c.road,'start'))&&![...incident.get(n)??[]].some(i=>i!==index&&departs(i,n));
+  };
   const removed=new Set<number>(),pending=candidates.map((_,i)=>i);
   while(pending.length){
-    const index=pending.pop()!,c=candidates[index];if(removed.has(index)||c.length>=12)continue;
-    if((incident.get(c.start)?.size??0)>1&&(incident.get(c.end)?.size??0)>1)continue;
+    const index=pending.pop()!,c=candidates[index];if(removed.has(index)||(c.length>=12&&!deadEnd(index)))continue;
+    if(c.length<12&&(incident.get(c.start)?.size??0)>1&&(incident.get(c.end)?.size??0)>1)continue;
     removed.add(index);
     for(const n of [c.start,c.end]){const list=incident.get(n)!;list.delete(index);pending.push(...list);}
   }
-  for(const [index,{road,points,length,start,end}]of candidates.entries()){
+  for(const [index,{road,points,length,start,end,first,last}]of candidates.entries()){
     if(removed.has(index))continue;
-    const add = (ps: Point2[], a: number, b: number) => {
+    const closed=(at:'start'|'end')=>closedAt(road,at);
+    const add = (ps: Point2[], a: number, b: number, forward:boolean) => {
       // Lane offsets follow the measured roadway, not the class width: a one-way class avenue carries two lanes only where the curbs leave room for them
       // (Huntington Avenue's carriageways beside the Green Line reservation measure 7.5 m against a 15 m class width; its Copley Place lane 5.3 m).
+      // A highway deck carries its own lane count.
       const paved=road.pavedWidth??road.width;
-      const lanes:(number|undefined)[]=road.bridge?.id==='tobin'&&road.oneway!==0?[-road.width/3,0,road.width/3]:road.oneway!==0&&road.width>=12&&paved>=6.5?[-Math.min(3,paved*.17),Math.min(3,paved*.17)]:[undefined];
+      const lanes:(number|undefined)[]=road.bridge?.id==='tobin'&&road.oneway!==0?[-road.width/3,0,road.width/3]:road.lanes!==undefined&&road.oneway!==0?motorwayLanes(road):road.oneway!==0&&road.width>=12&&paved>=6.5?[-Math.min(3,paved*.17),Math.min(3,paved*.17)]:[undefined];
+      const sink=forward?last&&closed('end'):first&&closed('start'),source=forward?first&&closed('start'):last&&closed('end');
       for(const laneOffset of lanes){
-        const edge={ id: edges.length, start: a, end: b, points: ps, length, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
+        const edge:Edge={ id: edges.length, start: a, end: b, points: ps, length, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
+        if(sink)edge.sink=true;if(source)edge.source=true;
         if(city.coverage?.length&&!lane(edge).every(p=>covered(p[0],p[1])))continue;
         edges.push(edge);
       }
     };
-    if (road.oneway >= 0) add(points, start, end);
-    if (road.oneway <= 0) add([...points].reverse(), end, start);
+    if (road.oneway >= 0) add(points, start, end, true);
+    if (road.oneway <= 0) add([...points].reverse(), end, start, false);
   }
-  return { nodes, edges };
+  return { nodes, heights, edges };
 }
 
 /** The lane centerline an edge's traffic follows: offset from the road centerline within the measured roadway. */
@@ -138,6 +212,19 @@ function at(path: Path, s: number): Point2 {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
+/** `at` for stations that only grow (a trajectory's samples): it walks forward
+ * from the last segment instead of searching the whole path each time. */
+function walker(path:Path){
+  let lo=-1;const d=path.distances,n=d.length;
+  return (s:number):Point2=>{
+    s=Math.max(0,Math.min(path.length,s));
+    if(lo<0||d[lo]>=s){lo=0;let hi=n-1;while(lo+1<hi){const mid=(lo+hi)>>1;if(d[mid]<s)lo=mid;else hi=mid;}}
+    while(lo+2<n&&d[lo+1]<s)lo++;
+    const a=path.points[lo],b=path.points[Math.min(n-1,lo+1)],t=(s-d[lo])/(d[Math.min(n-1,lo+1)]-d[lo]||1);
+    return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
+  };
+}
+
 /** The road under a path station: the owner of the rounded segment containing it. */
 export function pathRoad(path:Path,distance:number){let lo=0,hi=path.distances.length-1;while(lo+1<hi){const mid=(lo+hi)>>1;if(path.distances[mid]<distance)lo=mid;else hi=mid;}return path.roadAt[lo];}
 function pathYaw(path:Path,distance:number){distance=Math.min(distance,path.length-2);const a=at(path,distance),b=at(path,distance+2);return Math.atan2(b[0]-a[0],b[1]-a[1]);}
@@ -164,9 +251,63 @@ export function join(points:Point2[],roads:Road[],next:Point2[],road:Road){
   points.push(...next);roads.push(...next.map(()=>road));
 }
 
-/** Lightweight local traffic; all routes follow the imported directed road graph. */
-export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[]) {
-  const { nodes, edges } = roadGraph(city);
+/** Candidate metres back along the route and ahead into the next lane for a highway blend. */
+const BLEND_STEPS=[0,8,16,25,35,50,65,80,100,120,145];
+/** Steepest blend allowed: one metre sideways in fourteen along. */
+const BLEND_SLOPE=14;
+/** Append a highway lane whose start is offset sideways from the route's end:
+ * a lane added or dropped, a gore (a ramp's centreline starts on the
+ * carriageway's), a lane change. Leave the route up to 145 m before the joint
+ * and enter the lane up to 145 m into it, the shortest such pair joined by a
+ * smooth curve no steeper than one in fourteen, so a car drifts over instead of
+ * stepping sideways. Points before index `keep` stay (a car is on them).
+ * Returns the index of the first point changed. */
+export function blendJoin(points:Point2[],roads:Road[],next:Point2[],road:Road,keep=0){
+  const n=points.length;
+  if(n<2||next.length<2||distance(points[n-1],next[0])<.3){join(points,roads,next,road);return n;}
+  // back[k]: metres from the route's end back to points[n-1-k], down to index keep.
+  const back=[0];for(let i=n-1;i>Math.max(0,keep);i--)back.push(back[back.length-1]+distance(points[i],points[i-1]));
+  const ahead=[0];for(let i=1;i<next.length;i++)ahead.push(ahead[i-1]+distance(next[i-1],next[i]));
+  const behind=(w:number)=>{
+    if(w<=0||back.length<2){const a=points[n-2],b=points[n-1],length=distance(a,b)||1;return{p:b,dir:[(b[0]-a[0])/length,(b[1]-a[1])/length] as Point2,index:n-1};}
+    let k=1;while(k<back.length-1&&back[k]<w)k++;
+    const i=n-1-k,a=points[i],b=points[i+1],span=back[k]-back[k-1],t=span>0?Math.min(1,(w-back[k-1])/span):0,length=distance(a,b)||1;
+    return{p:[b[0]+(a[0]-b[0])*t,b[1]+(a[1]-b[1])*t] as Point2,dir:[(b[0]-a[0])/length,(b[1]-a[1])/length] as Point2,index:i};
+  };
+  const into=(u:number)=>{
+    let k=1;while(k<ahead.length-1&&ahead[k]<u)k++;
+    const a=next[k-1],b=next[k],span=ahead[k]-ahead[k-1],t=span>0?Math.max(0,Math.min(1,(u-ahead[k-1])/span)):0,length=distance(a,b)||1;
+    return{p:[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t] as Point2,dir:[(b[0]-a[0])/length,(b[1]-a[1])/length] as Point2,index:k};
+  };
+  const reachBack=back[back.length-1],reachAhead=ahead[ahead.length-1]-1;
+  let best:{w:number;u:number;score:number}|undefined;
+  for(const w of BLEND_STEPS)if(w<=reachBack)for(const u of BLEND_STEPS)if(u<=reachAhead){
+    const a=behind(w),b=into(u),cx=b.p[0]-a.p[0],cz=b.p[1]-a.p[1],c=Math.hypot(cx,cz);if(c<2)continue;
+    if((cx*a.dir[0]+cz*a.dir[1])/c<.9||a.dir[0]*b.dir[0]+a.dir[1]*b.dir[1]<.9)continue;
+    const side=Math.max(Math.abs(cx*a.dir[1]-cz*a.dir[0]),Math.abs(cx*b.dir[1]-cz*b.dir[0]));
+    const score=side<=c/BLEND_SLOPE+.1?w+u:1e6+side/c;
+    if(!best||score<best.score)best={w,u,score};
+  }
+  if(!best){join(points,roads,next,road);return n;}
+  const a=behind(best.w),b=into(best.u),c=distance(a.p,b.p),before=roads[a.index];
+  points.length=a.index+1;roads.length=a.index+1;
+  if(distance(points[a.index],a.p)>.05){points.push(a.p);roads.push(before);}
+  // Cubic Hermite from the route's heading to the lane's.
+  const steps=Math.max(2,Math.ceil(c/5));
+  for(let j=1;j<steps;j++){
+    const t=j/steps,t2=t*t,t3=t2*t,h00=2*t3-3*t2+1,h10=t3-2*t2+t,h01=-2*t3+3*t2,h11=t3-t2;
+    points.push([h00*a.p[0]+h10*c*a.dir[0]+h01*b.p[0]+h11*c*b.dir[0],h00*a.p[1]+h10*c*a.dir[1]+h01*b.p[1]+h11*c*b.dir[1]]);roads.push(t<.5?before:road);
+  }
+  points.push(b.p);roads.push(road);
+  for(let k=b.index;k<next.length;k++)if(distance(points[points.length-1],next[k])>.05){points.push(next[k]);roads.push(road);}
+  return a.index+1;
+}
+
+/** Lightweight local traffic; all routes follow the imported directed road graph.
+ * `surveyDrawn` says whether a survey mesh (a trace's `surveyDeck`) is drawn: a car on its trace is hidden until it is,
+ * since the Zakim viaduct reaches a kilometre past the tile that streams it and would leave its cars floating. */
+export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[],{surveyDrawn}:{surveyDrawn?:(id:string)=>boolean}={}) {
+  const { nodes, heights, edges } = roadGraph(city);
   const zonesByRoad=new Map<string,ConstructionZone[]>(),lanes=new Map<Edge,Point2[]>();
   for(const zone of constructionZones){const list=zonesByRoad.get(zone.roadId)??[];list.push(zone);zonesByRoad.set(zone.roadId,list);}
   // Retain densified worksite lanes only; ordinary metro streets need no new
@@ -177,12 +318,14 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   };
   const spawnEdges=edges.filter(edge=>edge.length>=12);
   const activityAt=createActivityProfile(city);
-  const outgoing = new Map<number, Edge[]>(), connections = new Map<number, Set<number>>();
+  const outgoing = new Map<number, Edge[]>(), connections = new Map<number, Set<number>>(), arriving=new Map<number,Set<Road>>();
   for(const edge of edges){
     const next=outgoing.get(edge.start);if(next)next.push(edge);else outgoing.set(edge.start,[edge]);
     if(!connections.has(edge.start))connections.set(edge.start,new Set());if(!connections.has(edge.end))connections.set(edge.end,new Set());
     connections.get(edge.start)!.add(edge.end);connections.get(edge.end)!.add(edge.start);
+    if(isMotorway(edge.road)){const roads=arriving.get(edge.end);if(roads)roads.add(edge.road);else arriving.set(edge.end,new Set([edge.road]));}
   }
+  const mergeRoads=new Set(edges.filter(edge=>speedClass(edge.road)===2&&(arriving.get(edge.start)?.size??0)>=2).map(edge=>edge.road));
   const components=new Map<number,number>();let component=0;
   for(const node of connections.keys())if(!components.has(node)){
     const stack=[node];components.set(node,component);
@@ -190,12 +333,48 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     component++;
   }
   // Match measured signal locations to graph junctions, rather than treating a
-  // roadside signal point as if it sat in the middle of the driving lane.
-  const signalJunctions = nodes.filter((point, index) => {
+  // roadside signal point as if it sat in the middle of the driving lane. A
+  // highway gore or lane drop is no intersection (only junctions a street
+  // reaches count), and a route stops only on the junction's own level, so a
+  // deck passing over a signalled crossing keeps going.
+  const streetNodes=new Set<number>();for(const edge of edges)if(!isMotorway(edge.road)){streetNodes.add(edge.start);streetNodes.add(edge.end);}
+  const signalNodes=nodes.flatMap((point, index) => {
     const branches = connections.get(index)??new Set<number>();
-    return branches.size >= 3 && city.signals.some(signal => distance(signal, point) < 24);
+    return branches.size >= 3 && streetNodes.has(index) && city.signals.some(signal => distance(signal, point) < 24)?[index]:[];
   });
-  const routeSignalStops=createRouteSignalLookup(signalJunctions);
+  const routeSignalStops=createRouteSignalLookup(signalNodes.map(index=>nodes[index]));
+  // Sibling lanes of one edge, for the lane a highway car is in counted from either side.
+  const laneSets=new Map<string,number[]>(),laneKey=(edge:Edge)=>`${edge.road.id}|${edge.start}|${edge.end}`;
+  for(const edge of edges)if(edge.laneOffset!==undefined){const key=laneKey(edge),list=laneSets.get(key);if(list)list.push(edge.laneOffset);else laneSets.set(key,[edge.laneOffset]);}
+  // Highway carriageway stations every 25 m, for how close an observer is to the highway (`covered`: under a tunnel's cover).
+  const highwayEdges=edges.filter(edge=>speedClass(edge.road)===2&&edge.length>=12),HIGHWAY_CELL=100,highwayCells=new Map<string,{p:Point2;y:number;tunnel:boolean;covered:boolean}[]>();
+  for(const road of new Set(highwayEdges.map(edge=>edge.road))){
+    const along=stations(road.points),total=along[along.length-1];
+    for(let s=0;s<=total;s+=25){const {p}=pointAtDistance(road.points,s,along),key=`${Math.floor(p[0]/HIGHWAY_CELL)},${Math.floor(p[1]/HIGHWAY_CELL)}`,entry={p,y:sampleRoadElevation(city,road,...p),tunnel:!!road.tunnel,covered:tunnelCoveredAt(road,s)},list=highwayCells.get(key);if(list)list.push(entry);else highwayCells.set(key,[entry]);}
+  }
+  /** An observer more than 4 m below the ground is in a tunnel and sees the tunnel
+   * records' traffic; one above ground sees every station open to the sky, a
+   * tunnel's portal approaches included (`tunnel.covered` leaves them out). */
+  const underground=(o:{x:number;y?:number;z:number})=>o.y!==undefined&&o.y<sampleElevation(city,o.x,o.z)-4;
+  /** Whether a record has a stretch open to the sky: any but a tunnel covered end to end. */
+  const open=(road:Road)=>!road.tunnel||!!road.tunnel.covered;
+  /** Whether (x, z) on `road` lies under its tunnel's cover. */
+  function coveredAt(road:Road,x:number,z:number){
+    if(!road.tunnel?.covered)return !!road.tunnel;
+    const {index,t}=roadProjection(road,x,z),along=tunnelStations(road);
+    return tunnelCoveredAt(road,along[index]+(along[index+1]-along[index])*t);
+  }
+  /** 2 on a highway carriageway (within 30 m and 6 m of its level), 1 beside one (260 m, 18 m), else 0. */
+  function motorwayLevel(observer:{x:number;y?:number;z:number}){
+    if(!highwayCells.size)return 0;
+    const below=underground(observer),cx=Math.floor(observer.x/HIGHWAY_CELL),cz=Math.floor(observer.z/HIGHWAY_CELL);let level=0;
+    for(let dx=-3;dx<=3;dx++)for(let dz=-3;dz<=3;dz++)for(const sample of highwayCells.get(`${cx+dx},${cz+dz}`)??[]){
+      if(below?!sample.tunnel:sample.covered)continue;
+      const d=Math.hypot(sample.p[0]-observer.x,sample.p[1]-observer.z),dy=observer.y===undefined?0:Math.abs(sample.y-observer.y);
+      if(d<30&&dy<6)return 2;if(d<260&&dy<18)level=1;
+    }
+    return level;
+  }
   // Where two source datasets meet, a street can end a few metres short of its
   // continuation without sharing a graph node (Huntington Avenue and Washington
   // Street at the Brookline line); routes may bridge such a seam.
@@ -211,15 +390,54 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     }
     return options;
   }
-  let elapsed = 0, rehomeTimer=0;
+  // `level` and `highway`: the observer's motorwayLevel and the highway cars within MOTORWAY_REACH, as of the last refill.
+  let elapsed = 0, rehomeTimer=0, level=0, highway=0;
   let seed = 43571;
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
   const choose = <T,>(array: T[]) => array[Math.floor(random() * array.length)];
-  /** Append up to 15 streets after `edge` to the lane points; returns the final edge.
+  /** A lane's first or last point and its heading, from the edge's centreline (worksites never reach a record's ends). */
+  function laneTip(edge:Edge,start:boolean){
+    const ps=edge.points,p=start?ps[0]:ps[ps.length-1],q=start?ps[1]:ps[ps.length-2],sign=start?-1:1,dx=(p[0]-q[0])*sign,dz=(p[1]-q[1])*sign,length=Math.hypot(dx,dz)||1;
+    const paved=edge.road.pavedWidth??edge.width,offset=edge.laneOffset??(edge.oneway?Math.min(2,paved*.14):Math.min(3,paved*.23));
+    return{p:[p[0]-dz/length*offset,p[1]+dx/length*offset] as Point2,dir:[dx/length,dz/length] as Point2};
+  }
+  /** The lane a highway car takes at a joint: its own lane on (the nearest where
+   * lanes are added or dropped, now and then the next one over); from the two
+   * lanes nearest an exit it leaves a quarter to a third of the time; off a
+   * ramp it merges into the outer lane on its own side. */
+  function motorwayChoice(edge:Edge,options:Edge[]){
+    const end=laneTip(edge,false),right:Point2=[-end.dir[1],end.dir[0]];
+    const lateral=(o:Edge)=>{const p=laneTip(o,true).p;return(p[0]-end.p[0])*right[0]+(p[1]-end.p[1])*right[1];};
+    const keepLane=(list:Edge[])=>{
+      const sorted=[...list].sort((a,b)=>lateral(a)-lateral(b));let best=0;
+      for(let i=1;i<sorted.length;i++)if(Math.abs(lateral(sorted[i]))<Math.abs(lateral(sorted[best])))best=i;
+      const tie=sorted.findIndex((o,i)=>i!==best&&Math.abs(Math.abs(lateral(o))-Math.abs(lateral(sorted[best])))<.3);
+      if(tie>=0&&random()<.5)best=tie;
+      if(sorted.length>1&&random()<LANE_CHANGE)best=Math.max(0,Math.min(sorted.length-1,best+(random()<.5?-1:1)));
+      return sorted[best];
+    };
+    const own=speedClass(edge.road),main=options.filter(o=>speedClass(o.road)===2),ramps=options.filter(o=>speedClass(o.road)===1);
+    if(own===2&&main.length&&ramps.length){
+      const a=ramps[0].points[0],b=pointAtDistance(ramps[0].points,40).p,exit=(b[0]-a[0])*right[0]+(b[1]-a[1])*right[1]>=0?1:-1;
+      const offset=edge.laneOffset??0,set=laneSets.get(laneKey(edge))??[offset],rank=set.filter(o=>(o-offset)*exit>1e-6).length;
+      if(rank<2&&random()<EXIT_SHARE[set.length>=3?1:0]){const outer=[...ramps].sort((p,q)=>((q.laneOffset??0)-(p.laneOffset??0))*exit);return outer[Math.min(rank,outer.length-1)];}
+      return keepLane(main);
+    }
+    if(own===1&&main.length&&!ramps.length){
+      const tip=edge.points[edge.points.length-1],back=pointAtDistance([...edge.points].reverse(),40).p,start=laneTip(main[0],true),side=(back[0]-tip[0])*-start.dir[1]+(back[1]-tip[1])*start.dir[0]>=0?1:-1;
+      return [...main].sort((p,q)=>((q.laneOffset??0)-(p.laneOffset??0))*side)[0];
+    }
+    const same=options.filter(o=>speedClass(o.road)===own);
+    return keepLane(same.length?same:options);
+  }
+  /** Append up to 15 streets after `edge` to the lane points; returns the final
+   * edge and the first point index a highway blend changed (Infinity for none).
    * When extending a running route, a street that stops at a dataset seam carries
    * on across it and a dead end turns back along its own street. (New routes end
-   * there as they always have, which keeps the opening fleet layout unchanged.) */
-  function follow(edge:Edge,points:Point2[],roads:Road[],extending=false){
+   * there as they always have, which keeps the opening fleet layout unchanged.)
+   * A route into a closed end stops there. */
+  function follow(edge:Edge,points:Point2[],roads:Road[],extending=false,keep=0){
+    let cut=Infinity;
     // Connector fragments must not spend the normal 15-street route budget,
     // or cars would still stop near the player after a densely split junction.
     for (let n = 0,connectors=0; n < 15&&connectors<64;) {
@@ -234,42 +452,106 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       if(!options.length&&extending)options=seamOptions(edge,dir);
       if(!options.length&&extending)options=leaving.filter(next=>next.end===current.start&&next.road===current.road);
       if (!options.length) break;
-      const sameStreet = options.filter(next => next.name === edge.name);
-      const sameLane=sameStreet.filter(next=>next.laneOffset===edge.laneOffset);
-      edge = choose(sameStreet.length && random() < .65 ? (sameLane.length?sameLane:sameStreet) : options);
+      if(isMotorway(edge.road)&&options.some(next=>isMotorway(next.road)))edge=motorwayChoice(edge,options);
+      else{
+        const sameStreet = options.filter(next => next.name === edge.name);
+        const sameLane=sameStreet.filter(next=>next.laneOffset===edge.laneOffset);
+        edge = choose(sameStreet.length && random() < .65 ? (sameLane.length?sameLane:sameStreet) : options);
+      }
       if(edge.length>=12)n++;else connectors++;
-      join(points,roads,laneFor(edge),edge.road);
+      if(isMotorway(current.road)&&isMotorway(edge.road))cut=Math.min(cut,blendJoin(points,roads,laneFor(edge),edge.road,keep));
+      else join(points,roads,laneFor(edge),edge.road);
+      if(edge.sink)break;
     }
-    return edge;
+    return {edge,cut};
   }
   function finish(path:Path,last:Edge){
     path.last=last;path.component=components.get(last.start);
-    path.stops=routeSignalStops(path.points,path.distances).map(distance=>({distance,yaw:pathYaw(path,distance)}));
+    path.stops=routeSignalStops(path.points,path.distances,(junction,along)=>{const p=at(path,along);return Math.abs(sampleRoadElevation(city,pathRoad(path,along),p[0],p[1])-heights[signalNodes[junction]])<3;}).map(distance=>({distance,yaw:pathYaw(path,distance)}));
+    if(last.sink)path.sinkAt=Math.max(0,path.length-CLOSURE_SETBACK+SINK_BEYOND);
+    let speed=-1;path.changes=[];path.merges=[];
+    for(let k=0;k<path.roadAt.length;k++){const c=speedClass(path.roadAt[k]);if(c!==speed){if(speed>=0)path.changes.push({distance:path.distances[k],road:path.roadAt[k]});speed=c;}if(k&&path.roadAt[k]!==path.roadAt[k-1]&&mergeRoads.has(path.roadAt[k]))path.merges.push(path.distances[k]);}
     return path;
   }
   function route(first?: Edge): Path {
     const edge = first ?? choose(spawnEdges);
-    const points = [...laneFor(edge)],roads=points.map(()=>edge.road),last=follow(edge,points,roads);
-    return finish(roundedPath(points,roads),last);
+    const points = [...laneFor(edge)],roads=points.map(()=>edge.road),last=follow(edge,points,roads).edge;
+    const path=finish(roundedPath(points,roads),last);if(edge.source)path.sourceAt=CLOSURE_SETBACK;
+    return path;
   }
   /** Continue a route that is running out near the player, so the car drives on
    * instead of parking at its end and holding up everyone behind it. The new
    * path keeps the unrounded points from two vertices behind the car, so the
    * stretch it is on rounds exactly as before and it carries on without a jump. */
   function extendRoute(actor:Actor){
-    const old=actor.path,last=old.last;if(!last)return false;
+    const old=actor.path,last=old.last;if(!last||last.sink)return false;
     let lo=0,hi=old.distances.length-1;while(lo+1<hi){const mid=(lo+hi)>>1;if(old.distances[mid]<actor.distance)lo=mid;else hi=mid;}
     const from=Math.max(0,old.source.vertex[lo]-2),points=old.source.points.slice(from),roads=old.source.roads.slice(from),count=points.length;
-    const end=follow(last,points,roads,true);if(points.length===count)return false;
-    const path=finish(roundedPath(points,roads),end);
+    // A highway blend may reshape the old lane ahead of the car, never under it.
+    const {edge:end,cut}=follow(last,points,roads,true,Math.min(count-1,old.source.vertex[lo]-from+2));if(points.length===count&&cut===Infinity)return false;
+    const path=finish(roundedPath(points,roads),end),kept=Math.min(count,cut);
     // Project the car onto the part of the new path rebuilt from the old points.
     let best=0,bestGap=Infinity;
-    for(let i=1;i<path.points.length&&path.source.vertex[i-1]<count;i++){
+    for(let i=1;i<path.points.length&&path.source.vertex[i-1]<kept;i++){
       const a=path.points[i-1],b=path.points[i],dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((actor.x-a[0])*dx+(actor.z-a[1])*dz)/(dx*dx+dz*dz||1)));
       const gap=Math.hypot(a[0]+dx*t-actor.x,a[1]+dz*t-actor.z);if(gap<bestGap){bestGap=gap;best=path.distances[i-1]+(path.distances[i]-path.distances[i-1])*t;}
     }
     if(actor.signalStop!==undefined)actor.signalStop+=best-actor.distance;
     actor.path=path;actor.distance=best;return true;
+  }
+  /** A car's highway and ramp cruise: its seeded street cruise (5.5 to 9 m/s) sets where it drives in each range. */
+  function cruiseOn(actor:Actor,road:Road){
+    const c=speedClass(road),range=c===2?MOTORWAY_CRUISE:c===1?RAMP_CRUISE:undefined;
+    return range?range[0]+(range[1]-range[0])*Math.max(0,Math.min(1,(actor.cruise-5.5)/3.5)):actor.cruise;
+  }
+  const leadPoints:Point2[]=[],leadStations:number[]=[];
+  /** Highway following: the Gipps speed behind the nearest of `others` (skipping
+   * index `skip`) ahead on the car's own route, within FOLLOW.reach and close
+   * enough to the lane to touch (about 2 m; the next lane is 3.65 m over),
+   * measured along the route so a leader on a bend or one drifting over from
+   * the next lane still counts. */
+  function leaderLimit(actor:Actor,others:readonly TrafficObstacle[],skip:number){
+    const reach=Math.min(FOLLOW.reach,actor.path.length-actor.distance),step=4;if(reach<1)return Infinity;
+    const y=actor.body.translation().y,fx=Math.sin(actor.yaw),fz=Math.cos(actor.yaw);
+    leadPoints.length=0;leadStations.length=0;
+    const point=walker(actor.path);for(let s=0;;s+=step){const t=Math.min(s,reach);leadPoints.push(point(actor.distance+t));leadStations.push(t);if(t>=reach)break;}
+    let limit=Infinity;
+    for(let k=0;k<others.length;k++){
+      if(k===skip)continue;
+      const other=others[k],dx=other.x-actor.x,dz=other.z-actor.z,range=Math.hypot(dx,dz);
+      if(range>reach+8||Math.abs(other.y-y)>3||(range<10&&dx*fx+dz*fz<-1))continue;
+      // The station is at least the plan distance, and not much more on any highway curve.
+      const k0=Math.floor(range/step);let lateral=Infinity,station=0;
+      for(let i=Math.max(0,k0-2),end=Math.min(leadPoints.length-1,k0+3+Math.ceil(k0*.3));i<end;i++){
+        const a=leadPoints[i],b=leadPoints[i+1],sx=b[0]-a[0],sz=b[1]-a[1],t=Math.max(0,Math.min(1,((other.x-a[0])*sx+(other.z-a[1])*sz)/(sx*sx+sz*sz||1))),d=Math.hypot(a[0]+sx*t-other.x,a[1]+sz*t-other.z);
+        if(d<lateral){lateral=d;station=leadStations[i]+(leadStations[i+1]-leadStations[i])*t;}
+      }
+      if(lateral>actor.spec.width/2+(other.halfWidth??.95)+.2||station<=0)continue;
+      const heading=pathYaw(actor.path,actor.distance+station),lead=other.yaw===undefined?0:(other.speed??0)*Math.max(0,Math.cos(other.yaw-heading));
+      limit=Math.min(limit,followSpeed(station-actor.spec.length/2-(other.halfLength??2.1),lead));
+    }
+    return limit;
+  }
+  /** The fleet as obstacles, for a car's following speed outside the step loop. */
+  const fleetObstacles=():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw}));
+  /** A station on a highway lane between `min` and `max` metres from the
+   * observer, on its level (a tunnel record in a tunnel, anywhere open to the
+   * sky above ground), clear of the player and of every car by the highway
+   * headway; lanes weighted by length. */
+  function motorwayPlacement(observer:Pick<VehicleState,'x'|'z'>&{y?:number},player:Pick<VehicleState,'x'|'z'>,min:number,max:number,except?:Actor,external:TrafficObstacle[]=[],attempts=24):Placement|undefined{
+    const below=underground(observer),candidates=highwayEdges.filter(edge=>(below?!!edge.road.tunnel:open(edge.road))&&edge.points.some(p=>Math.hypot(p[0]-observer.x,p[1]-observer.z)<max+40));
+    if(!candidates.length)return;
+    const total=candidates.reduce((sum,edge)=>sum+edge.length,0);
+    const clear=(p:Point2)=>Math.hypot(p[0]-player.x,p[1]-player.z)>=35&&!actors.some(actor=>actor!==except&&Math.hypot(actor.x-p[0],actor.z-p[1])<MOTORWAY_HEADWAY)&&!external.some(other=>Math.hypot(other.x-p[0],other.z-p[1])<(other.halfLength??2.1)+5);
+    for(let attempt=0;attempt<attempts;attempt++){
+      let pick=random()*total,edge=candidates[0];for(const c of candidates){edge=c;if((pick-=c.length)<=0)break;}
+      const lanePoints=laneFor(edge),along=stations(lanePoints),s=random()*along[along.length-1],p=pointAtDistance(lanePoints,s,along).p,radius=Math.hypot(p[0]-observer.x,p[1]-observer.z);
+      if(radius<min||radius>max||!clear(p)||!below&&coveredAt(edge.road,p[0],p[1]))continue;
+      const path=route(edge),d=Math.min(s,path.length-1);
+      if(path.sinkAt!==undefined&&d>path.sinkAt-40)continue;
+      const q=at(path,d);if(!clear(q))continue;
+      return{path,d,p:q};
+    }
   }
 
   const actors: Actor[] = [];
@@ -289,8 +571,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     }
     return selected;
   }
-  function nearbyEdges(observer:Pick<VehicleState,'x'|'z'>,radius:number){
-    return spawnEdges.filter(edge=>edge.points.some(point=>Math.hypot(point[0]-observer.x,point[1]-observer.z)<radius));
+  /** Lanes within `radius`; tunnel lanes only for an observer in a tunnel. */
+  function nearbyEdges(observer:Pick<VehicleState,'x'|'z'>&{y?:number},radius:number){
+    const below=underground(observer);
+    return spawnEdges.filter(edge=>(below||!edge.road.tunnel)&&edge.points.some(point=>Math.hypot(point[0]-observer.x,point[1]-observer.z)<radius));
   }
   function nearestStreet(observer:Pick<VehicleState,'x'|'z'>){
     let best=Infinity,name='';
@@ -345,13 +629,17 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   }
   const initialEdges=nearbyEdges(spawnPlayer,650),nearEdges=nearbyEdges(spawnPlayer,240),street=nearestStreet(spawnPlayer);
   const streetEdges=nearEdges.filter(edge=>edge.name===street),forward=forwardPlacements(streetEdges,spawnPlayer);
-  const target=activityAt(spawnPlayer.x,spawnPlayer.z).traffic,nearTarget=Math.round(target/3),streetTarget=Math.round(target/6);
+  // A start on or beside the highway fills it first (none of this applies elsewhere, so the street layout is unchanged).
+  const spawnLevel=motorwayLevel(spawnPlayer),spawnHighway=MOTORWAY_DENSITY[spawnLevel],streetTraffic=activityAt(spawnPlayer.x,spawnPlayer.z).traffic;
+  const target=spawnLevel?Math.min(COUNT-3,Math.max(streetTraffic,spawnHighway+MOTORWAY_STREETS)):streetTraffic,nearTarget=Math.round(streetTraffic/3),streetTarget=Math.round(streetTraffic/6);
   for (let i = 0; i < COUNT && spawnEdges.length; i++) {
     // Populate the street in view first, then adjacent blocks, then a reserve
     // fleet in the rest of the city. Every placement keeps its safe headway.
-    let candidate=i<Math.min(6,streetTarget)?forwardPlacement(forward,spawnPlayer,spawnPlayer,i):undefined;
-    if(!candidate&&i<streetTarget)candidate=placement(streetEdges,spawnPlayer,spawnPlayer,35,230);
-    if(!candidate&&i<nearTarget)candidate=placement(nearEdges,spawnPlayer,spawnPlayer,35,240);
+    let candidate=i<spawnHighway?motorwayPlacement(spawnPlayer,spawnPlayer,35,MOTORWAY_REACH):undefined;
+    const k=Math.max(0,i-spawnHighway);
+    if(!candidate&&spawnLevel<2&&k<Math.min(6,streetTarget))candidate=forwardPlacement(forward,spawnPlayer,spawnPlayer,k);
+    if(!candidate&&spawnLevel<2&&k<streetTarget)candidate=placement(streetEdges,spawnPlayer,spawnPlayer,35,230);
+    if(!candidate&&k<nearTarget)candidate=placement(nearEdges,spawnPlayer,spawnPlayer,35,240);
     if(!candidate&&i<target)candidate=placement(initialEdges,spawnPlayer,spawnPlayer,35,LOCAL_RADIUS);
     if(!candidate)candidate=placement(spawnEdges,spawnPlayer,spawnPlayer,i<target?35:LOCAL_RADIUS+80,Infinity);
     if (!candidate) continue;
@@ -363,12 +651,19 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     const spec=npcVehicleAt(actors.length),colliders=createNPCVehicleColliders(physics.world,body,spec),collider=colliders[0];
     fleet.bind(actors.length,spec.type);
     actors.push({ body, collider, colliders, spec, registration:fleet.registration(actors.length),path, distance: d, speed: 0, cruise: 5.5 + random() * 3.5, x: p[0], z: p[1], yaw, steering:0,color: new THREE.Color(npcPaint(spec)),waiting:0 });
+    // Highway cars start at speed, no faster than the car ahead allows.
+    if(speedClass(road)>0){const actor=actors[actors.length-1];actor.speed=Math.min(cruiseOn(actor,road)*.9,leaderLimit(actor,fleetObstacles(),actors.length-1));}
   }
   const byCollider=new Map(actors.flatMap(actor=>actor.colliders.map(collider=>[collider.handle,actor] as const)));
+  // Each lane leaving a closed start emits a car from its barrier every 1.5 to
+  // 4 s, on its own random stream so the fleet's draws are unchanged.
+  const emitters=edges.filter(edge=>edge.source).map(edge=>{const point=pointAtDistance(laneFor(edge),CLOSURE_SETBACK).p;return{edge,point,covered:coveredAt(edge.road,point[0],point[1]),timer:0};});
+  let emitSeed=91447;const emitRandom=()=>{emitSeed=(Math.imul(emitSeed,1664525)+1013904223)>>>0;return emitSeed/4294967296;};
   const matrix = new THREE.Matrix4();
   const rotation = new THREE.Quaternion(), laneRotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3(1, 1, 1), lift = new THREE.Vector3(), meshPosition = new THREE.Vector3();
   /** Write one actor's instance matrices from the body pose in `position`/`rotation`
    * (the body sits .65 m above the wheels' contact, the mesh origin on it). */
+  const unseen=(road:Road)=>!!road.surveyDeck&&!!surveyDrawn&&!surveyDrawn(road.surveyDeck);
   function draw(index:number){
     lift.set(0,NPC_BODY_LIFT,0).applyQuaternion(rotation);meshPosition.copy(position).sub(lift);matrix.compose(meshPosition,rotation,scale);
     fleet.draw(index,matrix,actors[index].color,Math.hypot(actors[index].x-drawObserver.x,actors[index].z-drawObserver.z),actors[index].steering);
@@ -462,12 +757,22 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   }
   function relocate(actor:Actor,path:Path,d=5){
     const start=at(path,d),next=at(path,d+2);
-    restore(actor);actor.rejoin=undefined;actor.evasion=undefined;actor.steering=0;
+    restore(actor);actor.rejoin=undefined;actor.evasion=undefined;actor.steering=0;actor.parked=false;
     actor.path=path;actor.distance=d;actor.speed=0;actor.signalStop=undefined;actor.signalCommitted=false;actor.waiting=0;actor.priorityUntil=undefined;actor.ended=undefined;
     actor.x=start[0];actor.z=start[1];actor.yaw=Math.atan2(next[0]-start[0],next[1]-start[1]);
     const road=pathRoad(path,d),normal=roadNormal(city,road,...start);
     actor.body.setTranslation({x:start[0]+normal.x*NPC_BODY_LIFT,y:sampleRoadElevation(city,road,...start)+normal.y*NPC_BODY_LIFT,z:start[1]+normal.z*NPC_BODY_LIFT},true);
     actor.body.setRotation(roadRotation(city,road,...start,actor.yaw),true);
+    if(speedClass(road)>0)actor.speed=Math.min(cruiseOn(actor,road)*.9,leaderLimit(actor,fleetObstacles(),actors.indexOf(actor)));
+  }
+  /** A car that drove into a closed end: hidden, its body moved out of the
+   * world (20 m apart, below the map's far corner) until it is placed again. */
+  function park(actor:Actor,index:number){
+    restore(actor);actor.parked=true;actor.rejoin=undefined;actor.evasion=undefined;actor.steering=0;actor.speed=0;
+    actor.signalStop=undefined;actor.signalCommitted=false;actor.waiting=0;actor.priorityUntil=undefined;actor.ended=undefined;
+    actor.x=city.bounds.minX-4000-index*20;actor.z=city.bounds.minZ-4000;
+    actor.body.setTranslation({x:actor.x,y:-800,z:actor.z},true);
+    fleet.hide(index);
   }
 
 
@@ -520,13 +825,16 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   const posAt=(path:Path,s:number):Pose=>{const p=at(path,s);return{x:p[0],z:p[1],yaw:pathYaw(path,s)};};
   /** The route ahead of a lane keeper, long enough to cover its braking distance. */
   function trajectory(actor:Actor):Trajectory{
-    const horizon=Math.min(CONFLICT.maxHorizon,CONFLICT.minHorizon+actor.speed*actor.speed/(2*CONFLICT.decel)),here={x:actor.x,z:actor.z,yaw:actor.yaw},poses=[here];
-    for(let t=CONFLICT.step;t<=horizon&&actor.distance+t<actor.path.length;t+=CONFLICT.step)poses.push(posAt(actor.path,actor.distance+t));
+    const cap=actor.path.merges?.some(s=>s-actor.distance>-30&&s-actor.distance<MERGE_WINDOW)?MOTORWAY_HORIZON:CONFLICT.maxHorizon,horizon=Math.min(cap,CONFLICT.minHorizon+actor.speed*actor.speed/(2*CONFLICT.decel)),here={x:actor.x,z:actor.z,yaw:actor.yaw},poses=[here];
+    // posAt for each sample, walking the path once: the yaw is the chord over the next 2 m.
+    const path=actor.path,point=walker(path),from=walker(path),to=walker(path);
+    for(let t=CONFLICT.step;t<=horizon&&actor.distance+t<path.length;t+=CONFLICT.step){const s=actor.distance+t,y=Math.min(s,path.length-2),p=point(s),a=from(y),b=to(y+2);poses.push({x:p[0],z:p[1],yaw:Math.atan2(b[0]-a[0],b[1]-a[1])});}
     return{halfLength:actor.spec.length/2,halfWidth:actor.spec.width/2,poses,pose:t=>t<=0?here:posAt(actor.path,actor.distance+t)};
   }
-  /** Travel at which a red light (not yet run on amber) or the route's end will stop the car anyway. */
+  /** Travel at which a red light (not yet run on amber) or the route's end will
+   * stop the car anyway; a route into a closed end does not stop there. */
   function heldAt(actor:Actor){
-    let held=actor.path.length-actor.distance-2;
+    let held=actor.path.sinkAt===undefined?actor.path.length-actor.distance-2:Infinity;
     const stop=actor.path.stops.find(s=>s.distance>=actor.distance-.2);
     if(stop&&signalPhase(elapsed,stop.yaw)!=='green'){
       const gap=stop.distance-actor.distance,committed=actor.signalStop===stop.distance?actor.signalCommitted:actor.speed>2&&gap<actor.speed*actor.speed/12+1;
@@ -625,12 +933,22 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       if(!changed)break;
     }
     stops();
-    const constrain=(i:number,travel:number,blocker:number,inPath:boolean)=>{const limit=yieldSpeed(travel);if(limit<limits[i]){limits[i]=limit;blockers[i]=limit<.5?blocker:-1;blockerInPath[i]=inPath;}};
+    const constrain=(i:number,travel:number,blocker:number,inPath:boolean,lead?:number)=>{const limit=lead===undefined?yieldSpeed(travel):followSpeed(travel,lead);if(limit<limits[i]){limits[i]=limit;blockers[i]=limit<.5?blocker:-1;blockerInPath[i]=inPath;}};
+    // A highway car behind or merging beside a moving car keeps a following gap
+    // to it (Gipps) instead of planning to stop short of where it is now. Into
+    // a merge the gap is how far it would arrive behind the other (their travels
+    // to the contact differ by it); one that would not arrive 2 m behind still
+    // plans to stop short and lets the other by.
+    const follows=(d:Decision)=>{
+      if(d.crossing||d.bothHold||d.w>=n||speedOf(d.w)<1||speedClass(pathRoad(actors[d.l].path,actors[d.l].distance))===0)return;
+      return speedOf(d.w)*Math.max(0,Math.cos(actors[d.w].yaw-actors[d.l].yaw));
+    };
     for(const d of decisions){
       if(d.w<n&&d.l<n)memory.set(Math.min(d.w,d.l)*256+Math.max(d.w,d.l),d.w);
       // A car held outside a junction it could not get through waits on what
       // stops it beyond; a blocker of its own is no part of a deadlock.
-      constrain(d.l,d.tl,d.bothHold?stopBy[d.l]:d.w,d.tw<=0);
+      const lead=follows(d),gap=d.tl-Math.max(0,d.tw);
+      constrain(d.l,lead===undefined||gap<2?d.tl:gap,d.bothHold?stopBy[d.l]:d.w,d.tw<=0,lead===undefined||gap<2?undefined:lead);
       if(d.bothHold)constrain(d.w,d.tw,stopBy[d.w]===d.w?-1:stopBy[d.w],false);
     }
     rightOfWayMemory=memory;
@@ -646,29 +964,40 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
 
   return {
     count: actors.length,
-    population(observer:Observer){
+    /** `motorway`: highway cars within MOTORWAY_REACH; `highway`: the observer's motorwayLevel. */
+    population(observer:Observer&{y?:number}){
       const profile=activityAt(observer.x,observer.z);
-      return {level:profile.level,target:profile.traffic,forward:actors.filter(actor=>{const p=aheadOf([actor.x,actor.z],observer);return p.along>35&&p.along<200&&Math.abs(p.across)<12;}).length,local:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<LOCAL_RADIUS).length,nearby:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<240).length,total:actors.length};
+      return {level:profile.level,target:profile.traffic,forward:actors.filter(actor=>{const p=aheadOf([actor.x,actor.z],observer);return p.along>35&&p.along<200&&Math.abs(p.across)<12;}).length,local:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<LOCAL_RADIUS).length,nearby:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<240).length,total:actors.length,
+        motorway:actors.filter(actor=>!actor.parked&&speedClass(pathRoad(actor.path,actor.distance))===2&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<MOTORWAY_REACH).length,highway:motorwayLevel(observer),parked:actors.filter(actor=>actor.parked).length};
     },
     // Called only during an explicit map teleport/reset, before the new view is
     // rendered. Ordinary driving uses the protected-distance refill below.
-    populateAt(observer:Observer,player:Pick<VehicleState,'x'|'z'>=observer,external:TrafficObstacle[]=[]){
+    // On or beside the highway its share is placed first.
+    populateAt(observer:Observer&{y?:number},player:Pick<VehicleState,'x'|'z'>=observer,external:TrafficObstacle[]=[]){
       const profile=activityAt(observer.x,observer.z),local=()=>actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<LOCAL_RADIUS).length;
+      const levelHere=motorwayLevel(observer),traffic=levelHere?Math.min(actors.length-3,Math.max(profile.traffic,MOTORWAY_DENSITY[levelHere]+MOTORWAY_STREETS)):profile.traffic,highwayTarget=MOTORWAY_DENSITY[levelHere];
+      let onHighway=levelHere?actors.filter(actor=>!actor.parked&&speedClass(pathRoad(actor.path,actor.distance))===2&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<MOTORWAY_REACH).length:0;
       const candidates=nearbyEdges(observer,650),near=nearbyEdges(observer,240),name=nearestStreet(observer),same=near.filter(edge=>edge.name===name);
-      const forward=forwardPlacements(same,observer);
+      const forward=levelHere===2?[]:forwardPlacements(same,observer);
       let inFront=actors.filter(actor=>{const p=aheadOf([actor.x,actor.z],observer);return p.along>35&&p.along<200&&Math.abs(p.across)<12;}).length;
       let nearby=actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<240).length;
       for(const actor of actors){
-        if(local()>=profile.traffic)break;
-        if(Math.hypot(actor.x-observer.x,actor.z-observer.z)<LOCAL_RADIUS*1.35)continue;
-        let candidate=inFront<Math.min(6,Math.round(profile.traffic/6))?forwardPlacement(forward,observer,player,inFront,actor,external):undefined;
-        if(!candidate&&nearby<Math.round(profile.traffic/6))candidate=placement(same,observer,player,35,230,actor,external);
-        if(!candidate&&nearby<Math.round(profile.traffic/3))candidate=placement(near,observer,player,35,240,actor,external);
-        candidate??=placement(candidates,observer,player,35,LOCAL_RADIUS,actor,external);
+        if(local()>=traffic&&onHighway>=highwayTarget)break;
+        // A highway short of cars also takes street cars beyond 300 m.
+        const away=Math.hypot(actor.x-observer.x,actor.z-observer.z);
+        if(away<LOCAL_RADIUS*1.35&&!(onHighway<highwayTarget&&away>300&&!actor.knocked&&speedClass(pathRoad(actor.path,actor.distance))===0))continue;
+        let candidate=onHighway<highwayTarget?motorwayPlacement(observer,player,35,MOTORWAY_REACH,actor,external):undefined;
+        if(candidate)onHighway++;
+        else if(away>=LOCAL_RADIUS*1.35){
+          if(levelHere<2&&inFront<Math.min(6,Math.round(profile.traffic/6)))candidate=forwardPlacement(forward,observer,player,inFront,actor,external);
+          if(!candidate&&levelHere<2&&nearby<Math.round(profile.traffic/6))candidate=placement(same,observer,player,35,230,actor,external);
+          if(!candidate&&nearby<Math.round(profile.traffic/3))candidate=placement(near,observer,player,35,240,actor,external);
+          candidate??=placement(candidates,observer,player,35,LOCAL_RADIUS,actor,external);
+        }
         if(candidate){relocate(actor,candidate.path,candidate.d);if(Math.hypot(candidate.p[0]-observer.x,candidate.p[1]-observer.z)<240)nearby++;const p=aheadOf(candidate.p,observer);if(p.along>35&&p.along<200&&Math.abs(p.across)<12)inFront++;}
       }
     },
-    snapshot:()=>actors.map(a=>{const stop=a.path.stops.find(s=>s.distance>=a.distance-.2);return{x:a.x,y:a.body.translation().y,z:a.z,yaw:a.yaw,speed:a.speed,steering:a.steering,evasion:a.evasion?.offset??0,road:pathRoad(a.path,a.distance).name,signal:stop?signalPhase(elapsed,stop.yaw):undefined,stopGap:stop?stop.distance-a.distance:Infinity,remaining:a.path.length-a.distance,priority:elapsed<(a.priorityUntil??0),knocked:!!a.knocked,rejoining:!!a.rejoin,dynamic:a.body.isDynamic(),collider:a.collider.handle,registration:a.registration,type:a.spec.type,mass:a.spec.mass,color:`#${a.color.getHexString()}`,height:a.spec.height,halfLength:a.spec.length/2,halfWidth:a.spec.width/2};}),
+    snapshot:()=>actors.map(a=>{const stop=a.path.stops.find(s=>s.distance>=a.distance-.2);return{x:a.x,y:a.body.translation().y,z:a.z,yaw:a.yaw,speed:a.speed,steering:a.steering,evasion:a.evasion?.offset??0,road:pathRoad(a.path,a.distance).name,parked:!!a.parked,hidden:!!a.parked||!!a.hidden,motorway:speedClass(pathRoad(a.path,a.distance)),signal:stop?signalPhase(elapsed,stop.yaw):undefined,stopGap:stop?stop.distance-a.distance:Infinity,remaining:a.path.length-a.distance,priority:elapsed<(a.priorityUntil??0),knocked:!!a.knocked,rejoining:!!a.rejoin,dynamic:a.body.isDynamic(),collider:a.collider.handle,registration:a.registration,type:a.spec.type,mass:a.spec.mass,color:`#${a.color.getHexString()}`,height:a.spec.height,halfLength:a.spec.length/2,halfWidth:a.spec.width/2};}),
     /** Each car with its heading, so a bus changing lanes sees how far a turning or crossing car reaches. */
     obstacles:():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw})),
     /** Collider handles of the fleet, so an impact on the player can be classified. */
@@ -694,34 +1023,59 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         }
         return false;
       };
+      const below=underground(observer);
       if(rehomeTimer>.25){
         rehomeTimer=0;
-        const target=activityAt(observer.x,observer.z).traffic;
+        // On or beside the highway, keep its own share of the fleet (MOTORWAY_DENSITY) within MOTORWAY_REACH on top of the streets'.
+        level=motorwayLevel(observer);
+        const streetTraffic=activityAt(observer.x,observer.z).traffic,target=level?Math.min(actors.length-3,Math.max(streetTraffic,MOTORWAY_DENSITY[level]+MOTORWAY_STREETS)):streetTraffic,highwayTarget=MOTORWAY_DENSITY[level];
         let local=actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<localRadius).length;
-        if(local<Math.min(target,actors.length)){
+        highway=level?actors.filter(actor=>!actor.parked&&speedClass(pathRoad(actor.path,actor.distance))===2&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<MOTORWAY_REACH).length:0;
+        if(local<Math.min(target,actors.length)||highway<highwayTarget){
           const approaches=spawnEdges.filter(edge=>{
+            if(edge.road.tunnel&&!below)return false;
             const a=edge.points[0],b=edge.points[1],d=Math.hypot(a[0]-observer.x,a[1]-observer.z);
             if(d<recycleDistance+15||d>localRadius-30)return false;
             const dx=b[0]-a[0],dz=b[1]-a[1];
             return (dx*(observer.x-a[0])+dz*(observer.z-a[1]))/(Math.hypot(dx,dz)*d)>-.1;
           });
+          // Driving the highway, cars left 700 m behind are recycled ahead.
+          const beyond=level===2?Math.min(localRadius*1.35,MOTORWAY_REACH+200):localRadius*1.35;
           let moved=0;
           for(const actor of actors){
-            if(local>=target||moved>=2)break;
-            if(Math.hypot(actor.x-observer.x,actor.z-observer.z)<=localRadius*1.35||Math.hypot(actor.x-player.x,actor.z-player.z)<=35)continue;
-            const candidate=placement(approaches,observer,player,recycleDistance,localRadius-10,actor,external,6);
-            if(candidate){relocate(actor,candidate.path,candidate.d);local++;moved++;}
+            if((local>=target&&highway>=highwayTarget)||moved>=2)break;
+            const away=Math.hypot(actor.x-observer.x,actor.z-observer.z);
+            if(Math.hypot(actor.x-player.x,actor.z-player.z)<=35)continue;
+            // A highway short of cars also takes street cars out of view.
+            if(away<=beyond&&!(highway<highwayTarget&&away>recycleDistance+40&&!actor.knocked&&speedClass(pathRoad(actor.path,actor.distance))===0))continue;
+            let candidate=highway<highwayTarget?motorwayPlacement(observer,player,recycleDistance,Math.min(localRadius-10,480),actor,external,8):undefined;
+            if(candidate)highway++;
+            else if(local<target&&away>beyond)candidate=placement(approaches,observer,player,recycleDistance,localRadius-10,actor,external,6);
+            if(candidate){relocate(actor,candidate.path,candidate.d);if(away>=localRadius)local++;moved++;}
           }
         }
       }
+      // Closed starts emit cars while the observer is near and on their level, and the highway is short of cars.
+      for(const emitter of emitters){
+        emitter.timer-=dt;if(emitter.timer>0)continue;
+        emitter.timer=1.5+emitRandom()*2.5;
+        const p=emitter.point;
+        if(highway>=MOTORWAY_DENSITY[Math.max(1,level)]||(below?!emitter.edge.road.tunnel:emitter.covered)||Math.hypot(p[0]-observer.x,p[1]-observer.z)>EMIT_RANGE||Math.hypot(p[0]-player.x,p[1]-player.z)<20||actors.some(actor=>Math.hypot(actor.x-p[0],actor.z-p[1])<28))continue;
+        // A car parked behind a closed end first, else the farthest one well out of view.
+        let pick=actors.find(actor=>actor.parked);
+        if(!pick){let far=localRadius*1.35;for(const actor of actors){const d=Math.hypot(actor.x-observer.x,actor.z-observer.z);if(d>far&&!actor.knocked&&Math.hypot(actor.x-player.x,actor.z-player.z)>35){far=d;pick=actor;}}}
+        if(!pick)continue;
+        relocate(pick,route(emitter.edge),CLOSURE_SETBACK);highway++;
+      }
       // Snapshot once per step instead of allocating an O(N²) pile of obstacle
       // objects. The stable snapshot also avoids actor-order-dependent following.
-      const obstacles:TrafficObstacle[]=[{...player,halfLength:2.1,halfWidth:.9},...actors.map(actor=>({x:actor.x,y:actor.body.translation().y,z:actor.z,halfLength:actor.spec.length/2,halfWidth:actor.spec.width/2,speed:actor.speed})),...external];
+      const obstacles:TrafficObstacle[]=[{...player,halfLength:2.1,halfWidth:.9},...actors.map(actor=>({x:actor.x,y:actor.body.translation().y,z:actor.z,halfLength:actor.spec.length/2,halfWidth:actor.spec.width/2,speed:actor.speed,yaw:actor.yaw})),...external];
       detectKnocks();
       for(const actor of actors)if(!actor.knocked&&!actor.rejoin&&actor.path.length-actor.distance<40&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<=localRadius*1.35)extendRoute(actor);
-      const keepers=actors.map(actor=>!actor.knocked&&!actor.rejoin),{limits,blockers}=rightsOfWay(keepers,external);
+      const keepers=actors.map(actor=>!actor.knocked&&!actor.rejoin&&!actor.parked),{limits,blockers}=rightsOfWay(keepers,external);
       for (let index = 0; index < actors.length; index++) {
         const actor = actors[index];
+        if(actor.parked)continue;
         if(actor.knocked){
           // Rapier moves this one. Track it so other cars still brake for it,
           // and hand it back to the lane once it has stopped sliding (or after
@@ -738,15 +1092,28 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
           if(way==='lost')relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));
           else if(way==='blocked'){if(!respawnAway(actor))relocate(actor,actor.path,Math.min(actor.path.length-.05,actor.distance));}
           else if(way==='clear')beginRejoin(actor,observer);
-          else{rotation.set(r.x,r.y,r.z,r.w);position.set(t.x,t.y,t.z);draw(index);continue;}
+          else{rotation.set(r.x,r.y,r.z,r.w);position.set(t.x,t.y,t.z);actor.hidden=false;draw(index);continue;}
         }
         const previousX=actor.x,previousZ=actor.z,previousYaw=actor.yaw,previousDistance=actor.distance;
         const forwardX = Math.sin(actor.yaw), forwardZ = Math.cos(actor.yaw);
-        let target = actor.rejoin?0:actor.cruise;
-        const p = at(actor.path, actor.distance), ahead = at(actor.path, actor.distance + 12);
+        const here=pathRoad(actor.path,actor.distance),fast=speedClass(here)>0;
+        let target = actor.rejoin?0:cruiseOn(actor,here);
+        const lookAhead=fast?Math.max(12,actor.speed*1.2):12,p = at(actor.path, actor.distance), ahead = at(actor.path, actor.distance + lookAhead);
         const upcomingYaw = Math.atan2(ahead[0] - p[0], ahead[1] - p[1]);
         const turn = Math.abs(Math.atan2(Math.sin(upcomingYaw - actor.yaw), Math.cos(upcomingYaw - actor.yaw)));
-        target *= 1 - Math.min(.6, turn * .65);
+        if(fast&&!actor.rejoin){
+          // Up to the highway's speed for a merge, down ahead of an exit or the
+          // street at 2.5 m/s², about 3 m/s² sideways on a bend (the chord to a
+          // point `lookAhead` metres on turns by half the arc), and the car ahead.
+          let first=true;
+          for(const change of actor.path.changes??[]){
+            const gap=change.distance-actor.distance;if(gap<0)continue;if(gap>220)break;
+            const next=cruiseOn(actor,change.road);
+            if(next<target)target=Math.min(target,Math.sqrt(next*next+5*gap));else if(first&&gap<140)target=next;
+            first=false;
+          }
+          target=Math.min(target,Math.sqrt(3.2*lookAhead/(2*Math.max(turn,1e-4))),leaderLimit(actor,obstacles,index+1));
+        }else target *= 1 - Math.min(.6, turn * .65);
         const stop=actor.path.stops.find(s=>s.distance>=actor.distance-.2);
         if(stop&&signalPhase(elapsed,stop.yaw)!=='green'){
           const gap=stop.distance-actor.distance;
@@ -762,17 +1129,26 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
           const other=obstacles[otherIndex];
           if(Math.abs(other.y-actorHeight)>3)continue;
           const dx=other.x-actor.x,dz=other.z-actor.z,along=dx*forwardX+dz*forwardZ,across=Math.abs(dx*forwardZ-dz*forwardX);
+          const inLane=across<actor.spec.width/2+.4+(other.halfWidth??.95);
+          if(fast){
+            // Highway cars follow along their route (leaderLimit); straight ahead only up close, where a bend cannot hide the lane.
+            if(along>0&&along<25&&inLane)target=Math.min(target,followSpeed(along-actor.spec.length/2-(other.halfLength??2.1),other.yaw===undefined?0:(other.speed??0)*Math.max(0,Math.cos(other.yaw-actor.yaw))));
+            if(Math.hypot(dx,dz)<5&&along>-1&&inLane)target=0;
+            continue;
+          }
           const gap=along-actor.spec.length/2-(other.halfLength??2.1)-2.3;
-          if(along>0&&along<55&&across<actor.spec.width/2+.4+(other.halfWidth??.95))target=Math.min(target,Math.sqrt(Math.max(0,2*3.8*gap)));
+          if(along>0&&along<55&&inLane)target=Math.min(target,Math.sqrt(Math.max(0,2*3.8*gap)));
           if(Math.hypot(dx,dz)<5&&along>-1)target=0;
         }
         if(keepers[index])target=Math.min(target,limits[index]);
         const evasion=evade(actor,player,dt);
         const remaining = actor.path.length - actor.distance;
-        if (remaining < 12) target = Math.min(target, Math.sqrt(Math.max(0, 2 * 3 * (remaining - 2))));
-        actor.speed += Math.max(-6 * dt, Math.min(2.2 * dt, target - actor.speed));
+        if (remaining < 12&&actor.path.sinkAt===undefined) target = Math.min(target, Math.sqrt(Math.max(0, 2 * 3 * (remaining - 2))));
+        actor.speed += Math.max(-6 * dt, Math.min((fast?2.6:2.2) * dt, target - actor.speed));
         actor.waiting=actor.speed<.3&&blockers[index]>=0?actor.waiting+dt:0;
         actor.distance = Math.min(actor.path.length - .05, actor.distance + actor.speed * dt);
+        // A car reaching the barrier of a closed end drives through it and is gone.
+        if(actor.path.sinkAt!==undefined&&actor.distance>=actor.path.sinkAt){park(actor,index);continue;}
         // Recycling occurs only well away from the player.
         // A route that could not be extended (a one-way street leaving the map)
         // ends here: recycle the car once it is out of the way of the view, or
@@ -810,7 +1186,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         }
         actor.body.setNextKinematicTranslation(position);
         actor.body.setNextKinematicRotation(rotation);
-        draw(index);
+        actor.hidden=unseen(road);if(actor.hidden)fleet.hide(index);else draw(index);
       }
       fleet.flush();
     },

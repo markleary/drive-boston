@@ -39,7 +39,8 @@ function tiledWall(data:MeshData,road:Road,city:CityData){
   geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));return geometry;
 }
 
-function signMaterial(lines:string[],warning=false){
+/** A printed highway sign face: green, or a warning's amber on charcoal. */
+export function signMaterial(lines:string[],warning=false){
   // Headless geometry tests do not need a canvas; the game always has one.
   if(typeof document==='undefined')return new THREE.MeshBasicMaterial({color:warning?'#d5a94f':'#17634e'});
   const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=256;const ctx=canvas.getContext('2d')!;

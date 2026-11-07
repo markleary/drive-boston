@@ -8,6 +8,7 @@ import unittest
 
 import numpy as np
 
+from i93_north import before_stage
 from land_approaches import AT_GRADE,SINK,TOWN_LINKS,level_land_approaches,restore_links,restore_sources,water_chain_ids,levelled_water_ids
 from water_crossings import DECK,RAMP_RISE,TERRAIN_RISE,grid_sampler,level_water_crossings,lifted,water_inputs
 
@@ -147,7 +148,9 @@ class RecordedSources(unittest.TestCase):
 class ShippedPackage(unittest.TestCase):
  def test_the_installed_package_is_levelled_and_the_interchange_is_whole(self):
   city=json.loads((ROOT/'public/data/city.json').read_text());grid=city['elevation']
-  heights=np.frombuffer(gzip.decompress((ROOT/'public/data'/grid['file']).read_bytes()),dtype='<i2')*grid.get('scale',.01);ground=grid_sampler(grid,heights)
+  heights=np.frombuffer(gzip.decompress((ROOT/'public/data'/grid['file']).read_bytes()),dtype='<i2')*grid.get('scale',.01)
+  # The stages after this one (Interstate 93) are taken back out, as validate-city.py does.
+  city['roads'],heights=before_stage(city['roads'],heights,json.loads((ROOT/'public/data/provenance.json').read_text()).get('i93North'),grid.get('scale',.01));ground=grid_sampler(grid,heights)
   polygons,water_level=water_inputs(city);water=level_water_crossings(city['roads'],polygons,ground,water_level,apply=False)
   report=level_land_approaches(city['roads'],ground,water_chain_ids(water),apply=False,profile_excluded=levelled_water_ids(water))
   self.assertEqual(report['changedRoads'],[],'the installed package must already be levelled')

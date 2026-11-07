@@ -30,7 +30,7 @@ import { due, UNPACED, type Pace } from './pacing';
 import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
-import { addRoadStructures } from './bridges';
+import { roadStructureSteps } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
 import { addSurveyDeckSurface } from './survey-deck-surface';
 import { addSourceFooting } from './source-footings';
@@ -302,7 +302,7 @@ export function createTileBuilder(ctx: TileContext) {
     // Elevated decks, barriers and supports, with their Rapier solids.
     {
       const elevated = ownedRoads.filter(r => r.elevations && !r.tunnel);
-      if (elevated.length) { addRoadStructures(group, subCity, materials.asphalt, elevated); for (const road of elevated) colliders.push(...physics.addRoadDeck(subCity, road)); stats.structures = elevated.length; }
+      if (elevated.length) { yield* stage('structures', roadStructureSteps(group, subCity, materials.asphalt, elevated, pace)); for (const road of elevated) { if (due(pace)) yield 'structures'; colliders.push(...physics.addRoadDeck(subCity, road)); } stats.structures = elevated.length; }
     }
     yield 'structures';
 

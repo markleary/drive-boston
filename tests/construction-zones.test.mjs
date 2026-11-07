@@ -5,6 +5,7 @@ import {constructionCones} from '../src/simulation/construction.ts';
 import {lane,roadGraph,roundedPath} from '../src/simulation/traffic.ts';
 import {NPC_VEHICLES} from '../src/simulation/npc-vehicle-specs.ts';
 import {constructionLanePoints,constructionPoint,planConstructionZones,CONSTRUCTION_APPROACH} from '../src/simulation/construction-zones.ts';
+import {isMotorway} from '../src/simulation/motorway.ts';
 
 const road=(id,extra={})=>({id,name:`${id} Avenue`,width:14,pavedWidth:14,oneway:1,points:[[0,-100],[0,100]],...extra});
 const city=roads=>({bounds:{minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},spawn:{x:-900,z:-900,yaw:0},roads,buildings:[],signals:[]});
@@ -90,8 +91,11 @@ test('real Boston layout provides separated, transit-free sites and every NPC fo
   assert.ok(zones.some(zone=>Math.hypot(zone.x-data.spawn.x,zone.z-data.spawn.z)>5000),'the feature reaches beyond the starting district');
   const edges=roadGraph(data).edges,byRoad=new Map();
   for(const edge of edges){const list=byRoad.get(edge.road.id)??[];list.push(edge);byRoad.set(edge.road.id,list);}
+  assert.ok(zones.some(zone=>isMotorway(zone.road)),'work zones also close lanes on the interstate');
   for(const zone of zones){
-    assert.ok(zone.pavedWidth>=(zone.road.oneway?7:13));assert.ok(!zone.road.bridge&&!zone.road.tunnel);
+    // Highway work zones close a lane on the interstate decks; street sites never sit on a bridge or in a tunnel.
+    if(isMotorway(zone.road))assert.ok(zone.road.bridge&&!zone.road.tunnel,'a highway site sits on an interstate deck');
+    else{assert.ok(zone.pavedWidth>=(zone.road.oneway?7:13));assert.ok(!zone.road.bridge&&!zone.road.tunnel);}
     assert.ok(Math.hypot(zone.x-data.spawn.x,zone.z-data.spawn.z)>=65,'construction cannot materialize under the starting car');
     for(const edge of byRoad.get(zone.roadId)??[]){
       const points=lane(edge,zones),path=roundedPath(points,points.map(()=>edge.road));

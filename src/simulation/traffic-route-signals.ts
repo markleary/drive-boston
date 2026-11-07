@@ -2,14 +2,16 @@ import type {Point2} from '../types';
 
 /** Find signal visits along dense routes without comparing every route segment
  * with every junction in the metro. Keep the same nine-metre detection radius,
- * twenty-metre visit grouping, and eight-metre stop-line setback. */
+ * twenty-metre visit grouping, and eight-metre stop-line setback. `accept`
+ * (junction index, route station of the visit) can drop a visit: a deck
+ * passing over a signalled junction does not stop there. */
 export function createRouteSignalLookup(junctions:Point2[]){
   const cell=64,cells=new Map<string,{point:Point2;index:number}[]>();
   junctions.forEach((point,index)=>{
     const key=`${Math.floor(point[0]/cell)},${Math.floor(point[1]/cell)}`,list=cells.get(key)??[];
     list.push({point,index});cells.set(key,list);
   });
-  return(points:Point2[],distances:number[])=>{
+  return(points:Point2[],distances:number[],accept?:(junction:number,along:number)=>boolean)=>{
     const visits=new Map<number,{along:number;separation:number}[]>();
     for(let i=1;i<points.length;i++){
       const a=points[i-1],b=points[i],dx=b[0]-a[0],dz=b[1]-a[1],segment=Math.hypot(dx,dz);
@@ -28,11 +30,11 @@ export function createRouteSignalLookup(junctions:Point2[]){
     for(const index of [...visits.keys()].sort((a,b)=>a-b)){
       const nearby=visits.get(index)!;let best:typeof nearby[number]|undefined,previous=-Infinity;
       for(const candidate of nearby){
-        if(candidate.along-previous>20&&best){stops.push(Math.max(0,best.along-8));best=undefined;}
+        if(candidate.along-previous>20&&best){if(!accept||accept(index,best.along))stops.push(Math.max(0,best.along-8));best=undefined;}
         if(!best||candidate.separation<best.separation)best=candidate;
         previous=candidate.along;
       }
-      if(best)stops.push(Math.max(0,best.along-8));
+      if(best&&(!accept||accept(index,best.along)))stops.push(Math.max(0,best.along-8));
     }
     return stops.sort((a,b)=>a-b);
   };

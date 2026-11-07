@@ -351,7 +351,7 @@ def build(city,source,heights):
   if landings:tunnel['surfaceLandings']=[[round(a,4),round(b,4)] for a,b in landings]
   for flag in ['capStart','capEnd']:
    if route.get(flag):tunnel[flag]=True
-  road={'id':route['id'],'name':route['name'],'kind':'motorway' if is_main else 'motorway_link','points':points,'width':route['width'],'oneway':1,'traffic':False,'elevations':ys,'startLevel':0 if route.get('surfaceStart') else -1,'endLevel':0 if route.get('surfaceEnd') else -1,'tunnel':tunnel}
+  road={'id':route['id'],'name':route['name'],'kind':'motorway' if is_main else 'motorway_link','points':points,'width':route['width'],'oneway':1,'elevations':ys,'startLevel':0 if route.get('surfaceStart') else -1,'endLevel':0 if route.get('surfaceEnd') else -1,'tunnel':tunnel}
   roads.append(road)
   for p,y in zip(points,ys):known[tuple(p)]=(y,road['id'])
   max_grade=max(abs(a-b)/max(.001,math.dist(p,q)) for p,q,a,b in zip(points,points[1:],ys,ys[1:]))

@@ -37,9 +37,10 @@ BANDS = (.1, .25, .5, .75)
 
 
 class Corridors:
- """Road corridors to keep clear of far boxes: half the roadway width (`pavedWidth ?? width`, as the runtime's street furniture and traffic use) each side of every centerline."""
+ """Road corridors to keep clear of far boxes: half the roadway width (`pavedWidth ?? width`, as the runtime's street furniture and traffic use) each side of every centerline.
+ Traces over a drivable survey mesh (`surveyDeck`, the Zakim viaduct) are not roadways of their own and are left out."""
  def __init__(self, roads):
-  self.shapes = [LineString([p[:2] for p in r['points']]).buffer((r.get('pavedWidth') or r['width']) / 2, cap_style='flat') for r in roads if len(r['points']) >= 2]
+  self.shapes = [LineString([p[:2] for p in r['points']]).buffer((r.get('pavedWidth') or r['width']) / 2, cap_style='flat') for r in roads if len(r['points']) >= 2 and not r.get('surveyDeck')]
   self.tree = STRtree(self.shapes)
 
  def near(self, geometry):
