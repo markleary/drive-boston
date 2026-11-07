@@ -23,7 +23,7 @@ def js_hash(text):
  for c in text:n=(n*31+ord(c))&0xFFFFFFFF
  if n>=2**31:n-=2**32
  return abs(n)
-WOOD_DISTRICTS={'Mission Hill','Jamaica Plain','Roxbury','Dorchester','Mattapan','South Boston','Charlestown','East Boston','Allston','Brighton','Somerville','Cambridge','Brookline','Chelsea'}
+WOOD_DISTRICTS={'Mission Hill','Jamaica Plain','Roxbury','Dorchester','Mattapan','South Boston','Charlestown','East Boston','Allston','Brighton','Somerville','Cambridge','Brookline','Chelsea','Everett','Medford','Malden','Melrose'}
 NOT_HOUSE_KINDS={'retail','commercial','industrial','office','garage','garages','church','school','university','college','hospital','warehouse','public','civic','dormitory','hotel','shed','roof','carport','parking','service','train_station','transportation','kindergarten','religious','government','supermarket'}
 _footprints=None
 def index_footprints(buildings):
@@ -66,8 +66,20 @@ def wood_frame(b,area):
  if not (8.3<=b['height']<=14.4 and 65<=area<=245):return False
  from shapely.geometry import Polygon
  return not attached(b,Polygon(b['footprint']))
+HOUSE_FAR_STYLE=32;HOUSE_VIVID=tuple(range(10));HOUSE_MUTED=tuple(range(10,20))
+def house_palette(b):
+ """Paint scheme of a generated northern house: the same choice as housePalette()
+ in src/render/house-styles.ts (palettes 0-9 polychrome, 10-19 quiet)."""
+ n=js_hash(b['id']);style=b.get('houseStyle','');year=b.get('yearBuilt') or 0
+ era=style in ('victorian','mansard') or (style in ('old-style','two-family') and 1840<=year<1916)
+ share=72 if style in ('victorian','mansard') else 38 if era else 0 if style=='garage' else 6
+ pool=HOUSE_VIVID if n%100<share else HOUSE_MUTED
+ return pool[(n//100)%len(pool)]
+
 def facade_style(b):
  if is_religious_building(b):return 10
+ # Generated houses: far style bytes from HOUSE_FAR_STYLE name their paint scheme.
+ if b.get('houseStyle'):return HOUSE_FAR_STYLE+house_palette(b)
  p=b['footprint'];area=abs(sum(p[i][0]*p[(i+1)%len(p)][1]-p[(i+1)%len(p)][0]*p[i][1] for i in range(len(p))))/2;n=js_hash(b['id']);h=b['height']
  if wood_frame(b,area):return 11+n%5
  if h>65:return [7,8,9][n%3]

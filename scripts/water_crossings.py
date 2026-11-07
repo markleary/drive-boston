@@ -97,15 +97,16 @@ def water_chains(roads):
  elevated=[r for r in roads if r.get('elevations') and not r.get('tunnel')];ends=defaultdict(list)
  for road in elevated:
   for index in (0,-1):ends[node_key(road['points'][index])].append((road,index))
- parent={r['id']:r['id'] for r in elevated}
+ # By position, not id: a way clipped at both shores leaves two bank pieces with one id.
+ index_of={id(road):k for k,road in enumerate(elevated)};parent=list(range(len(elevated)))
  def find(a):
   while parent[a]!=a:parent[a]=parent[parent[a]];a=parent[a]
   return a
  for shared in ends.values():
-  joined=[road for road,index in shared if lifted(road,index)]
-  for road in joined[1:]:parent[find(road['id'])]=find(joined[0]['id'])
+  joined=[index_of[id(road)] for road,index in shared if lifted(road,index)]
+  for k in joined[1:]:parent[find(k)]=find(joined[0])
  chains=defaultdict(list)
- for road in elevated:chains[find(road['id'])].append(road)
+ for k,road in enumerate(elevated):chains[find(k)].append(road)
  return sorted(chains.values(),key=lambda chain:min(r['id'] for r in chain))
 
 
@@ -173,9 +174,9 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
   # crossing beneath) raises the effective height of its nearest junction until
   # the surface meets it, so a quay on one bank never lifts the other bank.
   landings,distances=landing_distances(chain);lifts={key:0 for key in landings};bump=[0]
-  alongs={road['id']:stations(road['points']) for road in chain}
+  alongs={id(road):stations(road['points']) for road in chain}
   def point_distances(road,d):
-   a,b=node_key(road['points'][0]),node_key(road['points'][-1]);total=alongs[road['id']][-1]
+   a,b=node_key(road['points'][0]),node_key(road['points'][-1]);total=alongs[id(road)][-1]
    return {start:min(dist.get(a,math.inf)+d,dist.get(b,math.inf)+total-d) for start,dist in distances.items()}
   def height(dist):
    if not landings:return estimate+bump[0]
@@ -183,7 +184,7 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
    return sum(h*w for h,w in weights)/total
   bounds=[]
   for road in chain:
-   along=alongs[road['id']];points=road['points'];ends=[lifted(road,0),lifted(road,-1)]
+   along=alongs[id(road)];points=road['points'];ends=[lifted(road,0),lifted(road,-1)]
    if all(ends):bounds.extend((point_distances(road,d),max(ground(*p)+TERRAIN_RISE,level+MIN_RISE)) for d,p in zip(along,points))
    else:
     landing,low,shares,taper=ramp(road);dist=point_distances(road,along[len(points)-1 if ends[1] else 0])
@@ -203,7 +204,7 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
      d=line.project(q);required=height_below+deck
      if all(ends):bounds.append((point_distances(road,d),required))
      else:
-      landing,low,shares,taper=ramp(road);along=alongs[road['id']];share=smooth(abs(d-along[landing])/(along[-1] or 1))
+      landing,low,shares,taper=ramp(road);along=alongs[id(road)];share=smooth(abs(d-along[landing])/(along[-1] or 1))
       # The ramp reaches only `share` of the deck-end rise here, so the deck end must rise by the deficit divided by that share. A crossing right at the pinned landing cannot be cleared by any approach; it is reported, not quietly weakened.
       if share<LANDING_SHARE:unresolved.append({'road':other['id'],'share':round(share,4)})
       else:bounds.append((point_distances(road,along[len(along)-1 if ends[1] else 0]),low+(required-low)/share))
@@ -220,7 +221,7 @@ def level_water_crossings(roads,water_polygons,ground,water_level=None,deck=DECK
    bump[0]+=uniform
   changed=[];heights=[]
   for road in chain:
-   along=alongs[road['id']];old=road['elevations'];ends=[lifted(road,0),lifted(road,-1)]
+   along=alongs[id(road)];old=road['elevations'];ends=[lifted(road,0),lifted(road,-1)]
    if all(ends):new=[height(point_distances(road,d)) for d in along];heights.extend(new)
    else:
     landing,low,shares,taper=ramp(road);top=height(point_distances(road,along[len(along)-1 if ends[1] else 0]));heights.append(top)

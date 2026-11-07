@@ -67,6 +67,28 @@ class TownCurbTest(unittest.TestCase):
   # The pavement edges away from the junction are untouched by the closing.
   self.assertTrue(faces[0].contains(ss.Point(40,5.05)));self.assertFalse(faces[0].contains(ss.Point(40,5.2)))
 
+ def test_a_rerun_drops_the_last_runs_driveway_cut_curbs_beyond_the_towns(self):
+  from shapely.prepared import prep
+  town=prep(Polygon([[0,0],[100,0],[100,100],[0,100]]))
+  # A town fillet in a sliver just outside the outline, as the last run cut it at a driveway mouth.
+  fillet=[[0.0,-.5],[50.0,-.5],[100.0,-.5]];cut=[[[0.0,-.5],[40.0,-.5]],[[46.0,-.5],[50.0,-.5],[100.0,-.5]]]
+  survey=[[0,-30],[100,-30]];inside=[[10,10],[20,10],[30,10]];beside=[[0,-.6],[100,-.6]]
+  kept=ss.survey_curbs([survey,*cut,inside,fillet,beside],{json.dumps(fillet)},town,[fillet])
+  self.assertEqual(kept,[survey,beside],'only curbs off the regenerated fillets stay, however close')
+  self.assertEqual(ss.survey_curbs([survey,*cut],set(),town,[]),[survey,*cut],'without fillets nothing is taken for a town curb')
+
+ def test_a_street_changing_width_at_a_town_line_tapers(self):
+  towns={'West':Polygon([[-100,-100],[0,-100],[0,100],[-100,100]]),'East':Polygon([[0,-100],[100,-100],[100,100],[0,100]])}
+  face=lambda roads:max(ss.polygonize(unary_union([LineString(c) for c in ss.town_curbs(roads,towns)])),key=lambda f:f.area)
+  # Main Street is 16 m wide in one town and 8 m in the next: 4 m of edge offset eases out over 32 m.
+  f=face([road('osm-1-0',[[-60,0],[0,0]],16,'Main Street'),road('osm-2-0',[[0,0],[60,0]],8,'Main Street')])
+  for x,inside,outside in ((1,7.9,8.3),(16,5.9,6.3),(40,4.0,4.3)):
+   self.assertTrue(f.contains(ss.Point(x,inside)),x);self.assertFalse(f.contains(ss.Point(x,outside)),x)
+  self.assertEqual(ss.width_tapers([road('osm-1-0',[[-60,0],[0,0]],16,'Main Street'),road('osm-2-0',[[0,0],[60,0]],8,'Main Street')],{'Town':towns['West']},ss.LIP),[],'no town line, no taper')
+  # Another street meeting it end to end only steps (a 3 m fillet in the corner).
+  f=face([road('osm-1-0',[[-60,0],[0,0]],16,'Main Street'),road('osm-2-0',[[0,0],[60,0]],8,'Pleasant Street')])
+  self.assertFalse(f.contains(ss.Point(1,7.9)));self.assertTrue(f.contains(ss.Point(16,4.0)));self.assertFalse(f.contains(ss.Point(16,4.3)))
+
 
 class IslandTest(unittest.TestCase):
  def test_closed_faces_without_a_street_become_islands(self):

@@ -10,6 +10,14 @@ class RegressionGate(unittest.TestCase):
    candidate=copy.deepcopy(baseline);candidate['remainingProfiles'][0][field]=value
    self.assertTrue(regressions(candidate,baseline),field)
 
+ def test_a_shared_town_way_id_matches_either_reviewed_record(self):
+  # A way clipped at a town line keeps one id on both sides; each side matches its own record.
+  issue=lambda point,grade:{'road':'osm-1-0','maxGrade':grade,'gradePoint':point,'unpavedTerrainIntrusion':{'depth':0}}
+  baseline={'remainingProfiles':[issue([1,2],.3),issue([50,60],.2)],'fixedConstraintConflicts':[{'roads':['osm-1-0'],'excess':1},{'roads':['osm-1-0'],'excess':3}]}
+  self.assertEqual(regressions(baseline,baseline),[])
+  self.assertTrue(regressions({'remainingProfiles':[issue([50,60],.25)]},baseline),'steeper than its own record, though not than the other side')
+  self.assertTrue(regressions({'remainingProfiles':[],'fixedConstraintConflicts':[{'roads':['osm-1-0'],'excess':4}]},baseline))
+
  def test_new_constraint_conflicts_fail_the_gate(self):
   baseline={'remainingProfiles':[],'fixedConstraintConflicts':[{'roads':['a'],'excess':1}]}
   candidate=copy.deepcopy(baseline);candidate['fixedConstraintConflicts'][0]['excess']=2

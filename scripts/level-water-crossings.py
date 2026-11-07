@@ -3,7 +3,7 @@
 
 Run after merge-metro-extension.py (whose retained baseline roads carry the
 per-segment profiles) and before the dedicated bridge builders. Idempotent:
-a second run changes nothing. See water_crossings.py for the method.
+a second run changes nothing (passes repeat within a run until the decks settle). See water_crossings.py for the method.
 """
 import argparse,gzip,json,pathlib,sys
 import numpy as np
@@ -16,7 +16,14 @@ def main():
  city=json.loads((a.data_dir/'city.json').read_text());grid=city['elevation']
  heights=np.frombuffer(gzip.decompress((a.data_dir/grid['file']).read_bytes()),dtype='<i2')*grid.get('scale',.01)
  polygons,water_level=water_inputs(city)
- report=level_water_crossings(city['roads'],polygons,grid_sampler(grid,heights),water_level,apply=not a.check)
+ # A chain whose junction is the end of another levelled deck sees that end move, so a pass can
+ # unsettle a neighbour (Fellsway and Boston Avenue over the Mystic); repeat until nothing changes.
+ sample=grid_sampler(grid,heights);passes=0;changes=0
+ while True:
+  report=level_water_crossings(city['roads'],polygons,sample,water_level,apply=not a.check);passes+=1;changes+=len(report['changedRoads'])
+  if a.check or not report['changedRoads'] or passes==8:break
+ assert a.check or not report['changedRoads'],'water-crossing decks did not settle in 8 passes'
+ if passes>1:print(f'{changes} road changes in {passes} passes (the last changes nothing)')
  for chain in report['chains']:print('deck',chain['deck'],'lifts',chain['lifts'],'water',chain['waterLevel'],'junctions',chain['junctions'],', '.join(chain['names']),'changed',len(chain['changed']),'of',len(chain['roads']))
  for skipped in report['skipped']:print('skipped',skipped['reason'],', '.join(skipped['names']),skipped.get('by',''),skipped.get('farthestLiftedNodeMeters',''))
  print(f"{len(report['changedRoads'])} roads changed across {len(report['chains'])} water crossings; {len(report['skipped'])} chains left to their builders")

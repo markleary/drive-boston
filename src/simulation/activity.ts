@@ -1,5 +1,6 @@
 import type {CityData,Point2} from '../types';
 import {pointInside} from './roads.ts';
+import {inTownCentre} from './town-centres.ts';
 
 export interface ActivityProfile {
   level:'busy'|'mixed'|'residential';
@@ -18,18 +19,20 @@ export const ACTIVITY:Record<ActivityProfile['level'],Readonly<ActivityProfile>>
 export function createActivityProfile(city:CityData){
   const areas=(city.neighborhoods??[]).map(area=>{
     const level:ActivityProfile['level']=/^(Back Bay|Downtown|Chinatown|Leather District|North End|West End|South Boston Waterfront|Bay Village)$/.test(area.name)?'busy':
-      /^(Fenway|Longwood|South End|Charlestown|Allston|East Boston|Cambridge|Somerville|Brookline|Chelsea)$/.test(area.name)?'mixed':'residential';
+      /^(Fenway|Longwood|South End|Charlestown|Allston|East Boston|Cambridge|Somerville|Brookline|Chelsea|Everett|Medford|Malden)$/.test(area.name)?'mixed':'residential';
     const rings=area.rings.map(points=>({points,minX:Math.min(...points.map(p=>p[0])),maxX:Math.max(...points.map(p=>p[0])),minZ:Math.min(...points.map(p=>p[1])),maxZ:Math.max(...points.map(p=>p[1]))}));
     return {profile:ACTIVITY[level],rings};
   });
   return (x:number,z:number):Readonly<ActivityProfile>=>{
     const point:Point2=[x,z];
+    // A northern town centre (downtown Melrose's Main Street) is at least mixed.
+    const floor=(profile:Readonly<ActivityProfile>)=>profile.level==='residential'&&inTownCentre(point)?ACTIVITY.mixed:profile;
     for(const area of areas){
       // Match the atlas's even/odd fill, including holes and disjoint pieces.
       let inside=false;
       for(const ring of area.rings)if(x>=ring.minX&&x<=ring.maxX&&z>=ring.minZ&&z<=ring.maxZ&&pointInside(point,ring.points))inside=!inside;
-      if(inside)return area.profile;
+      if(inside)return floor(area.profile);
     }
-    return ACTIVITY.residential;
+    return floor(ACTIVITY.residential);
   };
 }

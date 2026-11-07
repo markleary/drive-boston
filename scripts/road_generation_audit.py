@@ -8,6 +8,7 @@ complete generation chain, before shipping an extension. Ordinary data
 validation also validates compiled surface polygons.
 """
 import argparse,gzip,json,math,pathlib
+from collections import defaultdict
 import numpy as np
 from shapely.geometry import Polygon,LineString,Point,box
 from shapely.ops import unary_union
@@ -82,17 +83,24 @@ def regressions(report,baseline):
  Keep --strict for clean-map/extension acceptance. This gate lets existing
  issues remain visible while preventing unrelated work from adding to them.
  """
- known={i['road']:i for i in baseline['remainingProfiles']};failures=[]
+ # A town way clipped at a town line keeps one id on both sides, so an issue
+ # matches any reviewed record of its id (or road set) that it does not exceed.
+ known=defaultdict(list);failures=[]
+ for i in baseline['remainingProfiles']:known[i['road']].append(i)
+ def worse(issue,old):
+  out=[]
+  if issue['maxGrade']>old['maxGrade']+.0001:out.append(f"steeper profile: {issue['road']}")
+  if issue['gradePoint']!=old['gradePoint']:out.append(f"changed steep location: {issue['road']}")
+  if issue['unpavedTerrainIntrusion']['depth']>old['unpavedTerrainIntrusion']['depth']+.001:out.append(f"new terrain intrusion: {issue['road']}")
+  return out
  for issue in report['remainingProfiles']:
-  old=known.get(issue['road'])
-  if old is None:failures.append(f"new profile issue: {issue['road']}");continue
-  if issue['maxGrade']>old['maxGrade']+.0001:failures.append(f"steeper profile: {issue['road']}")
-  if issue['gradePoint']!=old['gradePoint']:failures.append(f"changed steep location: {issue['road']}")
-  if issue['unpavedTerrainIntrusion']['depth']>old['unpavedTerrainIntrusion']['depth']+.001:failures.append(f"new terrain intrusion: {issue['road']}")
- conflicts={tuple(c['roads']):c for c in baseline.get('fixedConstraintConflicts',[])}
+  if not known[issue['road']]:failures.append(f"new profile issue: {issue['road']}");continue
+  results=[worse(issue,old) for old in known[issue['road']]]
+  if all(results):failures.extend(min(results,key=len))
+ conflicts=defaultdict(list)
+ for c in baseline.get('fixedConstraintConflicts',[]):conflicts[tuple(c['roads'])].append(c)
  for c in report.get('fixedConstraintConflicts',[]):
-  old=conflicts.get(tuple(c['roads']))
-  if old is None or c['excess']>old['excess']+.001:failures.append(f"new or worsened constraint conflict: {', '.join(c['roads'])}")
+  if not any(c['excess']<=old['excess']+.001 for old in conflicts[tuple(c['roads'])]):failures.append(f"new or worsened constraint conflict: {', '.join(c['roads'])}")
  return failures
 
 
