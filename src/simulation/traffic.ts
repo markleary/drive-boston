@@ -10,7 +10,7 @@ import {headOnThreat,advanceEvasion,type Evasion} from './traffic-evasion.ts';
 import {CONFLICT,firstContact,clearance,crossing,rightOfWay,yieldSpeed,blockingCycle,type Pose,type Trajectory} from './traffic-conflicts.ts';
 import { pointInside } from './roads.ts';
 import { coverageTester } from './coverage.ts';
-import { sampleRoadElevation,roadNormal,roadRotation,sampleDriveSurface,roadProjection,roadWidthAt } from './road-surfaces.ts';
+import { sampleRoadElevation,roadNormal,roadRotation,sampleVehicleSurface,roadProjection,roadWidthAt } from './road-surfaces.ts';
 import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
@@ -686,10 +686,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     actor.body.setLinvel({x:0,y:0,z:0},true);actor.body.setAngvel({x:0,y:0,z:0},true);
   }
   const tyreQ=new THREE.Quaternion(),tyreForward=new THREE.Vector3(),tyreRight=new THREE.Vector3();
-  /** Wheel forces for a knocked car that is upright on the road (or a bridge deck), applied at both
-   * axles so a sideways slide also brakes its spin as real tyres do. */
+  /** Wheel forces for a knocked car that is upright on the road (a bridge deck, or the Zakim's survey
+   * mesh over its trace), applied at both axles so a sideways slide also brakes its spin as real tyres do. */
   function tyreGrip(actor:Actor,dt:number){
-    const r=actor.body.rotation(),t=actor.body.translation(),upright=1-2*(r.x*r.x+r.z*r.z)>.7&&t.y-sampleDriveSurface(city,t.x,t.z,t.y).height<1.1;
+    const r=actor.body.rotation(),t=actor.body.translation(),upright=1-2*(r.x*r.x+r.z*r.z)>.7&&t.y-sampleVehicleSurface(city,t.x,t.z,t.y).height<1.1;
     for(const collider of actor.colliders)collider.setFriction(upright?KNOCKED.friction:KNOCKED.scrape);if(!upright)return;
     tyreQ.set(r.x,r.y,r.z,r.w);tyreForward.set(0,0,1).applyQuaternion(tyreQ);tyreRight.set(1,0,0).applyQuaternion(tyreQ);
     const m=actor.spec.mass/2,g=9.81,along=elapsed-actor.knocked!.since>KNOCKED.brakeAfter?KNOCKED.braking:KNOCKED.rolling;

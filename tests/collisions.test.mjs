@@ -135,11 +135,15 @@ test('a struck traffic car is shoved as a dynamic body, then eases back into its
 /** One straight two-way road, at ground level or on an 8 m deck with parapets. The
  * player is aimed at the first moving lane keeper from `offset` metres beyond the
  * usual start: across its path (`kind` 't'), head-on, or along the next lane over
- * with about 25 cm to spare ('miss'). */
+ * with about 25 cm to spare ('miss'). `deck` 'survey' makes the road a survey trace
+ * (the Zakim's, `city.surveyRoads`) over a fixed slab with walls standing in for the
+ * survey mesh: no road record and no deck collider lie under it. */
 async function straightRun(kind,offset,deck=false,speed=mph(50)){
-  const y0=deck?8:0,road={id:'Straight',name:'Straight',width:12,oneway:0,points:[[-400,0],[400,0]],...(deck?{elevations:[8,8]}:{})};
-  const physics=await DrivingPhysics.create({...flat,roads:[road]}),traffic=createTraffic(new THREE.Scene(),{...flat,roads:[road]},physics);
+  const y0=deck?8:0,road={id:'Straight',name:'Straight',width:12,oneway:0,points:[[-400,0],[400,0]],...(deck?{elevations:[8,8]}:{}),...(deck==='survey'?{surveyDeck:'MESH'}:{})};
+  const world=deck==='survey'?{...flat,roads:[],surveyRoads:[road]}:{...flat,roads:[road]};
+  const physics=await DrivingPhysics.create(world),traffic=createTraffic(new THREE.Scene(),world,physics);
   try{
+    if(deck==='survey'){const mesh=physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());for(const [y,z,h,w] of [[7.5,0,.5,6.4],[8.5,6.2,.5,.2],[8.5,-6.2,.5,.2]])physics.world.createCollider(RAPIER.ColliderDesc.cuboid(400,h,w).setTranslation(0,y,z).setFriction(1),mesh);}
     const away={...physics.getState(),x:900,z:900};
     for(let i=0;i<120;i++){traffic.update(1/60,away,away,[]);physics.step(released,1/60);}
     const index=traffic.snapshot().findIndex(a=>a.speed>4&&a.type==='compact'),b=traffic.snapshot()[index],fx=Math.sin(b.yaw),fz=Math.cos(b.yaw),rx=fz,rz=-fx;
@@ -180,6 +184,15 @@ test('compound cars keep bridge support during moderate hits and do not tunnel t
     // parapet; it must still collide with the slab while above its interior.
     const fast=await straightRun('t',offset,true,mph(50));
     assert.ok(fast.insideDeckMinY>7.5,'high-speed impacts must not tunnel through the interior bridge slab');
+  }
+});
+
+test('a car knocked on a survey deck (the Zakim) brakes on its tyres there instead of scraping to a stop',async()=>{
+  for(const offset of [0,.2]){
+    const r=await straightRun('t',offset,'survey',mph(25));
+    assert.ok(r.targetKnocked&&r.moved>1.5,`the struck car is shoved across the mesh (${r.moved.toFixed(1)} m)`);
+    assert.ok(r.tyreFriction,'upright over its trace counts as on the road, though no road record lies under it (the ground under the Zakim is the river)');
+    assert.ok(r.minY>7.5,`the walls keep it on the mesh (lowest centre ${r.minY.toFixed(2)} m)`);
   }
 });
 
