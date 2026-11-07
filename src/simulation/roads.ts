@@ -1,25 +1,30 @@
 import type { CityData, Point2, Road } from '../types';
 import {sampleRoadElevation} from './road-surfaces.ts';
+import {isMotorway} from './motorway.ts';
 type Segment={road:Road;a:Point2;dx:number;dz:number;len2:number};
-const roadIndexes=new WeakMap<CityData,{cells:Map<string,Segment[]>;minX:number;maxX:number;minZ:number;maxZ:number}>();
-function roadIndex(city:CityData){
-  const cached=roadIndexes.get(city);if(cached)return cached;
+type RoadIndex={cells:Map<string,Segment[]>;minX:number;maxX:number;minZ:number;maxZ:number};
+const roadIndexes=new WeakMap<CityData,RoadIndex>(),surveyIndexes=new WeakMap<CityData,RoadIndex>();
+function roadIndex(city:CityData,survey=false){
+  const cache=survey?surveyIndexes:roadIndexes,cached=cache.get(city);if(cached)return cached;
   const cells=new Map<string,Segment[]>();let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
-  for(const road of city.roads)for(let i=1;i<road.points.length;i++){
+  for(const road of survey?[...city.roads,...(city.surveyRoads??[])]:city.roads)for(let i=1;i<road.points.length;i++){
     const a=road.points[i-1],b=road.points[i],dx=b[0]-a[0],dz=b[1]-a[1],len2=dx*dx+dz*dz;if(len2<1)continue;
     const segment={road,a,dx,dz,len2},left=Math.floor(Math.min(a[0],b[0])/128),right=Math.floor(Math.max(a[0],b[0])/128),top=Math.floor(Math.min(a[1],b[1])/128),bottom=Math.floor(Math.max(a[1],b[1])/128);
     minX=Math.min(minX,left);maxX=Math.max(maxX,right);minZ=Math.min(minZ,top);maxZ=Math.max(maxZ,bottom);
     for(let x=left;x<=right;x++)for(let z=top;z<=bottom;z++){const key=`${x},${z}`,list=cells.get(key)??[];list.push(segment);cells.set(key,list);}
   }
-  const index={cells,minX,maxX,minZ,maxZ};roadIndexes.set(city,index);return index;
+  const index={cells,minX,maxX,minZ,maxZ};cache.set(city,index);return index;
 }
 type RoadPosition={x:number;z:number;yaw:number;distance:number;road:Road};
 /** Optional height/clearance constraints are used for crash recovery; ordinary
- * map/traffic lookups retain their horizontal nearest-road behavior. */
-export function closestRoad(city: CityData, x: number, z: number, majorOnly = false, options:{height?:number;maxDistance?:number;accept?:(position:RoadPosition)=>boolean}={}) {
+ * map/traffic lookups retain their horizontal nearest-road behavior. `majorOnly`
+ * (the street a facade, door or signal faces) never answers a motorway; `survey`
+ * also considers the traces over drivable survey meshes (`city.surveyRoads`),
+ * for street names and GPS anchors only, never to place a car on a surface. */
+export function closestRoad(city: CityData, x: number, z: number, majorOnly = false, options:{height?:number;maxDistance?:number;survey?:boolean;accept?:(position:RoadPosition)=>boolean}={}) {
   let best = { x:city.spawn.x, z:city.spawn.z, yaw:city.spawn.yaw, distance:Infinity, road:city.roads[0] };
   let bestScore=Infinity;
-  const index=roadIndex(city),cx=Math.floor(x/128),cz=Math.floor(z/128),seen=new Set<Segment>();
+  const index=roadIndex(city,!!options.survey&&!!city.surveyRoads?.length),cx=Math.floor(x/128),cz=Math.floor(z/128),seen=new Set<Segment>();
   if(!index.cells.size)return best;
   const limit=Math.max(Math.abs(cx-index.minX),Math.abs(cx-index.maxX),Math.abs(cz-index.minZ),Math.abs(cz-index.maxZ));
   for(let radius=0;radius<=limit;radius++){
@@ -31,7 +36,7 @@ export function closestRoad(city: CityData, x: number, z: number, majorOnly = fa
       // Facades, surface signals and ordinary map arrivals must not select a
       // buried carriageway. Underground actors supply their current height.
       if(road.tunnel&&options.height===undefined)continue;
-      if(majorOnly && (road.width<7 || /alley|public|unnamed/i.test(road.name)))continue;
+      if(majorOnly && (road.width<7 || isMotorway(road) || /alley|public|unnamed/i.test(road.name)))continue;
       const t=Math.max(.05,Math.min(.95,((x-a[0])*dx+(z-a[1])*dz)/len2));
       const px=a[0]+t*dx,pz=a[1]+t*dz,d=Math.hypot(px-x,pz-z);
       if(d>(options.maxDistance??Infinity))continue;

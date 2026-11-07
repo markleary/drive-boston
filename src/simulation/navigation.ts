@@ -1,12 +1,15 @@
 import type { CityData, Point2, Road, TravelMode, VehicleState } from '../types';
 import { sampleElevation } from './terrain.ts';
 import { closestRoad } from './roads.ts';
+import { isMotorway } from './motorway.ts';
 
 /** GPS routing over every road centerline. The traffic graph (`roadGraph` in traffic.ts) leaves
  * out narrow side streets, so the GPS keeps its own graph: each road is split at every vertex it
  * shares with another road at the same level (within a metre, as in next-intersection.ts), so an
  * overpass never joins the street beneath it. A route is an A* search over directed edges, which
- * lets it price turns (left turns cost more than right ones) and refuse U-turns except at dead ends. */
+ * lets it price turns (left turns cost more than right ones) and refuse U-turns except at dead ends.
+ * The traces over the drivable Zakim survey mesh (`city.surveyRoads`) join the graph, so a route
+ * can stay on I-93 across the Charles. */
 
 export interface RouteEdge { a:number; b:number; road:Road; points:Point2[]; along:number[]; length:number; /** Seconds per metre at the road's assumed speed. */ pace:number; component:number; }
 export interface RouteGraph { nodes:Point2[]; edges:RouteEdge[]; outStart:Int32Array; outList:Int32Array; degree:Int32Array; /** Unit headings per edge: start x,z then end x,z, in the a-to-b direction. */ headings:Float32Array; segments:Map<Road,{edge:Int32Array;offset:Float64Array}>; components:Map<Road,number>; main:number; }
@@ -20,7 +23,7 @@ export interface RoutePlan { points:Point2[]; along:number[]; times:number[]; le
 const SPEEDS:Record<string,number> = { motorway:24.6, motorway_link:15.6, trunk:20.1, trunk_link:13.4, primary:13.4, primary_link:11.2, secondary:12.5, secondary_link:11.2, tertiary:11.6, tertiary_link:11.2, residential:11.2, unclassified:11.2, living_street:4.5 };
 export const MAX_SPEED = 24.6;
 const WRONG_WAY = 12, START_UTURN = 25, DEAD_END_UTURN = 25;
-const minorRoad = (road:Road) => /alley|private|driveway|parking|service/i.test(road.name);
+const minorRoad = (road:Road) => /\balley|private|driveway|parking|service/i.test(road.name);
 function speedOf(road:Road){
   if(minorRoad(road)) return 4.5;
   return SPEEDS[road.kind??''] ?? (road.width>=14?13.4:road.width>=10?12.5:road.width>=7?11.2:6.7);
@@ -42,7 +45,7 @@ export function routeGraph(city:CityData):RouteGraph{
     const k=key(p),list=buckets.get(k);if(list)for(const n of list)if(Math.abs(heights[n]-height)<1)return n;
     const n=nodes.length;nodes.push(p);heights.push(height);uses.push(0);if(list)list.push(n);else buckets.set(k,[n]);return n;
   };
-  const roads=city.roads.filter(road=>road.points.length>=2);
+  const roads=(city.surveyRoads?.length?[...city.roads,...city.surveyRoads]:city.roads).filter(road=>road.points.length>=2);
   const vertexNodes=roads.map(road=>{let previous=-1;return road.points.map((p,i)=>{const n=nodeAt(p,road.elevations?.[i]??sampleElevation(city,p[0],p[1]));if(n!==previous)uses[n]++;previous=n;return n;});});
   const edges:RouteEdge[]=[],segments=new Map<Road,{edge:Int32Array;offset:Float64Array}>();
   roads.forEach((road,r)=>{
@@ -86,18 +89,20 @@ function project(graph:RouteGraph,road:Road,x:number,z:number):RouteAnchor|undef
   return best;
 }
 /** The nearest point of the main road network to (x,z). With a height (the player's), stacked
- * carriageways and tunnels are told apart; without one, as for a map click, only surface roads count. */
+ * carriageways, tunnels and the survey traces are told apart; without one, as for a map click,
+ * only surface roads count. */
 export function anchorAt(city:CityData,x:number,z:number,height?:number):RouteAnchor|undefined{
-  const graph=routeGraph(city),near=closestRoad(city,x,z,false,{height,accept:p=>graph.components.get(p.road)===graph.main});
+  const graph=routeGraph(city),near=closestRoad(city,x,z,false,{height,survey:height!==undefined,accept:p=>graph.components.get(p.road)===graph.main});
   return Number.isFinite(near.distance)?project(graph,near.road,x,z):undefined;
 }
 /** Surface streets around a map click, nearest first: the nearest and up to `count - 1` others within
  * `reach` metres more. Routing picks the first one it can reach legally, since a few source
- * one-ways start at a dead end or have no legal way in (the Science Park stub, Cambridge Street at Harvard). */
+ * one-ways start at a dead end or have no legal way in (the Science Park stub, Cambridge Street at Harvard).
+ * A motorway is never a destination: a click beside I-93 arrives on the street beside it. */
 export function destinationAnchors(city:CityData,x:number,z:number,count=6,reach=60):RouteAnchor[]{
   const graph=routeGraph(city),out:RouteAnchor[]=[],used=new Set<Road>();
   for(let k=0;k<count;k++){
-    const near=closestRoad(city,x,z,false,{maxDistance:out.length?out[0].distance+reach:Infinity,accept:p=>!used.has(p.road)&&graph.components.get(p.road)===graph.main});
+    const near=closestRoad(city,x,z,false,{maxDistance:out.length?out[0].distance+reach:Infinity,accept:p=>!used.has(p.road)&&!isMotorway(p.road)&&graph.components.get(p.road)===graph.main});
     if(!Number.isFinite(near.distance)||used.has(near.road))break;
     used.add(near.road);const anchor=project(graph,near.road,x,z);if(anchor)out.push(anchor);
   }
@@ -200,6 +205,17 @@ interface Leg { road:Road; start:number; end:number; node:number; }
 /** Street name as the HUD says it: the first part of a compound name, `null` for an unnamed way. */
 export function streetName(road:Pick<Road,'name'>){const name=road.name.split(' · ')[0].trim();return !name||/^unnamed\b/i.test(name)?null:name;}
 const isRamp = (road:Road) => /_link$/.test(road.kind??'')||/\b(ramp|entrance|exit)\b/i.test(road.name);
+/** Where a motorway ramp leads. `exit` is an exit ramp's sign, the part of its name after the route
+ * (`I-93 North · Exit 23 Route 60 Medford Square` signs "Exit 23 Route 60 Medford Square", and the
+ * tunnel's `Government Center / Clinton Street · I-93 South exit` "Exit toward Government Center /
+ * Clinton Street"); `onto` is the route any other ramp joins ("I-93 North"). */
+export function motorwayRamp(road:Road):{exit?:string;onto?:string}|undefined{
+  if(!isMotorway(road)||!/_link$/.test(road.kind??''))return undefined;
+  const [head='',...rest]=road.name.split(' · ').map(part=>part.trim()),tail=rest.join(' · ');
+  if(/^(exit|collector to)\b/i.test(tail))return {exit:tail};
+  if(/\bexit$/i.test(tail)&&head)return {exit:`Exit toward ${head}`};
+  const onto=head.replace(/\s+entrance$/i,'');return onto&&!/^unnamed\b/i.test(onto)?{onto}:undefined;
+}
 const SUFFIXES:Record<string,string> = { Street:'St', Avenue:'Ave', Boulevard:'Blvd', Road:'Rd', Drive:'Dr', Place:'Pl', Square:'Sq', Parkway:'Pkwy', Highway:'Hwy', Lane:'Ln', Court:'Ct', Terrace:'Ter', Expressway:'Expy', Turnpike:'Tpke', Circle:'Cir' };
 /** "Boylston Street" to "Boylston St", the way a navigation display abbreviates it. */
 export function abbreviateStreet(name:string){return name.replace(/\b(\w+)$/,word=>SUFFIXES[word]??word);}
@@ -220,6 +236,18 @@ const COMPASS = ['north','northeast','east','southeast','south','southwest','wes
 /** Compass word for a heading vector in world axes (x east, z south). */
 export function compass(dx:number,dz:number){const bearing=(Math.atan2(dx,-dz)*180/Math.PI+360)%360;return COMPASS[Math.round(bearing/45)%8];}
 
+/** "Take exit 23 toward Route 60 Medford Square"; `split` is a ramp dividing again after the exit ("Keep left to Medford"). */
+function exitText(sign:string,turn:TurnDirection,split:boolean){
+  const side=turn.endsWith('left')?'left':'right';
+  if(!/^exit\b/i.test(sign))return `Keep ${side} toward the ${sign[0].toLowerCase()}${sign.slice(1)}`;
+  const [,number,to,where]=/^exit\s*(\d+[a-z]?\b)?\s*(?:\b(to|toward)\b\s*)?(.*)$/i.exec(sign)??[],toward=where?` ${to?.toLowerCase()??'toward'} ${where}`:'';
+  return split?`Keep ${side}${toward||(number?` for exit ${number}`:'')}`:`Take ${number?`exit ${number}`:'the exit'}${toward}`;
+}
+/** Onto a motorway entrance ramp from a street. */
+function rampText(turn:TurnDirection,road:string){
+  const side=turn.endsWith('left')?'left':'right',name=abbreviateStreet(road);
+  return turn==='straight'?`Take the ramp onto ${name}`:turn.startsWith('slight')?`Take the ramp on the ${side} onto ${name}`:turn==='uturn'?`Make a U-turn onto the ramp to ${name}`:`Turn ${side} onto the ramp to ${name}`;
+}
 function turnText(turn:TurnDirection,road:string|null,ramp:boolean,fromRamp=false){
   const side=turn.endsWith('left')?'left':'right',name=road?abbreviateStreet(road):null;
   const onto=name?` on ${name}`:ramp?' onto the ramp':'';
@@ -237,44 +265,52 @@ function turnText(turn:TurnDirection,road:string|null,ramp:boolean,fromRamp=fals
  * named stub shorter than 25 m between two streets folds into the turn onto the next street; a
  * piece named apart from the street it carries straight on both ends (the Harvard Bridge on
  * Massachusetts Avenue) folds into that street; and a street that turns at an intersection keeping
- * its name still gets an instruction. */
+ * its name still gets an instruction. A motorway entrance ramp runs with the route it joins, so the
+ * turn onto it names the motorway; an exit ramp is a run of its own, announced by its sign at the gore. */
 function routeSteps(plan:RoutePlan,legs:Leg[],graph:RouteGraph,options:{uturn:boolean;target?:Point2}):RouteStep[]{
-  interface Run { name:string|null; ramp:boolean; start:number; end:number; joins:number[]; }
+  // `name` decides which legs merge; `label` is the street a step names.
+  interface Run { name:string|null; label:string|null; exit?:string; entrance:boolean; ramp:boolean; start:number; end:number; joins:number[]; }
   const runs:Run[]=[];
   for(const leg of legs){
-    const name=streetName(leg.road),last=runs[runs.length-1];
+    const ramp=motorwayRamp(leg.road),label=ramp?.onto??streetName(leg.road),name=ramp?.exit?leg.road.name:label,last=runs[runs.length-1];
     if(last&&last.name===name){last.joins.push(last.end);last.end=leg.end;last.ramp||=isRamp(leg.road);}
-    else runs.push({name,ramp:isRamp(leg.road),start:leg.start,end:leg.end,joins:[]});
+    else runs.push({name,label,exit:ramp?.exit,entrance:!!ramp?.onto,ramp:isRamp(leg.road),start:leg.start,end:leg.end,joins:[]});
   }
   // Each join records where one leg meets the next; keep the node to test for an intersection.
   const nodeAt=new Map<number,number>();for(const leg of legs)nodeAt.set(leg.end,leg.node);
   const length=plan.length,steps:RouteStep[]=[];
   const angleAt=(before:number,after:number)=>signedAngle(direction(plan,Math.max(0,before-20),before),direction(plan,after,Math.min(length,after+20)));
   const straight=(at:number)=>classifyTurn(angleAt(at,at))==='straight';
-  for(let i=1;i<runs.length-1;i++)if(runs[i].name&&runs[i].end-runs[i].start<25&&runs[i].name!==runs[i-1].name&&runs[i].name!==runs[i+1].name)runs[i].name=null;
+  for(let i=1;i<runs.length-1;i++)if(runs[i].name&&!runs[i].exit&&runs[i].end-runs[i].start<25&&runs[i].name!==runs[i-1].name&&runs[i].name!==runs[i+1].name){runs[i].name=null;runs[i].label=null;}
   for(let i=1;i<runs.length;i++){
     const a=runs[i-1],b=runs[i],c=runs[i+1];
     if(c&&a.name!==null&&a.name===c.name&&(b.name===null||(straight(b.start)&&straight(b.end)))){a.joins.push(a.end,b.end,...b.joins,...c.joins);a.end=c.end;a.ramp||=b.ramp||c.ramp;runs.splice(i,2);i--;continue;}
     if(a.name===b.name){a.joins.push(a.end,...b.joins);a.end=b.end;a.ramp||=b.ramp;runs.splice(i,1);i--;}
   }
-  const add=(at:number,after:number,road:string|null,ramp:boolean,fromRamp:boolean)=>{
+  // An entrance signed only "I-93" names the direction of the ramp it divides into.
+  for(let i=runs.length-2;i>=0;i--){const a=runs[i],b=runs[i+1];if(a.entrance&&b.entrance&&a.label&&b.label?.startsWith(`${a.label} `))a.label=b.label;}
+  const add=(at:number,after:number,road:string|null,ramp:boolean,fromRamp:boolean,entrance=false)=>{
     if(at<1||at>length-1)return;
-    const turn=classifyTurn(angleAt(at,after)),previous=steps.length?steps[steps.length-1].road:runs[0].name;
+    const turn=classifyTurn(angleAt(at,after)),previous=steps.length?steps[steps.length-1].road:runs[0].label;
     if(turn==='straight'&&(road===previous||(!road&&!ramp)))return;
-    steps.push({kind:'turn',at,turn,road,text:turnText(turn,road,ramp,fromRamp)});
+    steps.push({kind:'turn',at,turn,road,text:entrance&&road?rampText(turn,road):turnText(turn,road,ramp,fromRamp)});
   };
   for(let i=1;i<runs.length;i++){
     const run=runs[i],next=runs[i+1];
-    if(run.name===null&&next&&run.end-run.start<=60){add(run.start,run.end,next.name,run.ramp||next.ramp,runs[i-1].ramp);i++;continue;}
-    add(run.start,run.start,run.name,run.ramp,runs[i-1].ramp);
+    // An exit leaves (and a ramp divides) at a slight angle, so a gore that reads straight still bears to the side the ramp goes.
+    const gore=()=>{const angle=angleAt(run.start,run.start),read=classifyTurn(angle);return read==='straight'?angle<0?'slight-left' as const:'slight-right' as const:read;};
+    if(run.exit){if(run.start>=1&&run.start<=length-1){const turn=gore();steps.push({kind:'turn',at:run.start,turn,road:run.label,text:exitText(run.exit,turn,!!runs[i-1].exit)});}continue;}
+    if(run.entrance&&runs[i-1].entrance&&run.label){if(run.start>=1&&run.start<=length-1){const turn=gore();steps.push({kind:'turn',at:run.start,turn,road:run.label,text:`Keep ${turn.endsWith('left')?'left':'right'} toward ${abbreviateStreet(run.label)}`});}continue;}
+    if(run.name===null&&next&&run.end-run.start<=60){add(run.start,run.end,next.label,run.ramp||next.ramp,runs[i-1].ramp,next.entrance);i++;continue;}
+    add(run.start,run.start,run.label,run.ramp,runs[i-1].ramp,run.entrance);
   }
   // A street that turns at an intersection without changing its name.
-  for(const run of runs)if(run.name)for(const at of run.joins){
+  for(const run of runs)if(run.label&&!run.exit)for(const at of run.joins){
     const node=nodeAt.get(at);if(node===undefined||graph.degree[node]<3||steps.some(step=>Math.abs(step.at-at)<20))continue;
-    const angle=angleAt(at,at);if(Math.abs(angle)>.96){const turn=classifyTurn(angle);steps.push({kind:'turn',at,turn,road:run.name,text:turnText(turn,run.name,false)});}
+    const angle=angleAt(at,at);if(Math.abs(angle)>.96){const turn=classifyTurn(angle);steps.push({kind:'turn',at,turn,road:run.label,text:turnText(turn,run.label,false)});}
   }
   steps.sort((a,b)=>a.at-b.at);
-  const first=runs[0]?.name??null,[dx,dz]=direction(plan,0,Math.min(20,length));
+  const first=runs[0]?.label??null,[dx,dz]=direction(plan,0,Math.min(20,length));
   steps.unshift({kind:'depart',at:0,turn:options.uturn?'uturn':'straight',road:first,text:options.uturn?'Make a U-turn':`Head ${compass(dx,dz)}${first?` on ${abbreviateStreet(first)}`:''}`});
   let arrive='Arrive at your destination';
   if(options.target&&length>2){const end=plan.points[plan.points.length-1],[hx,hz]=direction(plan,Math.max(0,length-15),length),ox=options.target[0]-end[0],oz=options.target[1]-end[1];if(Math.hypot(ox,oz)>4)arrive=`Your destination is on the ${hx*oz-hz*ox>0?'right':'left'}`;}

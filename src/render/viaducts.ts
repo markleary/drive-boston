@@ -8,9 +8,11 @@ import {mergeSpatialGeometries} from './spatial-batches.ts';
 export function addSurveyViaductSupports(target:THREE.Object3D,city:CityData,data:TileBuildingGeometry){
   const supports=surveyViaductSupports(city,data),parts:THREE.BufferGeometry[]=[];
   for(const p of supports){
-    parts.push(new THREE.BoxGeometry(2.2,p.top-p.bottom,2.6).rotateY(p.yaw).translate(p.x,(p.top+p.bottom)/2,p.z));
+    for(const c of p.columns??[p]){
+      parts.push(new THREE.BoxGeometry(2.2,p.top-c.bottom,2.6).rotateY(p.yaw).translate(c.x,(p.top+c.bottom)/2,c.z));
+      parts.push(new THREE.BoxGeometry(4.2,.8,4.6).rotateY(p.yaw).translate(c.x,c.bottom+.4,c.z));
+    }
     parts.push(new THREE.BoxGeometry(p.width,.85,3.2).rotateY(p.yaw).translate(p.capX,p.top-.425,p.capZ));
-    parts.push(new THREE.BoxGeometry(4.2,.8,4.6).rotateY(p.yaw).translate(p.x,p.bottom+.4,p.z));
   }
   const group=new THREE.Group();group.name='Land-side survey viaduct piers';group.userData={supports:supports.length,excludes:'Zakim water span and Big Dig tunnel mouth'};
   const material=new THREE.MeshStandardMaterial({color:'#a5a398',roughness:.95});

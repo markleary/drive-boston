@@ -4,7 +4,7 @@ import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
-import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, registerDriveSurface } from '../simulation/road-surfaces.ts';
+import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, registerDriveSurface, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
 import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
 import {tireSlipIntensity,type TireContact} from '../simulation/tire-tracks.ts';
@@ -215,6 +215,11 @@ export class DrivingPhysics {
       // Same yaw/pitch transform as the visible parapet.
       const sx = Math.sin(-p.slope / 2), cx = Math.cos(-p.slope / 2), sy = Math.sin(p.yaw / 2), cy = Math.cos(p.yaw / 2);
       colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.135, .38, p.length / 2).setTranslation(p.x, p.y, p.z).setRotation({ x: cy * sx, y: sy * cx, z: -sy * sx, w: cy * cx }).setFriction(.4)));
+    }
+    // A closed end's barrier units, solid boxes of the full profile, set like the rendered row.
+    for (const u of closedEndBarriers(city, road)?.units ?? []) {
+      const sy = Math.sin(u.yaw / 2), cy = Math.cos(u.yaw / 2), sz = Math.sin(u.roll / 2), cz = Math.cos(u.roll / 2), h = JERSEY.height / 2;
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(u.length / 2, h, JERSEY.base / 2).setTranslation(u.x - Math.sin(u.roll) * Math.cos(u.yaw) * h, u.y - .02 + Math.cos(u.roll) * h, u.z + Math.sin(u.roll) * Math.sin(u.yaw) * h).setRotation({ x: sy * sz, y: sy * cz, z: cy * sz, w: cy * cz }).setFriction(.4).setRestitution(.05)));
     }
     for (const p of bridgeSupports(city, road)) {
       const rotation={x:0,y:Math.sin(p.yaw/2),z:0,w:Math.cos(p.yaw/2)};

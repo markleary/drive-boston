@@ -1,6 +1,7 @@
 import type {CityData,Point2,Road} from '../types';
 import {coverageTester} from './coverage.ts';
-import {sampleRoadElevation} from './road-surfaces.ts';
+import {sampleRoadElevation,roadWidthAt} from './road-surfaces.ts';
+import {motorwayLanes,pointAtDistance,stations} from './motorway.ts';
 
 /** Road-local offsets use the same convention as traffic.lane(): positive is
  * the side (-cos(yaw), sin(yaw)) of a vehicle travelling at `yaw`. */
@@ -20,6 +21,10 @@ export interface ConstructionZone {
   pavedWidth:number;
   seed:number;
   vehicleKind:'dump-truck'|'excavator';
+  /** A highway site follows its record's curve: `along` is measured on the
+   * centreline from `station` (metres from the record's start), the offset
+   * square to it. Street sites are straight, in the frame of x, z and yaw. */
+  frame?:{points:readonly Point2[];along:number[];station:number};
 }
 export interface ConstructionOptions {
   seed?:number;
@@ -27,6 +32,8 @@ export interface ConstructionOptions {
   /** Transit keeps its source route: work sites must clear both road buses and
    * dedicated rail reservations rather than make them drive through cones. */
   transitRoutes?:ReadonlyArray<{points:ReadonlyArray<Point2>}>;
+  /** At most this many street sites (96); the highway's own sites come on top,
+   * since the metro's street plan always fills the cap. 0 plans none at all. */
   maxZones?:number;
 }
 
@@ -39,6 +46,10 @@ const PROFILE_REACH=CONSTRUCTION_LENGTH/2+CONSTRUCTION_APPROACH;
 const END_CLEARANCE=18;
 const SPACING=350;
 const CELL=96;
+/** Highway sites close the outside lane over 60 m behind 45 m tapers, every
+ * 1.5 to 2.5 km along each direction of a carriageway (`Road.lanes` decks). */
+export const MOTORWAY_WORK_LENGTH=60,MOTORWAY_TAPER_LENGTH=45,MOTORWAY_SPACING:[number,number]=[1500,2500];
+const MOTORWAY_LENGTH=MOTORWAY_WORK_LENGTH+MOTORWAY_TAPER_LENGTH*2,MOTORWAY_REACH=MOTORWAY_LENGTH/2+CONSTRUCTION_APPROACH;
 
 type Segment={a:Point2;b:Point2;road?:Road};
 function indexSegments(lines:ReadonlyArray<{points:ReadonlyArray<Point2>;road?:Road}>){
@@ -127,11 +138,72 @@ export function planConstructionZones(city:CityData,options:ConstructionOptions=
     if(used.has(zone.roadId)||zones.some(other=>Math.hypot(other.x-zone.x,other.z-zone.z)<SPACING))continue;
     used.add(zone.roadId);zones.push(zone);if(zones.length>=(options.maxZones??96))break;
   }
+  zones.push(...planMotorwayZones(city,options.seed??0x42b0570));
   return zones;
+}
+
+/** Highway worksites on their own random stream (the street plan is unchanged):
+ * each direction of a carriageway is chained from its pieces (records named
+ * alike, end to start), and a site is planned 1.5 to 2.5 km after the last,
+ * slid forward to where its whole merge lies on one piece (pieces end at every
+ * gore and lane change, so a run of short ones can push it on by a kilometre)
+ * at least 150 m from a closed end and clear of the spawn. The outside lane
+ * closes into the next one over. */
+export function planMotorwayZones(city:CityData,seed:number):ConstructionZone[]{
+  let state=(seed^0x93a5c3)>>>0;
+  const random=()=>{state=(Math.imul(state,1664525)+1013904223)>>>0;return state/4294967296;};
+  const decks=city.roads.filter(road=>road.lanes!==undefined&&road.lanes>=2&&road.kind==='motorway'&&road.oneway===1&&road.traffic!==false&&!road.tunnel&&road.points.length>=2).sort((a,b)=>a.id.localeCompare(b.id));
+  const same=(a:Point2,b:Point2)=>Math.hypot(a[0]-b[0],a[1]-b[1])<.5,groups=new Map<string,Road[]>();
+  for(const road of decks){const name=road.name.split(' · ')[0],list=groups.get(name)??[];list.push(road);groups.set(name,list);}
+  const zones:ConstructionZone[]=[];
+  for(const pieces of groups.values()){
+    const visited=new Set<Road>();
+    for(const head of pieces.filter(road=>!pieces.some(other=>other!==road&&same(other.points[other.points.length-1],road.points[0])))){
+      const chain:{road:Road;along:number[];start:number}[]=[];let total=0;
+      for(let road:Road|undefined=head;road&&!visited.has(road);road=pieces.find(next=>!visited.has(next)&&same(next.points[0],road!.points[road!.points.length-1]))){
+        visited.add(road);const along=stations(road.points);chain.push({road,along,start:total});total+=along[along.length-1];
+      }
+      const closed=chain.flatMap(piece=>[piece.road.closed==='start'?piece.start:undefined,piece.road.closed==='end'?piece.start+piece.along[piece.along.length-1]:undefined]).filter((s):s is number=>s!==undefined);
+      for(let target=MOTORWAY_SPACING[0]*(.3+.7*random());target<total;target+=MOTORWAY_SPACING[0]+(MOTORWAY_SPACING[1]-MOTORWAY_SPACING[0])*random()){
+        let placed=false;
+        for(let s=target;s<total&&!placed;s+=50){
+          const piece=chain.find(c=>s>=c.start+MOTORWAY_REACH+20&&s<=c.start+c.along[c.along.length-1]-MOTORWAY_REACH-20);
+          if(!piece||closed.some(end=>Math.abs(end-s)<MOTORWAY_REACH+150))continue;
+          const local=s-piece.start,{p,dir}=pointAtDistance(piece.road.points,local,piece.along);
+          if(Math.hypot(p[0]-city.spawn.x,p[1]-city.spawn.z)<MOTORWAY_LENGTH/2+60)continue;
+          const lanes=motorwayLanes(piece.road),laneOffset=lanes[lanes.length-1],openOffset=lanes[lanes.length-2];
+          let pavedWidth=Infinity;for(let a=-MOTORWAY_LENGTH/2;a<=MOTORWAY_LENGTH/2;a+=15){const q=pointAtDistance(piece.road.points,local+a,piece.along).p;pavedWidth=Math.min(pavedWidth,roadWidthAt(piece.road,q[0],q[1]));}
+          zones.push({id:`construction-${piece.road.id}`,roadId:piece.road.id,road:piece.road,x:p[0],z:p[1],yaw:Math.atan2(dir[0],dir[1]),direction:1,laneOffset,openOffset,length:MOTORWAY_LENGTH,workLength:MOTORWAY_WORK_LENGTH,taperLength:MOTORWAY_TAPER_LENGTH,pavedWidth,seed:state,vehicleKind:random()<.5?'dump-truck':'excavator',frame:{points:piece.road.points,along:piece.along,station:local}});
+          target=s;placed=true;
+        }
+        if(!placed)break;
+      }
+    }
+  }
+  return zones;
+}
+
+/** A position in a site's travel frame: metres along from its middle, the
+ * offset in traffic's lane convention and the heading of travel there. */
+export function constructionLocal(zone:ConstructionZone,x:number,z:number){
+  if(!zone.frame){const sin=Math.sin(zone.yaw),cos=Math.cos(zone.yaw),dx=x-zone.x,dz=z-zone.z;return{along:dx*sin+dz*cos,offset:-dx*cos+dz*sin,yaw:zone.yaw};}
+  const {points,along,station}=zone.frame,reach=zone.length/2+CONSTRUCTION_APPROACH+60;
+  let best={gap:Infinity,s:station,tx:Math.sin(zone.yaw),tz:Math.cos(zone.yaw),cx:zone.x,cz:zone.z};
+  for(let i=1;i<points.length;i++){
+    if(along[i]<station-reach||along[i-1]>station+reach)continue;
+    const a=points[i-1],b=points[i],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<1e-6)continue;
+    const t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(length*length))),cx=a[0]+dx*t,cz=a[1]+dz*t,gap=Math.hypot(x-cx,z-cz);
+    if(gap<best.gap)best={gap,s:along[i-1]+length*t,tx:dx/length*zone.direction,tz:dz/length*zone.direction,cx,cz};
+  }
+  return{along:(best.s-station)*zone.direction,offset:-(x-best.cx)*best.tz+(z-best.cz)*best.tx,yaw:Math.atan2(best.tx,best.tz)};
 }
 
 /** A point in a site's travel frame; `offset` follows traffic's lane convention. */
 export function constructionPoint(zone:ConstructionZone,along:number,offset=zone.laneOffset):Point2{
+  if(zone.frame){
+    const {p,dir}=pointAtDistance(zone.frame.points,zone.frame.station+along*zone.direction,zone.frame.along),tx=dir[0]*zone.direction,tz=dir[1]*zone.direction;
+    return[p[0]-tz*offset,p[1]+tx*offset];
+  }
   return[zone.x+Math.sin(zone.yaw)*along-Math.cos(zone.yaw)*offset,zone.z+Math.cos(zone.yaw)*along+Math.sin(zone.yaw)*offset];
 }
 
@@ -156,9 +228,18 @@ export function constructionLanePoints(road:Road,points:Point2[],nominalOffset:n
     const a=samples[Math.max(0,i-1)],b=samples[Math.min(samples.length-1,i+1)],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz)||1;
     let offset=nominalOffset;
     for(const zone of matching){
-      const fx=Math.sin(zone.yaw),fz=Math.cos(zone.yaw);if((dx*fx+dz*fz)/length<.9)continue;
-      const along=(p[0]-zone.x)*fx+(p[1]-zone.z)*fz,across=-(p[0]-zone.x)*fz+(p[1]-zone.z)*fx;
-      if(Math.abs(across)>1)continue;
+      let along:number;
+      if(zone.frame){
+        // A highway site's frame follows the curve of its record.
+        if(Math.hypot(p[0]-zone.x,p[1]-zone.z)>zone.length/2+CONSTRUCTION_APPROACH+30)continue;
+        const local=constructionLocal(zone,p[0],p[1]);
+        if(Math.abs(local.offset)>1||(dx*Math.sin(local.yaw)+dz*Math.cos(local.yaw))/length<.9)continue;
+        along=local.along;
+      }else{
+        const fx=Math.sin(zone.yaw),fz=Math.cos(zone.yaw);if((dx*fx+dz*fz)/length<.9)continue;
+        const across=-(p[0]-zone.x)*fz+(p[1]-zone.z)*fx;along=(p[0]-zone.x)*fx+(p[1]-zone.z)*fz;
+        if(Math.abs(across)>1)continue;
+      }
       const full=zone.workLength/2+8,reach=zone.length/2+CONSTRUCTION_APPROACH,t=Math.max(0,Math.min(1,(reach-Math.abs(along))/(reach-full))),blend=t*t*(3-2*t);
       offset=Math.min(offset,nominalOffset+(zone.openOffset-nominalOffset)*blend);
     }

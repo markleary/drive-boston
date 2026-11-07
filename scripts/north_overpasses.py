@@ -483,9 +483,10 @@ def applies(roads):
  ids={r['id'] for r in roads};return all(i in ids for site in SITES for i in site['upper']+site['lower'])
 
 
-def replay(data_dir,city,record):
- """Rerun the repair from the recorded originals; True when it rewrites the installed package exactly."""
- grid=city['elevation'];roads=copy.deepcopy(city['roads']);installed=load_grid(data_dir/grid['file']);heights=installed.copy();restore(roads,heights,record)
+def replay(data_dir,city,record,installed=None):
+ """Rerun the repair from the recorded originals; True when it rewrites the installed package exactly
+ (`installed` the int16 graded grid as this stage left it, when a later stage changed the shipped one)."""
+ grid=city['elevation'];roads=copy.deepcopy(city['roads']);installed=load_grid(data_dir/grid['file']) if installed is None else installed;heights=installed.copy();restore(roads,heights,record)
  again,result,profiles,repaired=level_north_overpasses(roads,grid,heights,load_grid(data_dir/grid['source']),tile_footprints(data_dir,city))
  by_id={r['id']:r for r in city['roads']};by_new={r['id']:r for r in repaired}
  touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']}

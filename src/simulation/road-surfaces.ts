@@ -3,15 +3,47 @@ import {isHarvardBridgeRoad} from './harvard-bridge.ts';
 import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
 import {inTransitClearance} from './transit-corridors.ts';
 import {inTunnelPortal,tunnelAt} from './tunnels.ts';
+import {CLOSURE_SETBACK,LANE_WIDTH,motorwayLanes,pointAtDistance,speedClass,stations} from './motorway.ts';
 
-export function roadProjection(road:Pick<Road,'points'>,x:number,z:number){
-  let best={distance:Infinity,index:0,t:0,x:road.points[0]?.[0]??x,z:road.points[0]?.[1]??z};
-  for(let i=1;i<road.points.length;i++){
-    const a=road.points[i-1],b=road.points[i],dx=b[0]-a[0],dz=b[1]-a[1],len=dx*dx+dz*dz;
-    const t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(len||1))),px=a[0]+dx*t,pz=a[1]+dz*t,distance=Math.hypot(x-px,z-pz);
-    if(distance<best.distance)best={distance,index:i-1,t,x:px,z:pz};
+/** Bounding boxes of 16-segment runs of a long polyline (a highway deck has
+ * hundreds of points and is projected for every car on it every step). */
+const RUN=16,runBoxes=new WeakMap<object,{count:number;boxes:Float64Array}>();
+function boxesOf(points:readonly Point2[]){
+  let entry=runBoxes.get(points);
+  if(!entry||entry.count!==points.length){
+    const runs=Math.ceil((points.length-1)/RUN),boxes=new Float64Array(runs*4);
+    for(let r=0;r<runs;r++){
+      let minX=Infinity,minZ=Infinity,maxX=-Infinity,maxZ=-Infinity;
+      for(let i=r*RUN,end=Math.min(points.length-1,(r+1)*RUN);i<=end;i++){const p=points[i];if(p[0]<minX)minX=p[0];if(p[0]>maxX)maxX=p[0];if(p[1]<minZ)minZ=p[1];if(p[1]>maxZ)maxZ=p[1];}
+      boxes[r*4]=minX;boxes[r*4+1]=minZ;boxes[r*4+2]=maxX;boxes[r*4+3]=maxZ;
+    }
+    entry={count:points.length,boxes};runBoxes.set(points,entry);
   }
-  return best;
+  return entry.boxes;
+}
+const boxGap=(boxes:Float64Array,r:number,x:number,z:number)=>Math.hypot(Math.max(boxes[r*4]-x,0,x-boxes[r*4+2]),Math.max(boxes[r*4+1]-z,0,z-boxes[r*4+3]));
+/** The nearest point of a polyline: every segment in order, the first of equal
+ * distances winning. A long line skips the runs whose box lies farther than
+ * the best segment of the nearest box, which cannot change the answer. */
+export function roadProjection(road:Pick<Road,'points'>,x:number,z:number){
+  const points=road.points,n=points.length;
+  let distance=Infinity,index=0,t=0,px=points[0]?.[0]??x,pz=points[0]?.[1]??z;
+  let boxes:Float64Array|undefined,bound=Infinity;
+  if(n>RUN*3){
+    boxes=boxesOf(points);let nearest=0,gap=Infinity;
+    for(let r=0;r<boxes.length/4;r++){const g=boxGap(boxes,r,x,z);if(g<gap){gap=g;nearest=r;}}
+    for(let i=nearest*RUN+1,end=Math.min(n-1,(nearest+1)*RUN);i<=end;i++){
+      const a=points[i-1],b=points[i],dx=b[0]-a[0],dz=b[1]-a[1],len=dx*dx+dz*dz,u=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(len||1)));
+      bound=Math.min(bound,Math.hypot(x-a[0]-dx*u,z-a[1]-dz*u));
+    }
+  }
+  for(let i=1;i<n;i++){
+    if(boxes&&(i-1)%RUN===0&&boxGap(boxes,(i-1)/RUN,x,z)>bound){i+=RUN-1;continue;}
+    const a=points[i-1],b=points[i],dx=b[0]-a[0],dz=b[1]-a[1],len=dx*dx+dz*dz;
+    const u=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(len||1))),qx=a[0]+dx*u,qz=a[1]+dz*u,d=Math.hypot(x-qx,z-qz);
+    if(d<distance){distance=d;index=i-1;t=u;px=qx;pz=qz;}
+  }
+  return{distance,index,t,x:px,z:pz};
 }
 
 /** Elevations are road-specific: crossing paths may occupy independent levels. */
@@ -326,4 +358,99 @@ export function bridgeBarriers(city:CityData,road:Road){
       const center=(lo+hi)/2;return{x:a[0]+dx*center,y:ya+dy*center+.38,z:a[1]+dz*center,length:Math.hypot(distance,dy)*(hi-lo)+.008,yaw:Math.atan2(dx,dz),slope:Math.atan2(dy,distance)};
     });
   });
+}
+
+/** A precast concrete barrier unit (New Jersey profile): height, base and top
+ * widths, and the longest unit a closure row is divided into. */
+export const JERSEY={height:1.07,base:.62,top:.2,length:3.8};
+export interface ClosureUnit {x:number;y:number;z:number;yaw:number;roll:number;length:number}
+/** The barrier row across a closed deck end (`Road.closed`), `CLOSURE_SETBACK`
+ * metres in from it as at the tunnel caps: units spanning the whole deck, each
+ * seated on it (x, y, z the middle of its base) and rolled to its crossfall,
+ * `yaw` the road's heading with the unit's long axis across it; plus the row's
+ * middle and `face`, the heading its face looks along (back up the open road),
+ * for the reflectors and the closure sign. */
+export function closedEndBarriers(city:CityData,road:Road){
+  if(!road.closed||road.points.length<2)return;
+  const along=stations(road.points),total=along[along.length-1],end=road.closed==='end';
+  const station=end?Math.max(0,total-CLOSURE_SETBACK):Math.min(total,CLOSURE_SETBACK),{p,dir}=pointAtDistance(road.points,station,along);
+  const width=roadWidthAt(road,p[0],p[1]),count=Math.max(1,Math.ceil(width/JERSEY.length)),length=width/count,rx=-dir[1],rz=dir[0],yaw=Math.atan2(dir[0],dir[1]),units:ClosureUnit[]=[];
+  for(let k=0;k<count;k++){
+    const c=length*(k+.5)-width/2,x=p[0]+rx*c,z=p[1]+rz*c,h=length/2;
+    const left=sampleRoadElevation(city,road,x-rx*h,z-rz*h),right=sampleRoadElevation(city,road,x+rx*h,z+rz*h);
+    units.push({x,y:(left+right)/2,z,yaw,roll:Math.atan2(left-right,length),length:length-.04});
+  }
+  return{units,station,width,x:p[0],y:sampleRoadElevation(city,road,p[0],p[1]),z:p[1],face:end?yaw+Math.PI:yaw};
+}
+
+/** Lane line offsets of a deck with a `lanes` count, right of the centreline
+ * positive: the n + 1 edges of the lanes `motorwayLanes` centres. */
+export function laneEdges(road:Road){
+  const centres=motorwayLanes(road),spacing=centres.length>1?centres[1]-centres[0]:LANE_WIDTH;
+  return[...centres.map(c=>c-spacing/2),centres[centres.length-1]+spacing/2];
+}
+const laneEndIndexes=new WeakMap<CityData,Map<string,Road[]>>();
+/** The deck of the same class (carriageway or ramp) with a lane count that
+ * continues `road` across its end (or leads into its start), heading its way. */
+export function laneContinuation(city:CityData,road:Road,atEnd:boolean){
+  let ends=laneEndIndexes.get(city);
+  if(!ends){ends=new Map();for(const r of city.roads)if(r.lanes!==undefined&&r.points.length>1)for(const p of [r.points[0],r.points[r.points.length-1]]){const k=endKey(p[0],p[1]),list=ends.get(k);if(list)list.push(r);else ends.set(k,[r]);}laneEndIndexes.set(city,ends);}
+  const n=road.points.length,sign=atEnd?1:-1,p=road.points[atEnd?n-1:0],q=road.points[atEnd?n-2:1],dx=(p[0]-q[0])*sign,dz=(p[1]-q[1])*sign,length=Math.hypot(dx,dz)||1;
+  let best:Road|undefined,score=.9;
+  for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)for(const r of ends.get(`${Math.round(p[0]*2)+i},${Math.round(p[1]*2)+j}`)??[]){
+    if(r===road||speedClass(r)!==speedClass(road))continue;
+    const m=r.points.length,a=r.points[atEnd?0:m-1],b=r.points[atEnd?1:m-2];if(Math.hypot(a[0]-p[0],a[1]-p[1])>.5)continue;
+    const ex=(b[0]-a[0])*sign,ez=(b[1]-a[1])*sign,cos=(dx*ex+dz*ez)/(length*(Math.hypot(ex,ez)||1));
+    if(cos>score){score=cos;best=r;}
+  }
+  return best;
+}
+/** Dashed lane dividers: 3 m of paint in every 12 m. */
+export const LANE_DASH=[3,12];
+export interface LaneLine {points:Point2[];color:'white'|'yellow';kind:'left'|'right'|'divider'}
+/** Painted lines of a one-way deck with a `lanes` count, as polylines on it:
+ * dashed dividers between the lanes and solid edge lines, white on the right
+ * and yellow on the left. Where the same class of deck carries on with fewer
+ * lanes, the extra ones taper out on the right over the last 150 m (at most the
+ * deck's length, half of it when both ends taper) while the others slide over
+ * to meet its lines. A line is cut where another deck covers it: a ramp's lines
+ * inside the carriageway it leaves or joins and a carriageway's edge line across
+ * a ramp's mouth; a carriageway's dividers give way only to another carriageway,
+ * and the deck a line continues onto never cuts it. */
+export function laneMarkings(city:CityData,road:Road){
+  const lines:LaneLine[]=[];
+  if(road.lanes===undefined||road.oneway===0||road.points.length<2)return lines;
+  const own=laneEdges(road),n=own.length-1,along=stations(road.points),total=along[along.length-1],count=road.points.length;
+  const neighbours=([false,true] as const).map(atEnd=>laneContinuation(city,road,atEnd));
+  const tapers=([false,true] as const).flatMap((atEnd,j)=>{const edges=neighbours[j]&&laneEdges(neighbours[j]!);return edges&&edges.length<own.length?[{atEnd,target:own.map((_,k)=>edges[Math.min(k,edges.length-1)])}]:[];});
+  // At a seam the lines run square to the mean of both decks' headings, so they meet their continuation's.
+  const unit=(a:Point2,b:Point2):Point2=>{const dx=b[0]-a[0],dz=b[1]-a[1],l=Math.hypot(dx,dz)||1;return[dx/l,dz/l];};
+  const seam=(i:number,j:number):Point2=>{const next=neighbours[j],own=unit([0,0],deckDirection(road,i) as Point2);if(!next||(j?road.deckTangents?.end:road.deckTangents?.start))return own;const m=next.points.length,other=j?unit(next.points[0],next.points[1]):unit(next.points[m-2],next.points[m-1]);return[own[0]+other[0],own[1]+other[1]];};
+  const reach=Math.min(150,total/Math.max(1,tapers.length)),centre=road.points.map((p,i)=>{const [dx,dz]=i===0?seam(i,0):i===count-1?seam(i,1):deckDirection(road,i),l=Math.hypot(dx,dz)||1;return{p,rx:-dz/l,rz:dx/l};});
+  const linePoints=own.map((base,k)=>along.map((s,i)=>{
+    let o=base;
+    for(const t of tapers){const d=t.atEnd?total-s:s;if(d<reach){const u=1-d/reach;o+=(t.target[k]-base)*u*u*(3-2*u);}}
+    const half=(road.deckWidths?.[i]??road.width)/2-.25,c=centre[i];o=Math.max(-half,Math.min(half,o));
+    return[c.p[0]+c.rx*o,c.p[1]+c.rz*o] as Point2;
+  }));
+  const cells=deckIndex(city),cls=speedClass(road);
+  for(let k=0;k<=n;k++){
+    const pts=linePoints[k],edge=k===0||k===n,cuts=(other:Road)=>!neighbours.includes(other)&&(edge||cls!==2||speedClass(other)===2),visible:[number,number][]=[];
+    for(let i=1;i<count;i++){
+      const a=pts[i-1],b=pts[i],ya=sampleRoadElevation(city,road,a[0],a[1]),yb=sampleRoadElevation(city,road,b[0],b[1]),candidates=new Set<DeckTriangle>();
+      for(let x=Math.floor(Math.min(a[0],b[0])/DECK_CELL);x<=Math.floor(Math.max(a[0],b[0])/DECK_CELL);x++)for(let z=Math.floor(Math.min(a[1],b[1])/DECK_CELL);z<=Math.floor(Math.max(a[1],b[1])/DECK_CELL);z++)for(const triangle of cells.get(`${x},${z}`)??[])if(triangle.road!==road&&cuts(triangle.road))candidates.add(triangle);
+      const covered:[number,number][]=[];for(const triangle of candidates){const interval=coveredDeckInterval(a,b,ya,yb,triangle);if(interval)covered.push(interval);}
+      covered.sort((p,q)=>p[0]-q[0]);
+      let cursor=0;const span=along[i]-along[i-1],open=(lo:number,hi:number)=>{const s0=along[i-1]+span*lo,s1=along[i-1]+span*hi,last=visible[visible.length-1];if(last&&s0-last[1]<1e-6)last[1]=s1;else visible.push([s0,s1]);};
+      for(const [lo,hi]of covered){if(lo>cursor)open(cursor,lo);cursor=Math.max(cursor,hi);}
+      if(cursor<1)open(cursor,1);
+    }
+    const at=(s:number):Point2=>{let lo=0,hi=count-1;while(lo+1<hi){const mid=(lo+hi)>>1;if(along[mid]<s)lo=mid;else hi=mid;}const t=(s-along[lo])/((along[hi]-along[lo])||1);return[pts[lo][0]+(pts[hi][0]-pts[lo][0])*t,pts[lo][1]+(pts[hi][1]-pts[lo][1])*t];};
+    const piece=(s0:number,s1:number)=>{if(s1-s0<.3)return;const points=[at(s0)];for(let i=0;i<count;i++)if(along[i]>s0+1e-6&&along[i]<s1-1e-6)points.push(pts[i]);points.push(at(s1));lines.push({points,color:k===0?'yellow':'white',kind:k===0?'left':k===n?'right':'divider'});};
+    for(const [s0,s1]of visible){
+      if(edge){piece(s0,s1);continue;}
+      for(let d=Math.floor(s0/LANE_DASH[1])*LANE_DASH[1];d<s1;d+=LANE_DASH[1])piece(Math.max(s0,d),Math.min(s1,d+LANE_DASH[0]));
+    }
+  }
+  return lines;
 }

@@ -55,6 +55,9 @@ export async function resolveCity(city: CityData, read: Reader): Promise<CityDat
     city.landmarks=[...city.landmarks.filter(l=>!landmarkIds.has(l.id)),...tunnels.landmarks];
     city.sources=[...city.sources,...tunnels.sources.filter(s=>!city.sources.some(existing=>existing.url===s.url))];
   }
+  // A survey-deck trace is a graph edge over a mesh that draws and collides by
+  // itself: keep it out of every road consumer except traffic, GPS and labels.
+  if(city.roads.some(r=>r.surveyDeck)){city.surveyRoads=[...(city.surveyRoads??[]),...city.roads.filter(r=>r.surveyDeck)];city.roads=city.roads.filter(r=>!r.surveyDeck);}
   if (!tiles || !far) return city;
   const metro = city as MetroCity; metro.far = far; metro.landmarkBuildings ??= []; metro.buildings = []; metro.curbs ??= []; metro.parkPaths ??= []; metro.index = new BuildingIndex(far);
   return metro;

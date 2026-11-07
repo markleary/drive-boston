@@ -5,8 +5,10 @@ import {pointInside} from './roads.ts';
 import {roadProjection,sampleRoadElevation} from './road-surfaces.ts';
 import {buildingAt} from './city-tiles.ts';
 
-/** `width` and `capX`/`capZ` describe the cap, which may sit off the column's centre. */
-export interface ViaductSupport{x:number;z:number;bottom:number;top:number;width:number;yaw:number;capX:number;capZ:number;}
+/** `width` and `capX`/`capZ` describe the cap, which may sit off the column's centre.
+ * `columns`, when set, replace the single column at (x, z): a straddle bent's
+ * two legs, either side of a deck that passes beneath the cap. */
+export interface ViaductSupport{x:number;z:number;bottom:number;top:number;width:number;yaw:number;capX:number;capZ:number;columns?:{x:number;z:number;bottom:number}[];}
 /** Slice the surveyed land-side deck ribbons, keeping their actual elevations.
  * Water/cable span and the southern tunnel mouth are deliberately excluded.
  * This augments the floating survey viaducts; it never rewrites the Zakim mesh. */
@@ -36,7 +38,8 @@ export function surveyViaductSupports(city:CityData,data:TileBuildingGeometry){
   // Streets a pier must keep clear of, with their reach: only those near the structure.
   let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
   for(const t of triangles){minX=Math.min(minX,t.minX);maxX=Math.max(maxX,t.maxX);minZ=Math.min(minZ,t.minZ);maxZ=Math.max(maxZ,t.maxZ);}
-  const streets=city.roads.map(r=>{const reach=r.width/2+2.2;let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;for(const [x,z]of r.points){x0=Math.min(x0,x);x1=Math.max(x1,x);z0=Math.min(z0,z);z1=Math.max(z1,z);}return{r,x0:x0-reach,x1:x1+reach,z0:z0-reach,z1:z1+reach};})
+  // Survey traces lie on the structure itself; they are no street beneath it.
+  const streets=city.roads.filter(r=>!r.surveyDeck).map(r=>{const reach=r.width/2+2.2;let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;for(const [x,z]of r.points){x0=Math.min(x0,x);x1=Math.max(x1,x);z0=Math.min(z0,z);z1=Math.max(z1,z);}return{r,x0:x0-reach,x1:x1+reach,z0:z0-reach,z1:z1+reach};})
     .filter(s=>s.x1>=minX&&s.x0<=maxX&&s.z1>=minZ&&s.z0<=maxZ);
   for(const axis of [2,0])for(let section=-4200;section<=1900;section+=34){
     const across=axis===2?0:2,intervals:{lo:number;hi:number;y:number}[]=[];
@@ -71,8 +74,25 @@ export function surveyViaductSupports(city:CityData,data:TileBuildingGeometry){
       const bottom=sampleElevation(city,x,z)-.5,top=lowest-.55;
       if(top-bottom<4||result.some(s=>Math.hypot(s.x-x,s.z-z)<25))continue;
       if(buildingAt(city,x,z))continue;
-      if(streets.some(({r,x0,x1,z0,z1})=>x>=x0&&x<=x1&&z>=z0&&z<=z1&&roadProjection(r,x,z).distance<r.width/2+2.2&&sampleRoadElevation(city,r,x,z)<top+1))continue;
-      result.push({x,z,bottom,top,width:hi-lo,yaw:axis===2?0:Math.PI/2,capX:x+ux*(lo+hi)/2,capZ:z+uz*(lo+hi)/2});
+      const beneath=(px:number,pz:number,clear:number)=>streets.filter(({r,x0,x1,z0,z1})=>px>=x0&&px<=x1&&pz>=z0&&pz<=z1&&roadProjection(r,px,pz).distance<r.width/2+clear&&sampleRoadElevation(city,r,px,pz)<top+1);
+      const under=beneath(x,z,2.2);
+      if(!under.length){result.push({x,z,bottom,top,width:hi-lo,yaw:axis===2?0:Math.PI/2,capX:x+ux*(lo+hi)/2,capZ:z+uz*(lo+hi)/2});continue;}
+      // A deck beneath (the Charlestown lower deck under the upper one) gets a
+      // straddle bent: a leg clear of it on each side, on open ground, and the
+      // cap reaching both legs while no surveyed deck lies above or just over it.
+      if(under.some(({r})=>!r.elevations||r.tunnel))continue;
+      const inside=(u:number)=>under.some(({r})=>roadProjection(r,x+ux*u,z+uz*u).distance<r.width/2+.3);
+      let a=0,b=0;while(a>-30&&inside(a-.25))a-=.25;while(b<30&&inside(b+.25))b+=.25;
+      // Lorries pass under the cap: 4.4 m between the deck and the cap's soffit.
+      let headroom=true;for(let u=a;u<=b+1e-6&&headroom;u+=.5)headroom=under.every(({r})=>sampleRoadElevation(city,r,x+ux*u,z+uz*u)<=top-.85-4.4);
+      if(!headroom)continue;
+      const legs=[a-1.5,b+1.5],from=Math.min(lo,legs[0]-1.1),to=Math.max(hi,legs[1]+1.1);
+      if(a<=-30||b>=30||to-from>46||lo-from>3.5||to-hi>3.5)continue;
+      const capClear=(u:number)=>[-1.65,0,1.65].every(w=>{const y=deckHeight(x+ux*u+uz*w,z+uz*u+ux*w);return !Number.isFinite(y)||y>=top-.05;});
+      let open=true;for(let u=from;u<=to+1e-6&&open;u+=.5)if(u<lo||u>hi)open=capClear(u);
+      const columns=legs.map(u=>{const cx=x+ux*u,cz=z+uz*u;return{x:cx,z:cz,bottom:sampleElevation(city,cx,cz)-.5};});
+      if(!open||columns.some(c=>top-c.bottom<4||buildingAt(city,c.x,c.z)||wet([c.x,c.z])||beneath(c.x,c.z,1.3).length))continue;
+      result.push({x,z,bottom:Math.min(...columns.map(c=>c.bottom)),top,width:to-from,yaw:axis===2?0:Math.PI/2,capX:x+ux*(from+to)/2,capZ:z+uz*(from+to)/2,columns});
     }
   }
   return result;

@@ -157,7 +157,7 @@ class CentralArterySourceTest(unittest.TestCase):
   self.assertEqual(len(self.data['landmarks']),3)
   self.assertEqual(sum(bool(r['tunnel'].get('capStart'))+bool(r['tunnel'].get('capEnd')) for r in self.roads),2)
   for r in self.roads:
-   self.assertFalse(r['traffic']);self.assertEqual(r['oneway'],1)
+   self.assertNotIn('traffic',r);self.assertEqual(r['oneway'],1)
    for p,q,a,b in zip(r['points'],r['points'][1:],r['elevations'],r['elevations'][1:]):self.assertLess(abs(b-a)/math.dist(p,q),.12)
   for r,index in [(self.roads[0],0),(self.roads[1],-1)]:
    self.assertTrue(100<r['points'][index][1]<400,'close the tunnel near the I-90/south portals')

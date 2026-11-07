@@ -1,4 +1,5 @@
 import type {Point2,Road} from '../types';
+import {speedClass} from '../simulation/motorway.ts';
 
 export interface MapLabelBounds {left:number;right:number;top:number;bottom:number;}
 export interface MinimapRoadLabel {name:string;text:string;x:number;y:number;angle:number;bounds:MapLabelBounds;}
@@ -54,12 +55,15 @@ function paths(roads:Road[]):Path[]{
 }
 
 /** Build stable world-space anchors once. Layout only visits nearby buckets;
- * screen-space exclusions keep text clear of markers and the circular edge. */
+ * screen-space exclusions keep text clear of markers and the circular edge.
+ * A motorway deck labels by its route ("I-93 North", not each piece's place
+ * after ` · `), and its ramps carry no label; the tunnels keep their names. */
 export function createMinimapLabeler(roads:Road[]){
   const groups=new Map<string,Road[]>(),buckets=new Map<string,Anchor[]>(),cell=128;
   for(const road of roads){
-    if(!road.name||road.width<7||/alley|unnamed|private|service/i.test(road.name))continue;
-    const group=groups.get(road.name)??[];group.push(road);groups.set(road.name,group);
+    const highway=road.tunnel?0:speedClass(road);
+    if(!road.name||road.width<7||highway===1||/alley|unnamed|private|service/i.test(road.name))continue;
+    const name=highway?road.name.split(' · ')[0].trim():road.name,group=groups.get(name)??[];group.push(road);groups.set(name,group);
   }
   for(const [name,group]of groups){
     const chains=paths(group);

@@ -7,6 +7,7 @@ import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
 import {roadProjection,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 import {inTunnelPortal,tunnelPointAt,tunnelStations} from '../src/simulation/tunnels.ts';
+import {roadGraph} from '../src/simulation/traffic.ts';
 import {loadMetroCity,windowCity,readJson,installExactMeshes} from './helpers/metro-city.mjs';
 
 const source=readJson('central-artery.json'),tunnels=source.roads.filter(r=>r.tunnel);
@@ -86,7 +87,7 @@ async function bridgeExtension(road,atStart){
 test('Central Artery has separately profiled directional bores and continuous source ramp joins',()=>{
   assert.ok(mainlines.every(Boolean));assert.ok(tunnels.length>=10,'both bores and Boston surface ramps are present');
   for(const road of tunnels){
-    assert.equal(road.elevations.length,road.points.length);assert.equal(road.traffic,false,'closed southern cutoff cannot feed ambient traffic');
+    assert.equal(road.elevations.length,road.points.length);assert.notEqual(road.traffic,false,'bores and ramps carry ambient traffic');
     for(let i=1;i<road.points.length;i++){
       const length=Math.hypot(road.points[i][0]-road.points[i-1][0],road.points[i][1]-road.points[i-1][1]);
       assert.ok(length>.001);assert.ok(Math.abs(road.elevations[i]-road.elevations[i-1])/length<=.121,`${road.id} has excessive grade at section ${i}`);
@@ -95,6 +96,25 @@ test('Central Artery has separately profiled directional bores and continuous so
   }
   assert.equal(mainlines[0].tunnel.capStart,true);assert.equal(mainlines[1].tunnel.capEnd,true);
   for(const main of mainlines)assert.ok(Math.min(...main.elevations)<-8,'mainline actually occupies an underground level');
+});
+
+test('Central Artery traffic emerges from and vanishes into the closed southern cutoff and never meets a dead end',()=>{
+  const graph=c=>{const {edges}=roadGraph(c),leaving=new Set(edges.map(e=>e.start));return {of:id=>edges.filter(e=>e.road.id===id),dead:edges.filter(e=>/^central-artery-/.test(e.road.id)&&!e.sink&&!leaving.has(e.end)).map(e=>e.road.id)};};
+  const {of,dead}=graph(city);
+  assert.ok(of(mainIds[0]).some(e=>e.source)&&!of(mainIds[0]).some(e=>e.sink),'northbound cars emerge from the capped south end');
+  assert.ok(of(mainIds[1]).some(e=>e.sink)&&!of(mainIds[1]).some(e=>e.source),'southbound cars drive into the capped south end and vanish');
+  for(const road of tunnels)if(/-(south-on|south-off|north-off)$/.test(road.id))assert.ok(of(road.id).length,`${road.id} carries traffic`);
+  assert.deepEqual(dead,[],'no tunnel lane ends where nothing leaves it');
+  // The Zakim survey trace carries the northbound bore on; with it every entrance but the Cross Street one (which stops 9 m beside it) joins.
+  const bore=mainlines[0],end=bore.points.at(-1),prev=bore.points.at(-2),k=60/Math.hypot(end[0]-prev[0],end[1]-prev[1]),y=bore.elevations.at(-1);
+  const trace={id:'test-zakim-trace',name:'I-93 North · Zakim Bridge',kind:'motorway',oneway:1,width:16,lanes:4,closed:'end',points:[end,[end[0]+(end[0]-prev[0])*k,end[1]+(end[1]-prev[1])*k]],elevations:[y,y],surveyDeck:zakim.id,bridge:{id:'i93',kind:'zakim-survey-trace',thickness:1}};
+  const joined=graph({...city,surveyRoads:[...(city.surveyRoads??[]),trace]});
+  for(const road of tunnels)if(road.id!==auxiliaryId)assert.ok(joined.of(road.id).length,`${road.id} carries traffic once the bore leads on`);
+  assert.deepEqual(joined.dead,[],'no tunnel lane ends where nothing leaves it once the bore leads on');
+  // On the shipped network the survey traces carry both bores on, and the Cross Street entrance joins through its own trace.
+  const shipped=graph(metro);
+  for(const road of tunnels)assert.ok(shipped.of(road.id).length,`${road.id} carries traffic on the shipped network`);
+  assert.deepEqual(shipped.dead,[],'no tunnel lane ends where nothing leaves it on the shipped network');
 });
 
 for(const road of mainlines)for(const kind of ['car','ultrabee'])test(`${kind} traverses ${road?.id} and the retained Zakim mouth`,async()=>{

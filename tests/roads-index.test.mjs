@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {closestRoad} from '../src/simulation/roads.ts';
+import {isMotorway} from '../src/simulation/motorway.ts';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 
 test('spatial road lookup returns the exact nearest drivable segment across the expanded city',async()=>{
@@ -10,7 +11,7 @@ test('spatial road lookup returns the exact nearest drivable segment across the 
     let distance=Infinity;
     for(const road of city.roads){
       if(road.tunnel)continue;
-      if(majorOnly&&(road.width<7||/alley|public|unnamed/i.test(road.name)))continue;
+      if(majorOnly&&(road.width<7||isMotorway(road)||/alley|public|unnamed/i.test(road.name)))continue;
       for(let k=1;k<road.points.length;k++){
         const a=road.points[k-1],b=road.points[k],dx=b[0]-a[0],dz=b[1]-a[1],len2=dx*dx+dz*dz;if(len2<1)continue;
         const t=Math.max(.05,Math.min(.95,((x-a[0])*dx+(z-a[1])*dz)/len2));distance=Math.min(distance,Math.hypot(x-a[0]-t*dx,z-a[1]-t*dz));

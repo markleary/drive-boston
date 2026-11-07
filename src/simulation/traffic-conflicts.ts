@@ -30,8 +30,21 @@ export function footprintsOverlap(a:Pose,fa:Footprint,b:Pose,fb:Footprint){
   return true;
 }
 
+/** Bounds of each run of `RUN` consecutive poses of a trajectory, so a contact
+ * test skips the runs far from the pose (a highway car looks up to 120 m ahead). */
+const RUN=8,runBounds=new WeakMap<Trajectory,Float64Array>();
+function bounds(b:Trajectory){
+  let box=runBounds.get(b);if(box)return box;
+  const n=b.poses.length;box=new Float64Array(Math.ceil(n/RUN)*4);
+  for(let r=0;r*RUN<n;r++){let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;for(let k=r*RUN;k<Math.min(n,r*RUN+RUN);k++){const q=b.poses[k];x0=Math.min(x0,q.x);x1=Math.max(x1,q.x);z0=Math.min(z0,q.z);z1=Math.max(z1,q.z);}box[r*4]=x0;box[r*4+1]=x1;box[r*4+2]=z0;box[r*4+3]=z1;}
+  runBounds.set(b,box);return box;
+}
 function touchesAny(p:Pose,a:Footprint,b:Trajectory,reach:number){
-  for(const q of b.poses)if(Math.abs(q.x-p.x)<=reach&&Math.abs(q.z-p.z)<=reach&&footprintsOverlap(p,a,q,b))return true;
+  const box=bounds(b),n=b.poses.length;
+  for(let r=0;r*RUN<n;r++){
+    if(p.x<box[r*4]-reach||p.x>box[r*4+1]+reach||p.z<box[r*4+2]-reach||p.z>box[r*4+3]+reach)continue;
+    for(let k=r*RUN;k<Math.min(n,r*RUN+RUN);k++){const q=b.poses[k];if(Math.abs(q.x-p.x)<=reach&&Math.abs(q.z-p.z)<=reach&&footprintsOverlap(p,a,q,b))return true;}
+  }
   return false;
 }
 

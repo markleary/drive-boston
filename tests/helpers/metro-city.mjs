@@ -66,7 +66,7 @@ export function windowCity(city,bounds=CENTRAL,{pad=60,heights=city.elevation.he
   const elevation={width:w,height:h,cellSize:cs,originX:grid.originX+i0*cs,originZ:grid.originZ+j0*cs,heights:out};
   if(heights===city.elevation.heights&&grid.graded){elevation.graded=true;elevation.grading=grid.grading;}
   return {...rest,bounds:{...bounds},elevation,
-    roads:city.roads.filter(r=>r.points.some(inside)),buildings:city.buildings.filter(b=>inside(b.center)),
+    roads:city.roads.filter(r=>r.points.some(inside)),...(city.surveyRoads?{surveyRoads:city.surveyRoads.filter(r=>r.points.some(inside))}:{}),buildings:city.buildings.filter(b=>inside(b.center)),
     signals:city.signals.filter(inside),curbs:city.curbs.filter(c=>c.some(inside)),parkPaths:city.parkPaths.filter(p=>p.points.some(inside)),
     parks:city.parks.filter(a=>a.rings[0].some(inside)),water:city.water.filter(a=>a.rings[0].some(inside)),landmarks:city.landmarks.filter(l=>inside(l.position))};
 }

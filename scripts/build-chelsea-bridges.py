@@ -22,7 +22,7 @@ def main():
  if not any(s['name']==record['name'] for s in city['sources']):city['sources'].append(record)
  city_path.write_text(json.dumps(city,separators=(',',':'))+'\n')
  path=args.data_dir/'provenance.json';provenance=json.loads(path.read_text());provenance['coveragePolygons']=len(city['coverage']);provenance['coverageAreaSquareMeters']=round(sum(Polygon(p).area for p in city['coverage']));provenance['tiles']['count']=len(city['tiles']['keys'])
- provenance['roads']['boston']['count']=sum(not r['id'].startswith(('osm-','chelsea-','tobin-','leverett-')) for r in city['roads'])
+ provenance['roads']['boston']['count']=sum(not r['id'].startswith(('osm-','chelsea-','tobin-','leverett-','i93-')) for r in city['roads'])
  provenance['roads']['towns']['count']=sum(r['id'].startswith('osm-') for r in city['roads'])
  provenance['roads']['chelseaCreek']={'source':source['source'],'count':len(report['roads'])}
  provenance['chelseaCreekConnections']={**report,'sourceSHA256':hashlib.sha256(args.source_file.read_bytes()).hexdigest(),'heightAccuracy':'Estimated game profile with a 4.8 m rise above the higher street landing; not surveyed clearance or movable bridge operation.'}

@@ -3,7 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import type {CityData} from '../types';
 import type {DrivingPhysics} from '../physics/vehicle';
 import {createConstructionAssets} from '../render/construction.ts';
-import {constructionPoint,type ConstructionZone} from './construction-zones.ts';
+import {constructionPoint,constructionLocal,type ConstructionZone} from './construction-zones.ts';
 import {roadRotation,sampleRoadElevation} from './road-surfaces.ts';
 
 type Position={x:number;z:number};
@@ -42,7 +42,7 @@ export function createConstruction(scene:THREE.Scene,city:CityData,physics:Drivi
   function add(zone:ConstructionZone){
     const site:Site={zone,group:new THREE.Group(),bodies:[],cones:[],coneBatches:[]};site.group.name=zone.id;group.add(site.group);
     const rigid=(position:{x:number;y:number;z:number},dynamic=false)=>{
-      const q=roadRotation(city,zone.road,position.x,position.z,zone.yaw);
+      const q=roadRotation(city,zone.road,position.x,position.z,constructionLocal(zone,position.x,position.z).yaw);
       const desc=dynamic?RAPIER.RigidBodyDesc.dynamic().setLinearDamping(.3).setAngularDamping(.65).setCcdEnabled(true):RAPIER.RigidBodyDesc.fixed();
       const body=physics.world.createRigidBody(desc.setTranslation(position.x,position.y,position.z).setRotation(q));site.bodies.push(body);return body;
     };
@@ -95,7 +95,7 @@ export function createConstruction(scene:THREE.Scene,city:CityData,physics:Drivi
     const wanted=zones.filter(zone=>range(zone)<(active.has(zone.id)?760:620)&&zoneSupported(zone)).sort((a,b)=>range(a)-range(b)).slice(0,8),ids=new Set(wanted.map(zone=>zone.id));
     for(const site of active.values())if(!ids.has(site.zone.id))remove(site);
     for(const zone of wanted)if(!active.has(zone.id)){
-      const dx=player.x-zone.x,dz=player.z-zone.z,along=dx*Math.sin(zone.yaw)+dz*Math.cos(zone.yaw),offset=-dx*Math.cos(zone.yaw)+dz*Math.sin(zone.yaw);
+      const {along,offset}=constructionLocal(zone,player.x,player.z);
       // A new randomized session or map arrival may put the player inside a
       // planned worksite. Wait until its closed lane is free before creating it.
       if(Math.abs(along)<zone.length/2+4&&Math.abs(offset-zone.laneOffset)<2.8)continue;
