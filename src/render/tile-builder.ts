@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { IndexedSurfaceWriter, SurfaceBatches } from './indexed-surfaces.ts';
-import { staticDetailBatchSteps } from './static-batches.ts';
+import { staticDetailBatchSteps, type Warm } from './static-batches.ts';
 import { disposeTileResources } from './tile-resources.ts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
@@ -20,7 +20,7 @@ import { usesExactBuildingCollision } from '../simulation/building-collisions.ts
 import { pointInside } from '../simulation/roads.ts';
 import { type createMaterials, facadeStyleIndex, hash, seeded } from './materials';
 import { splitHouseRoof, tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
-import { drapedRibbonInto, drapedStripInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurface } from './terrain-ground';
+import { drapedRibbonInto, drapedStripInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurfaceSteps } from './terrain-ground';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
 import { greenway, obsoleteGreenwayCurb, inGreenway } from '../simulation/greenway.ts';
 import { canopyHitsDeck, STREET_CANOPY } from '../simulation/deck-canopy.ts';
@@ -52,7 +52,9 @@ import { houseDetailSteps, houseTowerGeometry } from './house-details';
 import { townFrontages } from './town-frontages';
 import { housePlan } from './house-plan';
 import { housePalette, houseRoof } from './house-styles';
-import { cityParkDetailSteps, areaBoundsOf, parkSurface, type Bounds } from './city-parks';
+import { cityParkDetailSteps, areaBoundsOf, type Bounds } from './city-parks';
+import { parkSurfaceSteps } from './area-surfaces.ts';
+import { boundingSphereSteps } from './paced-geometry.ts';
 import { fellsViewHeight } from './fells-woodland.ts';
 import type { TreeField } from './foliage';
 
@@ -63,6 +65,7 @@ export interface TileContext {
   /** Live id lookup of the detailed buildings currently in the scene. */
   buildingMap: Map<string, Building>;
   ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material; mobile?: boolean;
+  /** Starts linking a new static batch's shader programs, so the build can show it once they are ready. */ warm?: Warm;
 }
 export interface TileStats {
   buildings: number; exactMeshes: number; triangles: number; roads: number; structures: number; trees: number; lamps: number; signs: number; signals: number; parkTrees: number; storefronts: number; facades: number; rooftops: number; porches: number; housePorches: number; colliders: number;
@@ -165,10 +168,15 @@ export function createTileBuilder(ctx: TileContext) {
         const indices = new Uint32Array((w - 1) * (h - 1) * 6); let o = 0;
         for (let j = 0; j < h - 1; j++) for (let i = 0; i < w - 1; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; indices[o++] = a; indices[o++] = c; indices[o++] = b; indices[o++] = b; indices[o++] = c; indices[o++] = d; }
         const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); geometry.setIndex(new THREE.BufferAttribute(indices, 1)); geometry.computeBoundingSphere();
-        clipPortalSurface(city,geometry);
+        // Tunnel portals cut the surface (paced: downtown tiles hold hundreds of
+        // portal triangles); the collider then reuses that clip of the same arrays.
+        if (due(pace)) yield 'terrain';
+        yield* stage('terrain', clipPortalSurfaceSteps(city, geometry, pace));
         const ground = new THREE.Mesh(geometry, ctx.ground); ground.name = 'Terrain'; ground.position.y = -.04; ground.receiveShadow = true; ground.renderOrder = -3; group.add(ground);
+        if (due(pace)) yield 'terrain';
         colliders.push(physics.addTerrainTile(positions,indices));
         if (overlaps(bounds, BACK_BAY_PAVING)) {
+          if (due(pace)) yield 'terrain';
           const paving = backBayPaving(city, { i0, i1, j0, j1 });
           if (paving.attributes.position?.count) { const mesh = new THREE.Mesh(paving, materials.sidewalk); mesh.name = 'Back Bay paving'; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh); } else paving.dispose();
         }
@@ -266,13 +274,19 @@ export function createTileBuilder(ctx: TileContext) {
       // road ribbon otherwise paints asphalt over the plaza and strands its
       // real curb in an apparent traffic lane. Keep the curb and vehicle access.
       paved.push([[],frontageBrick,'Cross Street brick frontage',greenway.frontages.filter(a=>a.tile===key).map(a=>a.rings),.09]);
+      // A tile's generated street pavement is one polygon spanning the whole tile: draped and clipped a few milliseconds a frame.
       for (const [list, , , rings, y] of paved) for (const polygon of rings) {
         if (due(pace)) yield 'roads';
-        const geometry = clipPortalSurface(city, parkSurface(city, polygon, y)); if (geometry.attributes.position?.count) list.push(geometry); else geometry.dispose();
+        const surface = yield* stage('roads', parkSurfaceSteps(city, polygon, { offset: y, pace }));
+        const geometry = yield* stage('roads', clipPortalSurfaceSteps(city, surface, pace)); if (geometry.attributes.position?.count) list.push(geometry); else geometry.dispose();
       }
       for (const [list, material, name] of paved) {
         if (!list.length) continue;
-        const mesh = new THREE.Mesh(mergeGeometries(list), material); mesh.name = name; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh); for (const g of list) g.dispose();
+        if (due(pace)) yield 'roads';
+        const merged = mergeGeometries(list); for (const g of list) g.dispose(); if (!merged) continue;
+        // Bounds now, a few milliseconds a frame, rather than in the first render that culls the mesh.
+        yield* stage('roads', boundingSphereSteps(merged, pace));
+        const mesh = new THREE.Mesh(merged, material); mesh.name = name; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh);
       }
     }
     yield 'roads';
@@ -502,7 +516,7 @@ export function createTileBuilder(ctx: TileContext) {
       }
     }
     // Repacking an entire tile into BatchedMesh duplicates its vertex buffers. Mobile keeps its already grouped road/shell buffers.
-    group.userData.batching = ctx.mobile ? { sources: 0, batches: 0 } : yield* stage('details', staticDetailBatchSteps(group, pace));
+    group.userData.batching = ctx.mobile ? { sources: 0, batches: 0 } : yield* stage('details', staticDetailBatchSteps(group, pace, ctx.warm));
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
     const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps, signals: placements, stats, dispose: () => dispose(built, owned) };

@@ -29,6 +29,7 @@ import { isMetroCity, type Reader } from '../simulation/city-tiles.ts';
 import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import { createFarCity } from './far-city';
 import { createTileStreamer, type TileStreamer } from './tile-streaming';
+import type { Warm } from './static-batches';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 import { addTobinBridgeDetails } from './tobin-bridge';
@@ -37,7 +38,7 @@ import { updateSunShadow } from './shadows';
 import { addTunnels } from './tunnels';
 import { tunnelAt,inTunnelApproach } from '../simulation/tunnels.ts';
 
-export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; }
+export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; warm?: Warm; }
 
 export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData,options:WorldOptions={}) {
   const metro=isMetroCity(city)?city:undefined;
@@ -83,7 +84,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     far=createFarCity(scene,city,!!options.mobile);
     const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
     const parkTrees=createTreeField({scale:1.65,grates:false});parkTrees.group.name='Park specimen trees';scene.add(parkTrees.group);
-    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile},options.read,far,!!options.mobile);
+    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,warm:options.warm},options.read,far,!!options.mobile);
     buildingChunks=streamer.buildingChunks;lampPositions=streamer.lampPositions;signalPlacements=streamer.signals;
     roadStructures=new THREE.Group();roadStructures.name='Streamed road structures';
     const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);

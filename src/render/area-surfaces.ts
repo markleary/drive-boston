@@ -4,20 +4,32 @@ import {sampleElevation} from '../simulation/terrain.ts';
 import type {Bounds} from './city-parks';
 import {uncoveredWater,uncoveredBank} from './water-pavement.ts';
 import {SHORE_FADE,type WaterShore} from './water-shore.ts';
+import {drain,due,type Pace} from './pacing.ts';
+import {boundingSphereSteps,flatNormalSteps} from './paced-geometry.ts';
 // Above lawn decals (.024 m), below ground-road asphalt (.045 m).
 export const WATER_SURFACE_OFFSET=.035;
 const triangulations=new WeakMap<Point2[][],{vertices:THREE.Vector2[];faces:number[][]}>();
 
-export function shoreBankGeometry(positions:number[]){
+export function shoreBankGeometry(positions:number[]){return drain(shoreBankSteps(positions));}
+export function* shoreBankSteps(positions:number[],pace?:Pace):Generator<void,THREE.BufferGeometry>{
   const g=new THREE.BufferGeometry(),uv:number[]=[];
   for(let i=0;i<positions.length;i+=3)uv.push(positions[i]/4,positions[i+2]/4);
-  g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));g.computeVertexNormals();g.computeBoundingSphere();return g;
+  g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));yield* flatNormalSteps(g,pace);yield* boundingSphereSteps(g,pace);return g;
 }
+
+export interface SurfaceOptions{offset?:number;flatHeight?:number;bounds?:Bounds;water?:boolean;shore?:WaterShore;bankPositions?:number[];
+  /** Frame pacing: pause between DEM cells and through the per-vertex passes once the deadline has passed. */ pace?:Pace;}
 
 /** Clip polygon triangulation against the exact DEM triangles. This preserves
  * shore/park boundaries and hill crests without recursively oversampling long,
  * thin shoreline triangles. Holes are removed by Earcut before ground clipping. */
 export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeight?:number,bounds?:Bounds,water=false,shore?:WaterShore,bankPositions:number[]=[]){
+  return drain(parkSurfaceSteps(city,rings,{offset,flatHeight,bounds,water,shore,bankPositions}));
+}
+/** parkSurface as a paced generator. A tile's street pavement or a harbour
+ * basin covers tens of thousands of DEM cells, a few hundred milliseconds of
+ * clipping in one piece; the tile builder runs it a few milliseconds a frame. */
+export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,flatHeight,bounds,water=false,shore,bankPositions=[],pace}:SurfaceOptions={}):Generator<void,THREE.BufferGeometry>{
   let triangulated=triangulations.get(rings);
   if(!triangulated){
     const contour=rings[0]?.map(p=>new THREE.Vector2(...p))??[];
@@ -79,6 +91,7 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
   };
   const grid=city.elevation,cell=grid?.cellSize??6,ox=grid?.originX??0,oz=grid?.originZ??0;
   for(const f of faces){
+    if(due(pace))yield;
     let triangle=f.map(i=>[vertices[i].x,vertices[i].y] as Point2);
     // A streamed tile keeps only its own part of a park that spans several tiles.
     if(bounds){
@@ -89,6 +102,7 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
     const minX=Math.floor((Math.min(...triangle.map(p=>p[0]))-ox)/cell),maxX=Math.floor((Math.max(...triangle.map(p=>p[0]))-ox)/cell);
     const minZ=Math.floor((Math.min(...triangle.map(p=>p[1]))-oz)/cell),maxZ=Math.floor((Math.max(...triangle.map(p=>p[1]))-oz)/cell);
     for(let ix=minX;ix<=maxX;ix++)for(let iz=minZ;iz<=maxZ;iz++){
+      if(due(pace))yield;
       const x=ox+ix*cell,z=oz+iz*cell;
       let polygon=clip(triangle,-1,0,-x);polygon=clip(polygon,1,0,x+cell);polygon=clip(polygon,0,-1,-z);polygon=clip(polygon,0,1,z+cell);
       if(polygon.length<3)continue;
@@ -107,6 +121,6 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
     }
   }
   const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
-  if(water){const edge=new Float32Array(positions.length/3);for(let i=0;i<edge.length;i++)edge[i]=shore?Math.max(0,Math.min(1,(shore.distance(positions[i*3],positions[i*3+2])-shore.width)/Math.min(SHORE_FADE,shore.width/3))):1;g.setAttribute('waterEdge',new THREE.BufferAttribute(edge,1));}
-  g.computeVertexNormals();g.computeBoundingSphere();return g;
+  if(water){const edge=new Float32Array(positions.length/3);for(let i=0;i<edge.length;i++){if(i%4096===0&&due(pace))yield;edge[i]=shore?Math.max(0,Math.min(1,(shore.distance(positions[i*3],positions[i*3+2])-shore.width)/Math.min(SHORE_FADE,shore.width/3))):1;}g.setAttribute('waterEdge',new THREE.BufferAttribute(edge,1));}
+  yield* flatNormalSteps(g,pace);yield* boundingSphereSteps(g,pace);return g;
 }

@@ -27,6 +27,8 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
     return {
       setQuality(mode: QualityMode) { quality = mode; resize(); }, resize,
       render(_dt: number) { renderer.render(scene, camera); },
+      // Phones keep their tiles' meshes as built (no static batches to prepare).
+      warm(_mesh: THREE.Mesh) { return () => true; },
       get quality() { return quality; },
       dispose() {},
     };
@@ -70,8 +72,35 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
     quality = mode; ao.enabled = mode === 'high'; bloom.enabled = mode === 'high'; resize();
   }
   setQuality(initial);
+  // The shadow map draws casters with a shared MeshDepthMaterial carrying each
+  // material's side and cutout maps. Programs are shared by cache key, so a
+  // stand-in set up the same way links the shadow pass's variant too.
+  const depth = new THREE.MeshDepthMaterial(), shadowSide = { [THREE.FrontSide]: THREE.BackSide, [THREE.BackSide]: THREE.FrontSide, [THREE.DoubleSide]: THREE.DoubleSide };
+  /** Start linking every program the passes will draw `mesh` with: its own
+   * material (the beauty pass, and by day the reflection probe), GTAO's normal
+   * override and the shadow map's depth material. With KHR_parallel_shader_compile
+   * the driver links them off the main thread; the result says when all are
+   * ready, since a draw before then would wait for the link. */
+  function warm(mesh: THREE.Mesh) {
+    const material = mesh.material as THREE.Material & { map?: THREE.Texture | null; alphaMap?: THREE.Texture | null }, fog = scene.fog, previous = renderer.getRenderTarget();
+    const passes: [THREE.Material, THREE.Scene['fog']][] = [[material, fog]], programs: { isReady(): boolean }[] = [];
+    if (ao.enabled) passes.push([ao.normalMaterial, fog]);
+    if (mesh.castShadow && renderer.shadowMap.enabled) {
+      depth.side = material.shadowSide ?? shadowSide[material.side]; depth.map = material.map ?? null; depth.alphaMap = material.alphaMap ?? null; depth.alphaTest = material.alphaToCoverage ? .5 : material.alphaTest;
+      passes.push([depth, null]); // the shadow pass draws without a scene, so without fog
+    }
+    // Every pass renders offscreen (no tone mapping, linear output); any target selects that variant.
+    renderer.setRenderTarget(target);
+    try {
+      for (const [pass, passFog] of passes) {
+        mesh.material = pass; scene.fog = passFog;
+        for (const used of renderer.compile(mesh, camera, scene)) { const program = (renderer.properties.get(used) as { currentProgram?: { isReady(): boolean } }).currentProgram; if (program) programs.push(program); }
+      }
+    } finally { mesh.material = material; scene.fog = fog; renderer.setRenderTarget(previous); }
+    return () => programs.every(program => program.isReady());
+  }
   return {
-    setQuality, resize,
+    setQuality, resize, warm,
     render(dt: number) {
       // GTAO swaps the buffers. Start each frame with the same MSAA beauty
       // target, then compose into the single-sample buffer.
@@ -79,6 +108,6 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
       composer.render(dt);
     },
     get quality() { return quality; },
-    dispose() { for(const pass of composer.passes)pass.dispose(); composer.dispose(); },
+    dispose() { for(const pass of composer.passes)pass.dispose(); composer.dispose(); depth.dispose(); },
   };
 }

@@ -203,7 +203,7 @@ async function boot(){
     const transitData:TransitData=await transitResponse.json();reserveTransitCorridors(city,transitData.routes);
     const fleetResponse=await fetch(`${import.meta.env.BASE_URL}models/traffic-fleet.glb`);if(!fleetResponse.ok)throw new Error('The traffic models could not be loaded. Please reload.');await prepareNPCVehicles(await fleetResponse.arrayBuffer());
     await contextGate.wait();
-    if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait});}
+    if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait,warm:mesh=>graphics?.warm(mesh)??(()=>true)});}
     else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile,waitForContext:contextGate.wait})]);physics=results[0];world=results[1];}
     const streamer=world.streamer;
     const tireTracks=createTireTracks(scene,city,createTireSurfaceSampler(city,()=>Array.from(streamer?.loaded.values()??[],entry=>entry.tile)));
