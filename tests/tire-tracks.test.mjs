@@ -90,3 +90,41 @@ test('real car and bike contacts produce marks on hard braking and none in the a
     }finally{physics.dispose();}
   }
 });
+
+test('a skid on a survey deck (the Zakim) marks the mesh itself, while the street beneath and other decks keep their heights',async()=>{
+  // A survey trace (`city.surveyRoads`: no road record, nothing drawn or collided) 8 m up over a fixed slab standing in for
+  // the mesh, 6 cm under the trace and falling 4% across it, as the Zakim's crossfall does; a street runs beneath it and an
+  // ordinary deck beside it.
+  const meshY=z=>7.94-.04*z,trace={id:'zakim',name:'I-93 North · Zakim Bridge',kind:'motorway',oneway:1,lanes:3,width:12,points:[[-100,0],[100,0]],elevations:[8,8],surveyDeck:'MESH'};
+  const street={id:'under',name:'Under Street',width:8,oneway:0,points:[[0,-40],[0,40]]},deck={id:'deck',name:'Deck',width:10,oneway:0,points:[[-100,45],[100,45]],elevations:[8,8]};
+  const world={...city,parks:[],water:[],roads:[street,deck],surveyRoads:[trace],spawn:{x:-60,z:25,yaw:Math.PI/2}},sample=createTireSurfaceSampler(world);
+  assert.equal(sample(-50,meshY(1),1),'pavement','a wheel on the mesh stands on its trace');
+  assert.equal(sample(-50,meshY(-5.9),-5.9),'pavement','across the whole traced width');
+  assert.equal(sample(-50,meshY(6.5),6.5),null,'beyond the traced width the support is the ground 8 m below');
+  assert.equal(createTireSurfaceSampler({...world,surveyRoads:[]})(-50,meshY(1),1),null,'the road records alone see only the ground below');
+  assert.equal(sample(0,0,-2),'pavement','the street beneath the trace keeps its own surface');
+  const physics=await DrivingPhysics.create(world),marks=createTireTracks(new THREE.Scene(),world,sample);
+  try{
+    physics.addStaticMesh(new Float32Array([-100,meshY(-6.4),-6.4,100,meshY(-6.4),-6.4,100,meshY(6.4),6.4,-100,meshY(6.4),6.4]),new Uint32Array([0,2,1,0,3,2]));
+    physics.reset(-60,0,Math.PI/2,trace.id);
+    for(let i=0;i<30;i++)physics.step({...input,brake:1},1/60);
+    for(let i=0;i<150;i++)physics.step({...input,throttle:1},1/60);
+    const {speed,y}=physics.getState();assert.ok(speed>8&&y>7.5,`driving on the mesh (${speed.toFixed(1)} m/s, y ${y.toFixed(2)})`);
+    let time=0;
+    for(let i=0;i<60;i++){physics.step({...input,brake:1},1/60);marks.update(physics.getTireContacts({...input,brake:1}),time+=1/60,physics.poseRevision);}
+    assert.ok(marks.stats().pavement>8,`hard braking marks the deck (${marks.stats().pavement} marks)`);
+    // The plane of each wheel's own contact, 8.2 cm up as on any road: the trace (8.0) or the ground (0) would miss the slab.
+    const p=marks.mesh.geometry.getAttribute('position'),vertices=marks.mesh.geometry.drawRange.count/6*4;
+    for(let k=0;k<vertices;k++)assert.ok(Math.abs(p.getY(k)-meshY(p.getZ(k))-.082)<1e-3,`vertex ${k} lies ${(p.getY(k)-meshY(p.getZ(k))).toFixed(4)} m over the mesh`);
+  }finally{marks.dispose();physics.dispose();}
+  // Elsewhere the drive surface still sets the height, whatever the contact's own height and tilt.
+  const tilted=(x,y,z)=>({wheel:0,x,y,z,width:.235,normal:{x:0,y:.99,z:.141},intensity:1});
+  for(const [label,from,to,ground] of [['the street beneath the trace',tilted(0,.03,-2),tilted(0,.03,-1),0],['an ordinary deck',tilted(-50,8.03,45),tilted(-49,8.03,45),8]]){
+    const other=createTireTracks(new THREE.Scene(),world,sample);
+    try{
+      other.update([from],0,0);other.update([to],1/60,0);assert.equal(other.stats().pavement,1,label);
+      const p=other.mesh.geometry.getAttribute('position');
+      for(let k=0;k<4;k++)assert.ok(Math.abs(p.getY(k)-ground-.082)<1e-6,`${label}: vertex ${k} at ${p.getY(k).toFixed(4)}`);
+    }finally{other.dispose();}
+  }
+});

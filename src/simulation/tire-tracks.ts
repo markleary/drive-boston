@@ -2,7 +2,7 @@ import type {CityData,DriveInput,Point2} from '../types';
 import type {CityTile} from './tile-format.ts';
 import {pavementEdges} from './tile-format.ts';
 import {pointInside} from './roads.ts';
-import {roadProjection,sampleDriveSurface} from './road-surfaces.ts';
+import {roadProjection,sampleVehicleSurface} from './road-surfaces.ts';
 
 export type TireSurface='pavement'|'grass';
 export interface TireContact {
@@ -34,7 +34,9 @@ class SurfaceIndex {
 }
 
 /** Use the same curb-bounded polygons as the renderer; a park's paved paths,
- * driveways, sidewalks and islands take precedence over its lawn. */
+ * driveways, sidewalks and islands take precedence over its lawn. A wheel on the
+ * Zakim's survey mesh stands on pavement wherever a survey trace runs over it,
+ * as it does for the vehicle's own support. */
 export function createTireSurfaceSampler(city:CityData,tiles:()=>Iterable<CityTile>=()=>[]){
   const areas=new SurfaceIndex(),cached=new WeakMap<CityTile,SurfaceIndex>();
   let lastTiles:CityTile[]=[],measured=new Set<string>();
@@ -51,7 +53,7 @@ export function createTireSurfaceSampler(city:CityData,tiles:()=>Iterable<CityTi
     for(const key of keys){const list=lines.get(key)??[];list.push(entry);lines.set(key,list);}
   }
   return(x:number,y:number,z:number):TireSurface|null=>{
-    const support=sampleDriveSurface(city,x,z,y+.15);
+    const support=sampleVehicleSurface(city,x,z,y+.15);
     if(Math.abs(support.height-y)>.4)return null; // Roofs, traffic and other raised objects aren't lawns.
     if(support.road)return'pavement';
     const resident=[...tiles()];

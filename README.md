@@ -56,7 +56,7 @@ Neighborhood names and boundaries follow the [City of Boston neighborhood GIS la
 | Backtick (&#96;) | Toggle debug/location stats |
 | Escape | Pause / settings |
 
-Hard braking and sideways slides leave temporary tire marks for both cars and the Ultra Bee: rubber streaks on pavement and ragged, churned-soil tracks on lawns. Marks fade away after about 24 seconds on pavement or 35 seconds on grass; airborne wheels leave no tracks.
+Hard braking and sideways slides leave temporary tire marks for both cars and the Ultra Bee: rubber streaks on pavement (on the surveyed Zakim Bridge and Charlestown viaduct too, along the Interstate 93 and Leverett Connector lanes) and ragged, churned-soil tracks on lawns. Marks fade away after about 24 seconds on pavement or 35 seconds on grass; airborne wheels leave no tracks.
 
 Random roadworks close one curbside lane with tapered lines of reflective orange cones, warning signs, and parked dump trucks or excavators. Sites require measured pavement wide enough for two lanes in the same direction, keep junctions and transit routes clear, and leave an open lane that NPC traffic merges into. Cones can be knocked over; heavy equipment has solid collision shapes. The layout changes on reload and stays fixed during a session, with only nearby sites loaded. Lane eligibility is inferred from pavement width; roads without measurements stay clear. On Interstate 93 a work zone closes a carriageway's outside lane into the next one (60 m of work between 45 m tapers) every 1.5 to 2.5 km along each direction, clear of the ramps and the closed ends.
 
