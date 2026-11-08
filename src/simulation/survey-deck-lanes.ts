@@ -48,7 +48,9 @@ export function surveyDeckIndex(data:TileBuildingGeometry){
   };
   /** The nearest deck height to `near` regardless of obstructions, for draping paint. */
   const surface=(x:number,z:number,near:number)=>{heights(x,z);let best=near,gap=1.2;for(const y of flat)if(Math.abs(y-near)<gap){gap=Math.abs(y-near);best=y;}return best;};
-  return{deck,surface,flatFaces:()=>{const out:number[][]=[];for(let o=0;o<faces.length;o+=STRIDE)if(faces[o+9])out.push(Array.from(faces.subarray(o,o+9)));return out;}};
+  /** Whether another deck passes 3.5-25 m over the level `y` at (x, z). */
+  const covered=(x:number,z:number,y:number)=>{heights(x,z);return hits.some(h=>h>y+3.5&&h<y+25);};
+  return{deck,surface,covered,flatFaces:()=>{const out:number[][]=[];for(let o=0;o<faces.length;o+=STRIDE)if(faces[o+9])out.push(Array.from(faces.subarray(o,o+9)));return out;}};
 }
 
 /** Trace every carriageway of a surveyed structure (the Zakim and its
@@ -109,7 +111,10 @@ export function surveyDeckCarriageways(data:TileBuildingGeometry,{minWidth=2.5,m
     const seed:DeckStation={x:sx,z:sz,y:sy,tx:nz,tz:-nx,half:best.width/2,yLeft:best.m.yLeft,yRight:best.m.yRight,lanes:0};
     const stations=[...walk(seed,-1).reverse(),seed,...walk(seed,1)];
     if(stations.length<4)continue;
-    smoothLanes(stations);for(const s of stations)claim(s);result.push({stations});
+    for(const s of stations)claim(s);
+    // A strip mostly under the deck is structure, not roadway: the tower struts beneath the Zakim's deck.
+    if(stations.filter(s=>index.covered(s.x,s.z,s.y)).length>=stations.length*.8)continue;
+    smoothLanes(stations);result.push({stations});
   }
   return{carriageways:result,surface:index.surface};
 }

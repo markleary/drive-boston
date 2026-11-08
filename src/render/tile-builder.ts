@@ -32,7 +32,9 @@ import { createStreetSign } from './signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { roadStructureSteps } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
-import { addSurveyDeckSurface } from './survey-deck-surface';
+import { addSurveyDeckSurface, addSurveyDeckParapets } from './survey-deck-surface';
+import { surveyDeckCarriageways } from '../simulation/survey-deck-lanes.ts';
+import { surveyDeckParapets } from '../simulation/survey-deck-parapets.ts';
 import { addSourceFooting } from './source-footings';
 import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
@@ -341,7 +343,13 @@ export function createTileBuilder(ctx: TileContext) {
           if(b.landmark==='zakim-bridge'){
             const viaduct=addSurveyViaductSupports(group,city,data);
             for(const mesh of viaduct.collisions)colliders.push(physics.addStaticMesh(mesh.vertices,mesh.indices));
-            addSurveyDeckSurface(group,city,data,materials);
+            // One trace of the deck's carriageways paves them and closes the edges its parapets leave open;
+            // each step takes about a tenth of a second, so each gets its own frame.
+            if (due(pace)) yield 'buildings';
+            const traced=surveyDeckCarriageways(data);if (due(pace)) yield 'buildings';
+            const {parapets}=surveyDeckParapets(city,data,traced.carriageways.map(c=>c.stations));if (due(pace)) yield 'buildings';
+            addSurveyDeckSurface(group,city,data,materials,traced);
+            addSurveyDeckParapets(group,parapets,choose(false));colliders.push(...physics.addParapets(parapets));
           }
           const source = tileSourceGeometry(data);
           const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));

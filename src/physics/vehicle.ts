@@ -229,6 +229,14 @@ export class DrivingPhysics {
     return colliders;
   }
 
+  /** Solid parapet boxes set like the rendered ones (a surveyed deck's generated parapets). */
+  addParapets(parapets: readonly {x:number;y:number;z:number;yaw:number;slope:number;length:number;width:number;height:number}[]) {
+    return parapets.map(p => {
+      const sx = Math.sin(-p.slope / 2), cx = Math.cos(-p.slope / 2), sy = Math.sin(p.yaw / 2), cy = Math.cos(p.yaw / 2);
+      return this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(p.width / 2, p.height / 2, p.length / 2).setTranslation(p.x, p.y, p.z).setRotation({ x: cy * sx, y: sy * cx, z: -sy * sx, w: cy * cx }).setFriction(.4));
+    });
+  }
+
   /** Convex footprint proxy, extended below the lowest terrain along the footprint
    * so hillside entries cannot pass through the visible wall under a level base. */
   addBuildingHull(building: CityData['buildings'][number]) {
