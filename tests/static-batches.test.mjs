@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import * as THREE from 'three';
 import {batchStaticDetails,splitStaticGeometry,staticDetailBatchSteps} from '../src/render/static-batches.ts';
+import {drain,UNPACED,until} from '../src/render/pacing.ts';
 
 const triangles=g=>{
   const p=g.attributes.position,attributes=Object.keys(g.attributes).sort();
@@ -44,13 +45,40 @@ test('survey shells and transparent, hidden or independently controlled meshes s
   shells[0].visible=false;assert.equal(shells[0].visible,false);
 });
 
-test('paced batching keeps a visible replacement for every source at each yield',()=>{
+test('paced batching draws every source exactly once at each yield',()=>{
   const root=new THREE.Group(),material=new THREE.MeshStandardMaterial(),pace={deadline:-Infinity};
   for(let i=0;i<9;i++){const geometry=new THREE.BoxGeometry();geometry.clearGroups();const mesh=new THREE.Mesh(geometry,material);mesh.position.x=i*5;root.add(mesh);}
   const steps=staticDetailBatchSteps(root,pace);let result=steps.next(),yields=0;
   while(!result.done){
-    let instances=0;root.traverse(o=>{if(o instanceof THREE.BatchedMesh)instances+=o.instanceCount;else if(o instanceof THREE.Mesh)instances++;});
+    let instances=0;root.traverseVisible(o=>{if(o instanceof THREE.BatchedMesh)instances+=o.instanceCount;else if(o instanceof THREE.Mesh)instances++;});
     assert.equal(instances,9);yields++;result=steps.next();
   }
   assert.ok(yields>9);assert.equal(result.value.sources,9);
+});
+
+const sourceRoot=(count)=>{
+  const root=new THREE.Group(),material=new THREE.MeshStandardMaterial();
+  for(let i=0;i<count;i++){const geometry=new THREE.BoxGeometry();geometry.clearGroups();const mesh=new THREE.Mesh(geometry,material);mesh.position.x=i*5;root.add(mesh);}
+  return root;
+};
+test('a paced batch stays hidden until its programs are ready, then replaces its sources at once',()=>{
+  const root=sourceRoot(4),pace={deadline:Infinity};let polls=0,warmed;
+  const steps=staticDetailBatchSteps(root,pace,mesh=>{warmed=mesh;assert.equal(mesh.instanceCount,4);assert.equal(mesh.visible,false);return ()=>++polls>3;});
+  let result;
+  do{
+    // The streamer gives each frame a fresh deadline.
+    pace.deadline=performance.now()+1e4;result=steps.next();
+    if(!result.done){assert.equal(warmed?.visible??false,false);assert.equal(root.children.filter(o=>!(o instanceof THREE.BatchedMesh)).length,4);}
+  }while(!result.done);
+  assert.equal(polls,4);assert.equal(warmed.visible,true);assert.deepEqual(root.children,[warmed]);assert.deepEqual(result.value,{sources:4,batches:1});
+});
+test('an unpaced or synchronous build shows its batches without waiting for programs',()=>{
+  const root=sourceRoot(3);let polls=0;
+  assert.deepEqual(drain(staticDetailBatchSteps(root,UNPACED,()=>()=>{polls++;return false;})),{sources:3,batches:1});
+  assert.equal(polls,0);assert.equal(root.children.length,1);assert.equal(root.children[0].visible,true);
+});
+test('waiting for programs gives up after its time limit',async()=>{
+  const pace={deadline:0},began=performance.now(),steps=until(()=>false,pace,30);let yields=0;
+  while(!steps.next().done){assert.equal(pace.deadline,-Infinity);yields++;pace.deadline=0;await new Promise(resolve=>setTimeout(resolve,5));}
+  assert.ok(yields>0);assert.ok(performance.now()-began>=30);
 });

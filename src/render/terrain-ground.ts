@@ -2,19 +2,41 @@ import * as THREE from 'three';
 import type { CityData, Point2 } from '../types';
 import { buildTerrainGeometryData, sampleElevation, terrainGrid } from '../simulation/terrain.ts';
 import { TriangleWriter, type TriangleSink } from './geometry-writer.ts';
-import { clipTunnelPortals,tunnelPortalBoundsIntersect } from '../simulation/tunnels.ts';
+import { clipTunnelPortals,clipTunnelPortalSteps,tunnelPortalBoundsIntersect } from '../simulation/tunnels.ts';
+import { drain, due, type Pace } from './pacing.ts';
+import { boundingSphereSteps, flatNormalSteps } from './paced-geometry.ts';
 
 /** Ground layers share the physical portal subtraction. Rebuilt metre UVs
  * keep asphalt, park paving and the coarse terrain from covering a ramp. */
-export function clipPortalSurface(city:CityData,geometry:THREE.BufferGeometry){
+export function clipPortalSurface(city:CityData,geometry:THREE.BufferGeometry){return drain(clipPortalSurfaceSteps(city,geometry));}
+/** clipPortalSurface as a generator that pauses once `pace`'s deadline has passed. */
+export function* clipPortalSurfaceSteps(city:CityData,geometry:THREE.BufferGeometry,pace?:Pace):Generator<void,THREE.BufferGeometry>{
   const positions=geometry.getAttribute('position');if(!positions?.count)return geometry;
-  const indexed=!!geometry.index,vertices=positions.array as Float32Array,indices=geometry.index?Uint32Array.from(geometry.index.array):Uint32Array.from({length:positions.count},(_,i)=>i);
-  const clipped=clipTunnelPortals(city,vertices,indices);if(clipped.vertices===vertices)return geometry;
+  const index=geometry.index,vertices=positions.array as Float32Array;
+  // A Uint32 index goes in as it is, so the terrain collider's clip of the same
+  // arrays (DrivingPhysics.addTerrainTile) finds this result in the clip cache.
+  let indices:Uint32Array;
+  if(index)indices=index.array instanceof Uint32Array?index.array:Uint32Array.from(index.array);
+  else{indices=new Uint32Array(positions.count);for(let i=0;i<indices.length;i++)indices[i]=i;}
+  const steps=clipTunnelPortalSteps(city,vertices,indices);let step=steps.next();while(!step.done){if(due(pace))yield;step=steps.next();}
+  const clipped=step.value;if(clipped.vertices===vertices)return geometry;
   for(const name of Object.keys(geometry.attributes))geometry.deleteAttribute(name);
-  const uv=new Float32Array(clipped.vertices.length/3*2);
-  for(let i=0;i<uv.length/2;i++){uv[i*2]=clipped.vertices[i*3]/4;uv[i*2+1]=clipped.vertices[i*3+2]/4;}
-  geometry.setAttribute('position',new THREE.BufferAttribute(clipped.vertices,3));geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));geometry.setIndex(new THREE.BufferAttribute(clipped.indices,1));geometry.computeVertexNormals();geometry.computeBoundingSphere();
-  if(!indexed){const expanded=geometry.toNonIndexed();geometry.copy(expanded);expanded.dispose();}
+  if(index){
+    const uv=new Float32Array(clipped.vertices.length/3*2);
+    for(let i=0;i<uv.length/2;i++){uv[i*2]=clipped.vertices[i*3]/4;uv[i*2+1]=clipped.vertices[i*3+2]/4;}
+    geometry.setAttribute('position',new THREE.BufferAttribute(clipped.vertices,3));geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));geometry.setIndex(new THREE.BufferAttribute(clipped.indices,1));
+    if(due(pace))yield;geometry.computeVertexNormals();if(due(pace))yield;geometry.computeBoundingSphere();
+    return geometry;
+  }
+  // A triangle list goes back to a triangle list: every clipped triangle has
+  // its own vertices, so its smooth normals are its face normals.
+  const ids=clipped.indices,source=clipped.vertices,position=new Float32Array(ids.length*3),uv=new Float32Array(ids.length*2);
+  for(let i=0;i<ids.length;i++){
+    if(i%32768===0&&due(pace))yield;
+    const n=ids[i]*3,x=source[n],z=source[n+2];position[i*3]=x;position[i*3+1]=source[n+1];position[i*3+2]=z;uv[i*2]=x/4;uv[i*2+1]=z/4;
+  }
+  geometry.setAttribute('position',new THREE.BufferAttribute(position,3));geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+  yield* flatNormalSteps(geometry,pace);yield* boundingSphereSteps(geometry,pace);
   return geometry;
 }
 

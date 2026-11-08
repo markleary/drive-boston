@@ -8,12 +8,13 @@ import {roadSlabGeometry,deckEdge} from '../simulation/road-surfaces.ts';
 import {canopyHitsDeck,PARK_CANOPY} from '../simulation/deck-canopy.ts';
 import { canvasTexture, seeded } from './materials';
 import { createStreetTrees, type TreeField } from './foliage';
-import { drapedRibbonInto,clipPortalSurface } from './terrain-ground';
+import { drapedRibbonInto,clipPortalSurfaceSteps } from './terrain-ground';
 import { PartBatches, box, type Part } from './geometry-writer';
 import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
 import { insideEmbracePlaza } from './the-embrace';
-import {parkSurface,shoreBankGeometry,WATER_SURFACE_OFFSET} from './area-surfaces.ts';
+import {parkSurfaceSteps,shoreBankSteps,WATER_SURFACE_OFFSET} from './area-surfaces.ts';
+import {boundingSphereSteps} from './paced-geometry.ts';
 import {waterShore} from './water-shore.ts';
 import {createWaterMaterial} from './water-material.ts';
 import {applyWaterMotion,waterMotion} from './water-motion.ts';
@@ -83,7 +84,9 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     if(due(pace))yield;
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
     const list=isFellsWoodland(park)?woods:/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
-    const geometry=clipPortalSurface(city,parkSurface(city,park.rings,.024,undefined,bounds));if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
+    // A large park or basin covers thousands of DEM cells: its surface is draped a few milliseconds a frame.
+    const surface=yield* parkSurfaceSteps(city,park.rings,{bounds,pace});
+    const geometry=yield* clipPortalSurfaceSteps(city,surface,pace);if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
   }
   for(const water of waters){
     if(due(pace))yield;
@@ -92,18 +95,20 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     for(const surface of water.surfaces??[{rings:water.rings,level:waterHeight(city,water)}]){
       const extent=areaBounds(surface);
       if(bounds&&(extent.maxX<bounds.minX||extent.minX>bounds.maxX||extent.maxZ<bounds.minZ||extent.minZ>bounds.maxZ))continue;
-      const shore=waterShore(water,surface.rings),geometry=parkSurface(city,shore.rings,WATER_SURFACE_OFFSET,surface.level,bounds,true,shore,bankPositions);
+      const shore=waterShore(water,surface.rings),geometry=yield* parkSurfaceSteps(city,shore.rings,{offset:WATER_SURFACE_OFFSET,flatHeight:surface.level,bounds,water:true,shore,bankPositions,pace});
       if(geometry.attributes.position.count)waterSheets.push(applyWaterMotion(geometry,waterMotion(water,'source' in surface?surface:undefined)));else geometry.dispose();
     }
   }
   if(bankPositions.length){
-    const bank=shoreBankGeometry(bankPositions),vertices=bank.getAttribute('position').array as Float32Array;
-    options.onShore?.(vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
+    const bank=yield* shoreBankSteps(bankPositions,pace),vertices=bank.getAttribute('position').array as Float32Array,ids=new Uint32Array(vertices.length/3);for(let i=0;i<ids.length;i++)ids[i]=i;
+    if(due(pace))yield;
+    options.onShore?.(vertices,ids);
     const mesh=new THREE.Mesh(bank,lawn);mesh.name='Sloping water banks';mesh.receiveShadow=true;group.add(mesh);
   }
   for(const [list,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[woods,forestFloor,'Fells forest floor'],[plazas,pathMaterial,'Plazas'],[waterSheets,waterMaterial,'Water']] as const){
     if(!list.length)continue;
-    const merged=mergeGeometries(list,false);list.forEach(g=>g.dispose());if(!merged)continue;merged.computeBoundingSphere();
+    if(due(pace))yield;
+    const merged=mergeGeometries(list,false);list.forEach(g=>g.dispose());if(!merged)continue;yield* boundingSphereSteps(merged,pace);
     const mesh=new THREE.Mesh(merged,material);mesh.name=name;mesh.receiveShadow=true;if(material===waterMaterial)mesh.userData.noAO=true;group.add(mesh);
   }
   let bridges=0,benches=0,lamps=0;

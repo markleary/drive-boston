@@ -183,29 +183,43 @@ function subtract(subject:Vertex[],portal:Portal){
  * oversized grid-cell holes or invisible terrain wall at the mouth. */
 const clippedMeshes=new WeakMap<Uint32Array,{roads:Road[];elevation?:CityData['elevation'];vertices:Float32Array;result:TunnelMesh}>();
 export function clipTunnelPortals(city:TunnelCity,vertices:Float32Array,indices:Uint32Array):TunnelMesh{
-  const {portals:cells,portalList}=index(city);if(!portalList.length)return{vertices,indices};
+  const steps=clipTunnelPortalSteps(city,vertices,indices);let r=steps.next();while(!r.done)r=steps.next();return r.value;
+}
+/** clipTunnelPortals as a generator that yields after every 256 triangles near
+ * a portal (and every 64k vertices of the bounds scan), so a paced tile build
+ * can pause inside a tile's terrain or a district-sized pavement surface. */
+export function* clipTunnelPortalSteps(city:TunnelCity,vertices:Float32Array,indices:Uint32Array):Generator<void,TunnelMesh>{
+  const {portalList}=index(city);if(!portalList.length)return{vertices,indices};
   const cached=clippedMeshes.get(indices);if(cached&&cached.roads===city.roads&&cached.elevation===city.elevation&&cached.vertices===vertices)return cached.result;
   let minMeshX=Infinity,maxMeshX=-Infinity,minMeshZ=Infinity,maxMeshZ=-Infinity;
-  for(let i=0;i<vertices.length;i+=3){minMeshX=Math.min(minMeshX,vertices[i]);maxMeshX=Math.max(maxMeshX,vertices[i]);minMeshZ=Math.min(minMeshZ,vertices[i+2]);maxMeshZ=Math.max(maxMeshZ,vertices[i+2]);}
+  for(let i=0;i<vertices.length;i+=3){if(i&&i%196608===0)yield;minMeshX=Math.min(minMeshX,vertices[i]);maxMeshX=Math.max(maxMeshX,vertices[i]);minMeshZ=Math.min(minMeshZ,vertices[i+2]);maxMeshZ=Math.max(maxMeshZ,vertices[i+2]);}
   const relevant=portalList.filter(p=>p.minX<=maxMeshX&&p.maxX>=minMeshX&&p.minZ<=maxMeshZ&&p.maxZ>=minMeshZ);
   if(!relevant.length)return{vertices,indices};
   const minPortalX=Math.min(...relevant.map(p=>p.minX)),maxPortalX=Math.max(...relevant.map(p=>p.maxX)),minPortalZ=Math.min(...relevant.map(p=>p.minZ)),maxPortalZ=Math.max(...relevant.map(p=>p.maxZ));
-  let changed=false;const output=Array.from(vertices),triangles:number[]=[];
+  // The relevant portals by cell under numeric keys, each list in the index's
+  // order, so candidates (and the subtraction order) match the global cells.
+  const cells=new Map<number,Portal[]>(),cellKey=(x:number,z:number)=>(x+32768)*65536+z+32768;
+  for(const p of relevant)for(let x=Math.floor(p.minX/CELL);x<=Math.floor(p.maxX/CELL);x++)for(let z=Math.floor(p.minZ/CELL);z<=Math.floor(p.maxZ/CELL);z++){const list=cells.get(cellKey(x,z));if(list)list.push(p);else cells.set(cellKey(x,z),[p]);}
+  let changed=false,near=0;const added:number[]=[],triangles:number[]=[],base=vertices.length/3;
   for(let i=0;i<indices.length;i+=3){
     const ia=indices[i]*3,ib=indices[i+1]*3,ic=indices[i+2]*3;
     const minX=Math.min(vertices[ia],vertices[ib],vertices[ic]),maxX=Math.max(vertices[ia],vertices[ib],vertices[ic]),minZ=Math.min(vertices[ia+2],vertices[ib+2],vertices[ic+2]),maxZ=Math.max(vertices[ia+2],vertices[ib+2],vertices[ic+2]);
     if(maxX<minPortalX||minX>maxPortalX||maxZ<minPortalZ||minZ>maxPortalZ){triangles.push(indices[i],indices[i+1],indices[i+2]);continue;}
-    const candidates=new Set<Portal>();
-    for(let x=Math.floor(minX/CELL);x<=Math.floor(maxX/CELL);x++)for(let z=Math.floor(minZ/CELL);z<=Math.floor(maxZ/CELL);z++)for(const p of cells.get(`${x},${z}`)??[])if(p.minX<=maxX&&p.maxX>=minX&&p.minZ<=maxZ&&p.maxZ>=minZ)candidates.add(p);
-    if(!candidates.size){triangles.push(indices[i],indices[i+1],indices[i+2]);continue;}
+    if(++near%256===0)yield;
+    let candidates:Portal[]|undefined;
+    for(let x=Math.floor(minX/CELL);x<=Math.floor(maxX/CELL);x++)for(let z=Math.floor(minZ/CELL);z<=Math.floor(maxZ/CELL);z++){
+      const list=cells.get(cellKey(x,z));if(list)for(const p of list)if(p.minX<=maxX&&p.maxX>=minX&&p.minZ<=maxZ&&p.maxZ>=minZ&&!candidates?.includes(p))(candidates??=[]).push(p);
+    }
+    if(!candidates){triangles.push(indices[i],indices[i+1],indices[i+2]);continue;}
     const original:Vertex[]=[ia,ib,ic].map(n=>[vertices[n],vertices[n+1],vertices[n+2]]);
     let parts=[original];for(const portal of candidates){parts=parts.flatMap(part=>subtract(part,portal));changed=true;}
     for(const polygon of parts)for(let j=1;j<polygon.length-1;j++){
       const a=polygon[0],b=polygon[j],c=polygon[j+1];if(Math.abs((b[0]-a[0])*(c[2]-a[2])-(b[2]-a[2])*(c[0]-a[0]))<1e-7)continue;
-      const start=output.length/3;output.push(...a,...b,...c);triangles.push(start,start+1,start+2);
+      const start=base+added.length/3;added.push(a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]);triangles.push(start,start+1,start+2);
     }
   }
-  const result=changed?{vertices:new Float32Array(output),indices:new Uint32Array(triangles)}:{vertices,indices};
+  let result:TunnelMesh={vertices,indices};
+  if(changed){const output=new Float32Array(vertices.length+added.length);output.set(vertices);output.set(added,vertices.length);result={vertices:output,indices:new Uint32Array(triangles)};}
   clippedMeshes.set(indices,{roads:city.roads,elevation:city.elevation,vertices,result});
   clippedMeshes.set(result.indices,{roads:city.roads,elevation:city.elevation,vertices:result.vertices,result});
   return result;
