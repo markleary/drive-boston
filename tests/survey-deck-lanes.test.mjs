@@ -6,7 +6,7 @@ import {Ray} from '@dimforge/rapier3d-compat';
 import {surveyDeckCarriageways,surveyDeckCarriagewaySteps,surveyDeckIndex,deckLanes} from '../src/simulation/survey-deck-lanes.ts';
 import {surveyDeckParapets,surveyDeckParapetSteps} from '../src/simulation/survey-deck-parapets.ts';
 import {surveyViaductSupportSteps} from '../src/simulation/viaduct-supports.ts';
-import {addSurveyDeckSurface,addSurveyDeckSurfaceSteps,addSurveyDeckParapets,surveyDeckPavement,dashes,uncovered} from '../src/render/survey-deck-surface.ts';
+import {addSurveyDeckSurface,addSurveyDeckSurfaceSteps,addSurveyDeckParapets,addSurveyDeckParapetSteps,surveyDeckPavement,dashes,uncovered} from '../src/render/survey-deck-surface.ts';
 import {sampleRoadElevation,roadProjection,bridgeBarriers} from '../src/simulation/road-surfaces.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {read,readJson} from './helpers/metro-city.mjs';
@@ -160,6 +160,12 @@ test('dressing the Zakim pauses between small units of work, for a paced tile bu
  assert.equal(scan.value.parapets.length,parapets.length);assert.ok(scan.n>=2*stations,`${scan.n} pauses classifying both edges of ${stations} stations`);
  const surface=pauses(addSurveyDeckSurfaceSteps(new THREE.Group(),metro,data,{asphalt:new THREE.MeshBasicMaterial(),paint:new THREE.MeshBasicMaterial()},trace.value));
  assert.ok(surface.n>=stations/8&&surface.value.userData.faces>1000,`${surface.n} pauses paving ${surface.value.userData.faces} pieces`);
+ // The parapet boxes go 32 at a time, then become meshes, drawn as the one-shot call draws them.
+ const triangles=g=>{let n=0;g.traverse(o=>{if(o.geometry)n+=o.geometry.getAttribute('position').count/3;});return n;};
+ const boxes=pauses(addSurveyDeckParapetSteps(new THREE.Group(),parapets,new THREE.MeshBasicMaterial())),once=addSurveyDeckParapets(new THREE.Group(),parapets,new THREE.MeshBasicMaterial());
+ assert.equal(boxes.n,Math.floor(parapets.length/32)+1,`${boxes.n} pauses drawing ${parapets.length} parapets`);
+ assert.equal(triangles(boxes.value),triangles(once));assert.equal(triangles(once),parapets.length*12);
+ for(const g of [surface.value,boxes.value,once])g.traverse(o=>o.geometry?.dispose());
 });
 
 test('a car cannot drive through a deck parapet',async()=>{

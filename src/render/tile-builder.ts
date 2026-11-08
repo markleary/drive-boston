@@ -32,7 +32,7 @@ import { createStreetSign } from './signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { roadStructureSteps } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
-import { addSurveyDeckSurfaceSteps, addSurveyDeckParapets } from './survey-deck-surface';
+import { addSurveyDeckSurfaceSteps, addSurveyDeckParapetSteps } from './survey-deck-surface';
 import { surveyViaductSupportSteps } from '../simulation/viaduct-supports.ts';
 import { surveyDeckCarriagewaySteps } from '../simulation/survey-deck-lanes.ts';
 import { surveyDeckParapetSteps } from '../simulation/survey-deck-parapets.ts';
@@ -354,7 +354,9 @@ export function createTileBuilder(ctx: TileContext) {
             const traced=yield* paced('buildings',surveyDeckCarriagewaySteps(data),pace);
             const {parapets}=yield* paced('buildings',surveyDeckParapetSteps(city,data,traced.carriageways.map(c=>c.stations)),pace);
             yield* paced('buildings',addSurveyDeckSurfaceSteps(group,city,data,materials,traced),pace);if (due(pace)) yield 'buildings';
-            addSurveyDeckParapets(group,parapets,choose(false));colliders.push(...physics.addParapets(parapets));
+            // The parapet boxes (some 700) are drawn, and given colliders, a few dozen at a time.
+            yield* paced('buildings',addSurveyDeckParapetSteps(group,parapets,choose(false)),pace);
+            for(let i=0;i<parapets.length;i+=64){if (due(pace)) yield 'buildings';colliders.push(...physics.addParapets(parapets.slice(i,i+64)));}
           }
           const source = tileSourceGeometry(data);
           const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));

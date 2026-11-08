@@ -88,13 +88,18 @@ export function* addSurveyDeckSurfaceSteps(target:THREE.Object3D,city:CityData,d
 
 /** The generated parapets (`surveyDeckParapets`) as concrete boxes in the
  * survey's own shell finish. */
-export function addSurveyDeckParapets(target:THREE.Object3D,parapets:readonly DeckParapet[],material:THREE.Material){
+export function addSurveyDeckParapets(target:THREE.Object3D,parapets:readonly DeckParapet[],material:THREE.Material){return drain(addSurveyDeckParapetSteps(target,parapets,material));}
+/** `addSurveyDeckParapets` in steps, pausing every 32 boxes and before the
+ * batches become meshes. */
+export function* addSurveyDeckParapetSteps(target:THREE.Object3D,parapets:readonly DeckParapet[],material:THREE.Material):Generator<void,THREE.Group>{
   const batches=new PartBatches(400),m=new THREE.Matrix4(),q=new THREE.Quaternion(),e=new THREE.Euler(),one=new THREE.Vector3(1,1,1),at=new THREE.Vector3();
-  for(const p of parapets){
+  for(const [i,p] of parapets.entries()){
+    if(i%32===31)yield;
     // As a deck rail: pitched about its own width, then turned to its heading.
     m.compose(at.set(p.x,p.y,p.z),q.setFromEuler(e.set(-p.slope,p.yaw,0,'YXZ')),one);
     batches.at(material,p.x,p.z).box(box(p.width,p.height,p.length),m);
   }
+  yield;
   const group=new THREE.Group();group.name='Generated survey deck parapets';group.userData={parapets:parapets.length};
   for(const mesh of batches.meshes()){mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);}
   target.add(group);return group;
