@@ -16,15 +16,16 @@ const nearest=(x,z)=>{
  }
  return best;
 };
-const edge=(s,side)=>[s.x-s.tz*side*s.lanes*3.65/2,s.z+s.tx*side*s.lanes*3.65/2];
+const edge=(s,side)=>{const offset=side*Math.min(s.half-.3,s.lanes*3.65/2);return[s.x-s.tz*offset,s.z+s.tx*offset];};
 // How far an edge-line point strays from the chord joining its neighbours.
 // A straight road should not have a visible jog every two metres.
+const jogAt=(stations,i)=>Math.max(...[-1,1].map(side=>{
+ const a=edge(stations[i-1],side),b=edge(stations[i],side),c=edge(stations[i+1],side),dx=c[0]-a[0],dz=c[1]-a[1];
+ return Math.abs(dx*(b[1]-a[1])-dz*(b[0]-a[0]))/Math.hypot(dx,dz);
+}));
 const worstJog=(stations,index)=>{
  let worst=0;
- for(let i=index-15;i<=index+15;i++)for(const side of [-1,1]){
-  const a=edge(stations[i-1],side),b=edge(stations[i],side),c=edge(stations[i+1],side),dx=c[0]-a[0],dz=c[1]-a[1];
-  worst=Math.max(worst,Math.abs(dx*(b[1]-a[1])-dz*(b[0]-a[0]))/Math.hypot(dx,dz));
- }
+ for(let i=index-15;i<=index+15;i++)worst=Math.max(worst,jogAt(stations,i));
  return worst;
 };
 
@@ -35,6 +36,76 @@ test('Zakim and Charlestown paint has no short zigzags from the surveyed deck wa
   const {stations,index}=nearest(x,z),aligned=smoothMarkingStations(stations,onDeck);
   assert.ok(worstJog(aligned,index)<.025,`paint near ${x}, ${z} jogs ${(worstJog(aligned,index)*100).toFixed(1)} cm`);
  }
+});
+
+test('a deck constraint near the Zakim ramp merge does not create a sharp paint fallback',()=>{
+ const runs=uncovered(metro,carriageways.map(c=>c.stations)),distance=s=>Math.hypot(s.x-766.24,s.z+2184.80);
+ const run=runs.find(stations=>stations.some(s=>distance(s)<.01));assert.ok(run,'the reported ramp merge is covered');
+ const index=run.findIndex(s=>distance(s)<.01),aligned=smoothMarkingStations(run,onDeck);
+ // The smooth frame at this spot meets a surveyed protrusion. Replacing only
+ // that frame with the raw measurement made a 44 cm jog in 15 cm-wide paint.
+ // Include the approach neighbours so the correction cannot move the jog.
+ for(let i=index;i>=index-4;i--){
+  assert.equal(run[i-1].lanes,2);assert.equal(run[i].lanes,2);assert.equal(run[i+1].lanes,2);
+  assert.ok(jogAt(aligned,i)<.15,`ramp shoulder paint jogs ${(jogAt(aligned,i)*100).toFixed(1)} cm near ${run[i].x.toFixed(2)}, ${run[i].z.toFixed(2)}`);
+ }
+});
+
+test('an isolated deck-edge constraint is approached smoothly without moving paint off the deck',()=>{
+ const stations=Array.from({length:61},(_,i)=>({x:i===0||i===60?0:(i%2?.3:-.3),z:i*2,tx:0,tz:1,y:10,yLeft:10,yRight:10,half:4.1,lanes:2}));
+ // A local 60 cm protrusion into the right shoulder. Every raw cross-section
+ // fits, but a straightened right paint line needs a small leftward detour.
+ const contains=(x,z)=>x>=-4.1&&x<=4.1-.6*Math.exp(-((z-60)**2));
+ const supported=s=>[-3.725,-3.575,-.075,.075,3.575,3.725].every(o=>contains(s.x-s.tz*o,s.z+s.tx*o));
+ assert.ok(stations.every(supported),'the measured paint starts inside the deck');
+ const free=smoothMarkingStations(stations);assert.equal(supported(free[30]),false,'the obstruction requires a correction');
+ const original=structuredClone(stations),aligned=smoothMarkingStations(stations,contains);
+ assert.deepEqual(stations,original,'constrained paint leaves the source survey unchanged');
+ assert.ok(aligned.every(supported),'both edges of every paint line remain supported');
+ for(const i of [0,stations.length-1])assert.deepEqual(aligned[i],stations[i],'the run endpoints remain fixed');
+ for(let i=8;i<stations.length-8;i++)assert.ok(jogAt(aligned,i)<.15,`the correction creates a ${(jogAt(aligned,i)*100).toFixed(1)} cm jog at ${aligned[i].z.toFixed(1)} m`);
+});
+
+test('clearance corrections handle short paint groups without pulling across a lane change',()=>{
+ const stations=Array.from({length:24},(_,i)=>({x:i===0||i===23?0:(i%2?.3:-.3),z:i*2,tx:0,tz:1,y:10,yLeft:10,yRight:10,half:i===10||i===11?4.1:i===16?2.3:10,lanes:i===10||i===11?2:i===16?1:4}));
+ const contains=(x,z)=>{const half=z>=19&&z<=23?4.1:z>=31&&z<=33?2.3:10;return x>=-half&&x<=half-.6*Math.exp(-((z-20)**2));};
+ const free=smoothMarkingStations(stations),aligned=smoothMarkingStations(stations,contains);
+ for(let i=0;i<aligned.length;i++){
+  for(const key of ['x','z','tx','tz'])assert.ok(Number.isFinite(aligned[i][key]));
+  assert.equal(aligned[i].lanes,stations[i].lanes);
+  if(i!==10&&i!==11)assert.deepEqual(aligned[i],free[i],'the two-station correction does not reach different painted lines');
+ }
+ assert.ok(Math.abs(aligned[10].x-aligned[11].x)<.1,'the short painted stretch moves together');
+ for(const i of [10,11])for(const o of [-3.725,-3.575,-.075,.075,3.575,3.725])assert.ok(contains(aligned[i].x-aligned[i].tz*o,aligned[i].z+aligned[i].tx*o),'the short paint group stays on its deck');
+});
+
+test('an unsupported alignment with no local detour retains the whole measured paint stretch',()=>{
+ const stations=Array.from({length:21},(_,i)=>({x:i===10?-.9:0,z:i*2,tx:0,tz:1,y:10,yLeft:10,yRight:10,half:4.1,lanes:2}));
+ // The raw cross-section fits a narrow recess. The smoothed centre lies over
+ // 50 cm away from any supported location with its heading unchanged.
+ const contains=(x,z)=>Math.abs(x+.9*Math.exp(-((z-20)**2)))<=3.75;
+ const supported=s=>[-3.725,-3.575,-.075,.075,3.575,3.725].every(o=>contains(s.x-s.tz*o,s.z+s.tx*o));
+ assert.ok(stations.every(supported));
+ const free=smoothMarkingStations(stations);assert.equal(supported(free[10]),false);
+ const aligned=smoothMarkingStations(stations,contains);
+ assert.deepEqual(aligned,stations,'fallback keeps one continuous measured stretch rather than inserting a raw station into smooth paint');
+ assert.ok(aligned.every(supported));
+});
+
+test('interacting deck-edge corrections are revalidated and remain smooth and bounded',()=>{
+ const stations=Array.from({length:61},(_,i)=>({x:i===0||i===60?0:(i%2?.3:-.3),z:i*2,tx:0,tz:1,y:10,yLeft:10,yRight:10,half:4.1,lanes:2}));
+ // Opposite shoulders intrude 6 m apart. The smaller left intrusion at 58 m
+ // initially admits straight paint, but blocks the first detour toward 60 m.
+ const contains=(x,z)=>x>=-4.1+.6*Math.exp(-((z-66)**2))+.225*Math.exp(-((z-58)**2))&&x<=4.1-.6*Math.exp(-((z-60)**2));
+ const supported=s=>[-3.725,-3.575,-.075,.075,3.575,3.725].every(o=>contains(s.x-s.tz*o,s.z+s.tx*o));
+ assert.ok(stations.every(supported));
+ const free=smoothMarkingStations(stations);assert.ok(supported(free[29]),'the intervening edge initially admits paint');
+ assert.equal(supported(free[30]),false);assert.equal(supported(free[33]),false);
+ const aligned=smoothMarkingStations(stations,contains);
+ assert.ok(aligned.every(supported),'interpolation cannot introduce new unsupported paint');
+ for(const [i,s] of aligned.entries())assert.ok(Math.hypot(s.x-free[i].x,s.z-free[i].z)<=.500001,'a clearance correction remains within half a metre of the road alignment');
+ for(let i=8;i<stations.length-8;i++)assert.ok(jogAt(aligned,i)<.15,`interacting constraints leave a ${(jogAt(aligned,i)*100).toFixed(1)} cm jog at ${aligned[i].z.toFixed(1)} m`);
+ for(const i of [0,stations.length-1])assert.deepEqual(aligned[i],stations[i]);
 });
 
 test('paint alignment preserves curves, endpoints and measured lane widths without changing the survey',()=>{

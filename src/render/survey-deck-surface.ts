@@ -34,10 +34,9 @@ function markingOffsets(s:DeckStation){
  * from that alignment. Four symmetric passes span 8 m either way, preserving
  * road curves. Blend back to the measured frame over the last 8 m at each end:
  * a walk can stop obliquely at a merge, where its final chord is not the road's
- * heading. Survey stations used by pavement and physical
- * parapets, lane counts, widths and height references remain untouched. On a
- * narrow ramp, retain a measured frame if its replacement would put paint on
- * a barrier or beyond the deck. */
+ * heading. Survey stations used by pavement and physical parapets, lane counts,
+ * widths and height references remain untouched. Narrow ramps get a gradual
+ * lateral correction where the smooth alignment meets a barrier or deck edge. */
 export function smoothMarkingStations(stations:readonly DeckStation[],onDeck?:TracedDeck['onDeck']){return drain(smoothMarkingStationSteps(stations,onDeck));}
 function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:TracedDeck['onDeck']):Generator<void,DeckStation[]>{
   let plan=stations.map(s=>[s.x,s.z] as Point2);
@@ -48,16 +47,78 @@ function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:Trac
   const align=(s:DeckStation,i:number)=>{
     const a=plan[Math.max(0,i-1)],b=plan[Math.min(plan.length-1,i+1)],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
     const t=Math.min(1,i/4,(stations.length-1-i)/4),blend=t*t*(3-2*t),tx=s.tx*(1-blend)+(length>1e-6?dx/length:s.tx)*blend,tz=s.tz*(1-blend)+(length>1e-6?dz/length:s.tz)*blend,norm=Math.hypot(tx,tz);
-    const aligned={...s,x:s.x+(plan[i][0]-s.x)*blend,z:s.z+(plan[i][1]-s.z)*blend,tx:norm>1e-6?tx/norm:s.tx,tz:norm>1e-6?tz/norm:s.tz};
-    if(onDeck)for(const offset of markingOffsets(aligned))for(const edge of [-LINE/2,LINE/2]){
-      const o=offset+edge,near=s.y+(o>0?s.yLeft-s.y:s.y-s.yRight)*o/s.half;
-      if(!onDeck(aligned.x-aligned.tz*o,aligned.z+aligned.tx*o,near))return{...s};
-    }
-    return aligned;
+    return{...s,x:s.x+(plan[i][0]-s.x)*blend,z:s.z+(plan[i][1]-s.z)*blend,tx:norm>1e-6?tx/norm:s.tx,tz:norm>1e-6?tz/norm:s.tz};
   };
   const out:DeckStation[]=[];
   for(const [i,s] of stations.entries()){if(i%16===15)yield;out.push(align(s,i));}
+  if(onDeck)for(let first=0;first<stations.length;){
+    const count=markingOffsets(stations[first]).length;let end=first+1;
+    while(end<stations.length&&markingOffsets(stations[end]).length===count)end++;
+    // A lane change starts a separate painted line. Its clearance constraints
+    // must not pull on the different set of lines on the other side.
+    if(count>=2&&end-first>=2){
+      const corrected=yield* clearMarkingSteps(stations.slice(first,end),out.slice(first,end),onDeck,first===0,end===stations.length);
+      for(let i=first;i<end;i++)out[i]=corrected[i-first];
+    }
+    first=end;
+  }
   return out;
+}
+
+/** Move a blocked alignment sideways, spreading its correction through nearby
+ * smooth frames instead of snapping one station back to its noisy raw frame.
+ * Corrections fade over six 2 m stations. They may continue to a lane-change
+ * boundary, but the original run's endpoints remain fixed. Every interpolated
+ * frame is checked again; at most four passes resolve interacting constraints.
+ * If that fails, retain the whole measured paint stretch, never an isolated
+ * raw station surrounded by smoothed ones. */
+function* clearMarkingSteps(raw:readonly DeckStation[],target:DeckStation[],onDeck:NonNullable<TracedDeck['onDeck']>,preserveStart:boolean,preserveEnd:boolean):Generator<void,DeckStation[]>{
+  const supported=(s:DeckStation)=>{
+    for(const offset of markingOffsets(s))for(const edge of [-LINE/2,LINE/2]){
+      const o=offset+edge,near=s.y+(o>0?s.yLeft-s.y:s.y-s.yRight)*o/s.half;
+      if(!onDeck(s.x-s.tz*o,s.z+s.tx*o,near))return false;
+    }
+    return true;
+  };
+  type Correction={i:number;x:number;z:number};
+  const anchors=new Map<number,Correction>(),radius=6,end=raw.length-1,zero=(i:number):Correction=>({i,x:0,z:0});
+  let out=target;
+  for(let pass=0;pass<=4;pass++){
+    let changed=false;
+    for(let i=preserveStart?1:0;i<out.length-(preserveEnd?1:0);i++){
+      if(i%16===15)yield;
+      const s=out[i];if(supported(s))continue;
+      if(pass===4)return raw.map(s=>({...s}));
+      let safe:DeckStation|undefined;
+      // A bounded 50 cm search keeps the road alignment local. Keep its smooth
+      // heading: rotating back to the measured heading was the source of kinks.
+      for(let k=1;k<=20&&!safe;k++){
+        if(k%4===0)yield;
+        for(const sign of [-1,1]){
+          const o=sign*k*.025,candidate={...s,x:s.x-s.tz*o,z:s.z+s.tx*o};
+          if(Math.hypot(candidate.x-target[i].x,candidate.z-target[i].z)<=.500001&&supported(candidate)){safe=candidate;break;}
+        }
+      }
+      if(!safe)return raw.map(s=>({...s}));
+      anchors.set(i,{i,x:safe.x-target[i].x,z:safe.z-target[i].z});changed=true;
+    }
+    if(!changed)return out;
+    const points=[...anchors.values()].sort((a,b)=>a.i-b.i),controls:Correction[]=[],first=points[0],last=points.at(-1)!;
+    if(first.i>0){controls.push(!preserveStart&&first.i<=radius?{...first,i:0}:zero(0));if(first.i>radius)controls.push(zero(first.i-radius));}
+    for(let j=0;j<points.length;j++){
+      if(j&&points[j].i-points[j-1].i>radius*2)controls.push(zero(points[j-1].i+radius),zero(points[j].i-radius));
+      controls.push(points[j]);
+    }
+    if(last.i<end){if(end-last.i>radius)controls.push(zero(last.i+radius));controls.push(!preserveEnd&&end-last.i<=radius?{...last,i:end}:zero(end));}
+    out=[];let j=0;
+    for(let i=0;i<target.length;i++){
+      if(i%16===15)yield;
+      while(j+1<controls.length-1&&controls[j+1].i<i)j++;
+      const a=controls[j],b=controls[j+1],t=(i-a.i)/(b.i-a.i),w=t*t*(3-2*t);
+      out.push({...target[i],x:target[i].x+a.x+(b.x-a.x)*w,z:target[i].z+a.z+(b.z-a.z)*w});
+    }
+  }
+  return raw.map(s=>({...s}));
 }
 
 /** Interstate pavement on a surveyed structure's carriageways (the Zakim and
