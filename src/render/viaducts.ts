@@ -4,9 +4,10 @@ import type {TileBuildingGeometry} from '../simulation/tile-format.ts';
 import {surveyViaductSupports} from '../simulation/viaduct-supports.ts';
 import {mergeSpatialGeometries} from './spatial-batches.ts';
 
-/** Land-side approach supports only; the survey bridge and tunnel end stay intact. */
-export function addSurveyViaductSupports(target:THREE.Object3D,city:CityData,data:TileBuildingGeometry){
-  const supports=surveyViaductSupports(city,data),parts:THREE.BufferGeometry[]=[];
+/** Land-side approach supports only; the survey bridge and tunnel end stay
+ * intact. `supports` is the planned piers, when the caller has them. */
+export function addSurveyViaductSupports(target:THREE.Object3D,city:CityData,data:TileBuildingGeometry,supports=surveyViaductSupports(city,data)){
+  const parts:THREE.BufferGeometry[]=[];
   for(const p of supports){
     for(const c of p.columns??[p]){
       parts.push(new THREE.BoxGeometry(2.2,p.top-c.bottom,2.6).rotateY(p.yaw).translate(c.x,(p.top+c.bottom)/2,c.z));

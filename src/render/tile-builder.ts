@@ -32,7 +32,10 @@ import { createStreetSign } from './signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { roadStructureSteps } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
-import { addSurveyDeckSurface } from './survey-deck-surface';
+import { addSurveyDeckSurfaceSteps, addSurveyDeckParapetSteps } from './survey-deck-surface';
+import { surveyViaductSupportSteps } from '../simulation/viaduct-supports.ts';
+import { surveyDeckCarriagewaySteps } from '../simulation/survey-deck-lanes.ts';
+import { surveyDeckParapetSteps } from '../simulation/survey-deck-parapets.ts';
 import { addSourceFooting } from './source-footings';
 import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
 import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
@@ -78,6 +81,8 @@ export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[];
 
 /** Run a paced helper as one named stage: each pause it takes becomes a yield of that stage. */
 function* stage<T>(name: TileStage, steps: Generator<void, T>): Generator<TileStage, T> { let r = steps.next(); while (!r.done) { yield name; r = steps.next(); } return r.value; }
+/** Run a helper that pauses between small units of work as one named stage, passing a pause on only once the frame's deadline has passed. */
+function* paced<T>(name: TileStage, steps: Generator<void, T>, pace: Pace): Generator<TileStage, T> { let r = steps.next(); while (!r.done) { if (due(pace)) yield name; r = steps.next(); } return r.value; }
 
 /** Everything world.ts once built for the whole survey, rebuilt here for one
  * 1 km tile at a time as a generator: each stage yields between its units of
@@ -341,9 +346,19 @@ export function createTileBuilder(ctx: TileContext) {
           // The map draws this shell's outline instead of its convex hull, which would cover the streets it spans.
           if (!b.structure) addBuildingPlan(city, b, data);
           if(b.landmark==='zakim-bridge'){
-            const viaduct=addSurveyViaductSupports(group,city,data);
+            // Planning the piers, tracing the deck's carriageways, finding the edges the survey leaves open and paving
+            // the deck each take about a tenth of a second (more on a phone), so each pauses between small units of work.
+            const supports=yield* paced('buildings',surveyViaductSupportSteps(city,data),pace);
+            const viaduct=addSurveyViaductSupports(group,city,data,supports);
             for(const mesh of viaduct.collisions)colliders.push(physics.addStaticMesh(mesh.vertices,mesh.indices));
-            addSurveyDeckSurface(group,city,data,materials);
+            if (due(pace)) yield 'buildings';
+            // One trace of the deck's carriageways paves them and closes the edges its parapets leave open.
+            const traced=yield* paced('buildings',surveyDeckCarriagewaySteps(data),pace);
+            const {parapets}=yield* paced('buildings',surveyDeckParapetSteps(city,data,traced.carriageways.map(c=>c.stations)),pace);
+            yield* paced('buildings',addSurveyDeckSurfaceSteps(group,city,data,materials,traced),pace);if (due(pace)) yield 'buildings';
+            // The parapet boxes (some 700) are drawn, and given colliders, a few dozen at a time.
+            yield* paced('buildings',addSurveyDeckParapetSteps(group,parapets,choose(false)),pace);
+            for(let i=0;i<parapets.length;i+=64){if (due(pace)) yield 'buildings';colliders.push(...physics.addParapets(parapets.slice(i,i+64)));}
           }
           const source = tileSourceGeometry(data);
           const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));
