@@ -8,7 +8,7 @@ export interface DeckStation{x:number;z:number;y:number;tx:number;tz:number;half
 export interface DeckCarriageway{stations:DeckStation[];}
 /** A structure's traced carriageways, and `surface`: the deck height nearest a
  * level, for draping the pavement and its paint. */
-export interface TracedDeck{carriageways:DeckCarriageway[];surface:(x:number,z:number,near:number)=>number;}
+export interface TracedDeck{carriageways:DeckCarriageway[];surface:(x:number,z:number,near:number)=>number;/** Whether paint at this level stays on unobstructed deck. */onDeck?:(x:number,z:number,near:number)=>boolean;}
 
 const STEP=2,MARCH=.4,REACH=26,LANE=3.65,CELL=4,STRIDE=14;
 /** Lanes on a carriageway this wide: a narrow ramp is all lanes, an interstate
@@ -128,7 +128,7 @@ export function* surveyDeckCarriagewaySteps(data:TileBuildingGeometry,{minWidth=
     if(stations.filter(s=>index.covered(s.x,s.z,s.y)).length>=stations.length*.8)continue;
     smoothLanes(stations);result.push({stations});
   }
-  return{carriageways:result,surface:index.surface};
+  return{carriageways:result,surface:index.surface,onDeck:(x,z,near)=>Number.isFinite(index.deck(x,z,near))};
 }
 /** The whole trace at once, for tests and tools. */
 export function surveyDeckCarriageways(data:TileBuildingGeometry,options:{minWidth?:number;maxWidth?:number}={}){return drain(surveyDeckCarriagewaySteps(data,options));}
