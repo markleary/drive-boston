@@ -79,7 +79,7 @@ test('clearance corrections handle short paint groups without pulling across a l
  for(const i of [10,11])for(const o of [-3.725,-3.575,-.075,.075,3.575,3.725])assert.ok(contains(aligned[i].x-aligned[i].tz*o,aligned[i].z+aligned[i].tx*o),'the short paint group stays on its deck');
 });
 
-test('an unsupported alignment with no local detour retains the whole measured paint stretch',()=>{
+test('an unresolved deck recess omits paint while preserving the surrounding smooth alignment',()=>{
  const stations=Array.from({length:21},(_,i)=>({x:i===10?-.9:0,z:i*2,tx:0,tz:1,y:10,yLeft:10,yRight:10,half:4.1,lanes:2}));
  // The raw cross-section fits a narrow recess. The smoothed centre lies over
  // 50 cm away from any supported location with its heading unchanged.
@@ -88,8 +88,45 @@ test('an unsupported alignment with no local detour retains the whole measured p
  assert.ok(stations.every(supported));
  const free=smoothMarkingStations(stations);assert.equal(supported(free[10]),false);
  const aligned=smoothMarkingStations(stations,contains);
- assert.deepEqual(aligned,stations,'fallback keeps one continuous measured stretch rather than inserting a raw station into smooth paint');
- assert.ok(aligned.every(supported));
+ assert.equal(aligned[10].paint,false,'the unresolved frame is not painted');
+ for(const [i,s] of aligned.entries()){
+  const {paint,...frame}=s;assert.deepEqual(frame,free[i],'a local gap does not introduce raw-frame kinks');
+  if(paint!==false)assert.ok(supported(s));
+ }
+});
+
+test('an unresolved recess retains a different supported target whose raw frame was blocked, and leaves a rendered gap',()=>{
+ const stations=Array.from({length:21},(_,i)=>({x:i===10?-.9:i===15?.6:0,z:i*2,tx:0,tz:1,y:10,yLeft:10,yRight:10,half:4.1,lanes:2}));
+ const contains=(x,z)=>{const bump=Math.exp(-((z-20)**2));return Math.abs(x+.9*bump)<=4.1-.35*bump;};
+ const supported=s=>[-3.725,-3.575,-.075,.075,3.575,3.725].every(o=>contains(s.x-s.tz*o,s.z+s.tx*o));
+ const free=smoothMarkingStations(stations);
+ assert.ok(supported(stations[10]));assert.equal(supported(free[10]),false,'the recess exceeds the detour limit');
+ assert.equal(supported(stations[15]),false);assert.ok(supported(free[15]),'smoothing already repaired a different blocked raw frame');
+ const aligned=smoothMarkingStations(stations,contains);
+ assert.equal(aligned[10].paint,false);assert.notEqual(aligned[15].paint,false);
+ assert.deepEqual(aligned[15],free[15],'failure elsewhere must preserve this already-supported smooth target');
+ for(const [i,s] of aligned.entries()){
+  assert.equal(s.lanes,stations[i].lanes);assert.equal(s.half,stations[i].half);
+  if(s.paint!==false)assert.ok(supported(s),'every retained frame is supported');
+ }
+ const geometry={positions:Float32Array.from([[-12,-2],[12,-2],[-12,42],[12,42]].flatMap(([x,z])=>[x,10,z])),roof:new Uint16Array([0,2,1,1,2,3]),facade:new Uint16Array()};
+ const asphalt=new THREE.MeshBasicMaterial(),paint=new THREE.MeshBasicMaterial();asphalt.name='asphalt';paint.name='paint';
+ const group=addSurveyDeckSurface(new THREE.Group(),{roads:[]},geometry,{asphalt,paint},{carriageways:[{stations}],surface:()=>10,onDeck:contains});
+ let triangles=0,repaired=0;
+ try{
+  for(const mesh of group.children){
+   if(mesh.material.name!=='paint')continue;const p=mesh.geometry.getAttribute('position');
+   for(let i=0;i<p.count;i+=3){
+    const zs=[p.getZ(i),p.getZ(i+1),p.getZ(i+2)];triangles++;
+    assert.ok(Math.max(...zs)<20||Math.min(...zs)>20,'paint triangles cannot bridge the omitted cross-section');
+    for(let k=0;k<3;k++){
+     assert.ok(contains(p.getX(i+k),p.getZ(i+k)),'retained paint vertices stay on the deck');
+     if(Math.abs(p.getZ(i+k)-30)<.5)repaired++;
+    }
+   }
+  }
+  assert.ok(triangles>20);assert.ok(repaired>0,'paint remains visible at the independently repaired frame');
+ }finally{group.traverse(o=>o.geometry?.dispose());asphalt.dispose();paint.dispose();}
 });
 
 test('interacting deck-edge corrections are revalidated and remain smooth and bounded',()=>{
@@ -141,17 +178,23 @@ test('alignment keeps paint on the surveyed ramps and preserves oblique merge en
  let checked=0;
  for(const run of uncovered(metro,carriageways.map(c=>c.stations))){
   const aligned=smoothMarkingStations(run,onDeck);
+  const counts=aligned.map(s=>{
+   const shoulder=Math.max(.3,(s.half*2-s.lanes*3.65)/2);
+   return s.paint===false||(s.half*2-2*shoulder)/s.lanes<3.4?0:s.lanes+1;
+  });
   // Near the Charlestown split, a walk's last chord can be oblique to the
   // deck: replacing its heading swung a shoulder line 4.5 m off the road.
   for(const i of [0,run.length-1])for(const side of [-1,1]){
    const a=edge(run[i],side),b=edge(aligned[i],side);
    assert.ok(Math.hypot(a[0]-b[0],a[1]-b[1])<1e-9,'merge endpoint paint keeps its surveyed cross-section');
   }
-  for(let i=0;i<run.length;i++)if(supported(run[i])){
+  // A singleton or a too-narrow station draws no segment; check exactly the
+  // frames that form retained painted stretches after omissions and splits.
+  for(let i=0;i<run.length;i++)if(counts[i]>=2&&(counts[i-1]===counts[i]||counts[i+1]===counts[i])){
    checked++;assert.ok(supported(aligned[i]),`paint crosses a deck edge or obstruction at ${run[i].x.toFixed(2)}, ${run[i].z.toFixed(2)}`);
   }
  }
- assert.ok(checked>6000,'checked the mainlines and narrow ramps along the whole survey');
+ assert.ok(checked>5500,'checked retained painted stretches across the mainlines and narrow ramps');
 });
 
 test('short or narrow marking runs keep their extents and remain finite',()=>{

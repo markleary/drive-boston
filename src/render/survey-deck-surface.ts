@@ -21,8 +21,11 @@ const biased=(material:THREE.Material,units:number)=>{
 };
 
 type P3=[number,number,number];
+/** A render-only omission splits paint at a cross-section with no safe alignment. */
+type MarkingStation=DeckStation&{paint?:false};
 /** Lane lines centred between equal shoulders; no paint on narrow gore strips. */
-function markingOffsets(s:DeckStation){
+function markingOffsets(s:MarkingStation){
+  if(s.paint===false)return[];
   const lanes=s.lanes,width=s.half*2,shoulder=Math.max(.3,(width-lanes*3.65)/2),lane=(width-2*shoulder)/lanes;
   return lane<MIN_LANE_WIDTH?[]:Array.from({length:lanes+1},(_,k)=>-s.half+shoulder+k*lane);
 }
@@ -38,7 +41,7 @@ function markingOffsets(s:DeckStation){
  * widths and height references remain untouched. Narrow ramps get a gradual
  * lateral correction where the smooth alignment meets a barrier or deck edge. */
 export function smoothMarkingStations(stations:readonly DeckStation[],onDeck?:TracedDeck['onDeck']){return drain(smoothMarkingStationSteps(stations,onDeck));}
-function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:TracedDeck['onDeck']):Generator<void,DeckStation[]>{
+function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:TracedDeck['onDeck']):Generator<void,MarkingStation[]>{
   let plan=stations.map(s=>[s.x,s.z] as Point2);
   for(let pass=0;pass<4;pass++)plan=plan.map((p,i)=>{
     if(i===0||i===plan.length-1)return p;
@@ -49,7 +52,7 @@ function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:Trac
     const t=Math.min(1,i/4,(stations.length-1-i)/4),blend=t*t*(3-2*t),tx=s.tx*(1-blend)+(length>1e-6?dx/length:s.tx)*blend,tz=s.tz*(1-blend)+(length>1e-6?dz/length:s.tz)*blend,norm=Math.hypot(tx,tz);
     return{...s,x:s.x+(plan[i][0]-s.x)*blend,z:s.z+(plan[i][1]-s.z)*blend,tx:norm>1e-6?tx/norm:s.tx,tz:norm>1e-6?tz/norm:s.tz};
   };
-  const out:DeckStation[]=[];
+  const out:MarkingStation[]=[];
   for(const [i,s] of stations.entries()){if(i%16===15)yield;out.push(align(s,i));}
   if(onDeck)for(let first=0;first<stations.length;){
     const count=markingOffsets(stations[first]).length;let end=first+1;
@@ -57,7 +60,7 @@ function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:Trac
     // A lane change starts a separate painted line. Its clearance constraints
     // must not pull on the different set of lines on the other side.
     if(count>=2&&end-first>=2){
-      const corrected=yield* clearMarkingSteps(stations.slice(first,end),out.slice(first,end),onDeck,first===0,end===stations.length);
+      const corrected=yield* clearMarkingSteps(out.slice(first,end),onDeck,first===0,end===stations.length);
       for(let i=first;i<end;i++)out[i]=corrected[i-first];
     }
     first=end;
@@ -70,9 +73,9 @@ function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:Trac
  * Corrections fade over six 2 m stations. They may continue to a lane-change
  * boundary, but the original run's endpoints remain fixed. Every interpolated
  * frame is checked again; at most four passes resolve interacting constraints.
- * If that fails, retain the whole measured paint stretch, never an isolated
- * raw station surrounded by smoothed ones. */
-function* clearMarkingSteps(raw:readonly DeckStation[],target:DeckStation[],onDeck:NonNullable<TracedDeck['onDeck']>,preserveStart:boolean,preserveEnd:boolean):Generator<void,DeckStation[]>{
+ * If that fails, keep the original smooth alignment and omit paint only at its
+ * unsupported frames. Never insert raw frames or connect across unsafe ones. */
+function* clearMarkingSteps(target:DeckStation[],onDeck:NonNullable<TracedDeck['onDeck']>,preserveStart:boolean,preserveEnd:boolean):Generator<void,MarkingStation[]>{
   const supported=(s:DeckStation)=>{
     for(const offset of markingOffsets(s))for(const edge of [-LINE/2,LINE/2]){
       const o=offset+edge,near=s.y+(o>0?s.yLeft-s.y:s.y-s.yRight)*o/s.half;
@@ -81,14 +84,22 @@ function* clearMarkingSteps(raw:readonly DeckStation[],target:DeckStation[],onDe
     return true;
   };
   type Correction={i:number;x:number;z:number};
-  const anchors=new Map<number,Correction>(),radius=6,end=raw.length-1,zero=(i:number):Correction=>({i,x:0,z:0});
-  let out=target;
+  const anchors=new Map<number,Correction>(),radius=6,end=target.length-1,zero=(i:number):Correction=>({i,x:0,z:0});
+  function* fallback():Generator<void,MarkingStation[]>{
+    const safe:MarkingStation[]=[];
+    for(const [i,s] of target.entries()){
+      if(i%16===15)yield;
+      safe.push(supported(s)?s:{...s,paint:false});
+    }
+    return safe;
+  }
+  let out:MarkingStation[]=target;
   for(let pass=0;pass<=4;pass++){
     let changed=false;
     for(let i=preserveStart?1:0;i<out.length-(preserveEnd?1:0);i++){
       if(i%16===15)yield;
       const s=out[i];if(supported(s))continue;
-      if(pass===4)return raw.map(s=>({...s}));
+      if(pass===4)return yield* fallback();
       let safe:DeckStation|undefined;
       // A bounded 50 cm search keeps the road alignment local. Keep its smooth
       // heading: rotating back to the measured heading was the source of kinks.
@@ -99,10 +110,16 @@ function* clearMarkingSteps(raw:readonly DeckStation[],target:DeckStation[],onDe
           if(Math.hypot(candidate.x-target[i].x,candidate.z-target[i].z)<=.500001&&supported(candidate)){safe=candidate;break;}
         }
       }
-      if(!safe)return raw.map(s=>({...s}));
+      if(!safe)return yield* fallback();
       anchors.set(i,{i,x:safe.x-target[i].x,z:safe.z-target[i].z});changed=true;
     }
-    if(!changed)return out;
+    if(!changed){
+      // Fixed endpoints cannot move for clearance; a surveyed endpoint may
+      // itself be obstructed, so preserve its frame but do not paint it.
+      if(preserveStart&&!supported(out[0]))out[0]={...out[0],paint:false};
+      if(preserveEnd&&!supported(out[end]))out[end]={...out[end],paint:false};
+      return out;
+    }
     const points=[...anchors.values()].sort((a,b)=>a.i-b.i),controls:Correction[]=[],first=points[0],last=points.at(-1)!;
     if(first.i>0){controls.push(!preserveStart&&first.i<=radius?{...first,i:0}:zero(0));if(first.i>radius)controls.push(zero(first.i-radius));}
     for(let j=0;j<points.length;j++){
@@ -118,7 +135,7 @@ function* clearMarkingSteps(raw:readonly DeckStation[],target:DeckStation[],onDe
       out.push({...target[i],x:target[i].x+a.x+(b.x-a.x)*w,z:target[i].z+a.z+(b.z-a.z)*w});
     }
   }
-  return raw.map(s=>({...s}));
+  return yield* fallback();
 }
 
 /** Interstate pavement on a surveyed structure's carriageways (the Zakim and
