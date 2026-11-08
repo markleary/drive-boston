@@ -1,9 +1,10 @@
-import type {CityData,Point2} from '../types';
+import type {CityData,Point2,Road} from '../types';
 import type {TileBuildingGeometry} from './tile-format.ts';
 import {sampleElevation} from './terrain.ts';
 import {pointInside} from './roads.ts';
 import {roadProjection,sampleRoadElevation} from './road-surfaces.ts';
 import {buildingAt} from './city-tiles.ts';
+import {drain} from '../render/pacing.ts';
 
 /** `width` and `capX`/`capZ` describe the cap, which may sit off the column's centre.
  * `columns`, when set, replace the single column at (x, z): a straddle bent's
@@ -11,10 +12,13 @@ import {buildingAt} from './city-tiles.ts';
 export interface ViaductSupport{x:number;z:number;bottom:number;top:number;width:number;yaw:number;capX:number;capZ:number;columns?:{x:number;z:number;bottom:number}[];}
 /** Slice the surveyed land-side deck ribbons, keeping their actual elevations.
  * Water/cable span and the southern tunnel mouth are deliberately excluded.
- * This augments the floating survey viaducts; it never rewrites the Zakim mesh. */
-export function surveyViaductSupports(city:CityData,data:TileBuildingGeometry){
+ * This augments the floating survey viaducts; it never rewrites the Zakim mesh.
+ * It runs in steps, pausing at every section and between batches of triangles
+ * and roads, so a paced tile build spreads it across frames. */
+export function* surveyViaductSupportSteps(city:CityData,data:TileBuildingGeometry):Generator<void,ViaductSupport[]>{
   const v=data.positions,triangles:{p:number[][];minX:number;maxX:number;minZ:number;maxZ:number}[]=[];
   for(let i=0;i<data.roof.length;i+=3){
+    if(i%3000===2997)yield;
     const p=[0,1,2].map(j=>Array.from(v.slice(data.roof[i+j]*3,data.roof[i+j]*3+3)));
     const a=p[1].map((n,k)=>n-p[0][k]),b=p[2].map((n,k)=>n-p[0][k]);
     const ny=a[2]*b[0]-a[0]*b[2],nx=a[1]*b[2]-a[2]*b[1],nz=a[0]*b[1]-a[1]*b[0];
@@ -23,7 +27,11 @@ export function surveyViaductSupports(city:CityData,data:TileBuildingGeometry){
   }
   const wet=(p:Point2)=>(city.water??[]).some(w=>pointInside(p,w.rings[0])&&!w.rings.slice(1).some(r=>pointInside(p,r)));
   const cells=new Map<string,typeof triangles>();
-  for(const t of triangles)for(let cx=Math.floor(t.minX/8);cx<=Math.floor(t.maxX/8);cx++)for(let cz=Math.floor(t.minZ/8);cz<=Math.floor(t.maxZ/8);cz++){const k=`${cx},${cz}`,list=cells.get(k);if(list)list.push(t);else cells.set(k,[t]);}
+  let work=0;
+  for(const t of triangles){
+    if(++work>=20000){work=0;yield;}
+    for(let cx=Math.floor(t.minX/8);cx<=Math.floor(t.maxX/8);cx++)for(let cz=Math.floor(t.minZ/8);cz<=Math.floor(t.maxZ/8);cz++){work++;const k=`${cx},${cz}`,list=cells.get(k);if(list)list.push(t);else cells.set(k,[t]);}
+  }
   const deckHeight=(x:number,z:number)=>{
     let y=Infinity;
     for(const t of cells.get(`${Math.floor(x/8)},${Math.floor(z/8)}`)??[]){
@@ -39,9 +47,15 @@ export function surveyViaductSupports(city:CityData,data:TileBuildingGeometry){
   let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
   for(const t of triangles){minX=Math.min(minX,t.minX);maxX=Math.max(maxX,t.maxX);minZ=Math.min(minZ,t.minZ);maxZ=Math.max(maxZ,t.maxZ);}
   // Survey traces lie on the structure itself; they are no street beneath it.
-  const streets=city.roads.filter(r=>!r.surveyDeck).map(r=>{const reach=r.width/2+2.2;let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;for(const [x,z]of r.points){x0=Math.min(x0,x);x1=Math.max(x1,x);z0=Math.min(z0,z);z1=Math.max(z1,z);}return{r,x0:x0-reach,x1:x1+reach,z0:z0-reach,z1:z1+reach};})
-    .filter(s=>s.x1>=minX&&s.x0<=maxX&&s.z1>=minZ&&s.z0<=maxZ);
+  const streets:{r:Road;x0:number;x1:number;z0:number;z1:number}[]=[];let scanned=0;
+  for(const r of city.roads){
+    if(++scanned%1000===0)yield;
+    if(r.surveyDeck)continue;
+    const reach=r.width/2+2.2;let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;for(const [x,z]of r.points){x0=Math.min(x0,x);x1=Math.max(x1,x);z0=Math.min(z0,z);z1=Math.max(z1,z);}
+    if(x1+reach>=minX&&x0-reach<=maxX&&z1+reach>=minZ&&z0-reach<=maxZ)streets.push({r,x0:x0-reach,x1:x1+reach,z0:z0-reach,z1:z1+reach});
+  }
   for(const axis of [2,0])for(let section=-4200;section<=1900;section+=34){
+    yield;
     const across=axis===2?0:2,intervals:{lo:number;hi:number;y:number}[]=[];
     for(const t of triangles){
       if(section<(axis===2?t.minZ:t.minX)||section>(axis===2?t.maxZ:t.maxX))continue;
@@ -97,3 +111,5 @@ export function surveyViaductSupports(city:CityData,data:TileBuildingGeometry){
   }
   return result;
 }
+/** The supports at once, for tests and tools. */
+export function surveyViaductSupports(city:CityData,data:TileBuildingGeometry){return drain(surveyViaductSupportSteps(city,data));}

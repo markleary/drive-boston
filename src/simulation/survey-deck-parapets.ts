@@ -3,6 +3,7 @@ import type {TileBuildingGeometry} from './tile-format.ts';
 import type {DeckStation} from './survey-deck-lanes.ts';
 import {sampleElevation} from './terrain.ts';
 import {sampleRoadElevation} from './road-surfaces.ts';
+import {drain} from '../render/pacing.ts';
 
 /** A straight concrete parapet box: `x, y, z` its centre, `yaw` its heading
  * and `slope` its pitch, set like a deck rail (`bridgeBarriers`). */
@@ -13,14 +14,17 @@ export interface DeckParapet{x:number;y:number;z:number;yaw:number;slope:number;
 const TOP=.9,FOOT=.3,MIN_WIDTH=.45,MAX_WIDTH=1.2,CELL=4;
 
 /** Height queries on every triangle of a surveyed structure, either winding:
- * many of its barrier tops face down, and its parapets are vertical walls. */
-function surveyGeometry(data:TileBuildingGeometry){
-  const v=data.positions,list:number[]=[],cells=new Map<number,number[]>(),key=(cx:number,cz:number)=>(cx+32768)*65536+cz+32768;
+ * many of its barrier tops face down, and its parapets are vertical walls.
+ * Built in steps, a pause every 20,000 grid entries (a few triangles span a
+ * thousand cells each). */
+function* surveyGeometrySteps(data:TileBuildingGeometry){
+  const v=data.positions,list:number[]=[],cells=new Map<number,number[]>(),key=(cx:number,cz:number)=>(cx+32768)*65536+cz+32768;let work=0;
   for(const indices of [data.roof,data.facade])for(let i=0;i<indices.length;i+=3){
+    if(++work>=20000){work=0;yield;}
     const a=indices[i]*3,b=indices[i+1]*3,c=indices[i+2]*3,f=list.length/9;
     list.push(v[a],v[a+1],v[a+2],v[b],v[b+1],v[b+2],v[c],v[c+1],v[c+2]);
     for(let cx=Math.floor(Math.min(v[a],v[b],v[c])/CELL);cx<=Math.floor(Math.max(v[a],v[b],v[c])/CELL);cx++)for(let cz=Math.floor(Math.min(v[a+2],v[b+2],v[c+2])/CELL);cz<=Math.floor(Math.max(v[a+2],v[b+2],v[c+2])/CELL);cz++){
-      const k=key(cx,cz),cell=cells.get(k);if(cell)cell.push(f);else cells.set(k,[f]);
+      work++;const k=key(cx,cz),cell=cells.get(k);if(cell)cell.push(f);else cells.set(k,[f]);
     }
   }
   const t=Float64Array.from(list),seen=new Set<number>();
@@ -60,10 +64,12 @@ function surveyGeometry(data:TileBuildingGeometry){
 }
 
 /** Road decks near the structure (tunnel roadways too, which meet it at the
- * Central Artery portals), for the levels a survey edge may meet. */
-function deckLevels(city:CityData,box:{minX:number;maxX:number;minZ:number;maxZ:number}){
-  const cells=new Map<string,{road:Road;i:number;reach:number}[]>(),size=8;
+ * Central Artery portals), for the levels a survey edge may meet. Built in
+ * steps, a pause after each elevated road and every 500 roads. */
+function* deckLevelSteps(city:CityData,box:{minX:number;maxX:number;minZ:number;maxZ:number}){
+  const cells=new Map<string,{road:Road;i:number;reach:number}[]>(),size=8;let n=0;
   for(const road of city.roads){
+    if(++n%500===0)yield;
     if(!road.elevations)continue;
     for(let i=1;i<road.points.length;i++){
       const a=road.points[i-1],b=road.points[i],reach=Math.max(road.deckWidths?.[i-1]??road.width,road.deckWidths?.[i]??road.width)/2;
@@ -72,6 +78,7 @@ function deckLevels(city:CityData,box:{minX:number;maxX:number;minZ:number;maxZ:
         const k=`${cx},${cz}`,list=cells.get(k),entry={road,i,reach};if(list)list.push(entry);else cells.set(k,[entry]);
       }
     }
+    yield;
   }
   return(x:number,z:number,out:number[])=>{
     out.length=0;
@@ -88,6 +95,8 @@ function deckLevels(city:CityData,box:{minX:number;maxX:number;minZ:number;maxZ:
  * on, a step down, the ground, or a road deck whose own rails close the edge),
  * or how far out the deck ends. */
 export type EdgeKind={kind:'barrier'|'deck'|'step'|'ground'|'road'}|{kind:'drop';drop:number};
+/** The generated parapets, and the edge test that placed them. */
+export interface SurveyParapets{parapets:DeckParapet[];classify:(s:DeckStation,side:number)=>EdgeKind;}
 
 /** The parapets a surveyed structure (the Zakim and its Charlestown viaduct)
  * leaves out: wherever a traced carriageway's edge has nothing standing on or
@@ -95,12 +104,13 @@ export type EdgeKind={kind:'barrier'|'deck'|'step'|'ground'|'road'}|{kind:'drop'
  * carries on at its level), no road deck reaches that end (its own rails stand
  * there) and what lies beyond is more than 1.2 m down (not a step onto a lower
  * deck, nor the ground at a ramp's foot), a concrete box runs along the deck's
- * end, as high as the survey's own parapets. */
-export function surveyDeckParapets(city:CityData,data:TileBuildingGeometry,carriageways:DeckStation[][]){
-  const survey=surveyGeometry(data);
+ * end, as high as the survey's own parapets. It runs in steps, pausing at every
+ * edge station, so a paced tile build spreads it across frames. */
+export function* surveyDeckParapetSteps(city:CityData,data:TileBuildingGeometry,carriageways:DeckStation[][]):Generator<void,SurveyParapets>{
+  const survey=yield* surveyGeometrySteps(data);
   let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
   for(const stations of carriageways)for(const s of stations){minX=Math.min(minX,s.x);maxX=Math.max(maxX,s.x);minZ=Math.min(minZ,s.z);maxZ=Math.max(maxZ,s.z);}
-  const roads=deckLevels(city,{minX:minX-40,maxX:maxX+40,minZ:minZ-40,maxZ:maxZ+40}),found:number[]=[],decks:number[]=[];
+  const roads=yield* deckLevelSteps(city,{minX:minX-40,maxX:maxX+40,minZ:minZ-40,maxZ:maxZ+40}),found:number[]=[],decks:number[]=[];
   const level=(x:number,z:number,y:number)=>survey.heights(x,z,found).some(h=>Math.abs(h-y)<=.4)||roads(x,z,decks).some(h=>Math.abs(h-y)<=.4);
   /** The highest surface under `y` at (x, z): the ground, a road deck or the survey. */
   const below=(x:number,z:number,y:number)=>{
@@ -130,7 +140,7 @@ export function surveyDeckParapets(city:CityData,data:TileBuildingGeometry,carri
   const out:DeckParapet[]=[];
   for(const stations of carriageways)for(const side of [1,-1]){
     // Runs of open stations; each becomes boxes between its stations' deck ends.
-    const edges=stations.map(s=>classify(s,side));
+    const edges:EdgeKind[]=[];for(const s of stations){yield;edges.push(classify(s,side));}
     const ends=stations.map((s,i)=>{
       const edge=edges[i];if(edge.kind!=='drop')return undefined;
       const nx=-s.tz*side,nz=s.tx*side,outer=s.half+edge.drop,inner=Math.max(outer-MAX_WIDTH,Math.min(s.half,outer-MIN_WIDTH)),middle=(inner+outer)/2;
@@ -154,3 +164,5 @@ export function surveyDeckParapets(city:CityData,data:TileBuildingGeometry,carri
   }
   return{parapets:out,classify};
 }
+/** The whole set at once, for tests and tools. */
+export function surveyDeckParapets(city:CityData,data:TileBuildingGeometry,carriageways:DeckStation[][]){return drain(surveyDeckParapetSteps(city,data,carriageways));}

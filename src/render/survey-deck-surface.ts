@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import type {CityData,Point2,Road} from '../types';
 import type {TileBuildingGeometry} from '../simulation/tile-format.ts';
-import {surveyDeckCarriageways,type DeckStation} from '../simulation/survey-deck-lanes.ts';
+import {surveyDeckCarriageways,type DeckStation,type TracedDeck} from '../simulation/survey-deck-lanes.ts';
 import type {DeckParapet} from '../simulation/survey-deck-parapets.ts';
 import {deckEdge,sampleRoadElevation} from '../simulation/road-surfaces.ts';
 import {PartBatches,TriangleWriter,box} from './geometry-writer.ts';
+import {drain} from './pacing.ts';
 
 const LINE=.15,DASH=3,GAP=9,MIN_LANE_WIDTH=3.4,PROFILE=5;
 // The overlay lies a few centimetres above the survey deck; a bias toward the
@@ -25,21 +26,33 @@ type P3=[number,number,number];
  * lies on those profiles. `traced` is the structure's carriageways, when the
  * caller has them. */
 export function addSurveyDeckSurface(target:THREE.Object3D,city:CityData,data:TileBuildingGeometry,materials:{asphalt:THREE.Material;paint:THREE.Material},traced=surveyDeckCarriageways(data)){
+  return drain(addSurveyDeckSurfaceSteps(target,city,data,materials,traced));
+}
+/** `addSurveyDeckSurface` in steps, pausing every few stations, lines or
+ * pavement pieces, so a paced tile build spreads it across frames. */
+export function* addSurveyDeckSurfaceSteps(target:THREE.Object3D,city:CityData,data:TileBuildingGeometry,materials:{asphalt:THREE.Material;paint:THREE.Material},traced:TracedDeck):Generator<void,THREE.Group>{
   const {carriageways,surface}=traced,batches=new PartBatches(400);
   const asphalt=biased(materials.asphalt,-2),paint=biased(materials.paint,-4);
   let lines=0,faces=0;
-  for(const piece of surveyDeckPavement(city,data,carriageways.map(c=>c.stations))){
+  const pieces=yield* surveyDeckPavementSteps(city,data,carriageways.map(c=>c.stations));
+  for(const piece of pieces){
+    if(faces%16===15)yield;
     const sink=batches.at(asphalt,piece[0][0],piece[0][2]);faces++;
     for(let k=2;k<piece.length;k++)upTriangle(sink,piece[0],piece[k-1],piece[k],[piece[0][0]/5,piece[0][2]/5],[piece[k-1][0]/5,piece[k-1][2]/5],[piece[k][0]/5,piece[k][2]/5]);
   }
-  for(const stations of uncovered(city,carriageways.map(c=>c.stations))){
+  const runs=yield* uncoveredSteps(city,carriageways.map(c=>c.stations));
+  for(const stations of runs){
     const at=(s:DeckStation,offset:number):Point2=>[s.x-s.tz*offset,s.z+s.tx*offset];
     // The deck nearest the station's own level and crossfall, so a ramp
     // passing over or under this one never captures the paint.
-    const profiles=stations.map(s=>Array.from({length:PROFILE},(_,k)=>{
-      const offset=s.half*(2*k/(PROFILE-1)-1),[x,z]=at(s,offset);
-      return surface(x,z,s.y+(offset>0?s.yLeft-s.y:s.y-s.yRight)*offset/s.half);
-    }));
+    const profiles:number[][]=[];
+    for(const s of stations){
+      if(profiles.length%16===15)yield;
+      profiles.push(Array.from({length:PROFILE},(_,k)=>{
+        const offset=s.half*(2*k/(PROFILE-1)-1),[x,z]=at(s,offset);
+        return surface(x,z,s.y+(offset>0?s.yLeft-s.y:s.y-s.yRight)*offset/s.half);
+      }));
+    }
     const height=(i:number,offset:number)=>{
       const s=stations[i],f=Math.max(0,Math.min(PROFILE-1,(offset/s.half+1)*(PROFILE-1)/2)),k=Math.min(PROFILE-2,Math.floor(f));
       return profiles[i][k]+(profiles[i][k+1]-profiles[i][k])*(f-k);
@@ -57,6 +70,7 @@ export function addSurveyDeckSurface(target:THREE.Object3D,city:CityData,data:Ti
       const first=start,count=offsets[start].length;start=end;
       if(end-first<2||count<2)continue;
       for(let k=0;k<count;k++){
+        yield;
         const line=Array.from({length:end-first},(_,j)=>point(first+j,offsets[first+j][k],.06));
         for(const part of k===0||k===count-1?[line]:dashes(line)){ribbon(batches.at(paint,part[0][0],part[0][2]),part,LINE);lines++;}
       }
@@ -142,29 +156,37 @@ function overlaps(a:Point2[],b:Point2[],margin=1e-3){
  * Artery bores, the Leverett and Storrow ramps, the new I-93 decks at City
  * Square and the Charlestown mouth), which draw their own asphalt and lanes
  * (`roadDeckGeometry`, for a tunnel's roadway too). */
-export function surveyDeckPavement(city:CityData,data:TileBuildingGeometry,carriageways:DeckStation[][],lift=.03){
+export function surveyDeckPavement(city:CityData,data:TileBuildingGeometry,carriageways:DeckStation[][],lift=.03){return drain(surveyDeckPavementSteps(city,data,carriageways,lift));}
+/** `surveyDeckPavement` in steps: a pause every 20,000 grid entries while
+ * filing the deck faces, then every 16 station pairs, after each elevated road
+ * (and every 500 roads) and every 16 paved faces. */
+function* surveyDeckPavementSteps(city:CityData,data:TileBuildingGeometry,carriageways:DeckStation[][],lift=.03):Generator<void,P3[][]>{
   type Face={tri:Point2[];x0:number;y0:number;z0:number;gx:number;gz:number;minX:number;maxX:number;minZ:number;maxZ:number};
-  const v=data.positions,faces:Face[]=[],CELL=8,cells=new Map<string,number[]>();
+  const v=data.positions,faces:Face[]=[],CELL=8,cells=new Map<string,number[]>();let work=0;
+  /** File `item` in every cell its bounds touch, returning how many. */
   const bucket=<T>(grid:Map<string,T[]>,item:T,minX:number,maxX:number,minZ:number,maxZ:number)=>{
-    for(let cx=Math.floor(minX/CELL);cx<=Math.floor(maxX/CELL);cx++)for(let cz=Math.floor(minZ/CELL);cz<=Math.floor(maxZ/CELL);cz++){const k=`${cx},${cz}`,list=grid.get(k);if(list)list.push(item);else grid.set(k,[item]);}
+    let n=0;for(let cx=Math.floor(minX/CELL);cx<=Math.floor(maxX/CELL);cx++)for(let cz=Math.floor(minZ/CELL);cz<=Math.floor(maxZ/CELL);cz++){n++;const k=`${cx},${cz}`,list=grid.get(k);if(list)list.push(item);else grid.set(k,[item]);}
+    return n;
   };
   const near=<T>(grid:Map<string,T[]>,minX:number,maxX:number,minZ:number,maxZ:number)=>{
     const out=new Set<T>();for(let cx=Math.floor(minX/CELL);cx<=Math.floor(maxX/CELL);cx++)for(let cz=Math.floor(minZ/CELL);cz<=Math.floor(maxZ/CELL);cz++)for(const item of grid.get(`${cx},${cz}`)??[])out.add(item);return out;
   };
   for(let i=0;i<data.roof.length;i+=3){
+    if(++work>=20000){work=0;yield;}
     const a=data.roof[i]*3,b=data.roof[i+1]*3,c=data.roof[i+2]*3;
     const dx1=v[b]-v[a],dy1=v[b+1]-v[a+1],dz1=v[b+2]-v[a+2],dx2=v[c]-v[a],dy2=v[c+1]-v[a+1],dz2=v[c+2]-v[a+2];
     // The same flat, upward faces the tracer drives on.
     const ny=dz1*dx2-dx1*dz2,nx=dy1*dz2-dz1*dy2,nz=dx1*dy2-dy1*dx2;if(ny<=1e-6||Math.hypot(nx,nz)/ny>.25)continue;
     const det=dx1*dz2-dz1*dx2,tri:Point2[]=[[v[a],v[a+2]],[v[b],v[b+2]],[v[c],v[c+2]]];
     const face:Face={tri,x0:v[a],y0:v[a+1],z0:v[a+2],gx:(dy1*dz2-dy2*dz1)/det,gz:(dy2*dx1-dy1*dx2)/det,minX:Math.min(v[a],v[b],v[c]),maxX:Math.max(v[a],v[b],v[c]),minZ:Math.min(v[a+2],v[b+2],v[c+2]),maxZ:Math.max(v[a+2],v[b+2],v[c+2])};
-    bucket(cells,faces.push(face)-1,face.minX,face.maxX,face.minZ,face.maxZ);
+    work+=bucket(cells,faces.push(face)-1,face.minX,face.maxX,face.minZ,face.maxZ);
   }
   const height=(f:Face,x:number,z:number)=>f.y0+f.gx*(x-f.x0)+f.gz*(z-f.z0);
   const bounds=(poly:Point2[])=>{let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of poly){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}return[minX,maxX,minZ,maxZ] as const;};
   // Faces the traced stretches cross: each pair of stations, as two triangles.
   const paved=new Set<number>();
   for(const stations of carriageways)for(let i=1;i<stations.length;i++){
+    if(i%16===0)yield;
     const a=stations[i-1],b=stations[i],at=(s:DeckStation,o:number):Point2=>[s.x-s.tz*o,s.z+s.tx*o],ha=Math.max(.1,a.half-.15),hb=Math.max(.1,b.half-.15);
     const la=at(a,ha),ra=at(a,-ha),lb=at(b,hb),rb=at(b,-hb),y=(a.y+b.y)/2,cx=(a.x+b.x)/2,cz=(a.z+b.z)/2;
     for(const part of [[la,lb,rb],[la,rb,ra]]){
@@ -173,16 +195,21 @@ export function surveyDeckPavement(city:CityData,data:TileBuildingGeometry,carri
   }
   // Sourced road decks over the survey, as the triangles roadDeckGeometry draws.
   const decks=new Map<string,{tri:Point2[];y:number[]}[]>(),[minX,maxX,minZ,maxZ]=bounds(faces.flatMap(f=>f.tri));
+  let roads=0;
   for(const road of city.roads){
+    if(++roads%500===0)yield;
     if(!road.elevations||!road.points.some(([x,z])=>x>minX-60&&x<maxX+60&&z>minZ-60&&z<maxZ+60))continue;
     const edge=(i:number,side:number)=>road.deckEdgeElevations?.[i]?.[side<0?0:1]??road.elevations![i];
     for(let i=1;i<road.points.length;i++){
       const l0=deckEdge(road,i-1,-1),r0=deckEdge(road,i-1,1),l1=deckEdge(road,i,-1),r1=deckEdge(road,i,1);
       for(const deck of [{tri:[l0,r0,l1],y:[edge(i-1,-1),edge(i-1,1),edge(i,-1)]},{tri:[r0,r1,l1],y:[edge(i-1,1),edge(i,1),edge(i,-1)]}]){const [minX,maxX,minZ,maxZ]=bounds(deck.tri);bucket(decks,deck,minX,maxX,minZ,maxZ);}
     }
+    yield;
   }
   const out:P3[][]=[];
+  let shaped=0;
   for(const f of [...paved].sort((a,b)=>a-b)){
+    if(++shaped%16===0)yield;
     const face=faces[f];let pieces=[face.tri];
     for(const deck of near(decks,face.minX,face.maxX,face.minZ,face.maxZ)){
       const [minX,maxX,minZ,maxZ]=bounds(deck.tri);if(maxX<face.minX||minX>face.maxX||maxZ<face.minZ||minZ>face.maxZ||!overlaps(face.tri,deck.tri))continue;
@@ -214,10 +241,14 @@ function ribbon(sink:TriangleWriter,line:P3[],width:number){
 /** The stretches of each carriageway no sourced road deck already paves: the
  * Central Artery and Leverett Connector ramps join the survey at its lips and
  * draw their own asphalt and lanes over the last 50 m of it. */
-export function uncovered(city:CityData,carriageways:DeckStation[][]){
+export function uncovered(city:CityData,carriageways:DeckStation[][]){return drain(uncoveredSteps(city,carriageways));}
+/** `uncovered` in steps, a pause after each elevated road, every 500 roads
+ * and every 16 stations. */
+function* uncoveredSteps(city:CityData,carriageways:DeckStation[][]):Generator<void,DeckStation[][]>{
   // Segments of the elevated roads, bucketed in 25 m cells by their reach.
-  const cells=new Map<string,{road:Road;a:Point2;b:Point2}[]>();
+  const cells=new Map<string,{road:Road;a:Point2;b:Point2}[]>();let n=0;
   for(const road of city.roads){
+    if(++n%500===0)yield;
     if(!road.elevations)continue;const r=road.width/2;
     for(let i=1;i<road.points.length;i++){
       const a=road.points[i-1],b=road.points[i];
@@ -225,13 +256,14 @@ export function uncovered(city:CityData,carriageways:DeckStation[][]){
         const k=`${cx},${cz}`,list=cells.get(k),entry={road,a,b};if(list)list.push(entry);else cells.set(k,[entry]);
       }
     }
+    yield;
   }
   const covered=(s:DeckStation)=>(cells.get(`${Math.floor(s.x/25)},${Math.floor(s.z/25)}`)??[]).some(({road,a,b})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((s.x-a[0])*dx+(s.z-a[1])*dz)/(dx*dx+dz*dz||1)));
     return Math.hypot(s.x-a[0]-dx*t,s.z-a[1]-dz*t)<road.width/2&&Math.abs(sampleRoadElevation(city,road,s.x,s.z)-s.y)<1.5;
   });
   const out:DeckStation[][]=[];
-  for(const stations of carriageways){let run:DeckStation[]=[];for(const s of stations){if(covered(s)){if(run.length>1)out.push(run);run=[];}else run.push(s);}if(run.length>1)out.push(run);}
+  for(const stations of carriageways){let run:DeckStation[]=[];for(const [i,s] of stations.entries()){if(i%16===15)yield;if(covered(s)){if(run.length>1)out.push(run);run=[];}else run.push(s);}if(run.length>1)out.push(run);}
   return out;
 }
 

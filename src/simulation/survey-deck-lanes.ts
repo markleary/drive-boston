@@ -1,10 +1,14 @@
 import type {TileBuildingGeometry} from './tile-format.ts';
+import {drain} from '../render/pacing.ts';
 
 /** One measured cross-section of a surveyed carriageway: its centre between the
  * barriers (or deck edges), the unit direction of travel, the half width, the
  * deck height at the centre and at both edges, and the lanes painted there. */
 export interface DeckStation{x:number;z:number;y:number;tx:number;tz:number;half:number;yLeft:number;yRight:number;lanes:number;}
 export interface DeckCarriageway{stations:DeckStation[];}
+/** A structure's traced carriageways, and `surface`: the deck height nearest a
+ * level, for draping the pavement and its paint. */
+export interface TracedDeck{carriageways:DeckCarriageway[];surface:(x:number,z:number,near:number)=>number;}
 
 const STEP=2,MARCH=.4,REACH=26,LANE=3.65,CELL=4,STRIDE=14;
 /** Lanes on a carriageway this wide: a narrow ramp is all lanes, an interstate
@@ -14,16 +18,20 @@ export const deckLanes=(width:number)=>Math.max(1,Math.round((width-Math.min(4.2
 /** Height queries on the upward faces of a surveyed structure mesh. Flat faces
  * are drivable deck; any upward face standing .25-3.5 m above the deck (a
  * barrier or parapet top, a tower leg) blocks it. */
-export function surveyDeckIndex(data:TileBuildingGeometry){
-  const v=data.positions,list:number[]=[],cells=new Map<number,number[]>(),key=(cx:number,cz:number)=>(cx+32768)*65536+cz+32768;
+export function surveyDeckIndex(data:TileBuildingGeometry){return drain(surveyDeckIndexSteps(data));}
+/** `surveyDeckIndex` built in steps, a pause every 20,000 grid entries (a few
+ * faces span a thousand cells each). */
+function* surveyDeckIndexSteps(data:TileBuildingGeometry){
+  const v=data.positions,list:number[]=[],cells=new Map<number,number[]>(),key=(cx:number,cz:number)=>(cx+32768)*65536+cz+32768;let work=0;
   for(let i=0;i<data.roof.length;i+=3){
+    if(++work>=20000){work=0;yield;}
     const a=data.roof[i]*3,b=data.roof[i+1]*3,c=data.roof[i+2]*3;
     const ax=v[b]-v[a],ay=v[b+1]-v[a+1],az=v[b+2]-v[a+2],bx=v[c]-v[a],by=v[c+1]-v[a+1],bz=v[c+2]-v[a+2];
     const ny=az*bx-ax*bz,nx=ay*bz-az*by,nz=ax*by-ay*bx;if(ny<=1e-6)continue;
     const f=list.length/STRIDE,minX=Math.min(v[a],v[b],v[c]),maxX=Math.max(v[a],v[b],v[c]),minZ=Math.min(v[a+2],v[b+2],v[c+2]),maxZ=Math.max(v[a+2],v[b+2],v[c+2]);
     list.push(v[a],v[a+1],v[a+2],v[b],v[b+1],v[b+2],v[c],v[c+1],v[c+2],Math.hypot(nx,nz)/ny<=.25?1:0,minX,maxX,minZ,maxZ);
     for(let cx=Math.floor(minX/CELL);cx<=Math.floor(maxX/CELL);cx++)for(let cz=Math.floor(minZ/CELL);cz<=Math.floor(maxZ/CELL);cz++){
-      const k=key(cx,cz),cell=cells.get(k);if(cell)cell.push(f);else cells.set(k,[f]);
+      work++;const k=key(cx,cz),cell=cells.get(k);if(cell)cell.push(f);else cells.set(k,[f]);
     }
   }
   const faces=Float64Array.from(list);
@@ -56,10 +64,11 @@ export function surveyDeckIndex(data:TileBuildingGeometry){
 /** Trace every carriageway of a surveyed structure (the Zakim and its
  * Charlestown viaduct) between its barriers. Each walk measures the deck across
  * its direction every 2 m, recentres between the measured edges and stops at a
- * deck end, a split or merge, or a carriageway already traced. `surface` gives
- * the deck height nearest a level, for draping the pavement and its paint. */
-export function surveyDeckCarriageways(data:TileBuildingGeometry,{minWidth=2.5,maxWidth=45}={}){
-  const index=surveyDeckIndex(data),deck=index.deck;
+ * deck end, a split or merge, or a carriageway already traced. It runs in
+ * steps, pausing at every station walked and every face tried as a seed, so a
+ * paced tile build spreads its tenth of a second across frames. */
+export function* surveyDeckCarriagewaySteps(data:TileBuildingGeometry,{minWidth=2.5,maxWidth=45}={}):Generator<void,TracedDeck>{
+  const index=yield* surveyDeckIndexSteps(data),deck=index.deck;
   const across=(x:number,z:number,y:number,nx:number,nz:number)=>{
     const centre=deck(x,z,y);if(Number.isNaN(centre))return undefined;
     // March out to the first miss, then halve the gap twice: the edge lies
@@ -78,9 +87,10 @@ export function surveyDeckCarriageways(data:TileBuildingGeometry,{minWidth=2.5,m
   const claim=(s:DeckStation)=>{
     for(let o=-s.half;o<=s.half;o+=1){const x=s.x-s.tz*o,z=s.z+s.tx*o,k=cell(x,z),list=occupied.get(k);if(list)list.push(s.y);else occupied.set(k,[s.y]);}
   };
-  const walk=(start:DeckStation,sign:number)=>{
+  function* walk(start:DeckStation,sign:number):Generator<void,DeckStation[]>{
     const out:DeckStation[]=[];let c=start,tx=start.tx*sign,tz=start.tz*sign,grade=0;
     for(let i=0;i<4000;i++){
+      yield;
       const px=c.x+tx*STEP,pz=c.z+tz*STEP,m=across(px,pz,c.y+grade*STEP,-tz,tx);if(!m)break;
       const width=m.hi-m.lo;if(width<minWidth||width>maxWidth)break;
       // A sudden change is a split or a merge: the other branch is its own walk.
@@ -94,9 +104,10 @@ export function surveyDeckCarriageways(data:TileBuildingGeometry,{minWidth=2.5,m
       out.push(s);c={...s,tx,tz};
     }
     return out;
-  };
-  const result:DeckCarriageway[]=[],tried=new Set<string>();
+  }
+  const result:DeckCarriageway[]=[],tried=new Set<string>();let visited=0;
   for(const f of index.flatFaces()){
+    if(++visited%64===0)yield;
     const x=(f[0]+f[3]+f[6])/3,z=(f[2]+f[5]+f[8])/3,y=(f[1]+f[4]+f[7])/3,k=`${cell(x,z)},${Math.round(y)}`;
     if(tried.has(k)||taken(x,z,y))continue;tried.add(k);
     // The narrowest cross-section is square to the carriageway.
@@ -105,11 +116,12 @@ export function surveyDeckCarriageways(data:TileBuildingGeometry,{minWidth=2.5,m
     // Every 12 degrees, then refined to 1.5 degrees around the narrowest.
     for(let a=0;a<180;a+=12)if(!tryAngle(a*Math.PI/180))break;
     for(const step of [6,3,1.5])if(best){const angle=best.angle;tryAngle(angle-step*Math.PI/180);tryAngle(angle+step*Math.PI/180);}
+    yield;
     if(!best||best.width<minWidth||best.width>maxWidth)continue;
     const nx=Math.cos(best.angle),nz=Math.sin(best.angle),mid=(best.m.lo+best.m.hi)/2,sx=x+nx*mid,sz=z+nz*mid,sy=deck(sx,sz,best.m.y);
     if(Number.isNaN(sy)||taken(sx,sz,sy))continue;
     const seed:DeckStation={x:sx,z:sz,y:sy,tx:nz,tz:-nx,half:best.width/2,yLeft:best.m.yLeft,yRight:best.m.yRight,lanes:0};
-    const stations=[...walk(seed,-1).reverse(),seed,...walk(seed,1)];
+    const back=yield* walk(seed,-1),ahead=yield* walk(seed,1),stations=[...back.reverse(),seed,...ahead];
     if(stations.length<4)continue;
     for(const s of stations)claim(s);
     // A strip mostly under the deck is structure, not roadway: the tower struts beneath the Zakim's deck.
@@ -118,6 +130,8 @@ export function surveyDeckCarriageways(data:TileBuildingGeometry,{minWidth=2.5,m
   }
   return{carriageways:result,surface:index.surface};
 }
+/** The whole trace at once, for tests and tools. */
+export function surveyDeckCarriageways(data:TileBuildingGeometry,options:{minWidth?:number;maxWidth?:number}={}){return drain(surveyDeckCarriagewaySteps(data,options));}
 
 /** Lane counts follow the width but only change where the new count holds for
  * 30 m, so a width hovering at a threshold does not make the lines flicker. */

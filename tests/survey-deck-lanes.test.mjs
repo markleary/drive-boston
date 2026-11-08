@@ -3,9 +3,10 @@ import test from 'node:test';
 import * as THREE from 'three';
 import {resolveCity,loadTile} from '../src/simulation/city-tiles.ts';
 import {Ray} from '@dimforge/rapier3d-compat';
-import {surveyDeckCarriageways,surveyDeckIndex,deckLanes} from '../src/simulation/survey-deck-lanes.ts';
-import {surveyDeckParapets} from '../src/simulation/survey-deck-parapets.ts';
-import {addSurveyDeckSurface,addSurveyDeckParapets,surveyDeckPavement,dashes,uncovered} from '../src/render/survey-deck-surface.ts';
+import {surveyDeckCarriageways,surveyDeckCarriagewaySteps,surveyDeckIndex,deckLanes} from '../src/simulation/survey-deck-lanes.ts';
+import {surveyDeckParapets,surveyDeckParapetSteps} from '../src/simulation/survey-deck-parapets.ts';
+import {surveyViaductSupportSteps} from '../src/simulation/viaduct-supports.ts';
+import {addSurveyDeckSurface,addSurveyDeckSurfaceSteps,addSurveyDeckParapets,surveyDeckPavement,dashes,uncovered} from '../src/render/survey-deck-surface.ts';
 import {sampleRoadElevation,roadProjection,bridgeBarriers} from '../src/simulation/road-surfaces.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {read,readJson} from './helpers/metro-city.mjs';
@@ -124,6 +125,20 @@ test('parapets fill the survey\'s other gaps and hand over to road deck rails',(
  for(const p of parapets){assert.equal(p.height,1.2);assert.ok(p.width>=.45-1e-9&&p.width<=1.2+1e-9);for(const v of [p.x,p.y,p.z,p.yaw,p.slope,p.length])assert.ok(Number.isFinite(v));}
  const group=addSurveyDeckParapets(new THREE.Group(),parapets,new THREE.MeshStandardMaterial());
  assert.equal(group.userData.parapets,parapets.length);group.traverse(o=>o.geometry?.dispose());
+});
+
+test('dressing the Zakim pauses between small units of work, for a paced tile build',()=>{
+ // Each step once ran as one block of about a tenth of a second, many times the streamer's 4 ms frame budget.
+ const pauses=steps=>{let n=0,r=steps.next();while(!r.done){n++;r=steps.next();}return{n,value:r.value};};
+ const stations=carriageways.reduce((n,c)=>n+c.stations.length,0);
+ const piers=pauses(surveyViaductSupportSteps(metro,data));
+ assert.ok(piers.n>=360&&piers.value.length>100,`${piers.n} pauses planning ${piers.value.length} piers (at least one per section)`);
+ const trace=pauses(surveyDeckCarriagewaySteps(data));assert.equal(trace.value.carriageways.length,carriageways.length);
+ assert.ok(trace.n>=stations,`${trace.n} pauses tracing ${stations} stations`);
+ const scan=pauses(surveyDeckParapetSteps(metro,data,trace.value.carriageways.map(c=>c.stations)));
+ assert.equal(scan.value.parapets.length,parapets.length);assert.ok(scan.n>=2*stations,`${scan.n} pauses classifying both edges of ${stations} stations`);
+ const surface=pauses(addSurveyDeckSurfaceSteps(new THREE.Group(),metro,data,{asphalt:new THREE.MeshBasicMaterial(),paint:new THREE.MeshBasicMaterial()},trace.value));
+ assert.ok(surface.n>=stations/8&&surface.value.userData.faces>1000,`${surface.n} pauses paving ${surface.value.userData.faces} pieces`);
 });
 
 test('a car cannot drive through a deck parapet',async()=>{
