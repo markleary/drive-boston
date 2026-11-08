@@ -22,6 +22,7 @@ import {waterHeight} from '../simulation/water-level.ts';
 import {inTunnelApproach} from '../simulation/tunnels.ts';
 import {inGreenway,replacesGreenwayPark,outsideGreenwayPath} from '../simulation/greenway.ts';
 import {greenwayDetailSteps} from './greenway';
+import { fellsViewHeight, fellsWoodlandSteps, isFellsWoodland, type FellsViewHeight } from './fells-woodland.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -42,10 +43,12 @@ function distanceToSegment(p:Point2,a:Point2,b:Point2){
   return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dz);
 }
 
-let parkMaterials:{lawn:THREE.Material;gardenLawn:THREE.Material;pathMaterial:THREE.Material;waterMaterial:THREE.Material;iron:THREE.Material;wood:THREE.Material;stone:THREE.Material;lampGlass:THREE.Material}|undefined;
+let parkMaterials:{lawn:THREE.Material;gardenLawn:THREE.Material;forestFloor:THREE.Material;pathMaterial:THREE.Material;waterMaterial:THREE.Material;iron:THREE.Material;wood:THREE.Material;stone:THREE.Material;lampGlass:THREE.Material}|undefined;
 export interface ParkOptions {
   /** The visible shoreline slopes share their mesh with wheel collision. */
   onShore?:(vertices:Float32Array,indices:Uint32Array)=>void;
+  onRock?:(vertices:Float32Array,indices:Uint32Array)=>void;
+  fellsViewHeight?:FellsViewHeight;
   /** Streamed tile: surfaces are clipped to this box and only paths/ponds owned by it are built. */
   bounds?:Bounds; owner?:string; pathOwned?:(path:ParkPath)=>boolean; treeField?:TreeField; target?:THREE.Object3D;
   budgets?:{trees?:number;benches?:number};
@@ -59,6 +62,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const group=new THREE.Group();group.name='Boston parks and waterways';const pace=options.pace;
   const bounds=options.bounds;
   const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3&&!replacesGreenwayPark(p));
+  const woodland=parks.filter(isFellsWoodland);
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
   const paths=(city.parkPaths??[]).filter(p=>options.pathOwned?options.pathOwned(p):true);
   // Lawns and plazas lie a few centimetres above the terrain (depth bias 4) and
@@ -66,19 +70,19 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   // heights decide at grazing angles; an unbiased lawn would overwrite the
   // concrete of a paved island the parks layer also lists as parkway land.
   const ground=<T extends THREE.Material>(m:T)=>{m.polygonOffset=true;m.polygonOffsetFactor=1;m.polygonOffsetUnits=3;return m;};
-  parkMaterials??={lawn:ground(createGrassMaterial('#c7cfb0')),gardenLawn:ground(createGrassMaterial('#ccd5b6')),pathMaterial:ground(new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96})),
+  parkMaterials??={lawn:ground(createGrassMaterial('#c7cfb0')),gardenLawn:ground(createGrassMaterial('#ccd5b6')),forestFloor:ground(createGrassMaterial('#a2a087')),pathMaterial:ground(new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96})),
     waterMaterial:createWaterMaterial(),
     iron:new THREE.MeshStandardMaterial({color:'#303f36',metalness:.35,roughness:.65}),wood:new THREE.MeshStandardMaterial({color:'#876b45',roughness:.91}),stone:new THREE.MeshStandardMaterial({color:'#baaf96',roughness:.91}),
     lampGlass:new THREE.MeshStandardMaterial({color:'#f4e9ca',emissive:'#ffdba1',emissiveIntensity:.25,roughness:.35})};
-  const {lawn,gardenLawn,pathMaterial,waterMaterial,iron,wood,stone,lampGlass}=parkMaterials;
+  const {lawn,gardenLawn,forestFloor,pathMaterial,waterMaterial,iron,wood,stone,lampGlass}=parkMaterials;
   const treeBudget=options.budgets?.trees??760,benchBudget=options.budgets?.benches??140;
   const batches=new PartBatches(240),matrix=new THREE.Matrix4();
   const part=(g:Part,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{batches.part(g,m,matrix.makeRotationY(yaw).setPosition(x,y,z));};
-  const lawns:THREE.BufferGeometry[]=[],gardens:THREE.BufferGeometry[]=[],plazas:THREE.BufferGeometry[]=[],waterSheets:THREE.BufferGeometry[]=[],bankPositions:number[]=[];
+  const lawns:THREE.BufferGeometry[]=[],gardens:THREE.BufferGeometry[]=[],woods:THREE.BufferGeometry[]=[],plazas:THREE.BufferGeometry[]=[],waterSheets:THREE.BufferGeometry[]=[],bankPositions:number[]=[];
   for(const park of parks){
     if(due(pace))yield;
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
-    const list=/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
+    const list=isFellsWoodland(park)?woods:/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
     const geometry=clipPortalSurface(city,parkSurface(city,park.rings,.024,undefined,bounds));if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
   }
   for(const water of waters){
@@ -97,7 +101,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     options.onShore?.(vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
     const mesh=new THREE.Mesh(bank,lawn);mesh.name='Sloping water banks';mesh.receiveShadow=true;group.add(mesh);
   }
-  for(const [list,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[plazas,pathMaterial,'Plazas'],[waterSheets,waterMaterial,'Water']] as const){
+  for(const [list,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[woods,forestFloor,'Fells forest floor'],[plazas,pathMaterial,'Plazas'],[waterSheets,waterMaterial,'Water']] as const){
     if(!list.length)continue;
     const merged=mergeGeometries(list,false);list.forEach(g=>g.dispose());if(!merged)continue;merged.computeBoundingSphere();
     const mesh=new THREE.Mesh(merged,material);mesh.name=name;mesh.receiveShadow=true;if(material===waterMaterial)mesh.userData.noAO=true;group.add(mesh);
@@ -127,18 +131,20 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   // Spatially index roads, buildings and paths so landscape preparation stays
   // bounded when the city grows; every decoration remains clear of travel lanes.
-  const cell=50,segments=new Map<string,{a:Point2;b:Point2;clearance:number}[]>(),buildings=new Map<string,Point2[][]>();
+  const cell=50,segments=new Map<string,{a:Point2;b:Point2;clearance:number;trail:boolean}[]>(),buildings=new Map<string,Point2[][]>();
+  const woodlandMargin=woodland.length?15:0;
   const key=(x:number,z:number)=>`${Math.floor(x/cell)},${Math.floor(z/cell)}`;
-  function segment(a:Point2,b:Point2,clearance:number){
-    for(let x=Math.floor((Math.min(a[0],b[0])-clearance)/cell);x<=Math.floor((Math.max(a[0],b[0])+clearance)/cell);x++)for(let z=Math.floor((Math.min(a[1],b[1])-clearance)/cell);z<=Math.floor((Math.max(a[1],b[1])+clearance)/cell);z++){
-      const k=`${x},${z}`,items=segments.get(k)??[];items.push({a,b,clearance});segments.set(k,items);
+  function segment(a:Point2,b:Point2,clearance:number,trail=false){
+    const margin=clearance+woodlandMargin;
+    for(let x=Math.floor((Math.min(a[0],b[0])-margin)/cell);x<=Math.floor((Math.max(a[0],b[0])+margin)/cell);x++)for(let z=Math.floor((Math.min(a[1],b[1])-margin)/cell);z<=Math.floor((Math.max(a[1],b[1])+margin)/cell);z++){
+      const k=`${x},${z}`,items=segments.get(k)??[];items.push({a,b,clearance,trail});segments.set(k,items);
     }
   }
   for(const r of city.roads){if(r.tunnel)continue;for(let i=1;i<r.points.length;i++)segment(r.points[i-1],r.points[i],r.width/2+3.4);}
-  for(const p of paths)for(let i=1;i<p.points.length;i++)segment(p.points[i-1],p.points[i],p.width/2+1.7);
+  for(const p of paths)for(let i=1;i<p.points.length;i++)segment(p.points[i-1],p.points[i],p.width/2+1.7,true);
   for(const b of city.buildings){
     const p=b.footprint;if(p.length<3)continue;
-    for(let x=Math.floor(Math.min(...p.map(v=>v[0]))/cell);x<=Math.floor(Math.max(...p.map(v=>v[0]))/cell);x++)for(let z=Math.floor(Math.min(...p.map(v=>v[1]))/cell);z<=Math.floor(Math.max(...p.map(v=>v[1]))/cell);z++){
+    for(let x=Math.floor((Math.min(...p.map(v=>v[0]))-woodlandMargin)/cell);x<=Math.floor((Math.max(...p.map(v=>v[0]))+woodlandMargin)/cell);x++)for(let z=Math.floor((Math.min(...p.map(v=>v[1]))-woodlandMargin)/cell);z<=Math.floor((Math.max(...p.map(v=>v[1]))+woodlandMargin)/cell);z++){
       const k=`${x},${z}`,items=buildings.get(k)??[];items.push(p);buildings.set(k,items);
     }
   }
@@ -149,9 +155,33 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
   const clipped=(p:CityArea):Bounds=>{const b=areaBounds(p);return bounds?{minX:Math.max(b.minX,bounds.minX),maxX:Math.min(b.maxX,bounds.maxX),minZ:Math.max(b.minZ,bounds.minZ),maxZ:Math.min(b.maxZ,bounds.maxZ)}:b;};
+  let woodlandTrees=0;
+  if(woodland.length){
+    const extents=woodland.map(clipped);
+    const woodlandBounds={
+      minX:Math.min(...extents.map(b=>b.minX)),maxX:Math.max(...extents.map(b=>b.maxX)),
+      minZ:Math.min(...extents.map(b=>b.minZ)),maxZ:Math.max(...extents.map(b=>b.maxZ)),
+    };
+    const nearRing=(p:Point2,ring:Point2[],reach:number)=>ring.some((a,i)=>distanceToSegment(p,a,ring[(i+1)%ring.length])<reach);
+    const contains=(p:Point2)=>woodland.some((a,i)=>{
+      const b=extents[i];
+      return p[0]>=b.minX&&p[0]<b.maxX&&p[1]>=b.minZ&&p[1]<b.maxZ&&insideArea(p,a);
+    });
+    const clear=(p:Point2,reach:number,solid:boolean)=>{
+      const shore=solid?reach+1:1;
+      return !inTunnelApproach(city,...p)
+        && !(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance+(s.trail&&!solid?0:reach))
+        && !(buildings.get(key(...p))??[]).some(b=>pointInside(p,b)||nearRing(p,b,reach))
+        && !waterBounds.some(w=>p[0]>=w.minX-shore&&p[0]<=w.maxX+shore&&p[1]>=w.minZ-shore&&p[1]<=w.maxZ+shore
+          && (insideArea(p,w.area)||w.area.rings.some(r=>nearRing(p,r,shore))));
+    };
+    woodlandTrees=yield* fellsWoodlandSteps(city,group,{bounds:woodlandBounds,contains,clear,
+      viewHeight:options.fellsViewHeight??fellsViewHeight(city),onRock:options.onRock,pace});
+  }
   const limits=selected.map(p=>{const b=clipped(p),area=Math.max(0,b.maxX-b.minX)*Math.max(0,b.maxZ-b.minZ);return /public garden/i.test(p.name)?190:/boston common/i.test(p.name)?260:/fens/i.test(p.name)?190:Math.min(bounds?60:35,Math.round(area/1300));});
   for(const [index,park] of selected.entries()){
     if(due(pace))yield;
+    if(isFellsWoodland(park))continue;
     const b=clipped(park),limit=limits[index];let count=0;if(b.maxX<=b.minX||b.maxZ<=b.minZ)continue;
     for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length<treeBudget;attempt++){
       const p:Point2=[b.minX+random()*(b.maxX-b.minX),b.minZ+random()*(b.maxZ-b.minZ)];if(!insideArea(p,park)||!safe(p))continue;
@@ -190,7 +220,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   for(const mesh of batches.meshes()){mesh.castShadow=mesh.material!==pathMaterial;mesh.receiveShadow=true;group.add(mesh);}
   const greenwayGroup=yield* greenwayDetailSteps(city,options);if(greenwayGroup.userData.parcels)group.add(greenwayGroup);
-  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting and furnishings are procedural'};
+  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting, outcrops and furnishings are procedural'};
   (options.target??scene).add(group);return group;
 }
 

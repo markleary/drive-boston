@@ -53,6 +53,7 @@ import { townFrontages } from './town-frontages';
 import { housePlan } from './house-plan';
 import { housePalette, houseRoof } from './house-styles';
 import { cityParkDetailSteps, areaBoundsOf, parkSurface, type Bounds } from './city-parks';
+import { fellsViewHeight } from './fells-woodland.ts';
 import type { TreeField } from './foliage';
 
 export interface TileContext {
@@ -127,6 +128,7 @@ export function createTileBuilder(ctx: TileContext) {
   const principalParks = (city.parks ?? []).filter(p => /^(Boston Common|Public Garden)$/.test(p.name) && p.rings[0]);
   const parkStructure = (b: Building) => b.height < 30 && principalParks.some(p => { const box = areaBounds.get(p)!; return b.center[0] >= box.minX && b.center[0] <= box.maxX && b.center[1] >= box.minZ && b.center[1] <= box.maxZ && pointInside(b.center, p.rings[0]) && !p.rings.slice(1).some(r => pointInside(b.center, r)); });
   const grid = terrainGrid(city) ?? (() => { throw new Error('A metro city needs its elevation grid before tiles can be built'); })();
+  const woodlandViewHeight = fellsViewHeight(city);
   let junctions: JunctionIndex | undefined;
 
   /** `partial` is owned by the caller so an interrupted build can be undone with `abandon`. */
@@ -458,7 +460,9 @@ export function createTileBuilder(ctx: TileContext) {
 
     {
       for(const path of tile.parkPaths)colliders.push(...physics.addFootbridge(subCity,path));
-      const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group, budgets: { trees: 120, benches: 25 }, pace, onShore:(vertices,indices)=>colliders.push(physics.addStaticMesh(vertices,indices)) }));
+      const addLandscapeCollider = (vertices: Float32Array, indices: Uint32Array) => { colliders.push(physics.addStaticMesh(vertices, indices)); };
+      const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group,
+        budgets: { trees: 120, benches: 25 }, pace, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider }));
       stats.parkTrees = parks.userData.trees ?? 0;
     }
     yield 'parks';
