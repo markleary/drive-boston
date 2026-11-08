@@ -8,6 +8,10 @@ import {PartBatches,TriangleWriter,box} from './geometry-writer.ts';
 import {drain} from './pacing.ts';
 
 const LINE=.15,DASH=3,GAP=9,MIN_LANE_WIDTH=3.4,PROFILE=5;
+// A sourced road deck paves the survey where it runs from 1.5 cm under it (its
+// asphalt, drawn 1.8 to 2.5 cm over the deck, still shows) to 1.5 m over it. A
+// deck deeper under the survey is hidden by it and leaves it paved and painted.
+const UNDER=.015,OVER=1.5;
 // The overlay lies a few centimetres above the survey deck; a bias toward the
 // camera keeps it, and the paint above it, from flickering with the deck at range.
 const decked=new WeakMap<THREE.Material,THREE.Material>();
@@ -213,14 +217,15 @@ function* surveyDeckPavementSteps(city:CityData,data:TileBuildingGeometry,carria
     const face=faces[f];let pieces=[face.tri];
     for(const deck of near(decks,face.minX,face.maxX,face.minZ,face.maxZ)){
       const [minX,maxX,minZ,maxZ]=bounds(deck.tri);if(maxX<face.minX||minX>face.maxX||maxZ<face.minZ||minZ>face.maxZ||!overlaps(face.tri,deck.tri))continue;
-      // Only where the road deck runs within 1.5 m of this face (a ramp
-      // climbing out from under the survey paves it from that line on).
+      // Only where the road deck has reached this face (UNDER, OVER): a ramp
+      // climbing out from under the survey paves it from the line where it
+      // surfaces, one passing beneath leaves it paved.
       const gap=deck.tri.map(([x,z],k)=>deck.y[k]-height(face,x,z));
       let hole=deck.tri;
-      if(gap.some(g=>Math.abs(g)>=1.5)){
+      if(gap.some(g=>g<-UNDER||g>=OVER)){
         const [a,b,c]=deck.tri,d1x=b[0]-a[0],d1z=b[1]-a[1],d2x=c[0]-a[0],d2z=c[1]-a[1],det=d1x*d2z-d1z*d2x;if(Math.abs(det)<1e-9)continue;
         const gx=((gap[1]-gap[0])*d2z-(gap[2]-gap[0])*d1z)/det,gz=((gap[2]-gap[0])*d1x-(gap[1]-gap[0])*d2x)/det,at=(p:Point2)=>gap[0]+gx*(p[0]-a[0])+gz*(p[1]-a[1]);
-        hole=within(within(hole,p=>1.5-at(p)),p=>at(p)+1.5);if(hole.length<3||Math.abs(area2(hole))<1e-3)continue;
+        hole=within(within(hole,p=>OVER-at(p)),p=>at(p)+UNDER);if(hole.length<3||Math.abs(area2(hole))<1e-3)continue;
       }
       pieces=pieces.flatMap(p=>overlaps(p,hole)?subtract(p,hole):[p]);
     }
@@ -238,9 +243,10 @@ function ribbon(sink:TriangleWriter,line:P3[],width:number){
   }
 }
 
-/** The stretches of each carriageway no sourced road deck already paves: the
- * Central Artery and Leverett Connector ramps join the survey at its lips and
- * draw their own asphalt and lanes over the last 50 m of it. */
+/** The stretches of each carriageway no sourced road deck already paves (one
+ * from UNDER under the station to OVER over it): the Central Artery and
+ * Leverett Connector ramps join the survey at its lips and draw their own
+ * asphalt and lanes over the last 50 m of it. */
 export function uncovered(city:CityData,carriageways:DeckStation[][]){return drain(uncoveredSteps(city,carriageways));}
 /** `uncovered` in steps, a pause after each elevated road, every 500 roads
  * and every 16 stations. */
@@ -260,7 +266,8 @@ function* uncoveredSteps(city:CityData,carriageways:DeckStation[][]):Generator<v
   }
   const covered=(s:DeckStation)=>(cells.get(`${Math.floor(s.x/25)},${Math.floor(s.z/25)}`)??[]).some(({road,a,b})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((s.x-a[0])*dx+(s.z-a[1])*dz)/(dx*dx+dz*dz||1)));
-    return Math.hypot(s.x-a[0]-dx*t,s.z-a[1]-dz*t)<road.width/2&&Math.abs(sampleRoadElevation(city,road,s.x,s.z)-s.y)<1.5;
+    if(Math.hypot(s.x-a[0]-dx*t,s.z-a[1]-dz*t)>=road.width/2)return false;
+    const over=sampleRoadElevation(city,road,s.x,s.z)-s.y;return over>=-UNDER&&over<OVER;
   });
   const out:DeckStation[][]=[];
   for(const stations of carriageways){let run:DeckStation[]=[];for(const [i,s] of stations.entries()){if(i%16===15)yield;if(covered(s)){if(run.length>1)out.push(run);run=[];}else run.push(s);}if(run.length>1)out.push(run);}

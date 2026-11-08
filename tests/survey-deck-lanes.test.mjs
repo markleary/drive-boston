@@ -20,6 +20,10 @@ const ends=p=>{const hx=Math.sin(p.yaw)*p.length/2,hz=Math.cos(p.yaw)*p.length/2
 const offLine=(p,x,z)=>{const [[ax,az],[bx,bz]]=ends(p),dx=bx-ax,dz=bz-az,t=Math.max(0,Math.min(1,((x-ax)*dx+(z-az)*dz)/(dx*dx+dz*dz)));return Math.hypot(x-ax-dx*t,z-az-dz*t);};
 /** The traced edge on the given side of a station: its point, deck height and side sign. */
 const edge=(s,side)=>({x:s.x-s.tz*side*s.half,z:s.z+s.tx*side*s.half,y:side>0?s.yLeft:s.yRight,side});
+/** Whether (x, z) lies in a convex pavement piece. */
+const inside=(poly,x,z)=>{let sign=0;for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length],c=(b[0]-a[0])*(z-a[2])-(b[2]-a[2])*(x-a[0]);if(Math.abs(c)<1e-9)continue;if(sign&&Math.sign(c)!==sign)return false;sign=Math.sign(c);}return true;};
+/** Whether a road deck at `over` metres over the survey deck paves it in the survey's place. */
+const paves=over=>over>=-.015&&over<1.5;
 
 test('lane counts follow the measured width, keeping interstate shoulders',()=>{
  assert.equal(deckLanes(19.5),4,'a Zakim mainline deck');assert.equal(deckLanes(7.1),2,'a two-lane cantilever ramp');
@@ -55,7 +59,7 @@ test('no two traced carriageways claim the same deck',()=>{
 test('stretches the Central Artery and Leverett ramps already pave keep only their own markings',()=>{
  const runs=uncovered(metro,carriageways.map(c=>c.stations)),decks=metro.roads.filter(r=>r.elevations&&/^(central-artery|leverett)/.test(r.id));
  assert.ok(decks.length>0);
- for(const run of runs)for(const s of run)for(const r of decks)assert.ok(!(roadProjection(r,s.x,s.z).distance<r.width/2&&Math.abs(sampleRoadElevation(metro,r,s.x,s.z)-s.y)<1.5),`${r.id} and the survey deck both pave ${s.x.toFixed(0)}, ${s.z.toFixed(0)}`);
+ for(const run of runs)for(const s of run)for(const r of decks)assert.ok(!(roadProjection(r,s.x,s.z).distance<r.width/2&&paves(sampleRoadElevation(metro,r,s.x,s.z)-s.y)),`${r.id} and the survey deck both pave ${s.x.toFixed(0)}, ${s.z.toFixed(0)}`);
  const kept=runs.reduce((n,r)=>n+r.length,0),all=carriageways.reduce((n,c)=>n+c.stations.length,0);
  assert.ok(kept<all&&kept>all*.97);
 });
@@ -86,12 +90,29 @@ test('the pavement runs on across the joints between traced carriageways',()=>{
  // Each traced stretch ends square to itself, so the old strip pavement left a
  // bare wedge where two met at an angle; the reported one is north of the Charlestown split.
  const pieces=surveyDeckPavement(metro,data,carriageways.map(c=>c.stations)),index=surveyDeckIndex(data);
- const inside=(poly,x,z)=>{let sign=0;for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length],c=(b[0]-a[0])*(z-a[2])-(b[2]-a[2])*(x-a[0]);if(Math.abs(c)<1e-9)continue;if(sign&&Math.sign(c)!==sign)return false;sign=Math.sign(c);}return true;};
  for(const [x,z] of [[-160.4,-3614.0],[-180.7,-3618.6],[-137.7,-3226.0],[348.0,-2631.3]]){
   const piece=pieces.find(p=>inside(p,x,z));assert.ok(piece,`the deck at ${x}, ${z} is paved`);
   const y=piece.reduce((t,v)=>t+v[1],0)/piece.length;assert.ok(Math.abs(y-.03-index.surface(x,z,y))<.05,'just above the survey deck');
  }
  for(const piece of pieces)for(const v of piece)assert.ok(v.every(Number.isFinite));
+});
+
+test('the pavement gives way only to road decks that reach the survey deck',()=>{
+ // The Central Artery bores dive beneath the survey at its south end. Where one
+ // runs from 2 cm to 1.3 m under the deck, the deck hides its asphalt, so the
+ // survey stays paved (these were bare); where a road deck lies on the survey
+ // it paves the place itself.
+ const pieces=surveyDeckPavement(metro,data,carriageways.map(c=>c.stations)),index=surveyDeckIndex(data);
+ // The road deck's height over the survey face nearest `up` metres over the road.
+ const over=(id,x,z,up=0)=>{const r=metro.roads.find(r=>r.id===id),y=sampleRoadElevation(metro,r,x,z);return y-index.surface(x,z,y+up);};
+ for(const [x,z,id] of [[1180,-1769.5,'central-artery-southbound'],[1172,-1783,'central-artery-southbound'],[1197,-1783.8,'central-artery-northbound'],[1189.7,-1799.8,'central-artery-northbound']]){
+  const d=over(id,x,z,1);assert.ok(d<-.02,`${id} runs under the survey at ${x}, ${z} (${d.toFixed(3)} m)`);
+  assert.ok(pieces.some(p=>inside(p,x,z)),`the survey over ${id} at ${x}, ${z} is paved`);
+ }
+ for(const [x,z,id] of [[1165,-1802.5,'central-artery-southbound'],[347.36,-2590.29,'leverett-connector-north'],[-276.06,-4073.18,'i93-nb-01'],[637.61,-2374.88,'i93-sb-42']]){
+  const d=over(id,x,z);assert.ok(paves(d),`${id} lies on the survey at ${x}, ${z} (${d.toFixed(3)} m)`);
+  assert.ok(!pieces.some(p=>inside(p,x,z)),`${id} paves the survey at ${x}, ${z} itself`);
+ }
 });
 
 test('parapets close the east edge of the Charlestown viaduct the survey leaves open',()=>{
