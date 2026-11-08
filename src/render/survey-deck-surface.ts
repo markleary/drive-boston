@@ -21,6 +21,45 @@ const biased=(material:THREE.Material,units:number)=>{
 };
 
 type P3=[number,number,number];
+/** Lane lines centred between equal shoulders; no paint on narrow gore strips. */
+function markingOffsets(s:DeckStation){
+  const lanes=s.lanes,width=s.half*2,shoulder=Math.max(.3,(width-lanes*3.65)/2),lane=(width-2*shoulder)/lanes;
+  return lane<MIN_LANE_WIDTH?[]:Array.from({length:lanes+1},(_,k)=>-s.half+shoulder+k*lane);
+}
+
+/** Paint follows a road alignment, not every barrier irregularity measured by
+ * the deck walk. Its 2 m recentering steps can alternate by a few centimetres;
+ * using their steering headings at a 7 m lane offset magnifies that noise into
+ * visible zigzags. Smooth only the paint's plan centres, then derive normals
+ * from that alignment. Four symmetric passes span 8 m either way, preserving
+ * road curves. Blend back to the measured frame over the last 8 m at each end:
+ * a walk can stop obliquely at a merge, where its final chord is not the road's
+ * heading. Survey stations used by pavement and physical
+ * parapets, lane counts, widths and height references remain untouched. On a
+ * narrow ramp, retain a measured frame if its replacement would put paint on
+ * a barrier or beyond the deck. */
+export function smoothMarkingStations(stations:readonly DeckStation[],onDeck?:TracedDeck['onDeck']){return drain(smoothMarkingStationSteps(stations,onDeck));}
+function* smoothMarkingStationSteps(stations:readonly DeckStation[],onDeck?:TracedDeck['onDeck']):Generator<void,DeckStation[]>{
+  let plan=stations.map(s=>[s.x,s.z] as Point2);
+  for(let pass=0;pass<4;pass++)plan=plan.map((p,i)=>{
+    if(i===0||i===plan.length-1)return p;
+    const a=plan[i-1],b=plan[i+1];return[(a[0]+2*p[0]+b[0])/4,(a[1]+2*p[1]+b[1])/4];
+  });
+  const align=(s:DeckStation,i:number)=>{
+    const a=plan[Math.max(0,i-1)],b=plan[Math.min(plan.length-1,i+1)],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
+    const t=Math.min(1,i/4,(stations.length-1-i)/4),blend=t*t*(3-2*t),tx=s.tx*(1-blend)+(length>1e-6?dx/length:s.tx)*blend,tz=s.tz*(1-blend)+(length>1e-6?dz/length:s.tz)*blend,norm=Math.hypot(tx,tz);
+    const aligned={...s,x:s.x+(plan[i][0]-s.x)*blend,z:s.z+(plan[i][1]-s.z)*blend,tx:norm>1e-6?tx/norm:s.tx,tz:norm>1e-6?tz/norm:s.tz};
+    if(onDeck)for(const offset of markingOffsets(aligned))for(const edge of [-LINE/2,LINE/2]){
+      const o=offset+edge,near=s.y+(o>0?s.yLeft-s.y:s.y-s.yRight)*o/s.half;
+      if(!onDeck(aligned.x-aligned.tz*o,aligned.z+aligned.tx*o,near))return{...s};
+    }
+    return aligned;
+  };
+  const out:DeckStation[]=[];
+  for(const [i,s] of stations.entries()){if(i%16===15)yield;out.push(align(s,i));}
+  return out;
+}
+
 /** Interstate pavement on a surveyed structure's carriageways (the Zakim and
  * the Charlestown I-93 viaduct): asphalt over every deck face a traced
  * carriageway crosses (so the pavement runs on through the splits, merges and
@@ -45,7 +84,8 @@ export function* addSurveyDeckSurfaceSteps(target:THREE.Object3D,city:CityData,d
     for(let k=2;k<piece.length;k++)upTriangle(sink,piece[0],piece[k-1],piece[k],[piece[0][0]/5,piece[0][2]/5],[piece[k-1][0]/5,piece[k-1][2]/5],[piece[k][0]/5,piece[k][2]/5]);
   }
   const runs=yield* uncoveredSteps(city,carriageways.map(c=>c.stations));
-  for(const stations of runs){
+  for(const run of runs){
+    const stations=yield* smoothMarkingStationSteps(run,traced.onDeck);
     const at=(s:DeckStation,offset:number):Point2=>[s.x-s.tz*offset,s.z+s.tx*offset];
     // The deck nearest the station's own level and crossfall, so a ramp
     // passing over or under this one never captures the paint.
@@ -64,10 +104,7 @@ export function* addSurveyDeckSurfaceSteps(target:THREE.Object3D,city:CityData,d
     const point=(i:number,offset:number,lift:number):P3=>{const [x,z]=at(stations[i],offset);return[x,height(i,offset)+lift,z];};
     // Line offsets across each station: the lanes centred between equal
     // shoulders, none where the deck is too narrow to be a lane (a gore strip).
-    const offsets=stations.map(s=>{
-      const lanes=s.lanes,width=s.half*2,shoulder=Math.max(.3,(width-lanes*3.65)/2),lane=(width-2*shoulder)/lanes;
-      return lane<MIN_LANE_WIDTH?[]:Array.from({length:lanes+1},(_,k)=>-s.half+shoulder+k*lane);
-    });
+    const offsets=stations.map(markingOffsets);
     // Lines run in stretches with one lane count; a merge or lane drop starts a new stretch.
     for(let start=0;start<stations.length;){
       let end=start+1;while(end<stations.length&&offsets[end].length===offsets[start].length)end++;
