@@ -38,7 +38,7 @@ test('flight shadows retain distant tree silhouettes and switch immediately whil
   const context=Object.fromEntries(['save','restore','translate','rotate','beginPath','lineTo','moveTo','ellipse','fill','stroke'].map(name=>[name,()=>{}]));
   globalThis.document={createElement:()=>({getContext:()=>context})};
   try{
-    const scene=new THREE.Scene(),field=createTreeField({grates:false}),observer=new THREE.Vector3(0,180,5000);
+    const scene=new THREE.Scene(),field=createTreeField({grates:false}),observer=new THREE.Vector3(0,2,5000);
     scene.add(field.group);
     field.add('fixture',[80,250,...Array.from({length:36},(_,i)=>500+i*8),940].map(x=>new THREE.Vector3(x,0,5000)));
     const meshes=()=>field.group.children.filter(m=>m instanceof THREE.InstancedMesh&&m.count>0);
@@ -50,7 +50,13 @@ test('flight shadows retain distant tree silhouettes and switch immediately whil
     for(const mesh of meshes().filter(m=>/foliage/.test(m.name))){
       assert.equal(mesh.customDepthMaterial.map,mesh.material.map);
       assert.equal(mesh.customDepthMaterial.alphaTest,mesh.material.alphaTest,'leaf shadows retain their cutout silhouette');
+      assert.equal(mesh.material.alphaToCoverage,mesh.name.endsWith('LOD0'),'only close leaf cards use multisample coverage');
     }
+    assert.ok(meshes().some(m=>m.name.endsWith('LOD0')));
+    observer.y=440;
+    updateFoliage(scene,observer,0,true,true);
+    assert.equal(meshes().reduce((n,m)=>n+m.count,0),76,'altitude does not reduce horizontal foliage coverage');
+    assert.ok(meshes().every(m=>m.name.endsWith('LOD2')&&m.castShadow),'a climb immediately uses distant foliage even directly below the camera');
     updateFoliage(scene,observer,0,false,true);
     assert.ok(meshes().filter(m=>/LOD2/.test(m.name)).every(m=>!m.castShadow),'Balanced keeps its bounded tree shadow budget');
     updateFoliage(scene,observer,0,true,true);

@@ -5,12 +5,17 @@ import { canvasTexture, hash, seeded } from './materials.ts';
 
 const windTime={value:0};
 const SPECIES=[
-  {name:'maple',height:7.8,spread:3.1,tall:2.5,hue:.23,color:'#aabf85'},
-  {name:'elm',height:9.4,spread:3.4,tall:3.7,hue:.25,color:'#9fb484'},
-  {name:'honey locust',height:7.2,spread:3.5,tall:2.0,hue:.20,color:'#b7c78c'},
-  {name:'white pine',height:10.8,spread:2.7,tall:4.4,hue:.29,color:'#9ab396'},
+  {name:'maple',height:7.8,spread:3.1,tall:2.5,hue:70,color:'#aabf85'},
+  {name:'elm',height:9.4,spread:3.4,tall:3.7,hue:79,color:'#9fb484'},
+  {name:'honey locust',height:7.2,spread:3.5,tall:2.0,hue:88,color:'#b7c78c'},
+  {name:'white pine',height:10.8,spread:2.7,tall:4.4,hue:97,color:'#9ab396',parkOnly:true},
+  {name:'ginkgo',height:9.55,spread:1.9,tall:3.8,hue:60,color:'#c1cd79',taper:.36,cardWidth:.78},
+  {name:'red oak',height:7.7,spread:3.55,tall:2.65,hue:93,color:'#9db381',taper:-.22},
 ];
-let resources:{bark:THREE.MeshStandardMaterial;leaves:THREE.MeshStandardMaterial[];depth:THREE.MeshDepthMaterial[];geometries:{wood:THREE.BufferGeometry;leaves:THREE.BufferGeometry}[][]}|undefined;
+const STREET_SPECIES=SPECIES.flatMap((s,i)=>s.parkOnly?[]:[i]);
+const PARK_SPECIES=SPECIES.map((_,i)=>i);
+const LODS=[0,1,2];
+let resources:{bark:THREE.MeshStandardMaterial;leaves:{near:THREE.MeshStandardMaterial;distant:THREE.MeshStandardMaterial;depth:THREE.MeshDepthMaterial}[];geometries:{wood:THREE.BufferGeometry;leaves:THREE.BufferGeometry}[][]}|undefined;
 function wind(material:THREE.Material,flutter=false){
   material.onBeforeCompile=shader=>{shader.uniforms.treeTime=windTime;shader.vertexShader='uniform float treeTime;\n'+shader.vertexShader;shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
     float windPhase=instanceMatrix[3].x*.041+instanceMatrix[3].z*.037;
@@ -28,10 +33,23 @@ function leafTexture(species:number){
     const angle=random()*Math.PI*2,r=Math.sqrt(random())*108,x=128+Math.cos(angle)*r,y=128+Math.sin(angle)*r;
     const size=species===2?4+random()*5:8+random()*10;
     c.save();c.translate(x,y);c.rotate(random()*Math.PI*2);
-    c.fillStyle=`hsl(${70+species*9+random()*22},${29+random()*24}%,${30+random()*23}%)`;
+    c.fillStyle=`hsl(${SPECIES[species].hue+random()*22},${29+random()*24}%,${30+random()*23}%)`;
     c.beginPath();
     if(species===0){for(let j=0;j<10;j++){const a=j*Math.PI/5,radius=size*(j%2?.48:1);c.lineTo(Math.cos(a)*radius,Math.sin(a)*radius);}}
     else if(species===3){c.moveTo(0,-size*1.3);c.lineTo(size*.25,size);c.lineTo(-size*.25,size);}
+    else if(species===4){
+      c.moveTo(0,size*.75);
+      for(let j=0;j<=8;j++){
+        const a=-Math.PI*.95+j*Math.PI*.9/8;
+        c.lineTo(Math.cos(a)*size,Math.sin(a)*size*(j===4?.72:1));
+      }
+    }
+    else if(species===5){
+      for(let j=0;j<16;j++){
+        const a=j*Math.PI/8,radius=j%2?.64:1;
+        c.lineTo(Math.cos(a)*size*.63*radius,Math.sin(a)*size*radius);
+      }
+    }
     else c.ellipse(0,0,size*(species===2?.5:.57),size,0,0,Math.PI*2);
     c.fill();c.strokeStyle='#d4d99855';c.lineWidth=.65;c.beginPath();c.moveTo(0,-size*.7);c.lineTo(0,size*.7);c.stroke();c.restore();
   }
@@ -50,9 +68,9 @@ function geometryFor(species:number,lod:number){
   const count=[48,24,12][lod];
   for(let j=0;j<count;j++){
     const a=j*2.399963,unit=(j+.5)/count,vertical=1-2*unit,radius=Math.sqrt(Math.max(0,1-vertical*vertical));
-    const tier=species===3?unit:1,spread=species===3?s.spread*(.25+.75*tier):s.spread;
+    const spread=s.spread*(species===3?.25+.75*unit:1-(s.taper??0)*vertical);
     const x=Math.cos(a)*radius*spread,z=Math.sin(a)*radius*spread,y=s.height+vertical*s.tall-(species===3?1.2:0);
-    const card=new THREE.PlaneGeometry([2.6,3.8,5.1][lod]*(species===2?.85:1),[2.4,3.5,4.8][lod]);
+    const card=new THREE.PlaneGeometry([2.6,3.8,5.1][lod]*(s.cardWidth??(species===2?.85:1)),[2.4,3.5,4.8][lod]);
     const euler=new THREE.Euler((random()-.5)*1.9,a,(random()-.5)*1.2);q.setFromEuler(euler);matrix.compose(new THREE.Vector3(x,y,z),q,new THREE.Vector3(1,1,1));card.applyMatrix4(matrix);leaves.push(card);
   }
   const result={wood:mergeGeometries(wood,false)!,leaves:mergeGeometries(leaves,false)!};for(const g of [...wood,...leaves])g.dispose();return result;
@@ -60,9 +78,17 @@ function geometryFor(species:number,lod:number){
 function assets(){
   if(resources)return resources;
   const bark=new THREE.MeshStandardMaterial({color:'#665949',roughness:.98});wind(bark);
-  const leaves=SPECIES.map((s,i)=>{const m=new THREE.MeshStandardMaterial({map:leafTexture(i),color:s.color,roughness:.92,alphaTest:.42,side:THREE.DoubleSide,alphaToCoverage:true});m.forceSinglePass=true;wind(m,true);return m;});
-  const depth=leaves.map(m=>{const d=new THREE.MeshDepthMaterial({map:m.map,alphaTest:.42,side:THREE.DoubleSide,depthPacking:THREE.RGBADepthPacking});wind(d,true);return d;});
-  resources={bark,leaves,depth,geometries:SPECIES.map((_,i)=>[0,1,2].map(lod=>geometryFor(i,lod)))};return resources;
+  const leaves=SPECIES.map((s,i)=>{
+    const distant=new THREE.MeshStandardMaterial({map:leafTexture(i),color:s.color,roughness:.92,alphaTest:.42,side:THREE.DoubleSide});
+    distant.forceSinglePass=true;
+    // Alpha-to-coverage smooths nearby leaves, but its subpixel coverage
+    // produces bright speckles in the multisampled beauty pass at a distance.
+    const near=distant.clone();near.alphaToCoverage=true;
+    const depth=new THREE.MeshDepthMaterial({map:distant.map,alphaTest:distant.alphaTest,side:THREE.DoubleSide,depthPacking:THREE.RGBADepthPacking});
+    wind(near,true);wind(distant,true);wind(depth,true);
+    return{near,distant,depth};
+  });
+  resources={bark,leaves,geometries:SPECIES.map((_,i)=>LODS.map(lod=>geometryFor(i,lod)))};return resources;
 }
 
 /** Instance scale range applied to every site (see TreeField.add). */
@@ -70,9 +96,9 @@ export const TREE_SCALE_RANGE=[.82,1.12] as const;
 /** Widest horizontal reach from the trunk and highest point of the drawn tree
  * geometry at scale 1, over the given species and distance levels: what
  * src/simulation/deck-canopy.ts must keep clear of raised decks. */
-export function crownExtent(species:number[],lods:number[]){
+export function crownExtent(park:boolean){
   let reach=0,top=0;
-  for(const i of species)for(const lod of lods){const g=geometryFor(i,lod);for(const part of [g.wood,g.leaves]){const p=part.getAttribute('position');for(let k=0;k<p.count;k++){reach=Math.max(reach,Math.hypot(p.getX(k),p.getZ(k)));top=Math.max(top,p.getY(k));}part.dispose();}}
+  for(const i of park?PARK_SPECIES:STREET_SPECIES)for(const lod of LODS){const g=geometryFor(i,lod);for(const part of [g.wood,g.leaves]){const p=part.getAttribute('position');for(let k=0;k<p.count;k++){reach=Math.max(reach,Math.hypot(p.getX(k),p.getZ(k)));top=Math.max(top,p.getY(k));}part.dispose();}}
   return{reach,top};
 }
 export interface TreeField { group:THREE.Group; add(owner:string,positions:THREE.Vector3[]):void; remove(owner:string):void; readonly count:number; }
@@ -86,29 +112,34 @@ let grateMaterial:THREE.Material|undefined,grateGeometry:THREE.BufferGeometry|un
  * grow to fit and shrink only on disposal. */
 export function createTreeField(options:{scale?:number;grates?:boolean}={}):TreeField{
   const group=new THREE.Group();group.name='Boston varied trees';const shared=assets(),scale=options.scale??1;
+  const palette=options.grates===false?PARK_SPECIES:STREET_SPECIES;
   let sites:Site[]=[];
   const make=(species:number,lod:number,capacity:number)=>{
-    const wood=new THREE.InstancedMesh(shared.geometries[species][lod].wood,shared.bark,capacity),leaf=new THREE.InstancedMesh(shared.geometries[species][lod].leaves,shared.leaves[species],capacity);
+    const {near,distant,depth}=shared.leaves[species];
+    const wood=new THREE.InstancedMesh(shared.geometries[species][lod].wood,shared.bark,capacity),leaf=new THREE.InstancedMesh(shared.geometries[species][lod].leaves,lod===0?near:distant,capacity);
     wood.name=`${SPECIES[species].name} branches LOD${lod}`;leaf.name=`${SPECIES[species].name} foliage LOD${lod}`;
-    leaf.customDepthMaterial=shared.depth[species];leaf.userData.noAO=true;
+    leaf.customDepthMaterial=depth;leaf.userData.noAO=true;
     for(const mesh of [wood,leaf]){mesh.castShadow=lod<2;mesh.receiveShadow=true;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);mesh.frustumCulled=false;mesh.count=0;group.add(mesh);}
     return{wood,leaf,count:0,capacity};
   };
-  const batches=SPECIES.map((_,species)=>[0,1,2].map(lod=>make(species,lod,8)));
+  const batches=SPECIES.map((_,species)=>LODS.map(lod=>make(species,lod,8)));
   const ensure=(species:number,lod:number,needed:number)=>{
     const b=batches[species][lod];if(needed<=b.capacity)return b;
     group.remove(b.wood,b.leaf);b.wood.dispose();b.leaf.dispose();
     return batches[species][lod]=make(species,lod,Math.max(needed,Math.ceil(b.capacity*1.6)));
   };
-  const dummy=new THREE.Object3D();let last=-Infinity,lastX=Infinity,lastZ=Infinity,lastHigh=true,lastFlightShadows=false,dirty=true;
+  const dummy=new THREE.Object3D(),lastObserver=new THREE.Vector3(Infinity,Infinity,Infinity);let last=-Infinity,lastHigh=true,lastFlightShadows=false,dirty=true;
   const pending:Site[][][]=SPECIES.map(()=>[[],[],[]]);
   group.userData.updateFoliage=(observer:THREE.Vector3,time:number,high=true,flightShadows=false)=>{
-    if(!dirty&&high===lastHigh&&flightShadows===lastFlightShadows&&time-last<.25&&Math.hypot(observer.x-lastX,observer.z-lastZ)<25)return;
-    last=time;lastX=observer.x;lastZ=observer.z;lastHigh=high;lastFlightShadows=flightShadows;dirty=false;
+    if(!dirty&&high===lastHigh&&flightShadows===lastFlightShadows&&time-last<.25&&observer.distanceToSquared(lastObserver)<25**2)return;
+    last=time;lastObserver.copy(observer);lastHigh=high;lastFlightShadows=flightShadows;dirty=false;
     for(const row of pending)for(const list of row)list.length=0;
+    const near=high?100:60,mid=high?320:210;
     for(const site of sites){
-      const d=Math.hypot(site.p.x-observer.x,site.p.z-observer.z),near=high?100:60,mid=high?320:210;if(d>900)continue;
-      pending[site.species][d<near?0:d<mid?1:2].push(site);
+      const dx=site.p.x-observer.x,dz=site.p.z-observer.z,horizontal=dx*dx+dz*dz;
+      if(horizontal>900**2)continue;
+      const d2=horizontal+(site.p.y-observer.y)**2;
+      pending[site.species][d2<near**2?0:d2<mid**2?1:2].push(site);
     }
     pending.forEach((row,species)=>row.forEach((list,lod)=>{
       const b=ensure(species,lod,list.length);
@@ -130,13 +161,13 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
   const field:TreeField={group,
     add(owner,positions){
       const random=seeded(owner==='all'?9311:9311+hash(owner)%100000);
-      for(const p of positions.filter(p=>!inLongfellowCorridor(p.x,p.z)))sites.push({p,species:options.grates===false?Math.floor(random()*4):Math.floor(random()*3),scale:scale*(TREE_SCALE_RANGE[0]+random()*(TREE_SCALE_RANGE[1]-TREE_SCALE_RANGE[0])),yaw:random()*Math.PI*2,owner});
+      for(const p of positions.filter(p=>!inLongfellowCorridor(p.x,p.z)))sites.push({p,species:palette[Math.floor(random()*palette.length)],scale:scale*(TREE_SCALE_RANGE[0]+random()*(TREE_SCALE_RANGE[1]-TREE_SCALE_RANGE[0])),yaw:random()*Math.PI*2,owner});
       dirty=true;refreshGrates();group.userData.treeCount=sites.length;
     },
     remove(owner){sites=sites.filter(s=>s.owner!==owner);dirty=true;refreshGrates();group.userData.treeCount=sites.length;},
     get count(){return sites.length;},
   };
-  group.userData.treeCount=0;group.userData.species=SPECIES.map(s=>s.name);return field;
+  group.userData.treeCount=0;group.userData.species=palette.map(i=>SPECIES[i].name);return field;
 }
 export function createStreetTrees(positions:THREE.Vector3[],options:{scale?:number;grates?:boolean}={}){
   const field=createTreeField(options);field.add('all',positions);return field.group;
