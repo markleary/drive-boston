@@ -34,6 +34,7 @@ export interface Path { points: Point2[]; distances: number[]; length: number; s
  * `parked` car has driven into a closed end and waits, hidden, to be placed again;
  * a `hidden` one rides a deck that has not streamed in. */
 interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; parked?:boolean; hidden?:boolean; }
+type FleetObstacle = TrafficObstacle & { hidden?: boolean };
 const COUNT = TRAFFIC_CAPACITY;
 /** Highway cruise ranges (m/s): a car's own temper, from its seeded street
  * cruise, picks its speed within each, so it keeps its place in the order. */
@@ -509,14 +510,14 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
    * enough to the lane to touch (about 2 m; the next lane is 3.65 m over),
    * measured along the route so a leader on a bend or one drifting over from
    * the next lane still counts. */
-  function leaderLimit(actor:Actor,others:readonly TrafficObstacle[],skip:number){
+  function leaderLimit(actor:Actor,others:readonly FleetObstacle[],skip:number){
     const reach=Math.min(FOLLOW.reach,actor.path.length-actor.distance),step=4;if(reach<1)return Infinity;
     const y=actor.body.translation().y,fx=Math.sin(actor.yaw),fz=Math.cos(actor.yaw);
     leadPoints.length=0;leadStations.length=0;
     const point=walker(actor.path);for(let s=0;;s+=step){const t=Math.min(s,reach);leadPoints.push(point(actor.distance+t));leadStations.push(t);if(t>=reach)break;}
     let limit=Infinity;
     for(let k=0;k<others.length;k++){
-      if(k===skip)continue;
+      if(k===skip||(!actor.hidden&&others[k].hidden))continue;
       const other=others[k],dx=other.x-actor.x,dz=other.z-actor.z,range=Math.hypot(dx,dz);
       if(range>reach+8||Math.abs(other.y-y)>3||(range<10&&dx*fx+dz*fz<-1))continue;
       // The station is at least the plan distance, and not much more on any highway curve.
@@ -531,8 +532,8 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     }
     return limit;
   }
-  /** The fleet as obstacles, for a car's following speed outside the step loop. */
-  const fleetObstacles=():TrafficObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw}));
+  /** Keep each actor's slot stable so following can skip its own index. */
+  const fleetObstacles=():FleetObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw,hidden:!!a.hidden}));
   /** A station on a highway lane between `min` and `max` metres from the
    * observer, on its level (a tunnel record in a tunnel, anywhere open to the
    * sky above ground), clear of the player and of every car by the highway
@@ -889,7 +890,11 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       const reachI=CONFLICT.step*pi.poses.length+pi.halfLength+3;
       for(let j=i+1;j<n;j++){
         const pj=paths[j];if(!pj||Math.abs(heights[i]-heights[j])>3)continue;
-        const a=actors[i],b=actors[j],dx=b.x-a.x,dz=b.z-a.z;
+        const a=actors[i],b=actors[j];
+        // Hidden cars settle conflicts with one another to keep spacing
+        // while their deck is out of view.
+        if(!!a.hidden!==!!b.hidden)continue;
+        const dx=b.x-a.x,dz=b.z-a.z;
         if(Math.hypot(dx,dz)>reachI+CONFLICT.step*pj.poses.length+pj.halfLength+3)continue;
         const ti=firstContact(pi,pj);if(ti===undefined)continue;
         const tj=firstContact(pj,pi)??0;
@@ -906,6 +911,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     for(let i=0;i<n;i++){
       const pi=paths[i];if(!pi)continue;
       const actor=actors[i];
+      if(actor.hidden)continue;
       for(let k=0;k<external.length;k++){
         const bus=external[k];if(!bus.pose||Math.abs(bus.y-heights[i])>3||Math.hypot(bus.x-actor.x,bus.z-actor.z)>CONFLICT.step*pi.poses.length+pi.halfLength+(bus.halfLength??6)+CONFLICT.maxHorizon+3)continue;
         if(holdsBus(actor,bus)){blockers[n+k]=i;continue;}
@@ -1013,6 +1019,11 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     update(dt: number, player: VehicleState, observer: Pick<VehicleState,'x'|'y'|'z'> = player, external:TrafficObstacle[] = []) {
       dt = Math.max(0, Math.min(dt, 1 / 30));
       drawObserver=observer;elapsed += dt;rehomeTimer+=dt;
+      // Apply changes from the streamer before any car samples the fleet.
+      if(deckDrawn)for(const actor of actors){
+        if(actor.parked||actor.knocked)continue;
+        setDeckVisibility(actor,pathRoad(actor.path,actor.distance));
+      }
       const recycleDistance=260+Math.max(0,observer.y-sampleElevation(city,observer.x,observer.z))*4;
       const localRadius=Math.max(650,recycleDistance+220);
       // Refill only outside the protected view and use the current district's
@@ -1077,7 +1088,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       }
       // Snapshot once per step instead of allocating an O(N²) pile of obstacle
       // objects. The stable snapshot also avoids actor-order-dependent following.
-      const obstacles:TrafficObstacle[]=[{...player,halfLength:2.1,halfWidth:.9},...actors.map(actor=>({x:actor.x,y:actor.body.translation().y,z:actor.z,halfLength:actor.spec.length/2,halfWidth:actor.spec.width/2,speed:actor.speed,yaw:actor.yaw})),...external];
+      const obstacles:FleetObstacle[]=[{...player,halfLength:2.1,halfWidth:.9},...fleetObstacles(),...external];
       detectKnocks();
       for(const actor of actors)if(!actor.knocked&&!actor.rejoin&&actor.path.length-actor.distance<40&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<=localRadius*1.35)extendRoute(actor);
       const keepers=actors.map(actor=>!actor.knocked&&!actor.rejoin&&!actor.parked),{limits,blockers}=rightsOfWay(keepers,external);
@@ -1128,13 +1139,16 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
           if(actor.signalStop!==stop.distance){actor.signalStop=stop.distance;actor.signalCommitted=actor.speed>2&&gap<actor.speed*actor.speed/12+1;}
           if(!actor.signalCommitted)target=Math.min(target,Math.sqrt(Math.max(0,2*5*(gap-.5))));
         }else{actor.signalStop=undefined;actor.signalCommitted=false;}
-        const actorHeight=obstacles[index+1].y;
+        const actorHeight=obstacles[index+1].y,hidden=!!actor.hidden;
         for(let otherIndex=0;otherIndex<obstacles.length;otherIndex++){
-          if(otherIndex===index+1)continue;
+          const other=obstacles[otherIndex];
+          if(otherIndex===index+1||(!hidden&&other.hidden))continue;
           // Two lane keepers settle their order through rightsOfWay; the symmetric
           // rules below would stop both of two cars meeting at a corner for good.
-          if(keepers[index]&&otherIndex>0&&(otherIndex<=actors.length?keepers[otherIndex-1]:!!external[otherIndex-actors.length-1].pose))continue;
-          const other=obstacles[otherIndex];
+          const sharesRightOfWay=otherIndex<=actors.length
+            ? otherIndex>0&&keepers[otherIndex-1]&&hidden===other.hidden
+            : !hidden&&!!other.pose;
+          if(keepers[index]&&sharesRightOfWay)continue;
           if(Math.abs(other.y-actorHeight)>3)continue;
           const dx=other.x-actor.x,dz=other.z-actor.z,along=dx*forwardX+dz*forwardZ,across=Math.abs(dx*forwardZ-dz*forwardX);
           const inLane=across<actor.spec.width/2+.4+(other.halfWidth??.95);

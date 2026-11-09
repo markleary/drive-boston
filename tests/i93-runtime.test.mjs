@@ -152,6 +152,43 @@ for(const surveyed of [false,true])test(`traffic waits for the ${surveyed?'surve
   assert.ok(seen.hidden>0&&seen.shown>0&&seen.elsewhere>0,JSON.stringify(seen));
 });
 
+test('traffic yields to a crossing car only when its deck is visible',async()=>{
+  const main=deck('Loaded I-93','Loaded I-93',line([-700,0],[700,0]),1,{closed:'end'});
+  const crossing=deck('Unloaded crossing','Unloaded crossing',line([0,-700],[0,700]),1,{closed:'end'});
+  const bounds={minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},city=fixture([main,crossing],bounds,{x:-145,z:0,yaw:Math.PI/2});
+  let drawn=false;
+  const physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{deckDrawn:road=>road!==crossing||drawn});
+  const player={x:720,z:720,y:.65,yaw:0,speed:0,steering:0},observer={x:-30,z:0,y:DECK+.65};
+  physics.body.setTranslation(player,true);
+
+  // Only sample the last 40 m of the approach when there is actually a
+  // crossing car nearby. Track the same fleet when the crossing reappears.
+  function approachSpeed(){
+    let minimum=Infinity;
+    const approaching=new Set();
+    for(let i=0;i<40*60;i++){
+      traffic.update(1/60,player,observer);physics.world.step();
+      const cars=traffic.snapshot();
+      if(!cars.some(car=>!car.parked&&car.hidden===!drawn&&car.road===crossing.name&&Math.abs(car.z)<14))continue;
+      for(const car of cars){
+        if(car.hidden||car.road!==main.name||car.x<=-40||car.x>=0)continue;
+        approaching.add(car.collider);minimum=Math.min(minimum,car.speed);
+      }
+    }
+    assert.ok(approaching.size>=3,`encountered ${approaching.size} approaches with the crossing ${drawn?'visible':'hidden'}`);
+    return minimum;
+  }
+
+  try{
+    const yieldingSpeed=18;
+    const hiddenSpeed=approachSpeed();
+    assert.ok(hiddenSpeed>yieldingSpeed,`a hidden crossing car caused braking to ${hiddenSpeed.toFixed(2)} m/s`);
+    drawn=true;
+    const visibleSpeed=approachSpeed();
+    assert.ok(visibleSpeed<yieldingSpeed,`a visible crossing car should trigger a yield (minimum ${visibleSpeed.toFixed(2)} m/s)`);
+  }finally{traffic.dispose();physics.dispose();}
+});
+
 /** A tunnel carriageway covered for its first 1000 m, then open to the sky up a 600 m
  * portal approach to the ground (0 everywhere), and on at grade to a closed end; the
  * player starts above ground on the approach, 400 m past the portal. */
