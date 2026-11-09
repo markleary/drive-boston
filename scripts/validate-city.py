@@ -33,6 +33,7 @@ import north_overpasses
 import i93_north
 from harvard_terrain import repair_memorial_terrain
 from road_generation_audit import validate_surfaces
+from roadway_buildings import roadway_buildings
 parser=argparse.ArgumentParser();parser.add_argument('--data-dir',type=pathlib.Path,default=ROOT/'public/data');args=parser.parse_args()
 data_dir=args.data_dir;city=json.loads((data_dir/'city.json').read_text());provenance=json.loads((data_dir/'provenance.json').read_text())
 assert provenance.get('region')=='metro','validate-city.py checks metro packages written by scripts/build-metro.py'
@@ -130,7 +131,7 @@ pavements=0;borders=0;sidewalks=0;bricks=0;islands=0;driveways=0;measured_roads=
 clearance_index=RoadClearanceIndex(city['roads']);surface_headers={}
 for key in keys:
  tx,tz=map(int,key.split('_'));reproducible(f'{tiles["directory"]}/{tileformat.tile_name(tx,tz)}');header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
- surface_headers[key]={k:header[k] for k in ('tx','tz','size','streetPavement','streetSidewalks','deckPavement','sidewalks','islands','driveways')}
+ surface_headers[key]={k:header[k] for k in ('tx','tz','size','streetPavement','streetSidewalks','deckPavement','sidewalks','islands','driveways','buildings')}
  assert (header['tx'],header['tz'],header['size'])==(tx,tz,size) and len(entries)==far_counts.get(key,0)
  curbs+=len(header['curbs']);park_paths+=len(header['parkPaths']);assert all(isinstance(r,str) for r in header['roads'])
  # Curb-bounded roadways, inventory sidewalks and islands (build-street-surfaces.py).
@@ -186,6 +187,8 @@ for key in keys:
   elif b['source']!='osm-extrusion':assert abs(bottom-base)<=step/2+.002,f"floating primary building {b['id']}: {bottom-base:.3f} m gap";grounded+=1
   footprints_by_tile[(tx,tz)].append((b['id'],b['footprint'],min(v[0] for v in b['footprint']),max(v[0] for v in b['footprint']),min(v[1] for v in b['footprint']),max(v[1] for v in b['footprint'])))
 assert len(buildings)==far_total
+roadway_conflicts=roadway_buildings(city,surface_headers)
+assert not roadway_conflicts,f'Compact buildings obstruct measured roadways: {roadway_conflicts}'
 surface_audit=validate_surfaces(surface_headers)
 for b in supported:
  parent=buildings.get(b['partOf']);assert parent,f"{b['id']} claims an absent parent"
