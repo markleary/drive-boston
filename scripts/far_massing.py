@@ -150,15 +150,24 @@ def encode(parts, primary, ox, oz):
 
 def rewrite(raw, massing):
  """far.bin bytes with every hidden primary followed by massing(tile key, primary ordinal) and previous fragments dropped."""
- header, records = read_far(raw); size = header['size']; body = bytearray(); directory = []
- for entry in header['tiles']:
-  key = entry['key']; tx, tz = map(int, key.split('_')); start = len(body); count = 0; ordinal = -1
+ header, records = read_far(raw); size = header['size']; rebuilt = {}
+ for key in records:
+  tx, tz = map(int, key.split('_')); out = bytearray(); count = 0; ordinal = -1
   for record in records[key]:
    if record[6] & 8:continue
-   ordinal += 1; body += record; count += 1
+   ordinal += 1; out += record; count += 1
    if record[6] & 4:
-    parts = massing(key, ordinal); body += encode(parts, record, tx * size, tz * size); count += len(parts)
-  directory.append({'key': key, 'offset': start, 'count': count})
+    parts = massing(key, ordinal); out += encode(parts, record, tx * size, tz * size); count += len(parts)
+  rebuilt[key] = count, out
+ return pack_far(size, rebuilt)
+
+
+def pack_far(size, records):
+ """Pack encoded DBF2 records, keeping tile and record order."""
+ body = bytearray(); directory = []
+ for key, (count, tile) in records.items():
+  directory.append({'key': key, 'offset': len(body), 'count': count})
+  body.extend(tile)
  head = json.dumps({'size': size, 'tiles': directory}, separators=(',', ':')).encode(); out = b'DBF2' + struct.pack('<I', len(head)) + head
  return out + b'\0' * ((-len(out)) % 4) + bytes(body)
 
