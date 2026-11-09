@@ -49,7 +49,7 @@ Neighborhood names and boundaries follow the [City of Boston neighborhood GIS la
 | C | Chase, hood, or aerial camera |
 | Mouse drag / wheel | Look around / camera distance |
 | M | Open or close the city atlas |
-| R | Reset the active vehicle to the Boylston starting point |
+| R | Set the car or bike upright on the nearest road, facing your heading (the helicopter returns to the Boylston starting point) |
 | F / N | Horn / sound toggle |
 | H | Hide the HUD |
 | P | Toggle performance stats |
