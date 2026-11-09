@@ -24,6 +24,7 @@ import {inTunnelApproach} from '../simulation/tunnels.ts';
 import {inGreenway,replacesGreenwayPark,outsideGreenwayPath} from '../simulation/greenway.ts';
 import {greenwayDetailSteps} from './greenway';
 import { fellsViewHeight, fellsWoodlandSteps, isFellsWoodland, type FellsViewHeight } from './fells-woodland.ts';
+import { christianSciencePlazaSteps, christianScienceTrees, isChristianSciencePool, ownsChristianSciencePlaza } from './christian-science-plaza.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -50,6 +51,8 @@ export interface ParkOptions {
   onShore?:(vertices:Float32Array,indices:Uint32Array)=>void;
   onRock?:(vertices:Float32Array,indices:Uint32Array)=>void;
   fellsViewHeight?:FellsViewHeight;
+  mobile?:boolean;
+  detailed?:()=>boolean;
   /** Streamed tile: surfaces are clipped to this box and only paths/ponds owned by it are built. */
   bounds?:Bounds; owner?:string; pathOwned?:(path:ParkPath)=>boolean; treeField?:TreeField; target?:THREE.Object3D;
   budgets?:{trees?:number;benches?:number};
@@ -66,6 +69,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3&&!replacesGreenwayPark(p));
   const woodland=parks.filter(isFellsWoodland);
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
+  const christianSciencePlaza=waters.some(isChristianSciencePool)&&ownsChristianSciencePlaza(bounds);
   const paths=(city.parkPaths??[]).filter(p=>options.pathOwned?options.pathOwned(p):true);
   // Lawns and plazas lie a few centimetres above the terrain (depth bias 4) and
   // below the surveyed sidewalks (bias 2). The same slope factor lets those
@@ -91,6 +95,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   for(const water of waters){
     if(due(pace))yield;
+    if(isChristianSciencePool(water))continue;
     // The hydro union joins rivers at different elevations to the tidal harbour. Its
     // source basin/reach planes retain their own levels across streamed tiles.
     for(const surface of water.surfaces??[{rings:water.rings,level:waterHeight(city,water)}]){
@@ -197,6 +202,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       treePoints.push(new THREE.Vector3(p[0],sampleElevation(city,...p)+.025,p[1]));count++;
     }
   }
+  if(christianSciencePlaza)treePoints.push(...christianScienceTrees(city));
   if(treePoints.length){if(options.treeField)options.treeField.add(options.owner??'parks',treePoints);else{const trees=createStreetTrees(treePoints,{scale:1.65,grates:false});trees.name='Park specimen trees';group.add(trees);}}
   // Benches and restrained lamps sit beside real paths. Count is fixed per
   // length rather than per OSM segment, preventing dense clusters at junctions.
@@ -226,6 +232,9 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   for(const mesh of batches.meshes()){mesh.castShadow=mesh.material!==pathMaterial;mesh.receiveShadow=true;group.add(mesh);}
   const greenwayGroup=yield* greenwayDetailSteps(city,options);if(greenwayGroup.userData.parcels)group.add(greenwayGroup);
+  if(christianSciencePlaza){
+    yield* christianSciencePlazaSteps(city,group,options);
+  }
   group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting, outcrops and furnishings are procedural'};
   (options.target??scene).add(group);return group;
 }

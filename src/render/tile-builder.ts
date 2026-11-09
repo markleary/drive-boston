@@ -71,6 +71,7 @@ export interface TileContext {
   replacedBuildings?: ReadonlySet<string>;
   landmarkForecourt?: (x: number, z: number) => boolean;
   ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material; mobile?: boolean;
+  detailed?: () => boolean;
   /** Starts linking a new static batch's shader programs, so the build can show it once they are ready. */ warm?: Warm;
 }
 export interface TileStats {
@@ -525,7 +526,7 @@ export function createTileBuilder(ctx: TileContext) {
       for(const path of tile.parkPaths)colliders.push(...physics.addFootbridge(subCity,path));
       const addLandscapeCollider = (vertices: Float32Array, indices: Uint32Array) => { colliders.push(physics.addStaticMesh(vertices, indices)); };
       const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group,
-        budgets: { trees: 120, benches: 25 }, reserved: ctx.landmarkForecourt, pace, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider }));
+        budgets: { trees: 120, benches: 25 }, reserved: ctx.landmarkForecourt, pace, mobile: ctx.mobile, detailed: ctx.detailed, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider }));
       stats.parkTrees = parks.userData.trees ?? 0;
     }
     yield 'parks';
