@@ -258,7 +258,7 @@ function curtainWall(){
   return new THREE.MeshPhysicalMaterial({map,roughness:.16,metalness:.55,clearcoat:1,clearcoatRoughness:.08,envMapIntensity:2.4});
 }
 
-function paving() {
+export function paving() {
   const { canvas, ctx } = makeCanvas();
   const random = seeded(311);
   ctx.fillStyle = '#918f83'; ctx.fillRect(0, 0, 512, 512);
@@ -281,7 +281,7 @@ function paving() {
 
 /** Running-bond brick paving (Boston sidewalk inventory material BR): about
  * 20 by 10 cm bricks at the seven-metre repeat of parkSurface UVs. */
-function brickPaving(){
+export function brickPaving(){
   const {canvas,ctx}=makeCanvas(),random=seeded(523),bw=512/35,bh=bw/2;
   ctx.fillStyle='#b4a894';ctx.fillRect(0,0,512,512);
   for(let row=0;row*bh<512;row++)for(let col=-1;col*bw<512;col++){

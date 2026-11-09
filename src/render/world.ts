@@ -88,7 +88,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     far=createFarCity(scene,city,!!options.mobile,architecturalLandmarks.farHulls);
     const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
     const parkTrees=createTreeField({scale:1.65,grates:false});parkTrees.group.name='Park specimen trees';scene.add(parkTrees.group);
-    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,warm:options.warm,replacedBuildings:architecturalLandmarks.replaced,landmarkForecourt:architecturalLandmarks.occupied},options.read,far,!!options.mobile);
+    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,detailed:()=>highQuality,warm:options.warm,replacedBuildings:architecturalLandmarks.replaced,landmarkForecourt:architecturalLandmarks.occupied},options.read,far,!!options.mobile);
     buildingChunks=streamer.buildingChunks;lampPositions=streamer.lampPositions;signalPlacements=streamer.signals;
     roadStructures=new THREE.Group();roadStructures.name='Streamed road structures';
     const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);

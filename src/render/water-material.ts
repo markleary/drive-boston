@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 // Shared by every streamed sheet: animation and world-space ripples continue
 // across tile boundaries without per-tile textures or another render pass.
-const waterTime={value:0};
+export const waterTime={value:0};
 export function updateWater(time:number){waterTime.value=time;}
 
 const WATER_PARS=/* glsl */`
@@ -57,7 +57,7 @@ let ripples:THREE.DataTexture|undefined;
 
 /** Dielectric water uses Three's Fresnel reflection, sun glints, shadows and
  * the world's existing sky/local reflection probe (sky only on mobile). */
-export function createWaterMaterial(){
+export function createWaterMaterial(reflectionBoost=3.5){
   const material=new THREE.MeshPhysicalMaterial({color:'#26494a',roughness:.16,metalness:0,ior:1.333,normalMap:ripples??=rippleTexture(),transparent:true,depthWrite:false});
   material.name='Rippling water';
   material.onBeforeCompile=shader=>{
@@ -71,8 +71,8 @@ export function createWaterMaterial(){
       .replace('#include <normal_fragment_maps>',WATER_NORMAL)
       // scene.environment overrides material.envMapIntensity. Boost only the
       // water's reflected radiance, leaving the city's diffuse lighting alone.
-      .replace('#include <lights_fragment_maps>','#include <lights_fragment_maps>\n#if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular )\nradiance *= 3.5;\n#endif');
+      .replace('#include <lights_fragment_maps>','#include <lights_fragment_maps>\n#if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular )\nradiance *= '+reflectionBoost.toFixed(2)+';\n#endif');
   };
-  material.customProgramCacheKey=()=>'boston-rippling-water-3';
+  material.customProgramCacheKey=()=>'boston-rippling-water-3-'+reflectionBoost;
   return material;
 }
