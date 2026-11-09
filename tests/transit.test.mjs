@@ -38,6 +38,8 @@ test('mapped Green Line uses separate surface tracks and every bus route stays w
   assert.ok(route.points.length>80);assert.ok(route.stops.length>=(route.line==='Green-D'?6:8));
   if(route.kind==='bus')assert.ok(route.length>(route.line==='39'?7900:5000),`${route.destination} keeps its full in-coverage alignment`);
   for(const stop of route.stops)assert.ok(stop.distance>0&&stop.distance<route.length);
+  // A vehicle follows the points in order: a shape doubling back on its street (the MBTA's inbound 131 at Grove and Main) would U-turn it twice.
+  for(let i=1;i<route.points.length-1;i++){const[a,b,c]=route.points.slice(i-1,i+2),ux=b[0]-a[0],uz=b[1]-a[1],vx=c[0]-b[0],vz=c[1]-b[1],lu=Math.hypot(ux,uz),lv=Math.hypot(vx,vz);assert.ok(lu<.5||lv<.5||ux*vx+uz*vz>-.9*lu*lv,`${route.destination} reverses on itself at point ${i}`);}
   const path=withDistances(route),crossed=new Map();
   for(let s=10;s<route.length-10;s+=8){
    const point=transitPoint(path,s);

@@ -85,6 +85,21 @@ def surface_track(args,line,direction):
   refs.extend(part if not refs else part[1:]);ids.append(way.attrib['id']);distance+=length
  return [nodes[n]for n in refs],ids,covered,bridges,relation_id
 
+def despike(points):
+ # An MBTA shape can double back on its own street to touch a stop (the inbound 131 runs 42 m
+ # back east along Grove Street past its Main Street turn, then west again). A vehicle follows
+ # the points in order, so drop every vertex where the shape reverses (within about 25 degrees
+ # of straight back from its neighbouring distinct points) until none remains.
+ out=list(points);i=1
+ while i<len(out)-1:
+  j=i-1;k=i+1
+  while j>0 and math.dist(out[j],out[i])<.01:j-=1
+  while k<len(out)-1 and math.dist(out[k],out[i])<.01:k+=1
+  a,b,c=out[j],out[i],out[k];u=(b[0]-a[0],b[1]-a[1]);v=(c[0]-b[0],c[1]-b[1]);lu=math.hypot(*u);lv=math.hypot(*v)
+  if lu>.01 and lv>.01 and u[0]*v[0]+u[1]*v[1]<-.9*lu*lv:del out[i];i=max(1,i-1)
+  else:i+=1
+ return out
+
 def clearance_track(points):
  # The shipped 118 Davis Avenue footprint leaves only 20 cm beside the source D
  # centerline, and the next house at 5 Elm touches the vehicle's edge. Shift BOTH
@@ -135,7 +150,7 @@ def main():
     if path and path[-1]!=refs[0]:raise ValueError('Disconnected mapped rail ways')
     path.extend(refs if not path else refs[1:])
    geographic=[nodes[id]for id in path]
-  source=LineString([world(*p)for p in geographic]);runs=[]
+  source=LineString(despike([world(*p)for p in geographic])if kind=='bus' else[world(*p)for p in geographic]);runs=[]
   if line=='Green-D':
    original=source;source=clearance_track(list(source.coords))
    for spans in [covered,bridges]:
