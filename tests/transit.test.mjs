@@ -12,7 +12,7 @@ import {createRailProfile,railCovered} from '../src/simulation/transit-rail-surf
 import {tileCollisionIndices} from '../src/render/tile-geometry.ts';
 
 import {loadCentralCity,loadMetroCity} from './helpers/metro-city.mjs';
-const BUS_LINES=['1','9','23','28','39','57','66','86'];
+const BUS_LINES=['1','9','23','28','39','57','66','86','131'];
 const withDistances=route=>{const distances=[0];for(let i=1;i<route.points.length;i++)distances.push(distances.at(-1)+Math.hypot(route.points[i][0]-route.points[i-1][0],route.points[i][1]-route.points[i-1][1]));return{...route,distances,length:distances.at(-1)};};
 test('perpendicular signal approaches never receive green together and include clearance time',()=>{
  for(let time=0;time<64;time+=.05){
@@ -32,12 +32,14 @@ test('mapped Green Line uses separate surface tracks and every bus route stays w
  // and the Boston Medical Center model whose overhead link straddles Massachusetts
  // Avenue); tests/street-corridors.test.mjs drives the open street corridors.
  const complexes=meshBuildingIds;
- assert.equal(data.routes.filter(r=>r.kind==='tram').length,8);assert.equal(data.routes.filter(r=>r.kind==='bus').length,16);
+ assert.equal(data.routes.filter(r=>r.kind==='tram').length,8);assert.equal(data.routes.filter(r=>r.kind==='bus').length,18);
  for(const line of BUS_LINES)assert.equal(data.routes.filter(r=>r.line===line).length,2,`route ${line} runs in both directions`);
  for(const route of data.routes){
   assert.ok(route.points.length>80);assert.ok(route.stops.length>=(route.line==='Green-D'?6:8));
   if(route.kind==='bus')assert.ok(route.length>(route.line==='39'?7900:5000),`${route.destination} keeps its full in-coverage alignment`);
   for(const stop of route.stops)assert.ok(stop.distance>0&&stop.distance<route.length);
+  // A vehicle follows the points in order: a shape doubling back on its street (the MBTA's inbound 131 at Grove and Main) would U-turn it twice.
+  for(let i=1;i<route.points.length-1;i++){const[a,b,c]=route.points.slice(i-1,i+2),ux=b[0]-a[0],uz=b[1]-a[1],vx=c[0]-b[0],vz=c[1]-b[1],lu=Math.hypot(ux,uz),lv=Math.hypot(vx,vz);assert.ok(lu<.5||lv<.5||ux*vx+uz*vz>-.9*lu*lv,`${route.destination} reverses on itself at point ${i}`);}
   const path=withDistances(route),crossed=new Map();
   for(let s=10;s<route.length-10;s+=8){
    const point=transitPoint(path,s);
@@ -121,6 +123,31 @@ test('new western rail corridors clear tall buildings across all their streamed 
    }
   }
  }finally{for(const mesh of exact.values())mesh.geometry.dispose();material.dispose();}
+});
+
+test('the 131 links Malden Center and Melrose Highlands through the Oak Grove busway, clear of buildings',async()=>{
+ const routes=JSON.parse(readFileSync(new URL('../public/data/transit.json',import.meta.url),'utf8')).routes.filter(r=>r.line==='131');
+ assert.deepEqual(routes.map(r=>r.destination),['131 MELROSE HIGHLANDS VIA OAK GROVE','131 MALDEN VIA OAK GROVE']);
+ const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
+ for(const route of routes)for(const[x,z]of route.points){bounds.minX=Math.min(bounds.minX,x-30);bounds.maxX=Math.max(bounds.maxX,x+30);bounds.minZ=Math.min(bounds.minZ,z-30);bounds.maxZ=Math.max(bounds.maxZ,z+30);}
+ const city=await loadMetroCity({bounds}),near=(p,q,r)=>Math.hypot(p[0]-q[0],p[1]-q[1])<r;
+ assert.ok(city.loadedTiles.size>=20,'load the whole Malden and Melrose corridor');
+ const [outbound,inbound]=routes,malden=[50,-8470],highlands=[-23,-13185];
+ // The Malden Center busway is trimmed: buses begin and finish on Commercial Street beside it.
+ assert.ok(near(outbound.points[0],malden,40)&&near(inbound.points.at(-1),malden,80),'the 131 starts and ends at Malden Center');
+ assert.ok(near(outbound.points.at(-1),highlands,10)&&near(inbound.points[0],highlands,10),'the 131 turns at Melrose Highlands');
+ const commercial=city.roads.filter(r=>r.name==='Commercial Street');
+ for(const end of [outbound.points[0],inbound.points.at(-1)])assert.ok(commercial.some(r=>roadProjection(r,...end).distance<3),'a terminal end lies on Commercial Street, not in the busway');
+ for(const route of routes){
+  assert.ok(route.length>11000&&route.coveragePercent>=99,`${route.destination} keeps its whole alignment`);
+  // Oak Grove's parent coordinate sits 71 m from the busway loop; the bus dwells in the loop.
+  const oak=route.stops.find(s=>s.name==='Oak Grove');assert.ok(oak&&near(oak.position,[329,-9623],5),`${route.destination} serves Oak Grove in its busway`);
+  const path=withDistances(route);
+  for(let s=4;s<route.length-4;s+=4){
+   const point=transitPoint(path,s);assert.ok(city.coverage.some(r=>pointInside(point,r)),'the 131 stays inside the map');
+   for(const b of city.buildings)if(b.height>4&&Math.abs(b.center[0]-point[0])<200&&Math.abs(b.center[1]-point[1])<200&&pointInside(point,b.footprint))assert.fail(`${route.destination} crosses ${b.name} at ${s} m`);
+  }
+ }
 });
 
 test('buses ride the surveyed bridge decks and stay out of the water',async()=>{
