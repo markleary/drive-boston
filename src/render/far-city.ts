@@ -28,7 +28,7 @@ function styleColor(style: number) {
   return base.lerp(new THREE.Color('#b9bcb8'), .22);
 }
 
-export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false): FarCityView | undefined {
+export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false, replaced?: ReadonlySet<FarBuilding>): FarCityView | undefined {
   const metro = city as MetroCity; if (!metro.far || !metro.tiles) return undefined;
   const group = new THREE.Group(); group.name = 'Distant metro'; scene.add(group);
   const chunks = new Map<string, { buildings?: THREE.Mesh; ground?: THREE.Mesh; detailed: boolean; center: THREE.Vector3; count: number }>();
@@ -44,7 +44,7 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
   function buildBuildings(tile: FarTile) {
     // A hidden complex is boxed by its massing fragments, which share its chunk and so hide with its tile.
     // A tunnel-passage building is boxed by the pieces its detailed shell keeps (see tunnel-passages.ts).
-    const list = tile.buildings.filter(b => drawsFarMassing(b) && b.height >= 3 && b.footprint.length >= 3).flatMap(b => isTunnelPassageFar(tile.key, b) ? farPassageFootprints(city, b).map(footprint => ({ ...b, footprint })) : [b]);
+    const list = tile.buildings.filter(b => !replaced?.has(b) && drawsFarMassing(b) && b.height >= 3 && b.footprint.length >= 3).flatMap(b => isTunnelPassageFar(tile.key, b) ? farPassageFootprints(city, b).map(footprint => ({ ...b, footprint })) : [b]);
     if (!list.length) return;
     // Five faces per box (no floor), flat normals from a non-indexed layout: 30 vertices.
     const count = list.length, positions = new Float32Array(count * 30 * 3), normals = new Float32Array(count * 30 * 3), color = new Uint8Array(count * 30 * 3);

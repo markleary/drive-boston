@@ -28,6 +28,7 @@ import {createPrudentialPenthouseMaterial,isPrudential,prudentialCrownCollider,s
 import { isMetroCity, type Reader } from '../simulation/city-tiles.ts';
 import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import { createFarCity } from './far-city';
+import { addArchitecturalLandmarks } from './architectural-landmarks';
 import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import type { Warm } from './static-batches';
 import { addCharlesBridgeDetails } from './charles-bridges';
@@ -74,6 +75,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const buildingCollisions:{id:string;vertices:Float32Array;indices:Uint32Array}[]=[];
   let buildingChunks:THREE.Mesh[]=[],lampPositions:THREE.Vector3[]=[],signalPlacements:PlacedSignal[]=[],roadStructures:THREE.Group,streamer:TileStreamer|undefined,updateSignals=updateTrafficSignals;
   let far:ReturnType<typeof createFarCity>;
+  let architecturalLandmarks: ReturnType<typeof addArchitecturalLandmarks> | undefined;
 
   if(metro){
     if(!options.physics||!options.read)throw new Error('A metro city streams its tiles: createWorld needs physics and a tile reader');
@@ -81,10 +83,12 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     // never reveals the edge of the tiled area from the air.
     const range=terrainRange(city),surround=new THREE.Mesh(new THREE.PlaneGeometry(60000,60000).rotateX(-Math.PI/2),new THREE.MeshLambertMaterial({color:'#b9bea8'}));
     surround.position.set((city.bounds.minX+city.bounds.maxX)/2,range.min-2,(city.bounds.minZ+city.bounds.maxZ)/2);surround.name='Metro surround';surround.userData.noAO=true;scene.add(surround);
-    far=createFarCity(scene,city,!!options.mobile);
+    architecturalLandmarks=addArchitecturalLandmarks(scene,metro);
+    buildingCollisions.push(...architecturalLandmarks.collisions);
+    far=createFarCity(scene,city,!!options.mobile,architecturalLandmarks.farHulls);
     const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
     const parkTrees=createTreeField({scale:1.65,grates:false});parkTrees.group.name='Park specimen trees';scene.add(parkTrees.group);
-    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,warm:options.warm},options.read,far,!!options.mobile);
+    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,warm:options.warm,replacedBuildings:architecturalLandmarks.replaced,landmarkForecourt:architecturalLandmarks.occupied},options.read,far,!!options.mobile);
     buildingChunks=streamer.buildingChunks;lampPositions=streamer.lampPositions;signalPlacements=streamer.signals;
     roadStructures=new THREE.Group();roadStructures.name='Streamed road structures';
     const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);
@@ -305,6 +309,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     skyUniforms.showSunDisc.value=false;
     skyEnvironment?.dispose();skyEnvironment=pmrem.fromScene(environmentScene,.04,.1,2000);
     scene.environment=skyEnvironment.texture;skyUniforms.showSunDisc.value=true;
+    architecturalLandmarks?.encore?.setLighting(night);
+    architecturalLandmarks?.encore?.setReflection(skyEnvironment.texture);
     sun.color.set(mode==='golden'?0xffd5a6:mode==='day'?0xfff3df:0x8eaad8);
     sun.intensity=night?.16:mode==='golden'?3.6:3.4;hemi.intensity=night?.24:.68;
     scene.environmentIntensity=night?.22:.16;renderer.toneMappingExposure=night?1.05:.93;
@@ -345,6 +351,10 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     if(!probe||!probeTarget)return;
     const visible=player.visible,autoShadow=renderer.shadowMap.autoUpdate,environment=scene.environment,mipmaps=probeTarget.texture.generateMipmaps;
     const target=renderer.getRenderTarget(),cubeFace=renderer.getActiveCubeFace(),mipLevel=renderer.getActiveMipmapLevel(),xr=renderer.xr.enabled;
+    // Close to the resort, reuse the existing scene probe for its glass. Keep
+    // the building itself out of that capture so it cannot reflect itself.
+    const encore=encoreReflectionProbe()?architecturalLandmarks?.encore?.group:undefined;
+    if(encore)encore.visible=false;
     player.visible=false;renderer.shadowMap.autoUpdate=false;scene.environment=skyEnvironment!.texture;skyUniforms.showSunDisc.value=false;
     try{
       if(probe.coordinateSystem!==renderer.coordinateSystem){probe.coordinateSystem=renderer.coordinateSystem;probe.updateCoordinateSystem();}
@@ -352,9 +362,11 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
       renderer.setRenderTarget(probeTarget,face);renderer.render(scene,probe.children[face] as THREE.Camera);
     }finally{
       probeTarget.texture.generateMipmaps=mipmaps;renderer.setRenderTarget(target,cubeFace,mipLevel);renderer.xr.enabled=xr;
+      if(encore)encore.visible=true;
       player.visible=visible;renderer.shadowMap.autoUpdate=autoShadow;scene.environment=environment;skyUniforms.showSunDisc.value=true;
     }
   }
+  const encoreReflectionProbe=()=>!underground&&Math.hypot(probePosition.x-459,probePosition.z+5007)<480;
   function updateReflections(position:THREE.Vector3,time:number,player:THREE.Object3D){
     // Let the main view allocate the depth-comparison shadow texture before a
     // probe capture; a shadow sampler cannot use an uninitialized color texture.
@@ -372,6 +384,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     if(probeFace<6)return;
     probeFace=-1;probeTarget.texture.needsPMREMUpdate=true;
     reflectionEnvironment=pmrem.fromCubemap(probeTarget.texture,reflectionEnvironment);scene.environment=reflectionEnvironment.texture;
+    architecturalLandmarks?.encore?.setReflection(encoreReflectionProbe()?reflectionEnvironment.texture:skyEnvironment!.texture);
   }
   function setQuality(high:boolean){
     highQuality=high;const size=options.mobile?1024:high?4096:2048;

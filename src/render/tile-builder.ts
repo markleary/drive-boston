@@ -67,6 +67,9 @@ export interface TileContext {
   trees: TreeField; parkTrees: TreeField;
   /** Live id lookup of the detailed buildings currently in the scene. */
   buildingMap: Map<string, Building>;
+  /** Shells and collisions supplied by persistent landmark models. */
+  replacedBuildings?: ReadonlySet<string>;
+  landmarkForecourt?: (x: number, z: number) => boolean;
   ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material; mobile?: boolean;
   /** Starts linking a new static batch's shader programs, so the build can show it once they are ready. */ warm?: Warm;
 }
@@ -382,7 +385,9 @@ export function createTileBuilder(ctx: TileContext) {
         if (b === zakim) continue;
         if (due(pace)) yield 'buildings';
         const data = tile.geometry.get(b.id); if (!data) continue;
-        ctx.buildingMap.set(b.id, b); stats.buildings++; stats.triangles += (data.facade.length + data.roof.length) / 3;
+        ctx.buildingMap.set(b.id, b); stats.buildings++;
+        if (ctx.replacedBuildings?.has(b.id)) continue;
+        stats.triangles += (data.facade.length + data.roof.length) / 3;
         // Hand-modelled northern landmarks replace their extruded shell, hull and foundation skirt.
         if (replacesTileShell(b)) { const model = buildMelroseLandmark(city, b, !!ctx.mobile); if (model) { group.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); continue; } }
         const style = facadeStyleIndex(b), isStone = parkStructure(b), fenway = isFenwayBuilding(b);
@@ -447,7 +452,7 @@ export function createTileBuilder(ctx: TileContext) {
         const geometry = mergeGeometries(geometries, false); for (const g of geometries) g.dispose(); if (!geometry) continue;
         const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'Boston surveyed buildings'; geometry.computeBoundingSphere(); meshes.push(mesh); group.add(mesh);
       }
-      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b) && !replacesTileShell(b)) });
+      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b) && !replacesTileShell(b) && !ctx.replacedBuildings?.has(b.id)) });
       if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; group.add(mesh); } else footings.dispose();
       addTileBuildings(city, tile);
     }
@@ -457,7 +462,7 @@ export function createTileBuilder(ctx: TileContext) {
     {
       const treePositions: THREE.Vector3[] = [];
       const random = seeded(342 + hash(key) % 1000);
-      const occupied = (x: number, z: number) => inGreenway(x,z) || inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
+      const occupied = (x: number, z: number) => ctx.landmarkForecourt?.(x, z) || inGreenway(x,z) || inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
       const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
       for (const road of roads.filter(r=>!r.tunnel)) for (let i = 1; i < road.points.length; i++) {
         const a = road.points[i - 1], b = road.points[i], radius = (road.pavedWidth ?? road.width) / 2 + .8, segment = { a, b, radius };
@@ -520,7 +525,7 @@ export function createTileBuilder(ctx: TileContext) {
       for(const path of tile.parkPaths)colliders.push(...physics.addFootbridge(subCity,path));
       const addLandscapeCollider = (vertices: Float32Array, indices: Uint32Array) => { colliders.push(physics.addStaticMesh(vertices, indices)); };
       const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group,
-        budgets: { trees: 120, benches: 25 }, pace, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider }));
+        budgets: { trees: 120, benches: 25 }, reserved: ctx.landmarkForecourt, pace, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider }));
       stats.parkTrees = parks.userData.trees ?? 0;
     }
     yield 'parks';
@@ -529,7 +534,7 @@ export function createTileBuilder(ctx: TileContext) {
     {
       const sampler = sourceWallSampler(scene, meshes);
       yield 'details';
-      const detailBuildings = tile.buildings.filter(b => !isChelseaLiftFrame(b) && !replacesTileShell(b));
+      const detailBuildings = tile.buildings.filter(b => !isChelseaLiftFrame(b) && !replacesTileShell(b) && !ctx.replacedBuildings?.has(b.id));
       const half = Math.ceil(detailBuildings.length / 2), subsets = [detailBuildings.slice(0, half), detailBuildings.slice(half)];
       for (const subset of ctx.mobile ? [] : subsets) {
         if (!subset.length) continue;

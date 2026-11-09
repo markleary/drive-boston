@@ -53,6 +53,7 @@ export interface ParkOptions {
   /** Streamed tile: surfaces are clipped to this box and only paths/ponds owned by it are built. */
   bounds?:Bounds; owner?:string; pathOwned?:(path:ParkPath)=>boolean; treeField?:TreeField; target?:THREE.Object3D;
   budgets?:{trees?:number;benches?:number};
+  reserved?:(x:number,z:number)=>boolean;
   /** Frame pacing: the generator form pauses between areas, paths and parks once the deadline has passed. */ pace?:Pace;
 }
 type ParkPath=NonNullable<CityData['parkPaths']>[number];
@@ -155,7 +156,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   }
   const waterBounds=waters.map(w=>({area:w,...areaBounds(w)}));
   const wet=(p:Point2)=>waterBounds.some(w=>p[0]>=w.minX-2&&p[0]<=w.maxX+2&&p[1]>=w.minZ-2&&p[1]<=w.maxZ+2&&insideArea(p,w.area));
-  const safe=(p:Point2)=>!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
+  const safe=(p:Point2)=>!options.reserved?.(...p)&&!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
   const treePoints:THREE.Vector3[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
