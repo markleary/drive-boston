@@ -128,26 +128,27 @@ test('cars emerge from a closed start and vanish into a closed end, never drivin
   assert.equal(beyond,0,'none is seen past the barrier');
 });
 
-test('a car on a survey trace is hidden while the survey mesh is not drawn, and drawn once it is',async()=>{
-  // The middle carriageway piece as a trace over a survey mesh whose tile is built after ten seconds.
-  const city=corridor(),trace=city.roads.splice(1,1)[0];Object.assign(trace,{name:'I-93 North · Zakim Bridge',surveyDeck:'BOS-SURVEY'});city.surveyRoads=[trace];
-  let drawn=false;const asked=new Set(),physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{surveyDrawn:id=>{asked.add(id);return drawn;}});
+for(const surveyed of [false,true])test(`traffic waits for the ${surveyed?'surveyed':'procedural'} deck to stream in`,async()=>{
+  const city=corridor(),deck=city.roads[1];deck.name='I-93 North · Streamed deck';
+  if(surveyed){city.roads.splice(1,1);deck.surveyDeck='BOS-SURVEY';city.surveyRoads=[deck];}
+  let drawn=false;const physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{deckDrawn:road=>road!==deck||drawn});
   const player={x:400,y:.65,z:-100,yaw:0,speed:0,steering:0},observer={x:0,y:DECK+.6,z:-1500},seen={hidden:0,shown:0,elsewhere:0};
   physics.body.setTranslation(player,true);
   try{
     for(let step=1;step<=20*60;step++){
-      if(step===10*60)drawn=true;
+      if(step===8*60)drawn=true;
+      if(step===16*60)drawn=false;
       traffic.update(1/60,player,observer);physics.world.step();
       if(step%15)continue;
       for(const car of traffic.snapshot()){
         if(car.parked)continue;
-        const on=car.road==='I-93 North · Zakim Bridge';
-        assert.equal(car.hidden,on&&!drawn,`a car ${on?'on':'off'} the trace is ${car.hidden?'hidden':'drawn'} while the mesh is ${drawn?'':'not '}drawn`);
+        const on=car.road===deck.name;
+        assert.equal(car.hidden,on&&!drawn,`a car ${on?'on':'off'} the deck is ${car.hidden?'hidden':'drawn'} while the mesh is ${drawn?'':'not '}drawn`);
+        assert.equal(physics.world.getCollider(car.collider).isEnabled(),!car.hidden,'an invisible car cannot hit the player');
         if(on)seen[drawn?'shown':'hidden']++;else seen.elsewhere++;
       }
     }
   }finally{traffic.dispose();physics.dispose();}
-  assert.deepEqual([...asked],['BOS-SURVEY'],'only cars on the trace ask about its mesh');
   assert.ok(seen.hidden>0&&seen.shown>0&&seen.elsewhere>0,JSON.stringify(seen));
 });
 

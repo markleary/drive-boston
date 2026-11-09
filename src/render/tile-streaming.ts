@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { loadTile, tilesNear, type CityTile, type Reader } from '../simulation/city-tiles.ts';
+import type { Road } from '../types';
+import { loadTile, type CityTile, type Reader } from '../simulation/city-tiles.ts';
 import { RoadTileCoverage } from '../simulation/road-tile-coverage.ts';
 import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import type { FarCityView } from './far-city';
@@ -18,6 +19,8 @@ export interface TileStreamer {
   readonly needsRebuildAfterRestore: boolean;
   /** Rebuild every resident tile (geometry and colliders) and the neighborhood around the observer. */
   rebuild(x: number, z: number): Promise<boolean>;
+  /** Whether an elevated traffic route's supporting deck is in the scene. */
+  deckDrawn(road: Road): boolean;
   readonly loaded: ReadonlyMap<string, BuiltTile>;
   stats(): { exactMeshes: number } & Record<string, unknown>;
 }
@@ -39,7 +42,9 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
   // Phones free each finished tile's vertex arrays once they are on the GPU.
   const uploads = mobile ? createUploadRelease() : undefined;
   const coverage = new RoadTileCoverage(city, builder.roadsNear);
-  const wantedAround = (x: number, z: number, radius: number) => mobile ? coverage.tilesNear(x, z, radius) : tilesNear(city, x, z, radius);
+  // The desktop window covers procedural roads, but not every part of the
+  // Zakim survey. Give the survey owner the priority of the visible viaduct.
+  const wantedAround = (x: number, z: number, radius: number) => coverage.tilesNear(x, z, radius, { includeOrdinaryRoads: mobile });
   const group = new THREE.Group(); group.name = 'Streamed tiles'; scene.add(group);
   const loaded = new Map<string, BuiltTile>(), fetched = new Map<string, CityTile>(), fetching = new Map<string, Promise<CityTile>>(), failed = new Set<string>();
   type Active = { key: string; tile: CityTile; generator: Generator<TileStage, BuiltTile>; partial: PartialTile; stage?: TileStage; stageMs: Record<string, number> };
@@ -51,7 +56,7 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     for (const t of loaded.values()) { buildingChunks.push(...t.meshes); lampPositions.push(...t.lamps); signals.push(...t.signals); }
     scene.userData.version = ++version;
   };
-  const distanceTo = (built: { bounds: BuiltTile['bounds'] }, x: number, z: number) => Math.hypot(Math.max(built.bounds.minX - x, 0, x - built.bounds.maxX), Math.max(built.bounds.minZ - z, 0, z - built.bounds.maxZ));
+  const distanceTo = (bounds: BuiltTile['bounds'], x: number, z: number) => Math.hypot(Math.max(bounds.minX - x, 0, x - bounds.maxX), Math.max(bounds.minZ - z, 0, z - bounds.maxZ));
   const fetch = (tx: number, tz: number, key: string) => {
     // A paced build can span many frames after its download leaves `fetched`.
     // Fetching it again during that interval queues a second build which would
@@ -90,16 +95,16 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     const reach = loadRadius + expansion, drop = unloadRadius + expansion, now = began;
     if (focus && focus.until < now) focus = undefined;
     const wanted = wantedAround(position.x, position.z, reach);
-    const retained = mobile ? new Set(wantedAround(position.x, position.z, drop).map(t => t.key)) : undefined;
-    if (retained && focus) for (const t of wantedAround(focus.x, focus.z, drop)) retained.add(t.key);
+    const retained = new Set(wantedAround(position.x, position.z, drop).map(t => t.key));
+    if (focus) for (const t of wantedAround(focus.x, focus.z, drop)) retained.add(t.key);
     // Unload at most one far tile per frame; disposal walks the tile's objects.
-    for (const [key, built] of loaded) {
-      if (retained ? retained.has(key) : distanceTo(built, position.x, position.z) <= drop || (focus && distanceTo(built, focus.x, focus.z) <= drop)) continue;
+    for (const key of loaded.keys()) {
+      if (retained.has(key)) continue;
       unload(key); break;
     }
-    if (active && (retained ? !retained.has(active.key) : distanceTo({ bounds: boundsOf(active.tile) }, position.x, position.z) > drop && !(focus && distanceTo({ bounds: boundsOf(active.tile) }, focus.x, focus.z) <= drop))) abandon();
-    // Discard decoded downloads left behind by travel, including late arrivals.
-    if (retained) for (const key of fetched.keys()) if (!retained.has(key)) fetched.delete(key);
+    if (active && !retained.has(active.key)) abandon();
+    // On phones discard decoded downloads left behind by travel, including late arrivals.
+    if (mobile) for (const key of fetched.keys()) if (!retained.has(key)) fetched.delete(key);
     for (const t of wanted) { if (fetching.size >= maxFetches) break; fetch(t.tx, t.tz, t.key)?.catch(() => undefined); }
     if (!active) {
       let best: { key: string; distance: number } | undefined;
@@ -107,7 +112,10 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
       if (best) active = start(best.key, fetched.get(best.key)!);
     }
     if (!active) return;
-    const distance = wanted.find(t => t.key === active!.key)?.distance ?? distanceTo({ bounds: boundsOf(active.tile) }, position.x, position.z);
+    const physicalDistance = distanceTo(boundsOf(active.tile), position.x, position.z);
+    // A trace gives its distant owner an earlier slot, while distant tile
+    // scenery remains paced even when the observer is right on the trace.
+    const distance = mobile ? wanted.find(t => t.key === active!.key)?.distance ?? physicalDistance : physicalDistance;
     pace.deadline = distance > SYNC_RADIUS ? began + budget : Infinity;
     while (true) {
       const built = step(active);
@@ -123,7 +131,8 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     // A teleport/reload must install every supporting deck before placing the
     // vehicle. Even on desktop a long bridge's midpoint owner can lie outside
     // this smaller synchronous radius (the Chelsea end of Tobin is 371 m away).
-    // The normal desktop frame loop keeps its cheaper, larger spatial window.
+    // The normal desktop frame loop keeps its cheaper, larger spatial window
+    // for procedural roads.
     const wanted = coverage.tilesNear(x, z, radius);
     if (!mobile) await Promise.all(wanted.map(t => loaded.has(t.key) || (active?.key === t.key) || fetched.has(t.key) ? undefined : fetch(t.tx, t.tz, t.key)?.catch(() => undefined)));
     for (const t of wanted) {
@@ -162,5 +171,11 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     const tiles = [...loaded.values()].map(t => ({ key: t.key, buildings: t.stats.buildings, triangles: t.stats.triangles, buildMs: t.stats.buildMs, cpuMs: t.stats.cpuMs, stageMs: t.stats.stageMs }));
     return { loadRadius, unloadRadius, maxFetches, releasedBytes: uploads?.releasedBytes ?? 0, releasedAttributes: uploads?.releasedAttributes ?? 0, loaded: loaded.size, residentGroups: group.children.length, keys: [...loaded.keys()], fetching: fetching.size, pending: fetched.size, failed: failed.size, building: active?.key, stage: active?.stage, budgetMs: Math.round(budget * 10) / 10, tileSize: city.tiles.size, available: city.tiles.keys.length, farBuildings: city.tiles.buildingCount, ...totals, stageMs, tiles };
   }
-  return { group, buildingChunks, lampPositions, signals, update, ensureAround, rebuild, get needsRebuildAfterRestore() { return (uploads?.releasedAttributes ?? 0) > 0; }, loaded, stats };
+  function deckDrawn(road: Road) {
+    if (!road.surveyDeck && (!road.elevations || road.tunnel)) return true;
+    const key = coverage.keyFor(road);
+    if (!key || loaded.has(key)) return true;
+    return active?.key === key && (road.surveyDeck ? active.partial.surveyDeck === road.surveyDeck : !!active.partial.structuresReady);
+  }
+  return { group, buildingChunks, lampPositions, signals, update, ensureAround, rebuild, deckDrawn, get needsRebuildAfterRestore() { return (uploads?.releasedAttributes ?? 0) > 0; }, loaded, stats };
 }

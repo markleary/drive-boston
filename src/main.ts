@@ -254,9 +254,7 @@ async function boot(){
     const construction=createConstruction(scene,city,physics,constructionZones,{hasGround:(x,z)=>!streamer||streamer.loaded.has(`${Math.floor(x/city.tiles!.size)}_${Math.floor(z/city.tiles!.size)}`)});
     construction.update(physics.getState());
     physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;
-    // A survey mesh is drawn once the tile under its centre (where the packer puts it) is built; cars on its traces wait for it.
-    const surveyTiles=new Map((streamer?city.landmarkBuildings??[]:[]).map(b=>[b.id,`${Math.floor(b.center[0]/city.tiles!.size)}_${Math.floor(b.center[1]/city.tiles!.size)}`]));
-    traffic=createTraffic(scene,city,physics,constructionZones,{surveyDrawn:id=>!streamer||!surveyTiles.has(id)||streamer.loaded.has(surveyTiles.get(id)!)});
+    traffic=createTraffic(scene,city,physics,constructionZones,{deckDrawn:streamer?.deckDrawn});
     transit=createTransit(scene,city,physics,transitData);
     const railData=await railRequest,rail=railData?createRailTracks(scene,city,physics,railData,{mobile}):undefined;
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;

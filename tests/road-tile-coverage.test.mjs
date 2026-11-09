@@ -59,4 +59,10 @@ test('a survey trace brings its mesh owner, so a phone on the Charlestown end of
     assert.equal(index.tilesNear(x,z,radius).find(t=>t.key===owner)?.distance,0,`the mesh owner is wanted within ${radius} m`);
     assert.ok(!without.tilesNear(x,z,radius).some(t=>t.key===owner),'and nothing but the trace brings it');
   }
+  // Seen from the southbound approach, the survey is hundreds of metres
+  // nearer than its tile. Desktop must give it that earlier build slot too.
+  const approach = [-340,-4470], desktop = {includeOrdinaryRoads:false};
+  assert.ok(!tilesNear(metro,...approach,1150).some(t=>t.key===owner));
+  assert.ok(index.tilesNear(...approach,1150,desktop).find(t=>t.key===owner)?.distance<450);
+  assert.equal(index.keyFor(trace),owner);
 });

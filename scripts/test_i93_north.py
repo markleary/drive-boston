@@ -62,6 +62,20 @@ def curvature(along,y):
 
 
 class ProfileTest(unittest.TestCase):
+ def test_ramp_shoulders_use_open_space_and_taper_to_streets_and_buildings(self):
+  points=[[float(x),0.] for x in range(0,201,2)]
+  ramp=I.Plan('ramp',points,[1]*len(points),[7.]*len(points),I.RAMP_GRADE,[1]*len(points))
+  ramp.y=[2.]*len(points)
+  road={'points':[(130,-20),(130,20)],'width':6}
+  ground=type('Ground',(),{'across':lambda self,p,t,half:2 if 160<=p[0]<=164 and half>3.5 else 0})()
+  I.widen_ramps([ramp],[],[road],ground,lambda bounds:[list(box(70,3.8,90,8).exterior.coords)])
+  self.assertEqual((ramp.widths[0],ramp.widths[-1]),(7.,7.),'preserve both shared end widths')
+  self.assertEqual(ramp.widths[20],9.,'use the clear shoulders 40 m along')
+  self.assertEqual(ramp.widths[40],7.,'leave the existing building clearance at 80 m')
+  self.assertEqual(ramp.widths[65],7.,'keep the crossing at its original width')
+  self.assertEqual(ramp.widths[81],7.,'stay clear of the raised ground')
+  self.assertLessEqual(max(abs(np.diff(ramp.widths))),.161,'the shoulder tapers by at most 4 cm per metre on either side')
+
  def test_a_floor_tent_is_rounded_to_the_radius_and_never_lowered(self):
   # A floor peaking over a crossing, coned and rounded as solve() does it for a 5% grade.
   a=np.arange(0,301,3.0).tolist();floor=I.cone([12.0 if 140<=x<=160 else 0.0 for x in a],a,.92*.05,1)

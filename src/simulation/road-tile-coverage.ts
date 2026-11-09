@@ -34,6 +34,7 @@ function pavementDistance(road: Road, x: number, z: number) {
  * 1.1 km from it, beyond a phone's unload radius). */
 export class RoadTileCoverage {
   private owners = new WeakMap<Road, Omit<WantedTile, 'distance'>>();
+  private surveyOwners = new Map<string, Omit<WantedTile, 'distance'>>();
   private keys: Set<string>;
   private city: MetroCity;
   private roadsNear: (bounds: Bounds) => Road[];
@@ -46,20 +47,33 @@ export class RoadTileCoverage {
       const mesh = city.landmarkBuildings?.find(b => b.id === road.surveyDeck); if (!mesh || road.points.length < 2) continue;
       const [tx, tz] = tileOf(mesh.center[0], mesh.center[1], city.tiles.size), key = tileKey(tx, tz); if (!this.keys.has(key)) continue;
       const xs = road.points.map(p => p[0]), zs = road.points.map(p => p[1]), half = road.width / 2;
-      this.surveys.push({ road, owner: { tx, tz, key }, bounds: { minX: Math.min(...xs) - half, maxX: Math.max(...xs) + half, minZ: Math.min(...zs) - half, maxZ: Math.max(...zs) + half } });
+      const owner = { tx, tz, key };
+      this.surveyOwners.set(mesh.id, owner);
+      this.surveys.push({ road, owner, bounds: { minX: Math.min(...xs) - half, maxX: Math.max(...xs) + half, minZ: Math.min(...zs) - half, maxZ: Math.max(...zs) + half } });
     }
   }
-  tilesNear(x: number, z: number, radius: number): WantedTile[] {
+  private owner(road: Road) {
+    let owner = this.owners.get(road);
+    if (!owner) {
+      const [tx, tz] = tileOf(...roadMidpoint(road), this.city.tiles.size);
+      owner = { tx, tz, key: tileKey(tx, tz) };
+      this.owners.set(road, owner);
+    }
+    return owner;
+  }
+  keyFor(road: Road) {
+    return road.surveyDeck ? this.surveyOwners.get(road.surveyDeck)?.key : this.owner(road).key;
+  }
+  tilesNear(x: number, z: number, radius: number, { includeOrdinaryRoads = true } = {}): WantedTile[] {
     const wanted = new Map(tilesNear(this.city, x, z, radius).map(tile => [tile.key, tile]));
     const want = (owner: Omit<WantedTile, 'distance'>, distance: number) => { const previous = wanted.get(owner.key); if (!previous || distance < previous.distance) wanted.set(owner.key, { ...owner, distance }); };
     // Include centerlines just outside the radius whose pavement reaches it.
     const margin = radius + this.pavementMargin;
-    for (const road of this.roadsNear({ minX: x - margin, maxX: x + margin, minZ: z - margin, maxZ: z + margin })) {
+    for (const road of includeOrdinaryRoads ? this.roadsNear({ minX: x - margin, maxX: x + margin, minZ: z - margin, maxZ: z + margin }) : []) {
       if (road.points.length < 2) continue;
       const distance = pavementDistance(road, x, z);
       if (distance > radius) continue;
-      let owner = this.owners.get(road);
-      if (!owner) { const [tx, tz] = tileOf(...roadMidpoint(road), this.city.tiles.size); owner = { tx, tz, key: tileKey(tx, tz) }; this.owners.set(road, owner); }
+      const owner = this.owner(road);
       if (!this.keys.has(owner.key)) continue;
       want(owner, distance);
     }

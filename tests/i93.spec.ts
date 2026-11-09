@@ -35,6 +35,21 @@ const sideView=(name:string,x:number,y:number,z:number,dx:number,dz:number,dista
  const l=Math.hypot(dx,dz)||1,cx=x-dz/l*distance,cz=z+dx/l*distance;return {name,x:cx,y:y+rise,z:cz,yaw:Math.atan2(x-cx,z-cz),pitch};
 };
 
+test('the Zakim viaduct draws from the north before its distant owner finishes building',async({page},testInfo)=>{
+ await page.goto('/');
+ await page.getByTestId('start-drive').click({timeout:90000});
+ await page.keyboard.press('3');
+ // From here the viaduct is visible down the corridor, but its owning tile
+ // is beyond even the expanded desktop window at helicopter altitude.
+ await page.evaluate(()=>(window as any).__backbay.flyTo(-340,96,-4470,0.02));
+ await expect.poll(()=>page.evaluate(()=>{
+  const api=(window as any).__backbay,tile=api.scene.getObjectByName('Tile 0_-3');
+  return !!tile?.getObjectByName('Zakim survey shell')?.visible && !!tile.getObjectByName('Survey deck pavement and lanes') && !tile.userData.tile;
+ }),{timeout:15000}).toBe(true);
+ expect((await snapshot(page)).tiles.failed).toBe(0);
+ await page.screenshot({path:testInfo.outputPath('early-zakim-viaduct.png')});
+});
+
 test('Interstate 93: the car rides its decks to the barriers at the Stoneham line, among highway traffic, and GPS takes it',async({page,request},testInfo)=>{
  test.setTimeout(900000);await page.setViewportSize({width:1600,height:900});
  const city=await(await request.get('/data/city.json')).json(),roads:Road[]=city.roads;

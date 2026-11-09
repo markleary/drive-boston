@@ -344,8 +344,10 @@ export function junctionMouths(city:CityData,road:Road){
   return mouths;
 }
 
-/** Parapets along the exposed deck edges, except where the deck sits on the
- * ground. Every estimated structure lands on a street at grade, and the first
+/** Parapets along exposed deck edges. The limited-access I-93 decks keep their
+ * concrete along embankments and through cuts, even where the terrain rises
+ * to the shoulder. Their street landings still use the ground test. Other
+ * structures lose the parapet wherever the deck sits on the ground: the first
  * metres of a ramp mouth, an at-grade approach or a preserved surface street run
  * within centimetres of the terrain: a 0.76 m wall there stands across the
  * junction's sidewalk and crosswalk landings (the Tobin ramps at New Rutherford
@@ -356,12 +358,18 @@ export function junctionMouths(city:CityData,road:Road){
  * whatever lies beyond the cross street. */
 export function bridgeBarriers(city:CityData,road:Road){
   if(isHarvardBridgeRoad(road))return[]; // Outer sidewalk parapets are built in harvard-bridge.ts.
-  const mouths=junctionMouths(city,road);
+  const interstate=road.bridge?.id==='i93'&&speedClass(road)>0;
+  const mouths=interstate
+    ? [road.startLevel===0?road.points[0]:undefined,road.endLevel===0?road.points.at(-1):undefined].filter(p=>p!==undefined)
+    : junctionMouths(city,road);
   // The outside probe preserves protection on the union's exposed perimeter,
   // including where two source road ribbons share the same outer edge.
   return bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb,side})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),ox=-dz/(distance||1)*side,oz=dx/(distance||1)*side;
-    const grounded=(t:number)=>{const x=a[0]+dx*t,z=a[1]+dz*t;return deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouths.some(m=>Math.hypot(m[0]-x,m[1]-z)<MOUTH_REACH));};
+    const grounded=(t:number)=>{
+      const x=a[0]+dx*t,z=a[1]+dz*t,mouth=mouths.some(m=>Math.hypot(m[0]-x,m[1]-z)<MOUTH_REACH);
+      return (!interstate||mouth)&&deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouth);
+    };
     const clear=(t:number)=>grounded(t)||inTransitClearance(city,a[0]+dx*t,a[1]+dz*t,ya+dy*t),steps=Math.max(1,Math.ceil(distance/.4));
     const exposed:[number,number][]=[],boundary=(low:number,high:number,state:boolean)=>{
       for(let i=0;i<12;i++){const middle=(low+high)/2;if(clear(middle)===state)low=middle;else high=middle;}return(low+high)/2;
@@ -423,41 +431,78 @@ export function laneContinuation(city:CityData,road:Road,atEnd:boolean){
   }
   return best;
 }
+/** Measure the uninterrupted lane count across source splits, and carry the
+ * dash phase across seams with a unique continuation in both directions. */
+function laneMarkingChain(city:CityData,road:Road,atEnd:boolean){
+  const seen=new Set([road]);
+  let previous=road,next=laneContinuation(city,road,atEnd),distance=0,phase=0,boundary:Road|undefined;
+  while(next&&!seen.has(next)){
+    if(!boundary&&next.lanes!==road.lanes)boundary=next;
+    if((atEnd&&boundary)||laneContinuation(city,next,!atEnd)!==previous)break;
+    const length=stations(next.points).at(-1)??0;
+    if(!boundary)distance+=length;
+    if(!atEnd)phase=(phase+length)%LANE_DASH[1];
+    seen.add(next);previous=next;next=laneContinuation(city,next,atEnd);
+  }
+  return{distance,phase,boundary};
+}
 /** Dashed lane dividers: 3 m of paint in every 12 m. */
 export const LANE_DASH=[3,12];
 export interface LaneLine {points:Point2[];color:'white'|'yellow';kind:'left'|'right'|'divider'}
 /** Painted lines of a one-way deck with a `lanes` count, as polylines on it:
  * dashed dividers between the lanes and solid edge lines, white on the right
  * and yellow on the left. Where the same class of deck carries on with fewer
- * lanes, the extra ones taper out on the right over the last 150 m (at most the
- * deck's length, half of it when both ends taper) while the others slide over
- * to meet its lines. A line is cut where another deck covers it: a ramp's lines
+ * lanes, the extra ones taper out on the right over up to 150 m of the
+ * continuous lane run while the others slide over to meet its lines. A very
+ * short run cannot form a full-width extra lane between two tapers. A line is
+ * cut where another deck covers it: a ramp's lines
  * inside the carriageway it leaves or joins and a carriageway's edge line across
  * a ramp's mouth; a carriageway's dividers give way only to another carriageway,
- * and the deck a line continues onto never cuts it. */
-export function laneMarkings(city:CityData,road:Road){
+ * and the deck a line continues onto never cuts it. `continuationCity` keeps
+ * tapers and dash phase continuous when clipping uses only tile-local roads. */
+export function laneMarkings(city:CityData,road:Road,continuationCity=city){
   const lines:LaneLine[]=[];
   if(road.lanes===undefined||road.oneway===0||road.points.length<2)return lines;
   const own=laneEdges(road),n=own.length-1,along=stations(road.points),total=along[along.length-1],count=road.points.length;
-  const neighbours=([false,true] as const).map(atEnd=>laneContinuation(city,road,atEnd));
-  const tapers=([false,true] as const).flatMap((atEnd,j)=>{const edges=neighbours[j]&&laneEdges(neighbours[j]!);return edges&&edges.length<own.length?[{atEnd,target:own.map((_,k)=>edges[Math.min(k,edges.length-1)])}]:[];});
+  const neighbours=([false,true] as const).map(atEnd=>laneContinuation(continuationCity,road,atEnd));
+  const [before,after]=([false,true] as const).map(atEnd=>laneMarkingChain(continuationCity,road,atEnd));
+  const tapers=[before,after].flatMap(({boundary,distance},j)=>{
+    const edges=boundary&&laneEdges(boundary);
+    return edges&&edges.length<own.length?[{atEnd:j===1,distance,edges}]:[];
+  });
+  const laneRunLength=before.distance+total+after.distance;
+  const taperShare=laneRunLength/Math.max(1,tapers.length);
+  const sameTargets=tapers.length===2&&tapers[0].edges.length===tapers[1].edges.length&&tapers[0].edges.every((edge,k)=>edge===tapers[1].edges[k]);
+  // The minimum reach allows the same taper to fade in and out without a
+  // sharp jog where a lane count briefly spikes between two equal widths.
+  const reach=Math.min(150,sameTargets?Math.max(60,taperShare):taperShare);
+  const firstTaperedDivider=Math.min(n,...tapers.map(t=>t.edges.length-1));
   // At a seam the lines run square to the mean of both decks' headings, so they meet their continuation's.
   const unit=(a:Point2,b:Point2):Point2=>{const dx=b[0]-a[0],dz=b[1]-a[1],l=Math.hypot(dx,dz)||1;return[dx/l,dz/l];};
   const seam=(i:number,j:number):Point2=>{const next=neighbours[j],own=unit([0,0],deckDirection(road,i) as Point2);if(!next||(j?road.deckTangents?.end:road.deckTangents?.start))return own;const m=next.points.length,other=j?unit(next.points[0],next.points[1]):unit(next.points[m-2],next.points[m-1]);return[own[0]+other[0],own[1]+other[1]];};
-  const reach=Math.min(150,total/Math.max(1,tapers.length)),centre=road.points.map((p,i)=>{const [dx,dz]=i===0?seam(i,0):i===count-1?seam(i,1):deckDirection(road,i),l=Math.hypot(dx,dz)||1;return{p,rx:-dz/l,rz:dx/l};});
-  const linePoints=own.map((base,k)=>along.map((s,i)=>{
+  const centre=road.points.map((p,i)=>{const [dx,dz]=i===0?seam(i,0):i===count-1?seam(i,1):deckDirection(road,i),l=Math.hypot(dx,dz)||1;return{p,rx:-dz/l,rz:dx/l};});
+  const offsets=own.map((base,k)=>along.map((s,i)=>{
     let o=base;
-    for(const t of tapers){const d=t.atEnd?total-s:s;if(d<reach){const u=1-d/reach;o+=(t.target[k]-base)*u*u*(3-2*u);}}
-    const half=(road.deckWidths?.[i]??road.width)/2-.25,c=centre[i];o=Math.max(-half,Math.min(half,o));
-    return[c.p[0]+c.rx*o,c.p[1]+c.rz*o] as Point2;
+    for(const t of tapers){const d=t.distance+(t.atEnd?total-s:s);if(d<reach){const u=1-d/reach;o+=(t.edges[Math.min(k,t.edges.length-1)]-o)*u*u*(3-2*u);}}
+    const half=(road.deckWidths?.[i]??road.width)/2-.25;return Math.max(-half,Math.min(half,o));
   }));
   const cells=deckIndex(city),cls=speedClass(road);
   for(let k=0;k<=n;k++){
-    const pts=linePoints[k],edge=k===0||k===n,cuts=(other:Road)=>!neighbours.includes(other)&&(edge||cls!==2||speedClass(other)===2),visible:[number,number][]=[];
+    const pts=centre.map(({p,rx,rz},i):Point2=>[p[0]+rx*offsets[k][i],p[1]+rz*offsets[k][i]]);
+    const edge=k===0||k===n,cuts=(other:Road)=>!neighbours.includes(other)&&(edge||cls!==2||speedClass(other)===2),visible:[number,number][]=[];
     for(let i=1;i<count;i++){
+      const covered:[number,number][]=[];
+      if(k>=firstTaperedDivider&&!edge){
+        // The extra divider would otherwise lie directly over the shoulder
+        // line as its lane closes. Keep it where at least half a lane fits.
+        const a=offsets[n][i-1]-offsets[k][i-1]-LANE_WIDTH/2,b=offsets[n][i]-offsets[k][i]-LANE_WIDTH/2;
+        if(a<0&&b<0)continue;
+        if(a<0)covered.push([0,a/(a-b)]);
+        if(b<0)covered.push([a/(a-b),1]);
+      }
       const a=pts[i-1],b=pts[i],ya=sampleRoadElevation(city,road,a[0],a[1]),yb=sampleRoadElevation(city,road,b[0],b[1]),candidates=new Set<DeckTriangle>();
       for(let x=Math.floor(Math.min(a[0],b[0])/DECK_CELL);x<=Math.floor(Math.max(a[0],b[0])/DECK_CELL);x++)for(let z=Math.floor(Math.min(a[1],b[1])/DECK_CELL);z<=Math.floor(Math.max(a[1],b[1])/DECK_CELL);z++)for(const triangle of cells.get(`${x},${z}`)??[])if(triangle.road!==road&&cuts(triangle.road))candidates.add(triangle);
-      const covered:[number,number][]=[];for(const triangle of candidates){const interval=coveredDeckInterval(a,b,ya,yb,triangle);if(interval)covered.push(interval);}
+      for(const triangle of candidates){const interval=coveredDeckInterval(a,b,ya,yb,triangle);if(interval)covered.push(interval);}
       covered.sort((p,q)=>p[0]-q[0]);
       let cursor=0;const span=along[i]-along[i-1],open=(lo:number,hi:number)=>{const s0=along[i-1]+span*lo,s1=along[i-1]+span*hi,last=visible[visible.length-1];if(last&&s0-last[1]<1e-6)last[1]=s1;else visible.push([s0,s1]);};
       for(const [lo,hi]of covered){if(lo>cursor)open(cursor,lo);cursor=Math.max(cursor,hi);}
@@ -467,7 +512,7 @@ export function laneMarkings(city:CityData,road:Road){
     const piece=(s0:number,s1:number)=>{if(s1-s0<.3)return;const points=[at(s0)];for(let i=0;i<count;i++)if(along[i]>s0+1e-6&&along[i]<s1-1e-6)points.push(pts[i]);points.push(at(s1));lines.push({points,color:k===0?'yellow':'white',kind:k===0?'left':k===n?'right':'divider'});};
     for(const [s0,s1]of visible){
       if(edge){piece(s0,s1);continue;}
-      for(let d=Math.floor(s0/LANE_DASH[1])*LANE_DASH[1];d<s1;d+=LANE_DASH[1])piece(Math.max(s0,d),Math.min(s1,d+LANE_DASH[0]));
+      for(let d=Math.floor((s0+before.phase)/LANE_DASH[1])*LANE_DASH[1]-before.phase;d<s1;d+=LANE_DASH[1])piece(Math.max(s0,d),Math.min(s1,d+LANE_DASH[0]));
     }
   }
   return lines;

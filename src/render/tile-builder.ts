@@ -79,8 +79,8 @@ export interface BuiltTile {
   key: string; tile: CityTile; group: THREE.Group; bounds: Bounds; colliders: RAPIER.Collider[]; meshes: THREE.Mesh[]; lamps: THREE.Vector3[]; signals: PlacedSignal[]; stats: TileStats;
   dispose(): void;
 }
-export type TileStage = 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
-export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; ownedMaterials?: THREE.Material[]; }
+export type TileStage = 'survey' | 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
+export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; ownedMaterials?: THREE.Material[]; surveyDeck?: string; structuresReady?: boolean; }
 
 /** Run a paced helper as one named stage: each pause it takes becomes a yield of that stage. */
 function* stage<T>(name: TileStage, steps: Generator<void, T>): Generator<TileStage, T> { let r = steps.next(); while (!r.done) { yield name; r = steps.next(); } return r.value; }
@@ -154,6 +154,29 @@ export function createTileBuilder(ctx: TileContext) {
       for (const m of batches.meshes()) { m.receiveShadow = true; if (m.material === materials.asphalt) m.renderOrder = -1; else if (m.material === materials.sidewalk) m.renderOrder = -2; group.add(m); }
     };
 
+    // The viaduct extends beyond its owner tile. Publish the surveyed shell
+    // and its collision together before building scenery under the bridge.
+    const zakim = tile.buildings.find(b => b.landmark === 'zakim-bridge');
+    const survey = zakim && tile.geometry.get(zakim.id);
+    if (zakim && survey) {
+      const shell = new THREE.Group();
+      shell.name = 'Zakim survey shell'; shell.visible = false; group.add(shell);
+      for (const isRoof of [false, true]) {
+        if (due(pace)) yield 'survey';
+        const geometry = tileShellGeometry(survey, zakim, isRoof); if (!geometry) continue;
+        const material = landmarkShellMaterial(zakim, isRoof, materials) ?? materials.roof;
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = 'Boston surveyed buildings'; mesh.castShadow = true; mesh.receiveShadow = true;
+        geometry.computeBoundingSphere(); meshes.push(mesh); shell.add(mesh);
+      }
+      if (due(pace)) yield 'survey';
+      colliders.push(physics.addStaticMesh(survey.positions, tileCollisionIndices(survey)));
+      ctx.buildingMap.set(zakim.id, zakim);
+      stats.buildings++; stats.exactMeshes++; stats.triangles += (survey.facade.length + survey.roof.length) / 3;
+      shell.visible = true; partial.surveyDeck = zakim.id;
+      yield 'survey';
+    }
+
     // Terrain: the grid quads this tile covers, plus the quad column and row on
     // its far edges so neighbouring tiles overlap by one cell instead of leaving
     // a seam when only one of them is loaded. Overlapping triangles are identical.
@@ -188,6 +211,33 @@ export function createTileBuilder(ctx: TileContext) {
       }
     }
     yield 'terrain';
+
+    // Install the procedural decks and barriers ahead of street surfaces and
+    // curbs so the highway can carry traffic while the tile finishes building.
+    const elevated = ownedRoads.filter(r => r.elevations && !r.tunnel);
+    if (elevated.length) {
+      yield* stage('structures', roadStructureSteps(group, subCity, materials.asphalt, elevated, pace, city));
+      for (const road of elevated) { if (due(pace)) yield 'structures'; colliders.push(...physics.addRoadDeck(subCity, road)); }
+      stats.structures = elevated.length;
+    }
+    partial.structuresReady = true;
+    yield 'structures';
+
+    if (zakim && survey) {
+      const traced = yield* paced('survey', surveyDeckCarriagewaySteps(survey), pace);
+      yield* paced('survey', addSurveyDeckSurfaceSteps(group, city, survey, materials, traced), pace);
+      const { parapets } = yield* paced('survey', surveyDeckParapetSteps(city, survey, traced.carriageways.map(c => c.stations)), pace);
+      const concrete = landmarkShellMaterial(zakim, false, materials) ?? materials.facades[facadeStyleIndex(zakim)];
+      yield* paced('survey', addSurveyDeckParapetSteps(group, parapets, concrete), pace);
+      for (let i = 0; i < parapets.length; i += 64) {
+        if (due(pace)) yield 'survey';
+        colliders.push(...physics.addParapets(parapets.slice(i, i + 64)));
+      }
+      const supports = yield* paced('survey', surveyViaductSupportSteps(city, survey), pace);
+      const viaduct = addSurveyViaductSupports(group, city, survey, supports);
+      for (const mesh of viaduct.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices));
+      yield 'survey';
+    }
 
     // House typologies first: the shop frontages below skip houses.
     prepareNeighborhoodArchitecture(subCity, tile.buildings);
@@ -320,13 +370,6 @@ export function createTileBuilder(ctx: TileContext) {
     }
     yield 'curbs';
 
-    // Elevated decks, barriers and supports, with their Rapier solids.
-    {
-      const elevated = ownedRoads.filter(r => r.elevations && !r.tunnel);
-      if (elevated.length) { yield* stage('structures', roadStructureSteps(group, subCity, materials.asphalt, elevated, pace)); for (const road of elevated) { if (due(pace)) yield 'structures'; colliders.push(...physics.addRoadDeck(subCity, road)); } stats.structures = elevated.length; }
-    }
-    yield 'structures';
-
     // Buildings: the quantized tile shells become the same façade-styled,
     // spatially bucketed chunks the survey build produced, with exact-mesh
     // landmarks collided as meshes and everything else as convex hulls.
@@ -336,6 +379,7 @@ export function createTileBuilder(ctx: TileContext) {
         const k = `${material.uuid}:${tag || `${Math.floor(cx / 500)}:${Math.floor(cz / 500)}`}`; let entry = buckets.get(k); if (!entry) { entry = { material, geometries: [] }; buckets.set(k, entry); } entry.geometries.push(geometry);
       };
       for (const b of tile.buildings) {
+        if (b === zakim) continue;
         if (due(pace)) yield 'buildings';
         const data = tile.geometry.get(b.id); if (!data) continue;
         ctx.buildingMap.set(b.id, b); stats.buildings++; stats.triangles += (data.facade.length + data.roof.length) / 3;
@@ -359,21 +403,6 @@ export function createTileBuilder(ctx: TileContext) {
           colliders.push(physics.addStaticMesh(data.positions, tileCollisionIndices(data))); stats.exactMeshes++;
           // The map draws this shell's outline instead of its convex hull, which would cover the streets it spans.
           if (!b.structure) addBuildingPlan(city, b, data);
-          if(b.landmark==='zakim-bridge'){
-            // Planning the piers, tracing the deck's carriageways, finding the edges the survey leaves open and paving
-            // the deck each take about a tenth of a second (more on a phone), so each pauses between small units of work.
-            const supports=yield* paced('buildings',surveyViaductSupportSteps(city,data),pace);
-            const viaduct=addSurveyViaductSupports(group,city,data,supports);
-            for(const mesh of viaduct.collisions)colliders.push(physics.addStaticMesh(mesh.vertices,mesh.indices));
-            if (due(pace)) yield 'buildings';
-            // One trace of the deck's carriageways paves them and closes the edges its parapets leave open.
-            const traced=yield* paced('buildings',surveyDeckCarriagewaySteps(data),pace);
-            const {parapets}=yield* paced('buildings',surveyDeckParapetSteps(city,data,traced.carriageways.map(c=>c.stations)),pace);
-            yield* paced('buildings',addSurveyDeckSurfaceSteps(group,city,data,materials,traced),pace);if (due(pace)) yield 'buildings';
-            // The parapet boxes (some 700) are drawn, and given colliders, a few dozen at a time.
-            yield* paced('buildings',addSurveyDeckParapetSteps(group,parapets,choose(false)),pace);
-            for(let i=0;i<parapets.length;i+=64){if (due(pace)) yield 'buildings';colliders.push(...physics.addParapets(parapets.slice(i,i+64)));}
-          }
           const source = tileSourceGeometry(data);
           const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));
           source.dispose();
