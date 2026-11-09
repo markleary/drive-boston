@@ -67,7 +67,7 @@ test('desktop: keyboard accelerates, brakes, reverses, steers both ways and rese
   const angleDelta = (yaw: number) => Math.atan2(Math.sin(yaw - spawn.yaw), Math.cos(yaw - spawn.yaw));
   const polling = { timeout: 20000, intervals: [100, 200, 300] };
   async function resetToSpawn() {
-    await page.keyboard.press('r');
+    await page.evaluate(({ x, z, yaw }) => (window as unknown as { __backbay: { travelTo(x: number, z: number, yaw: number): Promise<void> } }).__backbay.travelTo(x, z, yaw), spawn);
     await expect.poll(async () => {
       const state = (await snapshot(page)).state;
       return Math.hypot(state.x - spawn.x, state.z - spawn.z);
@@ -76,8 +76,8 @@ test('desktop: keyboard accelerates, brakes, reverses, steers both ways and rese
     expect(Math.abs(angleDelta((await snapshot(page)).state.yaw))).toBeLessThan(.02);
   }
 
-  // These are real browser key events. Diagnostics only read the resulting
-  // Rapier motion; no test hook teleports, forces, or advances the simulation.
+  // These are real browser key events. Apart from placing the car at the spawn
+  // between runs, diagnostics only read the resulting Rapier motion.
   await resetToSpawn();
   await page.keyboard.down('w');
   try {
@@ -114,7 +114,19 @@ test('desktop: keyboard accelerates, brakes, reverses, steers both ways and rese
     }
   }
   expect(turns[0] * turns[1]).toBeLessThan(0);
-  await resetToSpawn();
+  // R sets the car on the nearest road where it is, not back at the spawn.
+  const away = await page.evaluate(() => (window as unknown as { __backbay: { city: { landmarks: { driveStart?: { x: number; z: number; yaw: number } }[] } } }).__backbay.city.landmarks.map(l => l.driveStart).filter(Boolean));
+  const start = away.find(p => Math.hypot(p!.x - spawn.x, p!.z - spawn.z) > 600)!;
+  await page.evaluate(({ x, z, yaw }) => (window as unknown as { __backbay: { travelTo(x: number, z: number, yaw: number): Promise<void> } }).__backbay.travelTo(x, z, yaw), start);
+  await expect.poll(async () => { const state = (await snapshot(page)).state; return Math.hypot(state.x - start.x, state.z - start.z); }, polling).toBeLessThan(.5);
+  await page.keyboard.down('w');
+  try { await expect.poll(async () => (await snapshot(page)).state.speed, polling).toBeGreaterThan(3); } finally { await page.keyboard.up('w'); }
+  const moving = (await snapshot(page)).state;
+  await page.keyboard.press('r');
+  await expect.poll(async () => Math.abs((await snapshot(page)).state.speed), polling).toBeLessThan(.25);
+  const placed = (await snapshot(page)).state;
+  expect(Math.hypot(placed.x - moving.x, placed.z - moving.z)).toBeLessThan(30);
+  expect(Math.hypot(placed.x - spawn.x, placed.z - spawn.z)).toBeGreaterThan(500);
   expect(errors).toEqual([]);
 });
 

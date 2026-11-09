@@ -88,7 +88,7 @@ async function boot(){
     place();populateNeighborhood();cameraSnap=true;lookOffset=0;
   };
   const ui=createInterface(city,{
-    onReset(){if(!physics)return;if(travelMode==='helicopter'){flight?.reset();populateNeighborhood();cameraSnap=true;lookOffset=0;}else void travelTo(city.spawn.x,city.spawn.z,()=>physics!.reset(city.spawn.x,city.spawn.z,city.spawn.yaw));},
+    onReset(){if(!physics)return;if(travelMode==='helicopter'){flight?.reset();populateNeighborhood();cameraSnap=true;lookOffset=0;}else{physics.resetToRoad();cameraSnap=true;lookOffset=0;}},
     onCar(id){
       if(id===carId)return;carId=id;physics?.setCar(id);audio.setCar(id);
       if(playerCar){scene.remove(playerCar.group);playerCar.dispose();playerCar=createCar(id);scene.add(playerCar.group);}
