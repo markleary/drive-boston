@@ -31,11 +31,15 @@ GREEN_BRANCHES={
 }
 GREEN_E={'canonical-8000015':('E MEDFORD / TUFTS',['831542201','9267575','832390268','832390271','832390272']),'canonical-8000018':('E HEATH STREET',['832390273','832390270','832390269','218004436','831542200'])}
 # Typical (typicality 1) MBTA bus patterns, one per direction; each is clipped to coverage.
-BUS_ROUTES=['39','1','66','28','23','57','86','9']
+BUS_ROUTES=['39','1','66','28','23','57','86','9','131']
 # Station busways and the Harvard Square bus tunnel are not streets: metres cut from the
 # (start, end) of a shape so a bus begins and finishes on the public road (the Forest Hills,
-# Ruggles and Mattapan busways, and the tunnel portal below Harvard Square).
-TRIM={'390179':(40,0),'280217':(95,25),'230246':(75,0),'660341':(0,230),'860193':(0,225)}
+# Ruggles, Mattapan and Malden Center busways, and the tunnel portal below Harvard Square).
+TRIM={'390179':(40,0),'280217':(95,25),'230246':(75,0),'660341':(0,230),'860193':(0,225),'1310098':(64,0),'1310097':(0,72)}
+# A busway a route passes through mid-route cannot be trimmed. Its station's parent coordinate
+# can sit beyond the berths (Oak Grove's is 71 m west of the 131's busway loop), so it is
+# matched within this many metres and the bus dwells at the nearest point of its loop.
+BUSWAY_STATIONS={'place-ogmnl':80}
 def fetch(args,route,kind,query):
  file=args.cache/f'{route}-{kind}.json';url='https://api-v3.mbta.com/'+kind+'?'+urllib.parse.urlencode(query)
  if args.download or not file.exists():
@@ -154,7 +158,7 @@ def main():
    # Circle is 54 m beyond the inbound route's first node). Place its dwell inside the
    # mapped platform with room for a single car; never extend a track beyond coverage.
    terminal=line in GREEN_BRANCHES and a['name'] in ['Boston College','Cleveland Circle']
-   if geometry.distance(pt)>(60 if terminal else 25):continue
+   if geometry.distance(pt)>(60 if terminal else BUSWAY_STATIONS.get(stop['id'],25) if kind=='bus' else 25):continue
    along=geometry.project(pt)
    if terminal:along=max(25,min(geometry.length-25,along))
    if along<15 or along>geometry.length-15:continue
