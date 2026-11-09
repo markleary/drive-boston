@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Point2 } from '../types.ts';
+import { registerContextTexture } from './context-resources.ts';
 import { seeded } from './materials.ts';
 import { finish, LandmarkModel, landmarkTexture, lettering, rectangle } from './landmark-model.ts';
 
@@ -60,17 +61,45 @@ function glassTexture(lit: boolean) {
   });
 }
 
+function nightGlassTexture() {
+  const random = seeded(7049), size = 16;
+  const glass = ['#2b2421', '#302520', '#332924', '#292529'];
+  const curtains = ['#766650', '#8d7c65', '#ad9c82', '#737b7e'];
+  return landmarkTexture(COLUMNS * size, LEVELS * size, ctx => {
+    ctx.fillStyle = '#241e1c';
+    ctx.fillRect(0, 0, COLUMNS * size, LEVELS * size);
+    for (let row = 0; row < LEVELS; row++) for (let col = 0; col < COLUMNS; col++) {
+      const x = col * size, y = row * size;
+      ctx.fillStyle = glass[Math.floor(random() * glass.length)];
+      ctx.fillRect(x + 1, y, size - 1, size - 1);
+      // Bronze glass and shades conceal most rooms. Let a little light through
+      // part of a pane, with a dimmer spill on the glass around the opening.
+      if (random() > .085) continue;
+      const left = x + 3 + Math.floor(random() * 5), top = y + 3 + Math.floor(random() * 3);
+      const width = 2 + Math.floor(random() * 5), height = 5 + Math.floor(random() * 4);
+      ctx.fillStyle = '#463b33';
+      ctx.fillRect(left - 1, top - 1, width + 2, height + 2);
+      ctx.fillStyle = curtains[Math.floor(random() * curtains.length)];
+      ctx.fillRect(left, top, width, height);
+    }
+  });
+}
+
 export function buildEncore(base: number) {
   const model = new LandmarkModel('Encore Boston Harbor', ENCORE_ID, 414.147, base, -5040.204, Math.atan2(-.763, .646));
   const stone = finish('#d8c4a4'), cream = finish('#eddbba'), coping = finish('#bca482');
   const membrane = finish('#d7ccba'), roof = finish('#b7aca0'), vent = finish('#777169');
   const solar = finish('#303b4c', .32, .18), baseGlass = finish('#665347', .23, .28);
+  const dayGlow = glassTexture(true), nightGlow = nightGlassTexture();
   const bronze = new THREE.MeshStandardMaterial({
-    color: '#d5ad94', map: glassTexture(false), emissive: '#ffae69', emissiveMap: glassTexture(true),
+    color: '#d5ad94', map: glassTexture(false), emissive: '#ffae69', emissiveMap: dayGlow,
     emissiveIntensity: .025, metalness: .64, roughness: .115, envMapIntensity: 1.17,
   });
+  for (const texture of [dayGlow, nightGlow]) registerContextTexture(bronze, texture);
   const crown = finish('#50352c', .135, .62);
   crown.envMapIntensity = 1.25;
+  crown.emissive.set('#30231f');
+  crown.emissiveIntensity = 0;
   const bands = new THREE.MeshStandardMaterial({ color: '#e8cea5', roughness: .5, emissive: '#ffc573', emissiveIntensity: .11 });
   const name = lettering('Encore', '#ffe6b0', '600 106px "Snell Roundhand", "Brush Script MT", cursive', true);
   for (const material of [bronze, crown, bands, name]) haze(material);
@@ -161,8 +190,13 @@ export function buildEncore(base: number) {
     ...model.build(),
     setReflection(environment: THREE.Texture) { bronze.envMap = crown.envMap = environment; },
     setLighting(night: boolean) {
-      bronze.emissiveIntensity = night ? .82 : .025;
-      bands.emissiveIntensity = night ? 1.8 : .11;
+      bronze.emissiveMap = night ? nightGlow : dayGlow;
+      bronze.emissive.set(night ? '#ffffff' : '#ffae69');
+      bronze.emissiveIntensity = night ? .58 : .025;
+      crown.emissiveIntensity = night ? .56 : 0;
+      bands.emissive.set(night ? '#ffe6c7' : '#ffc573');
+      bands.emissiveIntensity = night ? 1.16 : .11;
+      name.color.setScalar(night ? 2.25 : 1);
     },
   };
 }
