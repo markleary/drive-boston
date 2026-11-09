@@ -62,6 +62,8 @@ Connector, and the City Square ramp pieces the lower deck replaces).
   and the lower one stays under it, each solve taking the other's latest heights.
   The hard bounds are coned under the grade and rounded to MAINLINE_RADIUS
   (RAMP_RADIUS) so the deck is never pressed over a sharper crest or sag.
+  Ramps gain shoulder width only where the neighbouring road and building
+  envelopes leave room, tapering back to the original width at junctions.
   Consecutive records of one carriageway or ramp share their seam's tangent
   (`deckTangents`), so their deck ends and lane paint meet square.
 - Cuts: the source overpasses are estimated decks between at-grade landings, so
@@ -122,6 +124,9 @@ APPROACH='i93-overpass-approach'
 BUILDING=1.0
 LANE=3.65
 RAMP_WIDTHS={1:7.0,2:10.4}
+RAMP_SHOULDER=1.0   # extra room on each side where the mapped corridor allows
+RAMP_TAPER=25       # metres of travel per metre of extra shoulder
+RAMP_EDGE_MARGIN=.4 # clearance from obstacles beyond the widened deck
 # Existing decks the carriageways pass over whatever the source layers say. At
 # Exit 22 OpenStreetMap makes the Mystic Valley Parkway the bridge, but the
 # packaged parkway piece is a water-crossing deck 1.3 m over the river bank, so
@@ -144,6 +149,12 @@ TRACE_BLEND=40      # lateral blend of a trace onto a neighbouring record's end 
 JOINT=30            # a trace's curve between two traced pieces starts this far back on each
 CROSS_MERGE=120     # the Cross Street entrance's trace joins the northbound trace this far from the tunnel
 CUT_VERSION=1
+# Outboard corner of the detached survey spur south of the Zakim. Its high
+# lip overhangs the tunnel approach; neither mainline nor any ramp uses it.
+PORTAL_SPUR_TIP=(1172.09,10.27,-1761.38)
+# The obsolete tip of the survey's outer parapet crosses the generated bore
+# diagonally. Start its cut where it hands off to the bore's own outside wall.
+PORTAL_RAIL_TAIL=((1162.1,-1794.8),(1183.9,-1770.7))
 SPLIT_MERGE=[-896.935,-4751.959]   # 540052144 joins 542171987 at this interior vertex
 # Ramp records in solve order: a group's trunk first, so the pieces after it find
 # their shared split node already profiled.
@@ -723,13 +734,38 @@ class SurveyMesh:
    if mark['sha256']!=digest:raise ValueError(f'{self.path.name}: the Zakim survey was cut for another lower deck; rebuild from a package without the I-93 stage')
    return mark
   b=self.buildings[self.k];vertices,faces,roof,dropped,split=cut_mesh(b['positions'],b['facade'],b['roof'],region)
-  record=mesh_record(vertices,faces,entry['anchor'],entry['baseElevation'],repair_winding=False,roof_mask=roof);q,facade,roof_faces,scale=record
   mark={'version':CUT_VERSION,'stage':'build-i93-north.py','sha256':digest,'droppedTriangles':dropped,'splitTriangles':split,'areaSquareMeters':round(float(region.area),1)}
   entry['surveyCut']=mark;generated={f:entry.pop(f) for f in ('collision','roadOverlaps','buildingPassage','v','f','r','scale') if f in entry};entry.update(generated)
+  self.replace(vertices,faces,roof)
+  return mark
+ def repair_portal_approach(self):
+  """Remove the detached survey shell that ends over the active southbound
+  approach and the old outer parapet beyond the handoff to the tunnel wall."""
+  entry=self.header['buildings'][self.k]
+  if entry.get('portalApproachRepaired'):return
+  b=self.buildings[self.k];v=b['positions'];seed=np.linalg.norm(v-PORTAL_SPUR_TIP,axis=1)<.15
+  faces=np.concatenate([b['facade'],b['roof']]);roof=np.arange(len(faces))>=len(b['facade'])
+  removed=seed[faces].any(axis=1)
+  while True:
+   seed[faces[removed]]=True
+   expanded=seed[faces].any(axis=1)
+   if np.array_equal(removed,expanded):break
+   removed=expanded
+  # Fail closed if a different survey edition welds the spur to the mainline.
+  if removed.any():
+   cut=v[faces[removed]]
+   assert cut[:,:,0].min()>950 and cut[:,:,2].min()>-1980 and cut[:,:,1].max()<18,'unexpected Zakim portal spur extent'
+  kept=faces[~removed];flags=roof[~removed]
+  rail=LineString(PORTAL_RAIL_TAIL).buffer(1.25,cap_style='square')
+  vertices,faces,roof,_,_=cut_mesh(v,kept[~flags],kept[flags],rail)
+  entry['portalApproachRepaired']=True
+  self.replace(vertices,faces,roof)
+ def replace(self,vertices,faces,roof):
+  entry=self.header['buildings'][self.k];b=self.buildings[self.k]
+  record=mesh_record(vertices,faces,entry['anchor'],entry['baseElevation'],repair_winding=False,roof_mask=roof);q,facade,roof_faces,scale=record
   self.geometry=[record if i==self.k else (np.rint((x['positions']-np.asarray(x['anchor']))/x.get('scale',SCALE)).astype(np.int16),x['facade'],x['roof'],x.get('scale',SCALE)) for i,x in enumerate(self.buildings)]
   # Continue with the survey as the tile stores it, as a rerun reads it back.
   b['positions']=q.astype(np.float64)*scale+np.asarray(entry['anchor'],dtype=np.float64);b['facade']=facade.astype(np.int64);b['roof']=roof_faces.astype(np.int64);self.cells=None
-  return mark
  def triangles(self):b=self.buildings[self.k];return b['positions'][np.concatenate([b['facade'],b['roof']])]
  def raster(self):
   if self.cells is None:b=self.buildings[self.k];self.cells=survey_raster(b['positions'],np.concatenate([b['facade'],b['roof']]))
@@ -845,6 +881,34 @@ def ramp_plans(ways):
   rp,ro=resample_owned(points,owner);lanes=[lanes_of(ways,o,True) for o in ro]
   plan=Plan(spec['id'],rp,ro,taper(rp,[RAMP_WIDTHS[l] for l in lanes],40),RAMP_GRADE,lanes);plan.spec=spec;out.append(plan)
  return out
+
+
+def widen_ramps(ramps,main,existing,ground,footprints):
+ """Cap each added shoulder along full segments, including between stations.
+ Reserve room for a sibling ramp's extra shoulder and keep the baseline
+ section wherever a street, deck or building already touches it. Fit to the
+ solved deck height and graded ground so a wider ramp keeps its profile."""
+ lines=[LineString(r['points']) for r in existing];tree=STRtree(lines)
+ obstacles={p:strip([(*q,0,w/2) for q,w in zip(p.points,p.widths)],RAMP_SHOULDER if p in ramps else 0) for p in [*main,*ramps]}
+ street_reach=max((r['width']/2+CORRIDOR for r in existing),default=0)
+ for plan in ramps:
+  reach=max(plan.widths)/2+RAMP_SHOULDER+RAMP_EDGE_MARGIN
+  x0,z0,x1,z1=plan.line.bounds
+  houses=[Polygon(f) for f in footprints((x0-reach,z0-reach,x1+reach,z1+reach)) if len(f)>=3]
+  streets=[lines[j].buffer(existing[j]['width']/2+(0 if existing[j].get('elevations') else CORRIDOR))
+   for j in tree.query(plan.line,predicate='dwithin',distance=reach+street_reach)]
+  nearby=STRtree([*houses,*streets,*(shape for other,shape in obstacles.items() if other is not plan)])
+  extra=[RAMP_SHOULDER]*len(plan.points);extra[0]=extra[-1]=0
+  for i,(a,b) in enumerate(zip(plan.points,plan.points[1:])):
+   segment=LineString([a,b]);half=max(plan.widths[i:i+2])/2
+   gap=min((segment.distance(nearby.geometries[j]) for j in nearby.query(segment,predicate='dwithin',distance=half+RAMP_SHOULDER+RAMP_EDGE_MARGIN)),default=math.inf)
+   room=max(0,gap-half-RAMP_EDGE_MARGIN)
+   extra[i]=min(extra[i],room);extra[i+1]=min(extra[i+1],room)
+  for i,(p,t,w,y) in enumerate(zip(plan.points,plan.tangents,plan.widths,plan.y)):
+   while extra[i]>0 and ground.across(p,t,w/2+extra[i])>y-.12:extra[i]=max(0,extra[i]-.125)
+  for i in range(1,len(extra)):extra[i]=min(extra[i],extra[i-1]+(plan.along[i]-plan.along[i-1])/RAMP_TAPER)
+  for i in range(len(extra)-2,-1,-1):extra[i]=min(extra[i],extra[i+1]+(plan.along[i+1]-plan.along[i])/RAMP_TAPER)
+  plan.widths=[round(w+2*e,3) for w,e in zip(plan.widths,extra)]
 
 
 def classify(p,plan,main,ramps,streets):
@@ -1216,7 +1280,10 @@ def install(city,source,heights,footprints,mesh=None,joins=None):
  cut grid). The mesh keeps its cut tile until SurveyMesh.write()."""
  from water_crossings import water_inputs
  grid=city['elevation'];mark={}
- def survey(plan):mark.update(mesh.cut(cut_region(source['survey'],plan),cut_digest(source['survey'],plan)));return mesh.raster(),mesh.triangles()
+ def survey(plan):
+  mark.update(mesh.cut(cut_region(source['survey'],plan),cut_digest(source['survey'],plan)))
+  mesh.repair_portal_approach()
+  return mesh.raster(),mesh.triangles()
  main,ramps,report=build(city,source,heights,water_inputs(city),survey if mesh else None);plans=[*main.values(),*ramps]
  bad=[p for p,ok in report['grades'].items() if not ok];assert not bad,f'I-93 profiles exceed their grade: {bad}'
  assert not report['surveyConflicts'],f"I-93 lower deck meets the survey mesh: {report['surveyConflicts'][:6]}"
@@ -1224,6 +1291,7 @@ def install(city,source,heights,footprints,mesh=None,joins=None):
  replaced,notes=carry_overpasses(city['roads'],decks,grid,Terrain(grid,heights),cut[1])
  roads=[x for r in city['roads'] for x in replaced.get(r['id'],[r])]
  result,vertices,originals=cut_terrain(plans,grid,heights,roads,footprints,cut)
+ widen_ramps(ramps,main.values(),roads,Terrain(grid,result),footprints)
  hoods=[{'name':n['name'],'shape':Polygon(n['rings'][0],n['rings'][1:])} for n in city['neighborhoods']]
  ways={w['id']:w for w in source['ways']};recs=records(main,ramps,ways,hoods)+(trace_records(source,main,joins,hoods,survey_surface(mesh.raster()) if mesh else None) if joins else [])
  pieces=[x for k in sorted(replaced) for x in replaced[k] if x.get('elevations')]

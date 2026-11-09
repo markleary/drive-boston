@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {roundedPath,pathRoad,join,lane,roadGraph} from '../src/simulation/traffic.ts';
-import {bridgeBarriers,sampleRoadElevation,deckEdgeGrounded,junctionMouths,RAIL_LIP,SHELF_DROP,MOUTH_REACH} from '../src/simulation/road-surfaces.ts';
+import {bridgeBarriers,deckEdge,sampleRoadElevation,deckEdgeGrounded,junctionMouths,RAIL_LIP,SHELF_DROP,MOUTH_REACH} from '../src/simulation/road-surfaces.ts';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 
 // A ramp or bridge deck ends on an ordinary street at grade. The street keeps its
@@ -68,17 +68,20 @@ test('a ramp mouth at grade has no parapets until its deck edge stands off the g
   assert.ok(mouthed.some(p=>p.x-p.length/2<reach+1),'the embankment rail starts right after it');
 });
 
-test('no parapet stands on the ground anywhere in the metro, and the Tobin ramps open onto New Rutherford Avenue',async()=>{
+test('street junctions and grounded non-interstate bridge edges stay open across the metro',async()=>{
   const city=await loadMetroCity({tiles:[]}),{sampleElevation}=await import('../src/simulation/terrain.ts'),{roadProjection}=await import('../src/simulation/road-surfaces.ts');
   const offenders=[];let rails=0,shelves=0;
   for(const road of city.roads){
     if(!road.elevations||road.tunnel)continue;
-    const mouths=junctionMouths(city,road);
+    const interstate=road.bridge?.id==='i93'&&road.lanes!==undefined;
+    const mouths=interstate?[road.startLevel===0?road.points[0]:undefined,road.endLevel===0?road.points.at(-1):undefined].filter(Boolean):junctionMouths(city,road);
     for(const p of bridgeBarriers(city,road)){
       rails++;const hit=roadProjection(road,p.x,p.z),n=Math.hypot(p.x-hit.x,p.z-hit.z)||1,ox=(p.x-hit.x)/n,oz=(p.z-hit.z)/n,base=p.y-.38;
       // The rule's own probes: a rail whose deck sits on the ground beside it, with no drop within reach (or inside a junction mouth), is a wall across a street.
       const lip=Math.max(base-sampleElevation(city,p.x+ox*.3,p.z+oz*.3),base-sampleElevation(city,p.x+ox*1.5,p.z+oz*1.5));
-      if(deckEdgeGrounded(city,p.x,p.z,base+.02,ox,oz,mouths.some(m=>Math.hypot(m[0]-p.x,m[1]-p.z)<MOUTH_REACH)))offenders.push(`${road.id} ${road.name} (${p.x.toFixed(1)},${p.z.toFixed(1)}) lip ${lip.toFixed(2)}`);
+      const atMouth=mouths.some(m=>Math.hypot(m[0]-p.x,m[1]-p.z)<MOUTH_REACH);
+      if(interstate&&!atMouth)continue;
+      if(deckEdgeGrounded(city,p.x,p.z,base+.02,ox,oz,atMouth))offenders.push(`${road.id} ${road.name} (${p.x.toFixed(1)},${p.z.toFixed(1)}) lip ${lip.toFixed(2)}`);
       else if(lip<RAIL_LIP-.02)shelves++;
     }
   }
@@ -96,6 +99,22 @@ test('no parapet stands on the ground anywhere in the metro, and the Tobin ramps
     assert.deepEqual(near,[],`${id} has no parapet inside the junction`);
     assert.ok(bridgeBarriers(city,ramp).some(p=>Math.hypot(p.x-node[0],p.z-node[1])<45),`${id} is railed once it has climbed off the ground`);
   }
+});
+
+test('the Salem Street entrance keeps both barriers along the embankment and opens at the merge',async()=>{
+  const city=await loadMetroCity({tiles:[]}),ramp=city.roads.find(r=>r.id==='i93-sb-entrance-23'),rails=bridgeBarriers(city,ramp);
+  assert.ok(Math.max(...ramp.deckWidths)>=8.9,'the ramp gains shoulder room where clear');
+  assert.equal(ramp.deckWidths[0],7,'the street landing keeps its original width');
+  assert.ok(rails.every(p=>Math.hypot(p.x-ramp.points[0][0],p.z-ramp.points[0][1])>10),'the street landing stays open');
+  for(let i=0;i<ramp.points.length-1;i++){
+    const z=ramp.points[i][1];if(z< -7580||z> -7476)continue;
+    for(const side of [-1,1]){
+      const a=deckEdge(ramp,i,side,.18),b=deckEdge(ramp,i+1,side,.18),x=(a[0]+b[0])/2,z=(a[1]+b[1])/2;
+      assert.ok(rails.some(p=>Math.hypot(p.x-x,p.z-z)<.05),`a barrier protects the exposed edge at ${x}, ${z}`);
+    }
+  }
+  const [x,z]=ramp.points.at(-1);
+  assert.ok(rails.every(p=>Math.hypot(p.x-x,p.z-z)>15),'no barrier cuts off the carriageway merge');
 });
 
 test('every traffic lane leaving a junction follows its own road, including New Rutherford Avenue after the Austin Street deck',async()=>{

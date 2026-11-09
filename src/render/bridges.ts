@@ -33,7 +33,7 @@ const unitMatrix=(u:ClosureUnit)=>new THREE.Matrix4().compose(new THREE.Vector3(
 export function addRoadStructures(scene:THREE.Object3D,city:CityData,asphalt?:THREE.Material,structures=city.roads.filter(r=>r.elevations)){return drain(roadStructureSteps(scene,city,asphalt,structures));}
 /** `addRoadStructures` as paced steps: a tile's highway decks, with their lane
  * lines, parapets and piers, take several frames' worth of work. */
-export function* roadStructureSteps(scene:THREE.Object3D,city:CityData,asphalt?:THREE.Material,structures=city.roads.filter(r=>r.elevations),pace?:Pace):Generator<void,THREE.Group>{
+export function* roadStructureSteps(scene:THREE.Object3D,city:CityData,asphalt?:THREE.Material,structures=city.roads.filter(r=>r.elevations),pace?:Pace,continuationCity=city):Generator<void,THREE.Group>{
   const group=new THREE.Group();group.name='Elevated roads and water crossings';
   const concrete=new THREE.MeshStandardMaterial({color:'#9b9a8e',roughness:.92});
   const steel=new THREE.MeshStandardMaterial({color:'#525f58',roughness:.7,metalness:.45});
@@ -48,7 +48,7 @@ export function* roadStructureSteps(scene:THREE.Object3D,city:CityData,asphalt?:
     top.setAttribute('position',new THREE.BufferAttribute(deck.vertices,3));top.setAttribute('uv',new THREE.BufferAttribute(deck.uv,2));top.setIndex(new THREE.BufferAttribute(deck.indices,1));top.computeVertexNormals();decks.push(top);
     const slab=roadSlabGeometry(city,road),base=new THREE.BufferGeometry();base.setAttribute('position',new THREE.BufferAttribute(slab.vertices,3));base.setIndex(new THREE.BufferAttribute(slab.indices,1));base.computeVertexNormals();slabs.push(base);
     if(due(pace))yield;
-    const surface=(x:number,z:number)=>sampleRoadElevation(city,road,x,z),lanes=laneMarkings(city,road);
+    const surface=(x:number,z:number)=>sampleRoadElevation(city,road,x,z),lanes=laneMarkings(city,road,continuationCity);
     if(lanes.length){
       // A highway deck paints its own lanes instead of the edge lines and centre dash below.
       const white=new TriangleWriter(),amber=new TriangleWriter();

@@ -7,7 +7,7 @@ import {surveyDeckCarriageways,surveyDeckCarriagewaySteps,surveyDeckIndex,deckLa
 import {surveyDeckParapets,surveyDeckParapetSteps} from '../src/simulation/survey-deck-parapets.ts';
 import {surveyViaductSupportSteps} from '../src/simulation/viaduct-supports.ts';
 import {addSurveyDeckSurface,addSurveyDeckSurfaceSteps,addSurveyDeckParapets,addSurveyDeckParapetSteps,surveyDeckPavement,dashes,uncovered} from '../src/render/survey-deck-surface.ts';
-import {sampleRoadElevation,roadProjection,bridgeBarriers} from '../src/simulation/road-surfaces.ts';
+import {sampleRoadElevation,roadProjection,roadWidthAt,bridgeBarriers} from '../src/simulation/road-surfaces.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {read,readJson} from './helpers/metro-city.mjs';
 const metro=await resolveCity(readJson('city.json'),read);
@@ -105,13 +105,41 @@ test('the pavement gives way only to road decks that reach the survey deck',()=>
  const pieces=surveyDeckPavement(metro,data,carriageways.map(c=>c.stations)),index=surveyDeckIndex(data);
  // The road deck's height over the survey face nearest `up` metres over the road.
  const over=(id,x,z,up=0)=>{const r=metro.roads.find(r=>r.id===id),y=sampleRoadElevation(metro,r,x,z);return y-index.surface(x,z,y+up);};
- for(const [x,z,id] of [[1180,-1769.5,'central-artery-southbound'],[1172,-1783,'central-artery-southbound'],[1197,-1783.8,'central-artery-northbound'],[1189.7,-1799.8,'central-artery-northbound']]){
+ for(const [x,z,id] of [[1197,-1783.8,'central-artery-northbound'],[1189.7,-1799.8,'central-artery-northbound']]){
   const d=over(id,x,z,1);assert.ok(d<-.02,`${id} runs under the survey at ${x}, ${z} (${d.toFixed(3)} m)`);
   assert.ok(pieces.some(p=>inside(p,x,z)),`the survey over ${id} at ${x}, ${z} is paved`);
  }
  for(const [x,z,id] of [[1165,-1802.5,'central-artery-southbound'],[347.36,-2590.29,'leverett-connector-north'],[-276.06,-4073.18,'i93-nb-01'],[637.61,-2374.88,'i93-sb-42']]){
   const d=over(id,x,z);assert.ok(paves(d),`${id} lies on the survey at ${x}, ${z} (${d.toFixed(3)} m)`);
   assert.ok(!pieces.some(p=>inside(p,x,z)),`${id} paves the survey at ${x}, ${z} itself`);
+ }
+});
+
+test('the southbound tunnel approach has no detached survey deck or stray parapet in its lanes',()=>{
+ const index=surveyDeckIndex(data),road=metro.roads.find(r=>r.id==='central-artery-southbound');
+ assert.ok(Number.isNaN(index.deck(1177.5,-1766.2,10.3,.4)),'the orphan survey spur is gone');
+ for(const [x,z] of [[1170,-1785.5],[1176,-1778.7],[1180,-1769.5]]){
+  const y=sampleRoadElevation(metro,road,x,z);
+  assert.ok(Number.isNaN(index.deck(x,z,y+.65,.5)),`no survey surface stands above the bore at ${x}, ${z}`);
+ }
+});
+
+test('the two open survey ends at Cambridge Street have transverse concrete rails',()=>{
+ const index=surveyDeckIndex(data),through=[...metro.roads,...metro.surveyRoads].filter(r=>r.id.startsWith('i93-')&&r.traffic!==false);
+ for(const [x,z,y] of [[-189.5,-3619.09,32.224],[-153.225,-3491.30,16.974]]){
+  const rail=parapets.find(p=>Math.hypot(p.x-x,p.z-z)<.2&&p.length>10);
+  assert.ok(rail,`an end rail spans the deck at ${x}, ${z}`);
+  for(const t of [-.4,0,.4]){
+   const a=x+Math.sin(rail.yaw)*rail.length*t,b=z+Math.cos(rail.yaw)*rail.length*t;
+   assert.ok(Number.isFinite(index.deck(a,b,y,.25)),`the rail is backed by deck at ${a}, ${b}`);
+  }
+  for(let t=-.5;t<=.501;t+=.05){
+   const a=x+Math.sin(rail.yaw)*rail.length*t,b=z+Math.cos(rail.yaw)*rail.length*t;
+   for(const road of through){
+    if(roadProjection(road,a,b).distance>roadWidthAt(road,a,b)/2+rail.width/2)continue;
+    assert.ok(Math.abs(y-sampleRoadElevation(metro,road,a,b))>4,`the end rail leaves ${road.id} clear`);
+   }
+  }
  }
 });
 

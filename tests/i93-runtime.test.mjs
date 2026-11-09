@@ -128,27 +128,65 @@ test('cars emerge from a closed start and vanish into a closed end, never drivin
   assert.equal(beyond,0,'none is seen past the barrier');
 });
 
-test('a car on a survey trace is hidden while the survey mesh is not drawn, and drawn once it is',async()=>{
-  // The middle carriageway piece as a trace over a survey mesh whose tile is built after ten seconds.
-  const city=corridor(),trace=city.roads.splice(1,1)[0];Object.assign(trace,{name:'I-93 North · Zakim Bridge',surveyDeck:'BOS-SURVEY'});city.surveyRoads=[trace];
-  let drawn=false;const asked=new Set(),physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{surveyDrawn:id=>{asked.add(id);return drawn;}});
+for(const surveyed of [false,true])test(`traffic waits for the ${surveyed?'surveyed':'procedural'} deck to stream in`,async()=>{
+  const city=corridor(),deck=city.roads[1];deck.name='I-93 North · Streamed deck';
+  if(surveyed){city.roads.splice(1,1);deck.surveyDeck='BOS-SURVEY';city.surveyRoads=[deck];}
+  let drawn=false;const physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{deckDrawn:road=>road!==deck||drawn});
   const player={x:400,y:.65,z:-100,yaw:0,speed:0,steering:0},observer={x:0,y:DECK+.6,z:-1500},seen={hidden:0,shown:0,elsewhere:0};
   physics.body.setTranslation(player,true);
   try{
     for(let step=1;step<=20*60;step++){
-      if(step===10*60)drawn=true;
+      if(step===8*60)drawn=true;
+      if(step===16*60)drawn=false;
       traffic.update(1/60,player,observer);physics.world.step();
       if(step%15)continue;
       for(const car of traffic.snapshot()){
         if(car.parked)continue;
-        const on=car.road==='I-93 North · Zakim Bridge';
-        assert.equal(car.hidden,on&&!drawn,`a car ${on?'on':'off'} the trace is ${car.hidden?'hidden':'drawn'} while the mesh is ${drawn?'':'not '}drawn`);
+        const on=car.road===deck.name;
+        assert.equal(car.hidden,on&&!drawn,`a car ${on?'on':'off'} the deck is ${car.hidden?'hidden':'drawn'} while the mesh is ${drawn?'':'not '}drawn`);
+        assert.equal(physics.world.getCollider(car.collider).isEnabled(),!car.hidden,'an invisible car cannot hit the player');
         if(on)seen[drawn?'shown':'hidden']++;else seen.elsewhere++;
       }
     }
   }finally{traffic.dispose();physics.dispose();}
-  assert.deepEqual([...asked],['BOS-SURVEY'],'only cars on the trace ask about its mesh');
   assert.ok(seen.hidden>0&&seen.shown>0&&seen.elsewhere>0,JSON.stringify(seen));
+});
+
+test('traffic yields to a crossing car only when its deck is visible',async()=>{
+  const main=deck('Loaded I-93','Loaded I-93',line([-700,0],[700,0]),1,{closed:'end'});
+  const crossing=deck('Unloaded crossing','Unloaded crossing',line([0,-700],[0,700]),1,{closed:'end'});
+  const bounds={minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},city=fixture([main,crossing],bounds,{x:-145,z:0,yaw:Math.PI/2});
+  let drawn=false;
+  const physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{deckDrawn:road=>road!==crossing||drawn});
+  const player={x:720,z:720,y:.65,yaw:0,speed:0,steering:0},observer={x:-30,z:0,y:DECK+.65};
+  physics.body.setTranslation(player,true);
+
+  // Only sample the last 40 m of the approach when there is actually a
+  // crossing car nearby. Track the same fleet when the crossing reappears.
+  function approachSpeed(){
+    let minimum=Infinity;
+    const approaching=new Set();
+    for(let i=0;i<40*60;i++){
+      traffic.update(1/60,player,observer);physics.world.step();
+      const cars=traffic.snapshot();
+      if(!cars.some(car=>!car.parked&&car.hidden===!drawn&&car.road===crossing.name&&Math.abs(car.z)<14))continue;
+      for(const car of cars){
+        if(car.hidden||car.road!==main.name||car.x<=-40||car.x>=0)continue;
+        approaching.add(car.collider);minimum=Math.min(minimum,car.speed);
+      }
+    }
+    assert.ok(approaching.size>=3,`encountered ${approaching.size} approaches with the crossing ${drawn?'visible':'hidden'}`);
+    return minimum;
+  }
+
+  try{
+    const yieldingSpeed=18;
+    const hiddenSpeed=approachSpeed();
+    assert.ok(hiddenSpeed>yieldingSpeed,`a hidden crossing car caused braking to ${hiddenSpeed.toFixed(2)} m/s`);
+    drawn=true;
+    const visibleSpeed=approachSpeed();
+    assert.ok(visibleSpeed<yieldingSpeed,`a visible crossing car should trigger a yield (minimum ${visibleSpeed.toFixed(2)} m/s)`);
+  }finally{traffic.dispose();physics.dispose();}
 });
 
 /** A tunnel carriageway covered for its first 1000 m, then open to the sky up a 600 m
@@ -161,6 +199,35 @@ const portal=()=>{
     {id:'surface-nb',name:'I-93 North · Northtown',kind:'motorway',points:line([0,-1600],[0,-1900]),width:14.95,oneway:1,lanes:3,closed:'end'},
   ],undefined,{x:0,z:-1400,yaw:Math.PI});
 };
+
+test('a visible car keeps its distance behind a queue on an undrawn deck it is about to join',async()=>{
+  // One carriageway 1 m up (the 3 m height test never hides a leader) runs onto
+  // a 40 m piece whose owner tile has not streamed in, which lands on a street
+  // (a landing must reach the street's height); the signal there queues hidden
+  // cars back along the piece every red phase.
+  const main=deck('Loaded I-93','Loaded I-93',line([-700,0],[0,0]),1,{closed:'start'});main.elevations=main.points.map(()=>1);
+  const stub=deck('Unloaded I-93','Unloaded I-93',[[0,0],[40,0]],1,{elevations:[1,0]});
+  const foot=street('foot-street','Foot Street',[[40,-300],[40,0],[40,300]]);
+  const city={...fixture([main,stub,foot],{minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},{x:-145,z:0,yaw:Math.PI/2}),signals:[[42,2]]};
+  const physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{deckDrawn:road=>road!==stub});
+  const player={x:720,z:720,y:.65,yaw:0,speed:0,steering:0},observer={x:-30,z:0,y:1.65};
+  physics.body.setTranslation(player,true);
+  let worst=Infinity,approaches=0,queued=0;
+  try{
+    for(let i=0;i<90*60;i++){
+      traffic.update(1/60,player,observer);physics.world.step();
+      if(i%3)continue;
+      const cars=traffic.snapshot().filter(c=>!c.parked&&(c.road===main.name||c.road===stub.name));
+      const queue=cars.filter(c=>c.hidden&&c.speed<.5);
+      if(queue.length)queued++;
+      for(const car of cars)if(!car.hidden&&queue.some(b=>b.x-car.x<40))approaches++;
+      for(let p=0;p<cars.length;p++)for(let q=0;q<p;q++){if(!cars[p].hidden&&!cars[q].hidden)continue;worst=Math.min(worst,clearance(cars[p],cars[q]));}
+    }
+  }finally{traffic.dispose();physics.dispose();}
+  assert.ok(queued>0,'the signal queued cars on the undrawn piece');
+  assert.ok(approaches>0,'visible cars came up behind the hidden queue');
+  assert.ok(worst>0,`a car never overlaps one queued on the undrawn piece ahead of it (closest ${worst.toFixed(2)} m)`);
+});
 
 test('a tunnel record is underground only where it is covered, so its portal approach carries the open highway traffic',async()=>{
   const city=portal(),physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics);
