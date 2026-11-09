@@ -35,6 +35,10 @@ export interface Path { points: Point2[]; distances: number[]; length: number; s
  * a `hidden` one rides a deck that has not streamed in. */
 interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; parked?:boolean; hidden?:boolean; }
 type FleetObstacle = TrafficObstacle & { hidden?: boolean };
+/** A car on an undrawn deck still leads a visible car along the route it is about
+ * to join (the queue it reaches keeps its spacing), but never makes it yield to a
+ * crossing it cannot see; a hidden car sees every car. */
+const leads=(actor:{hidden?:boolean},other:FleetObstacle,heading:number)=>!!actor.hidden||!other.hidden||(other.yaw!==undefined&&Math.cos(other.yaw-heading)>.5);
 const COUNT = TRAFFIC_CAPACITY;
 /** Highway cruise ranges (m/s): a car's own temper, from its seeded street
  * cruise, picks its speed within each, so it keeps its place in the order. */
@@ -517,7 +521,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     const point=walker(actor.path);for(let s=0;;s+=step){const t=Math.min(s,reach);leadPoints.push(point(actor.distance+t));leadStations.push(t);if(t>=reach)break;}
     let limit=Infinity;
     for(let k=0;k<others.length;k++){
-      if(k===skip||(!actor.hidden&&others[k].hidden))continue;
+      if(k===skip)continue;
       const other=others[k],dx=other.x-actor.x,dz=other.z-actor.z,range=Math.hypot(dx,dz);
       if(range>reach+8||Math.abs(other.y-y)>3||(range<10&&dx*fx+dz*fz<-1))continue;
       // The station is at least the plan distance, and not much more on any highway curve.
@@ -527,7 +531,8 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         if(d<lateral){lateral=d;station=leadStations[i]+(leadStations[i+1]-leadStations[i])*t;}
       }
       if(lateral>actor.spec.width/2+(other.halfWidth??.95)+.2||station<=0)continue;
-      const heading=pathYaw(actor.path,actor.distance+station),lead=other.yaw===undefined?0:(other.speed??0)*Math.max(0,Math.cos(other.yaw-heading));
+      const heading=pathYaw(actor.path,actor.distance+station);if(!leads(actor,other,heading))continue;
+      const lead=other.yaw===undefined?0:(other.speed??0)*Math.max(0,Math.cos(other.yaw-heading));
       limit=Math.min(limit,followSpeed(station-actor.spec.length/2-(other.halfLength??2.1),lead));
     }
     return limit;
@@ -1142,7 +1147,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         const actorHeight=obstacles[index+1].y,hidden=!!actor.hidden;
         for(let otherIndex=0;otherIndex<obstacles.length;otherIndex++){
           const other=obstacles[otherIndex];
-          if(otherIndex===index+1||(!hidden&&other.hidden))continue;
+          if(otherIndex===index+1||!leads(actor,other,actor.yaw))continue;
           // Two lane keepers settle their order through rightsOfWay; the symmetric
           // rules below would stop both of two cars meeting at a corner for good.
           const sharesRightOfWay=otherIndex<=actors.length

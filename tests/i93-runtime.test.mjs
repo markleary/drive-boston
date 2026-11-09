@@ -200,6 +200,35 @@ const portal=()=>{
   ],undefined,{x:0,z:-1400,yaw:Math.PI});
 };
 
+test('a visible car keeps its distance behind a queue on an undrawn deck it is about to join',async()=>{
+  // One carriageway 1 m up (the 3 m height test never hides a leader) runs onto
+  // a 40 m piece whose owner tile has not streamed in, which lands on a street
+  // (a landing must reach the street's height); the signal there queues hidden
+  // cars back along the piece every red phase.
+  const main=deck('Loaded I-93','Loaded I-93',line([-700,0],[0,0]),1,{closed:'start'});main.elevations=main.points.map(()=>1);
+  const stub=deck('Unloaded I-93','Unloaded I-93',[[0,0],[40,0]],1,{elevations:[1,0]});
+  const foot=street('foot-street','Foot Street',[[40,-300],[40,0],[40,300]]);
+  const city={...fixture([main,stub,foot],{minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},{x:-145,z:0,yaw:Math.PI/2}),signals:[[42,2]]};
+  const physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics,[],{deckDrawn:road=>road!==stub});
+  const player={x:720,z:720,y:.65,yaw:0,speed:0,steering:0},observer={x:-30,z:0,y:1.65};
+  physics.body.setTranslation(player,true);
+  let worst=Infinity,approaches=0,queued=0;
+  try{
+    for(let i=0;i<90*60;i++){
+      traffic.update(1/60,player,observer);physics.world.step();
+      if(i%3)continue;
+      const cars=traffic.snapshot().filter(c=>!c.parked&&(c.road===main.name||c.road===stub.name));
+      const queue=cars.filter(c=>c.hidden&&c.speed<.5);
+      if(queue.length)queued++;
+      for(const car of cars)if(!car.hidden&&queue.some(b=>b.x-car.x<40))approaches++;
+      for(let p=0;p<cars.length;p++)for(let q=0;q<p;q++){if(!cars[p].hidden&&!cars[q].hidden)continue;worst=Math.min(worst,clearance(cars[p],cars[q]));}
+    }
+  }finally{traffic.dispose();physics.dispose();}
+  assert.ok(queued>0,'the signal queued cars on the undrawn piece');
+  assert.ok(approaches>0,'visible cars came up behind the hidden queue');
+  assert.ok(worst>0,`a car never overlaps one queued on the undrawn piece ahead of it (closest ${worst.toFixed(2)} m)`);
+});
+
 test('a tunnel record is underground only where it is covered, so its portal approach carries the open highway traffic',async()=>{
   const city=portal(),physics=await DrivingPhysics.create(city),traffic=createTraffic(new THREE.Scene(),city,physics);
   const tunnel=car=>!car.parked&&car.road==='I-93 North · Tunnel';

@@ -113,13 +113,17 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     }
     if (!active) return;
     const physicalDistance = distanceTo(boundsOf(active.tile), position.x, position.z);
-    // A trace gives its distant owner an earlier slot, while distant tile
-    // scenery remains paced even when the observer is right on the trace.
-    const distance = mobile ? wanted.find(t => t.key === active!.key)?.distance ?? physicalDistance : physicalDistance;
-    pace.deadline = distance > SYNC_RADIUS ? began + budget : Infinity;
+    // A road gives its distant owner an earlier slot. A phone also builds the
+    // tile unpaced while the observer is on one of its roads, but only until the
+    // decks a car stands on are in (the Zakim shell comes first); the scenery of
+    // a distant tile stays paced even when the observer is right on the trace.
+    const roadDistance = mobile ? wanted.find(t => t.key === active!.key)?.distance ?? physicalDistance : physicalDistance;
+    let paced = (active.partial.structuresReady ? physicalDistance : roadDistance) > SYNC_RADIUS;
+    pace.deadline = paced ? began + budget : Infinity;
     while (true) {
       const built = step(active);
       if (built) { finish(active, built); active = undefined; break; }
+      if (!paced && active.partial.structuresReady && physicalDistance > SYNC_RADIUS) { paced = true; pace.deadline = began + budget; }
       if (performance.now() > pace.deadline) break;
     }
     // The partial group draws this frame; note its uploads so finish() can free them.
