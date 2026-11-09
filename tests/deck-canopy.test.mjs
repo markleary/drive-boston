@@ -30,8 +30,8 @@ test('nothing is planted under the I-93 North entrance from Cross / Sudbury Stre
 
 test('canopy bounds cover the drawn tree geometry at every distance level and the largest instance scale',()=>{
   const scale=TREE_SCALE_RANGE[1];
-  for(const [canopy,species,fieldScale] of [[STREET_CANOPY,[0,1,2],1],[PARK_CANOPY,[0,1,2,3],1.65]]){
-    const extent=crownExtent(species,[0,1,2]);
+  for(const [canopy,park,fieldScale] of [[STREET_CANOPY,false,1],[PARK_CANOPY,true,1.65]]){
+    const extent=crownExtent(park);
     assert.ok(canopy.reach>=extent.reach*fieldScale*scale,`reach ${canopy.reach} covers ${(extent.reach*fieldScale*scale).toFixed(2)}`);
     assert.ok(canopy.top>=extent.top*fieldScale*scale,`top ${canopy.top} covers ${(extent.top*fieldScale*scale).toFixed(2)}`);
   }

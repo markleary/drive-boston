@@ -5,7 +5,7 @@ import {tunnelCoveredAt,tunnelStations} from './tunnels.ts';
  * horizontal extent from the trunk (leaf-card corners included) and `top` the
  * highest point above the trunk base, over every distance level (the far
  * levels use larger cards) at the largest instance scale: street trees 1.12
- * over three species, park specimens 1.65 x 1.12 over four. A node test checks
+ * over five species, park specimens 1.65 x 1.12 over six. A node test checks
  * them against crownExtent() in src/render/foliage.ts. */
 export interface Canopy{reach:number;top:number;}
 export const STREET_CANOPY:Canopy={reach:7.6,top:18};
