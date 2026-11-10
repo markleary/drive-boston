@@ -2,6 +2,7 @@ import type { Building, CityData, Point2 } from '../types';
 import { decodeElevation, gunzip, parseTile, tileFile, tileKey, tileOf, type CityTile, type TileBuilding } from './tile-format.ts';
 import { parseFar, type FarBuilding, type FarCity } from './far-format.ts';
 import {prepareBuildingTunnelPassage} from './tunnel-passages.ts';
+import {refineFrogPond} from './boston-common.ts';
 
 /** A metro city streams its buildings from 1 km tiles. `city.buildings` holds
  * the currently loaded detailed set; `far` holds every building's hull. */
@@ -49,6 +50,7 @@ export async function resolveCity(city: CityData, read: Reader): Promise<CityDat
     city.tunnels ? read(city.tunnels.file).then(buffer=>JSON.parse(new TextDecoder().decode(buffer)) as Pick<CityData,'roads'|'landmarks'|'sources'>) : undefined,
   ]);
   if (elevation && heights) elevation.heights = heights;
+  if (city.water) city.water = city.water.map(refineFrogPond);
   if(tunnels){
     const roadIds=new Set(tunnels.roads.map(r=>r.id)),landmarkIds=new Set(tunnels.landmarks.map(l=>l.id));
     city.roads=[...city.roads.filter(r=>!roadIds.has(r.id)),...tunnels.roads];

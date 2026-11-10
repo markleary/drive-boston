@@ -310,6 +310,14 @@ These exterior models use original geometry and materials. They draw at both str
 - City Hall uses the [Boston Landmarks Commission study](https://www.boston.gov/news/boston-city-hall-study-report) and [KMW Architecture's exterior photographs](https://www.kmwarch.com/boston-city-hall) for the concrete fins and piers, ceremonial hoods, brick podium and recessed courtyard.
 - The ICA uses [MassGIS imagery](https://www.mass.gov/info-details/massgis-data-2023-aerial-imagery), the [ICA's building photographs and description](https://www.icaboston.org/about/our-building/), and [Diller Scofidio + Renfro's published sections](https://www.archdaily.com/897150/institute-of-contemporary-art-diller-scofidio-plus-renfro) for the gallery cantilever, channel glass, suspended mediatheque and timber grandstand.
 
+## Boston Common trees and Frog Pond
+
+Tree sites come from the November 9, 2026 snapshot of the [BPRD Trees inventory](https://data.boston.gov/dataset/bprd-trees). The Common's boundary contains 551 sites from the snapshot. The renderer uses six existing tree shapes and estimates their relative size from trunk diameter. It skips sites that conflict with the game's paths, roads, buildings, or plaza.
+
+The Frog Pond basin and concrete apron are traced 3 m and 0.75 m inside the surrounding walkway's centerline, respectively. The walkway is [OpenStreetMap way 23787089](https://www.openstreetmap.org/way/23787089), © OpenStreetMap contributors, ODbL 1.0. The pool's outline and rim follow the mapped walkway and the existing conditions shown in the [Boston Common Master Plan](https://www.boston.gov/sites/default/files/file/2023/05/BCMP_chapter2.pdf). The 5.66 m water level is a game-world estimate fitted to the terrain.
+
+To regenerate the offline detail file, query the [city's tree service](https://services.arcgis.com/sFnw0xNflSi8J0uh/arcgis/rest/services/BPRD_Trees/FeatureServer/0/query) for `park='Boston Common'` with `outFields=id,spp_com,dbh,park`, `outSR=4326`, and `f=geojson`. Pass the result and the cached `osm-metro-paths.json` to `scripts/build-boston-common.py` using the data build's Python environment.
+
 ## The Embrace, Boston Common
 
 [*The Embrace*](https://en.wikipedia.org/wiki/The_Embrace) (Hank Willis Thomas with MASS Design Group, unveiled January 2023) stands at OpenStreetMap node 10552518542 (42.3549357, −71.0643618), which converts to game position (858.64, −538.98), between the Boston Common Visitor Center and the Parkman Bandstand. The surrounding 1965 Freedom Plaza outline, its inner paving ring, and the curved retaining wall on its uphill east and south edge come from OSM ways 1132661865, 1131759734, and 1334814996, © OpenStreetMap contributors, **ODbL 1.0**, retrieved October 28, 2026 through the Overpass API and converted with the same EPSG:2249 transform as the city package. The plaza drapes on the DEM; park trees, benches, lamps, and close grass stay off it.

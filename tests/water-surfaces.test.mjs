@@ -32,6 +32,22 @@ test('flat water retains island holes and paved ground-road cutouts',()=>{
  g.dispose();
 });
 
+test('the Frog Pond water covers both lobes without grass breaking through',()=>{
+ const pond=metro.water.find(w=>w.name==='Frog Pond'),[{level,rings}]=pond.surfaces;
+ assert.ok(inside([686,-650],pond.rings)&&inside([784,-665],pond.rings));
+ const ring=rings[0],g=parkSurface(metro,rings,WATER_SURFACE_OFFSET,level,undefined,true),p=g.attributes.position;
+ const basinArea=Math.abs(ring.reduce((sum,[x,z],i)=>{
+  const [nextX,nextZ]=ring[(i+1)%ring.length];return sum+x*nextZ-z*nextX;
+ },0))/2;
+ let waterArea=0;
+ for(let i=0;i<p.count;i+=3){
+  const x=p.getX(i),z=p.getZ(i);
+  waterArea+=Math.abs((p.getX(i+1)-x)*(p.getZ(i+2)-z)-(p.getZ(i+1)-z)*(p.getX(i+2)-x))/2;
+ }
+ assert.ok(Math.abs(basinArea-waterArea)<.1);
+ g.dispose();
+});
+
 test('Mattapan screenshot reach keeps a single 1.18 m water level across terrain and tile boundaries',()=>{
  const water=metro.water.find(w=>w.id==='water-merged-55'),surface=water.surfaces.find(s=>inside([-1200,9020],s.rings));
  assert.equal(surface.name,'Neponset River');assert.equal(surface.level,1.18);
