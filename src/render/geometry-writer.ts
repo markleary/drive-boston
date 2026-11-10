@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { computeBounds } from './fast-bounds.ts';
 
 /** A box part: the six faces BoxGeometry builds (same corners, normals and
  * UVs), written straight into a TriangleWriter instead of becoming a geometry. */
@@ -99,7 +100,7 @@ export class TriangleWriter {
   geometry() {
     const g = new THREE.BufferGeometry(), n = this.count;
     g.setAttribute('position', new THREE.BufferAttribute(this.position.slice(0, n * 3), 3)); g.setAttribute('normal', new THREE.BufferAttribute(this.normal.slice(0, n * 3), 3)); g.setAttribute('uv', new THREE.BufferAttribute(this.uv.slice(0, n * 2), 2));
-    if (n) g.computeBoundingSphere(); return g;
+    if (n) computeBounds(g, false); return g;
   }
 }
 

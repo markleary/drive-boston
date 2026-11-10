@@ -573,7 +573,9 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     }
     drawMiniMap();if(mapOpen)drawFullMap();
   }
-  function drawMap(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, center: Point2, scale: number, large: boolean) {
+  /** `pad`: the canvas is the minimap's layer, `pad` px larger than the minimap on every side and without the
+   * markers that stay put in the view (see `composeMiniMap`). */
+  function drawMap(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, center: Point2, scale: number, large: boolean, pad = 0) {
     const dpr = Math.min(2, window.devicePixelRatio || 1), w = canvas.width / dpr, h = canvas.height / dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#edece1'; ctx.fillRect(0, 0, w, h);
     const viewport=large?mapViewport:{left:0,top:0,right:w,bottom:h};
@@ -652,21 +654,22 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       }
     }
     if(!large){
-      const fontSize=w<170?10:11;
+      // Labels are placed within the minimap itself, not the layer's margin.
+      const fontSize=w-2*pad<170?10:11;
       ctx.font=`600 ${fontSize}px "Avenir Next",sans-serif`;
-      const roadLabels=minimapLabels({center,scale,width:w,height:h,fontSize,
+      const roadLabels=minimapLabels({center,scale,width:w-2*pad,height:h-2*pad,fontSize,
         measureText:text=>ctx.measureText(text).width,
-        reserved:city.landmarks.map(landmark=>{const [x,y]=project(landmark.position);return{x,y,radius:7};}),
+        reserved:city.landmarks.map(landmark=>{const [x,y]=project(landmark.position);return{x:x-pad,y:y-pad,radius:7};}),
       });
       ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineJoin='round';
       for(const label of roadLabels){
-        ctx.save();ctx.translate(label.x,label.y);ctx.rotate(label.angle);
+        ctx.save();ctx.translate(label.x+pad,label.y+pad);ctx.rotate(label.angle);
         ctx.lineWidth=3;ctx.strokeStyle='#faf8f0';ctx.strokeText(label.text,0,0);
         ctx.fillStyle='#344c45';ctx.fillText(label.text,0,0);ctx.restore();
       }
       ctx.textBaseline='alphabetic';
       const description=`Your position in Boston${roadLabels.length?`. Nearby roads: ${roadLabels.map(label=>label.name).join(', ')}`:''}`;
-      if(canvas.getAttribute('aria-label')!==description)canvas.setAttribute('aria-label',description);
+      const described=pad?mini:canvas;if(described.getAttribute('aria-label')!==description)described.setAttribute('aria-label',description);
     }
     for (const landmark of city.landmarks) {
       const p = project(landmark.position); if (!inside(p)) continue;
@@ -679,33 +682,69 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
         }
       }
     }
-    const destination=nav.destination;
-    if(destination){
-      const p=project(destination),radius=Math.min(w,h)/2,angle=Math.atan2(p[1]-h/2,p[0]-w/2);
-      // Beyond the round minimap's edge, an arrow on the rim points the way.
-      if(!large&&Math.hypot(p[0]-w/2,p[1]-h/2)>radius-16){
-        ctx.save();ctx.translate(w/2+Math.cos(angle)*(radius-12),h/2+Math.sin(angle)*(radius-12));ctx.rotate(angle);
-        ctx.beginPath();ctx.moveTo(8,0);ctx.lineTo(-5,-6.5);ctx.lineTo(-2,0);ctx.lineTo(-5,6.5);ctx.closePath();
-        ctx.fillStyle='#d6453a';ctx.strokeStyle='#fffaf0';ctx.lineWidth=1.5;ctx.lineJoin='round';ctx.fill();ctx.stroke();ctx.restore();
-      }else drawPin(ctx,p,large?1:.8);
-    }
+    if(pad)return;
+    drawDestination(ctx,project,w,h,large);
     if(large&&inputMode==='gamepad'){
       // RB sets the destination under this crosshair.
       ctx.save();ctx.translate(centerX,centerY);ctx.strokeStyle='#233b3b';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(0,0,7,0,Math.PI*2);ctx.moveTo(-13,0);ctx.lineTo(-9,0);ctx.moveTo(9,0);ctx.lineTo(13,0);ctx.moveTo(0,-13);ctx.lineTo(0,-9);ctx.moveTo(0,9);ctx.lineTo(0,13);ctx.stroke();ctx.restore();
     }
-    const player = project([state.x,state.z]);
-    ctx.fillStyle='#233b3b13';ctx.beginPath();ctx.arc(player[0],player[1],large?20:17,0,Math.PI*2);ctx.fill();
-    ctx.save();ctx.translate(...player);ctx.rotate(Math.PI-state.yaw);ctx.fillStyle='#234b4a';ctx.strokeStyle='#fff9ee';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(6.5,7);ctx.lineTo(0,4);ctx.lineTo(-6.5,7);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
+    drawPlayer(ctx,project,large);
     if (large) {
       ctx.textAlign='left';ctx.fillStyle='#6b8073';ctx.font='600 10px "DM Sans",sans-serif';ctx.fillText('N',32,128);ctx.strokeStyle='#6b8073';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(36,136);ctx.lineTo(36,158);ctx.moveTo(32,141);ctx.lineTo(36,136);ctx.lineTo(40,141);ctx.stroke();
       const meters=[25,50,100,200,500,1000,2000,5000].find(value=>value*scale>=70)??2000;
       const length=meters*scale,rx=viewport.right,y=viewport.bottom+10;ctx.beginPath();ctx.moveTo(rx-length,y);ctx.lineTo(rx,y);ctx.moveTo(rx-length,y-4);ctx.lineTo(rx-length,y+4);ctx.moveTo(rx,y-4);ctx.lineTo(rx,y+4);ctx.stroke();ctx.textAlign='right';ctx.fillText(meters>=1000?`${meters/1000} km`:`${meters} m`,rx,y-9);
     }
   }
+  /** The destination: a pin, or beyond the round minimap's edge an arrow on its rim pointing the way. */
+  function drawDestination(ctx:CanvasRenderingContext2D,project:(point:Point2)=>Point2,w:number,h:number,large:boolean){
+    const destination=nav.destination;if(!destination)return;
+    const p=project(destination),radius=Math.min(w,h)/2,angle=Math.atan2(p[1]-h/2,p[0]-w/2);
+    if(!large&&Math.hypot(p[0]-w/2,p[1]-h/2)>radius-16){
+      ctx.save();ctx.translate(w/2+Math.cos(angle)*(radius-12),h/2+Math.sin(angle)*(radius-12));ctx.rotate(angle);
+      ctx.beginPath();ctx.moveTo(8,0);ctx.lineTo(-5,-6.5);ctx.lineTo(-2,0);ctx.lineTo(-5,6.5);ctx.closePath();
+      ctx.fillStyle='#d6453a';ctx.strokeStyle='#fffaf0';ctx.lineWidth=1.5;ctx.lineJoin='round';ctx.fill();ctx.stroke();ctx.restore();
+    }else drawPin(ctx,p,large?1:.8);
+  }
+  function drawPlayer(ctx:CanvasRenderingContext2D,project:(point:Point2)=>Point2,large:boolean){
+    const player = project([state.x,state.z]);
+    ctx.fillStyle='#233b3b13';ctx.beginPath();ctx.arc(player[0],player[1],large?20:17,0,Math.PI*2);ctx.fill();
+    ctx.save();ctx.translate(...player);ctx.rotate(Math.PI-state.yaw);ctx.fillStyle='#234b4a';ctx.strokeStyle='#fff9ee';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(6.5,7);ctx.lineTo(0,4);ctx.lineTo(-6.5,7);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
+  }
   function fullScale() {
     return Math.min((mapViewport.right-mapViewport.left) / (city.bounds.maxX-city.bounds.minX), (mapViewport.bottom-mapViewport.top) / (city.bounds.maxZ-city.bounds.minZ)) * mapZoom;
   }
-  function drawMiniMap() { if(!started||isPaused()||document.hidden||host.classList.contains('hud-off')||mini.clientWidth===0)return;drawMap(miniContext,mini,[state.x,state.z],mini.clientWidth / (travelMode === 'helicopter' ? 460 + Math.max(0, altitude - 30) * 2 : 460),false); }
+  // The minimap's laid-out width, kept by an observer: reading clientWidth in the frame loop forces a layout whenever
+  // the HUD's text has changed since the last one, which is every frame while moving.
+  let miniWidth = mini.clientWidth; const observed = typeof ResizeObserver !== 'undefined'; if (observed) new ResizeObserver(() => { miniWidth = mini.clientWidth; }).observe(mini);
+  // The map itself (roads, footprints, labels) is drawn every 90 ms into a layer MINI_PAD px larger than the minimap
+  // on every side; every frame that layer is copied onto the minimap shifted by what the player has travelled since,
+  // and the player's arrow and the destination marker are drawn over it. Redrawn only every 90 ms, the map moved in
+  // eleven steps a second while the world outside moved every frame.
+  const MINI_PAD=16,miniLayer=document.createElement('canvas'),miniLayerContext=miniLayer.getContext('2d')!;
+  let miniDrawn:{x:number;z:number;scale:number}|undefined;
+  const miniShown=()=>started&&!isPaused()&&!document.hidden&&!host.classList.contains('hud-off');
+  function drawMiniMap() {
+    if(!miniShown())return;if(!observed)miniWidth=mini.clientWidth;if(miniWidth===0)return;
+    const dpr=Math.min(2,window.devicePixelRatio||1),pad=Math.round(MINI_PAD*dpr),scale=miniWidth / (travelMode === 'helicopter' ? 460 + Math.max(0, altitude - 30) * 2 : 460);
+    if(miniLayer.width!==mini.width+2*pad||miniLayer.height!==mini.height+2*pad){miniLayer.width=mini.width+2*pad;miniLayer.height=mini.height+2*pad;}
+    drawMap(miniLayerContext,miniLayer,[state.x,state.z],scale,false,pad/dpr);
+    miniDrawn={x:state.x,z:state.z,scale};composeMiniMap();
+  }
+  function composeMiniMap() {
+    if(!miniDrawn||!miniShown()||!miniLayer.width)return;
+    const dpr=Math.min(2,window.devicePixelRatio||1),pad=(miniLayer.width-mini.width)/2,w=mini.width/dpr,h=mini.height/dpr,{scale}=miniDrawn;
+    // Resized since the layer was drawn: the next redraw fits it again.
+    if(pad<=0||miniLayer.height-mini.height!==2*pad)return;
+    // Whole device pixels, so the layer is copied and not resampled: the map stays as sharp as it was drawn.
+    const dx=Math.round((miniDrawn.x-state.x)*scale*dpr),dy=Math.round((miniDrawn.z-state.z)*scale*dpr);
+    miniContext.setTransform(1,0,0,1,0,0);
+    // A stalled frame can carry the player past the margin: the map's ground colour shows there until the redraw.
+    if(Math.abs(dx)>pad||Math.abs(dy)>pad){miniContext.fillStyle='#edece1';miniContext.fillRect(0,0,mini.width,mini.height);}
+    miniContext.drawImage(miniLayer,dx-pad,dy-pad);
+    miniContext.setTransform(dpr,0,0,dpr,0,0);
+    const project=([x,z]:Point2):Point2=>[(x-state.x)*scale+w/2,(z-state.z)*scale+h/2];
+    drawDestination(miniContext,project,w,h,false);drawPlayer(miniContext,project,false);
+  }
   function drawFullMap() { if (mapOpen) drawMap(fullContext,full,mapCenter,fullScale(),true); }
   /** Opening the atlas with a destination set shows the car and the route ahead instead of the whole city. */
   function frameRoute(){
@@ -772,7 +811,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     }
     const now=performance.now();
     diagnostics.update(now);
-    if(now-lastMapDraw>90){drawMiniMap();lastMapDraw=now;}
+    if(now-lastMapDraw>90){drawMiniMap();lastMapDraw=now;}else composeMiniMap();
     if(now-lastLocation>500){
       const neighborhood=neighborhoodAt(state.x,state.z);
       // Stacked carriageways share XY, so the driving HUD must follow the

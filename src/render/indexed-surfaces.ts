@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { computeBounds } from './fast-bounds.ts';
 import type { TriangleSink } from './geometry-writer.ts';
 
 /** Store a shared road vertex once while preserving every Float32 attribute
@@ -45,7 +46,7 @@ export class IndexedSurfaceWriter implements TriangleSink {
     geometry.setAttribute('normal', new THREE.BufferAttribute(this.normal.slice(0, this.vertices * 3), 3));
     geometry.setAttribute('uv', new THREE.BufferAttribute(this.uv.slice(0, this.vertices * 2), 2));
     geometry.setIndex(new THREE.BufferAttribute(this.indices.slice(0, this.count), 1));
-    geometry.computeBoundingSphere(); return geometry;
+    computeBounds(geometry, false); return geometry;
   }
 }
 

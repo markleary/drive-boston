@@ -33,7 +33,7 @@ export interface Path { points: Point2[]; distances: number[]; length: number; s
  * eases back onto its lane over `rejoin` from the pose it was left in. A
  * `parked` car has driven into a closed end and waits, hidden, to be placed again;
  * a `hidden` one rides a deck that has not streamed in. */
-interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; parked?:boolean; hidden?:boolean; }
+interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; respawnAfter?:number; parked?:boolean; hidden?:boolean; }
 type FleetObstacle = TrafficObstacle & { hidden?: boolean };
 /** A car on an undrawn deck still leads a visible car along the route it is about
  * to join (the queue it reaches keeps its spacing), but never makes it yield to a
@@ -336,6 +336,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     while(stack.length){const current=stack.pop()!;for(const next of connections.get(current)??[])if(!components.has(next)){components.set(next,component);stack.push(next);}}
     component++;
   }
+  // Where a car can be recycled within its own network, looked up once: `respawnAway` asks for every car that has
+  // run out of road, every frame until it finds a place.
+  const spawnByComponent=new Map<number|undefined,Edge[]>();
+  for(const edge of spawnEdges){const key=components.get(edge.start),list=spawnByComponent.get(key);if(list)list.push(edge);else spawnByComponent.set(key,[edge]);}
   // Match measured signal locations to graph junctions, rather than treating a
   // roadside signal point as if it sat in the middle of the driving lane. A
   // highway gore or lane drop is no intersection (only junctions a street
@@ -1038,14 +1042,18 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         !actors.some(other => other !== actor && Math.hypot(other.x - point[0], other.z - point[1]) < 18) &&
         !external.some(other => Math.hypot(other.x - point[0], other.z - point[1]) < (other.halfLength ?? 2.1) + 5);
       // Retain the old body until an unoccupied distant replacement has been found.
+      // A car whose network has no free place beyond the view (a few streets cut off from the rest, all of them
+      // under a helicopter whose view reaches 900 m) asks again in a second: twelve fresh routes a frame for each
+      // such car, each after a pass over every edge of the metro, held full-speed flights at 30 ms a frame.
       const respawnAway=(actor:Actor)=>{
-        for (let attempt = 0; attempt < 12; attempt++) {
-          const connected=spawnEdges.filter(edge=>components.get(edge.start)===actor.path.component);if(!connected.length)return false;
+        if(actor.respawnAfter!==undefined&&elapsed<actor.respawnAfter)return false;
+        const connected=spawnByComponent.get(actor.path.component);
+        if(connected?.length)for (let attempt = 0; attempt < 12; attempt++) {
           const path = route(choose(connected)), start = at(path, 5);
           if (Math.hypot(start[0] - observer.x, start[1] - observer.z) < recycleDistance || !clearRelocation(start,actor)) continue;
-          relocate(actor,path);return true;
+          actor.respawnAfter=undefined;relocate(actor,path);return true;
         }
-        return false;
+        actor.respawnAfter=elapsed+1;return false;
       };
       const below=underground(observer);
       if(rehomeTimer>.25){
