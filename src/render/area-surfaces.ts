@@ -18,6 +18,8 @@ export function* shoreBankSteps(positions:number[],pace?:Pace):Generator<void,TH
 }
 
 export interface SurfaceOptions{offset?:number;flatHeight?:number;bounds?:Bounds;water?:boolean;shore?:WaterShore;bankPositions?:number[];
+  /** Absolute height for a shaped surface tessellated against the terrain grid. */
+  heightAt?:(point:Point2)=>number;
   /** Frame pacing: pause between DEM cells and through the per-vertex passes once the deadline has passed. */ pace?:Pace;}
 
 /** Clip polygon triangulation against the exact DEM triangles. This preserves
@@ -29,7 +31,7 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
 /** parkSurface as a paced generator. A tile's street pavement or a harbour
  * basin covers tens of thousands of DEM cells, a few hundred milliseconds of
  * clipping in one piece; the tile builder runs it a few milliseconds a frame. */
-export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,flatHeight,bounds,water=false,shore,bankPositions=[],pace}:SurfaceOptions={}):Generator<void,THREE.BufferGeometry>{
+export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,flatHeight,bounds,water=false,shore,bankPositions=[],heightAt,pace}:SurfaceOptions={}):Generator<void,THREE.BufferGeometry>{
   let triangulated=triangulations.get(rings);
   if(!triangulated){
     const contour=rings[0]?.map(p=>new THREE.Vector2(...p))??[];
@@ -79,7 +81,7 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
         if(db<=0)out.push(b);a=b;da=db;
       }poly=out;
     }
-    for(const part of water?uncoveredWater(city,poly,flatHeight):[poly])emitTriangles(part);
+    for(const part of water?uncoveredWater(city,poly,flatHeight):[poly])emitTriangles(part,false,heightAt);
   };
   const clip=(poly:Point2[],nx:number,nz:number,limit:number)=>{
     const out:Point2[]=[];if(!poly.length)return out;

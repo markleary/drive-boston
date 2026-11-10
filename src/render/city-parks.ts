@@ -7,9 +7,9 @@ import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {roadSlabGeometry,deckEdge} from '../simulation/road-surfaces.ts';
 import {canopyHitsDeck,PARK_CANOPY} from '../simulation/deck-canopy.ts';
 import { canvasTexture, seeded } from './materials';
-import { createStreetTrees, type TreeField } from './foliage';
+import { createStreetTrees, type TreeField, type TreePlanting } from './foliage';
 import { drapedRibbonInto,clipPortalSurfaceSteps } from './terrain-ground';
-import { PartBatches, box, type Part } from './geometry-writer';
+import { PartBatches, TriangleWriter, box, type Part } from './geometry-writer';
 import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
 import { insideEmbracePlaza } from './the-embrace';
@@ -25,6 +25,7 @@ import {inGreenway,replacesGreenwayPark,outsideGreenwayPath} from '../simulation
 import {greenwayDetailSteps} from './greenway';
 import { fellsViewHeight, fellsWoodlandSteps, isFellsWoodland, type FellsViewHeight } from './fells-woodland.ts';
 import { christianSciencePlazaSteps, christianScienceTrees, isChristianSciencePool, ownsChristianSciencePlaza } from './christian-science-plaza.ts';
+import { BOSTON_COMMON, commonTrees, FROG_POND, FROG_POND_LEVEL, frogPondApron } from '../simulation/boston-common.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -60,6 +61,42 @@ export interface ParkOptions {
   /** Frame pacing: the generator form pauses between areas, paths and parks once the deadline has passed. */ pace?:Pace;
 }
 type ParkPath=NonNullable<CityData['parkPaths']>[number];
+
+const frogPondConcrete=new THREE.MeshStandardMaterial({color:'#b7afa3',roughness:.93});
+
+/** This wading pool has a concrete rim and a level surface. The apron ties
+ * the rim back into the sloped paths without changing their terrain heights. */
+function* frogPondSteps(city:CityData,water:CityArea,waterMaterial:THREE.Material,{onShore,pace}:ParkOptions){
+  const level=FROG_POND_LEVEL,rimHeight=level+.23,ring=water.rings[0];
+  const apron=yield* parkSurfaceSteps(city,[frogPondApron,ring],{pace,heightAt:p=>{
+    const distance=Math.min(...ring.map((a,i)=>distanceToSegment(p,a,ring[(i+1)%ring.length])));
+    return Math.max(sampleElevation(city,...p)+.035,rimHeight-.45*distance);
+  }});
+  const rim=new TriangleWriter();
+  rim.append(apron);
+  apron.dispose();
+  for(const [i,[ax,az]] of ring.entries()){
+    const [bx,bz]=ring[(i+1)%ring.length],base=level-.04;
+    rim.triangle(ax,base,az,ax,rimHeight,az,bx,base,bz);
+    rim.triangle(bx,base,bz,ax,rimHeight,az,bx,rimHeight,bz);
+  }
+  const concrete=new THREE.Mesh(rim.geometry(),frogPondConcrete);
+  concrete.name='Frog Pond concrete rim';
+  concrete.receiveShadow=true;
+
+  const surface=yield* parkSurfaceSteps(city,water.rings,{offset:WATER_SURFACE_OFFSET,flatHeight:level,water:true,pace});
+  const sheet=new THREE.Mesh(applyWaterMotion(surface,waterMotion(water)),waterMaterial);
+  sheet.name='Frog Pond water';
+  sheet.receiveShadow=true;
+  sheet.userData.noAO=true;
+  const pond=new THREE.Group();
+  pond.name=FROG_POND;
+  pond.add(concrete,sheet);
+  const vertices=concrete.geometry.getAttribute('position').array as Float32Array;
+  onShore?.(vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
+  return pond;
+}
+
 /** Real Boston park boundaries, hydrography and mapped pedestrian alignments.
  * Planting, furnishings and bridge details are original procedural interpretations. */
 export function addCityParkDetails(scene:THREE.Scene,city:CityData,options:ParkOptions={}){ return drain(cityParkDetailSteps(scene,city,options)); }
@@ -96,6 +133,14 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   for(const water of waters){
     if(due(pace))yield;
     if(isChristianSciencePool(water))continue;
+    if(water.name===FROG_POND){
+      // This pool fits in one tile. It is also in adjacent tiles' shoreline buffers.
+      const [x,z]=water.rings[0][0];
+      if(!bounds||x>=bounds.minX&&x<bounds.maxX&&z>=bounds.minZ&&z<bounds.maxZ){
+        group.add(yield* frogPondSteps(city,water,waterMaterial,options));
+      }
+      continue;
+    }
     // The hydro union joins rivers at different elevations to the tidal harbour. Its
     // source basin/reach planes retain their own levels across streamed tiles.
     for(const surface of water.surfaces??[{rings:water.rings,level:waterHeight(city,water)}]){
@@ -159,10 +204,14 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       const k=`${x},${z}`,items=buildings.get(k)??[];items.push(p);buildings.set(k,items);
     }
   }
-  const waterBounds=waters.map(w=>({area:w,...areaBounds(w)}));
+  // Keep furniture and trunks out of the Frog Pond's apron as well as its water.
+  const waterBounds=waters.map(w=>{
+    const area=w.name===FROG_POND?{...w,rings:[frogPondApron]}:w;
+    return {area,...areaBounds(area)};
+  });
   const wet=(p:Point2)=>waterBounds.some(w=>p[0]>=w.minX-2&&p[0]<=w.maxX+2&&p[1]>=w.minZ-2&&p[1]<=w.maxZ+2&&insideArea(p,w.area));
   const safe=(p:Point2)=>!options.reserved?.(...p)&&!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
-  const treePoints:THREE.Vector3[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
+  const treePoints:(THREE.Vector3|TreePlanting)[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
   const clipped=(p:CityArea):Bounds=>{const b=areaBounds(p);return bounds?{minX:Math.max(b.minX,bounds.minX),maxX:Math.min(b.maxX,bounds.maxX),minZ:Math.max(b.minZ,bounds.minZ),maxZ:Math.min(b.maxZ,bounds.maxZ)}:b;};
@@ -189,10 +238,10 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     woodlandTrees=yield* fellsWoodlandSteps(city,group,{bounds:woodlandBounds,contains,clear,
       viewHeight:options.fellsViewHeight??fellsViewHeight(city),onRock:options.onRock,pace});
   }
-  const limits=selected.map(p=>{const b=clipped(p),area=Math.max(0,b.maxX-b.minX)*Math.max(0,b.maxZ-b.minZ);return /public garden/i.test(p.name)?190:/boston common/i.test(p.name)?260:/fens/i.test(p.name)?190:Math.min(bounds?60:35,Math.round(area/1300));});
+  const limits=selected.map(p=>{const b=clipped(p),area=Math.max(0,b.maxX-b.minX)*Math.max(0,b.maxZ-b.minZ);return /public garden/i.test(p.name)?190:/fens/i.test(p.name)?190:Math.min(bounds?60:35,Math.round(area/1300));});
   for(const [index,park] of selected.entries()){
     if(due(pace))yield;
-    if(isFellsWoodland(park))continue;
+    if(isFellsWoodland(park)||park.name===BOSTON_COMMON)continue;
     const b=clipped(park),limit=limits[index];let count=0;if(b.maxX<=b.minX||b.maxZ<=b.minZ)continue;
     for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length<treeBudget;attempt++){
       const p:Point2=[b.minX+random()*(b.maxX-b.minX),b.minZ+random()*(b.maxZ-b.minZ)];if(!insideArea(p,park)||!safe(p))continue;
@@ -203,6 +252,18 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     }
   }
   if(christianSciencePlaza)treePoints.push(...christianScienceTrees(city));
+  // Use the park inventory independently of the tile's procedural tree budget.
+  const common=parks.find(p=>p.name===BOSTON_COMMON);
+  if(common){
+    const b=clipped(common);
+    for(const [x,z,species,scale] of commonTrees){
+      if(due(pace))yield;
+      const p:Point2=[x,z];
+      if(x<b.minX||x>=b.maxX||z<b.minZ||z>=b.maxZ||!insideArea(p,common)||!safe(p))continue;
+      const y=sampleElevation(city,x,z);
+      if(!canopyHitsDeck(city,x,z,y,PARK_CANOPY))treePoints.push({position:new THREE.Vector3(x,y+.025,z),species,scale});
+    }
+  }
   if(treePoints.length){if(options.treeField)options.treeField.add(options.owner??'parks',treePoints);else{const trees=createStreetTrees(treePoints,{scale:1.65,grates:false});trees.name='Park specimen trees';group.add(trees);}}
   // Benches and restrained lamps sit beside real paths. Count is fixed per
   // length rather than per OSM segment, preventing dense clusters at junctions.
@@ -235,7 +296,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   if(christianSciencePlaza){
     yield* christianSciencePlazaSteps(city,group,options);
   }
-  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,source:'Boston GIS park/hydro polygons; OpenStreetMap pedestrian paths',accuracy:'Mapped outlines and paths; planting, outcrops and furnishings are procedural'};
+  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
   (options.target??scene).add(group);return group;
 }
 

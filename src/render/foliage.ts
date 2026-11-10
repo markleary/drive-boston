@@ -101,7 +101,8 @@ export function crownExtent(park:boolean){
   for(const i of park?PARK_SPECIES:STREET_SPECIES)for(const lod of LODS){const g=geometryFor(i,lod);for(const part of [g.wood,g.leaves]){const p=part.getAttribute('position');for(let k=0;k<p.count;k++){reach=Math.max(reach,Math.hypot(p.getX(k),p.getZ(k)));top=Math.max(top,p.getY(k));}part.dispose();}}
   return{reach,top};
 }
-export interface TreeField { group:THREE.Group; add(owner:string,positions:THREE.Vector3[]):void; remove(owner:string):void; readonly count:number; }
+export interface TreePlanting { position:THREE.Vector3; species:string; scale:number; }
+export interface TreeField { group:THREE.Group; add(owner:string,positions:(THREE.Vector3|TreePlanting)[]):void; remove(owner:string):void; readonly count:number; }
 type Site={p:THREE.Vector3;species:number;scale:number;yaw:number;owner:string};
 let grateMaterial:THREE.Material|undefined,grateGeometry:THREE.BufferGeometry|undefined;
 
@@ -161,7 +162,14 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
   const field:TreeField={group,
     add(owner,positions){
       const random=seeded(owner==='all'?9311:9311+hash(owner)%100000);
-      for(const p of positions.filter(p=>!inLongfellowCorridor(p.x,p.z)))sites.push({p,species:palette[Math.floor(random()*palette.length)],scale:scale*(TREE_SCALE_RANGE[0]+random()*(TREE_SCALE_RANGE[1]-TREE_SCALE_RANGE[0])),yaw:random()*Math.PI*2,owner});
+      for(const tree of positions){
+        const planting=tree instanceof THREE.Vector3?undefined:tree;
+        const p=tree instanceof THREE.Vector3?tree:tree.position;
+        if(inLongfellowCorridor(p.x,p.z))continue;
+        const species=(planting?palette.find(i=>SPECIES[i].name===planting.species):undefined)??palette[Math.floor(random()*palette.length)];
+        const size=planting?.scale??(TREE_SCALE_RANGE[0]+random()*(TREE_SCALE_RANGE[1]-TREE_SCALE_RANGE[0]));
+        sites.push({p,species,scale:scale*size,yaw:random()*Math.PI*2,owner});
+      }
       dirty=true;refreshGrates();group.userData.treeCount=sites.length;
     },
     remove(owner){sites=sites.filter(s=>s.owner!==owner);dirty=true;refreshGrates();group.userData.treeCount=sites.length;},
@@ -169,7 +177,7 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
   };
   group.userData.treeCount=0;group.userData.species=palette.map(i=>SPECIES[i].name);return field;
 }
-export function createStreetTrees(positions:THREE.Vector3[],options:{scale?:number;grates?:boolean}={}){
+export function createStreetTrees(positions:(THREE.Vector3|TreePlanting)[],options:{scale?:number;grates?:boolean}={}){
   const field=createTreeField(options);field.add('all',positions);return field.group;
 }
 const fields=new WeakMap<THREE.Scene,{list:THREE.Group[];version:unknown}>();

@@ -1,4 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
+import type { InstancedMesh, Scene } from 'three';
+import { frogPondApron } from '../src/simulation/boston-common.ts';
+import { pointInside } from '../src/simulation/roads';
+import type { CityData, Point2 } from '../src/types';
 
 interface Position { x:number; y:number; z:number; yaw:number; speed:number; }
 interface Snapshot {
@@ -63,7 +67,36 @@ test('connected Boston: visit the new districts and parks, drive, and inspect th
   try{await expect.poll(async()=>(await snapshot(page)).flight.y,{timeout:15000}).toBeGreaterThan(airborne.flight.y+12);}
   finally{await page.keyboard.up('Space');}
   await expect.poll(async()=>{const current=await snapshot(page),displayed=Number(await page.locator('#altitude-value').textContent());return Math.abs(displayed-(current.flight.y-current.flightGroundHeight)*3.28084);}).toBeLessThan(2);
+  const landscape=await page.evaluate(()=>{
+    const {city,scene}=(window as unknown as {__backbay:{city:CityData;scene:Scene}}).__backbay;
+    const common=city.parks!.find(park=>park.name==='Boston Common')!;
+    const trees:Point2[]=[];
+    for(const mesh of scene.getObjectByName('Park specimen trees')!.children as InstancedMesh[]){
+      if(!mesh.name.includes('branches'))continue;
+      const matrices=mesh.instanceMatrix.array;
+      for(let i=0;i<mesh.count;i++)trees.push([matrices[i*16+12],matrices[i*16+14]]);
+    }
+    const pond=scene.getObjectByName('Frog Pond');
+    return {trees,ring:common.rings[0],hasWater:!!pond?.getObjectByName('Frog Pond water')};
+  });
+  expect(landscape.trees.filter(tree=>pointInside(tree,landscape.ring)).length).toBeGreaterThan(300);
+  expect(landscape.hasWater).toBe(true);
   await page.screenshot({path:testInfo.outputPath('common-helicopter.png')});
+  await page.keyboard.press('c');
+  await page.evaluate(async()=>{
+    const {flyTo}=(window as unknown as {__backbay:{flyTo(x:number,y:number,z:number,yaw:number):Promise<void>}}).__backbay;
+    await flyTo(742,11,-636,Math.PI);
+  });
+  const closeGrass=()=>page.evaluate(()=>{
+    const {scene}=(window as unknown as {__backbay:{scene:Scene}}).__backbay;
+    const grass=scene.getObjectByName('Near grass blades') as InstancedMesh;
+    const matrices=grass.instanceMatrix.array;
+    return grass.visible?Array.from({length:grass.count},(_,i):Point2=>[matrices[i*16+12],matrices[i*16+14]]):[];
+  });
+  await expect.poll(async()=>(await closeGrass()).length).toBeGreaterThan(100);
+  const grassOnApron=(await closeGrass()).filter(tuft=>pointInside(tuft,frogPondApron));
+  expect(grassOnApron).toHaveLength(0);
+  await page.screenshot({path:testInfo.outputPath('frog-pond-close.png')});
   await page.keyboard.press('1');
   await expect.poll(async()=>(await snapshot(page)).travelMode).toBe('drive');
   expect(errors).toEqual([]);
