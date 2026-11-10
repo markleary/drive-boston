@@ -3,6 +3,7 @@ import type {CityTile} from './tile-format.ts';
 import {pavementEdges} from './tile-format.ts';
 import {pointInside} from './roads.ts';
 import {roadProjection,sampleVehicleSurface} from './road-surfaces.ts';
+import {isCommonwealthMall} from './commonwealth-mall.ts';
 
 export type TireSurface='pavement'|'grass';
 export interface TireContact {
@@ -40,7 +41,8 @@ class SurfaceIndex {
 export function createTireSurfaceSampler(city:CityData,tiles:()=>Iterable<CityTile>=()=>[]){
   const areas=new SurfaceIndex(),cached=new WeakMap<CityTile,SurfaceIndex>();
   let lastTiles:CityTile[]=[],measured=new Set<string>();
-  for(const p of city.parks??[])areas.add(p.rings,/plaza|copley square/i.test(p.name)||/Malls, Squares/i.test(p.kind??'')?'pavement':'grass');
+  // The Commonwealth Avenue Mall is typed with the paved squares but is a lawn; its surveyed walk is a tile sidewalk polygon.
+  for(const p of city.parks??[])areas.add(p.rings,(/plaza|copley square/i.test(p.name)||/Malls, Squares/i.test(p.kind??''))&&!isCommonwealthMall(p)?'pavement':'grass');
   for(const w of city.water??[])areas.add(w.rings,null);
   // Roads/paths are indexed by segment so each wheel only visits nearby lines.
   const lines=new Map<string,{points:Point2[];width:number;id:string;elevated:boolean}[]>();

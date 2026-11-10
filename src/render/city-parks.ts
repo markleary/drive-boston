@@ -27,6 +27,8 @@ import {greenwayDetailSteps} from './greenway';
 import { fellsViewHeight, fellsWoodlandSteps, isFellsWoodland, type FellsViewHeight } from './fells-woodland.ts';
 import { christianSciencePlazaSteps, christianScienceTrees, isChristianSciencePool, ownsChristianSciencePlaza } from './christian-science-plaza.ts';
 import { BOSTON_COMMON, commonTrees, FROG_POND, FROG_POND_LEVEL, frogPondApron } from '../simulation/boston-common.ts';
+import { isCommonwealthMall, isPlannedMallLawn, mallPathTest } from '../simulation/commonwealth-mall.ts';
+import { mallDetailSteps, type SolidBox } from './commonwealth-mall.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -59,6 +61,8 @@ export interface ParkOptions {
   bounds?:Bounds; owner?:string; pathOwned?:(path:ParkPath)=>boolean; treeField?:TreeField; target?:THREE.Object3D;
   budgets?:{trees?:number;benches?:number};
   reserved?:(x:number,z:number)=>boolean;
+  /** Solid furnishings (the Commonwealth Avenue Mall's fences and monuments), as boxes for `DrivingPhysics.addParapets`. */ onSolids?:(boxes:SolidBox[])=>void;
+  /** A streamed tile's surveyed sidewalk polygons and the concrete they are drawn in, for the Mall's walks. */ sidewalks?:readonly {rings:Point2[][]}[]; paving?:THREE.Material;
   /** Frame pacing: the generator form pauses between areas, paths and parks once the deadline has passed. */ pace?:Pace;
 }
 type ParkPath=NonNullable<CityData['parkPaths']>[number];
@@ -128,7 +132,8 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   for(const park of parks){
     if(due(pace))yield;
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
-    const list=isFellsWoodland(park)?woods:/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
+    // Boston types the Commonwealth Avenue Mall with its paved squares; it is a lawn (its walk is a surveyed sidewalk polygon).
+    const list=isFellsWoodland(park)?woods:(/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??''))&&!isCommonwealthMall(park)?plazas:/public garden/i.test(park.name)?gardens:lawns;
     // A large park covers thousands of DEM cells: its surface is draped a few milliseconds a frame.
     yield* list.add(park.rings);
   }
@@ -170,10 +175,13 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     if(merged){yield* boundingSphereSteps(merged,pace);const mesh=new THREE.Mesh(merged,waterMaterial);mesh.name='Water';mesh.receiveShadow=true;mesh.userData.noAO=true;group.add(mesh);}
   }
   let bridges=0,benches=0,lamps=0;
+  // The Mall's walks are its own (commonwealth-mall.ts): the surveyed polygon where there is one, concrete where not.
+  const onMall=mallPathTest(parks);
   for(const path of paths){
     if(path.points.length<2)continue;
     if(due(pace))yield;
     const bridge='bridge' in path&&path.bridge;
+    if(!bridge&&onMall(path))continue;
     if(bridge){
       const road=footbridgeRoad(city,path);if(!road)continue;bridges++;
       const slab=roadSlabGeometry(city,road),deck=new THREE.BufferGeometry();
@@ -248,7 +256,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const limits=selected.map(p=>{const b=clipped(p),area=Math.max(0,b.maxX-b.minX)*Math.max(0,b.maxZ-b.minZ);return /public garden/i.test(p.name)?190:/fens/i.test(p.name)?190:Math.min(bounds?60:35,Math.round(area/1300));});
   for(const [index,park] of selected.entries()){
     if(due(pace))yield;
-    if(isFellsWoodland(park)||park.name===BOSTON_COMMON)continue;
+    if(isFellsWoodland(park)||park.name===BOSTON_COMMON||isPlannedMallLawn(park))continue;
     const b=clipped(park),limit=limits[index];let count=0;if(b.maxX<=b.minX||b.maxZ<=b.minZ)continue;
     for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length<treeBudget;attempt++){
       const p:Point2=[b.minX+random()*(b.maxX-b.minX),b.minZ+random()*(b.maxZ-b.minZ)];if(!insideArea(p,park)||!safe(p))continue;
@@ -271,11 +279,15 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       if(!canopyHitsDeck(city,x,z,y,PARK_CANOPY))treePoints.push({position:new THREE.Vector3(x,y+.025,z),species,scale});
     }
   }
+  // The Mall's rows, fences, benches and monuments, likewise outside the budgets: its benches are counted in its own
+  // statistics (`userData.mall`), not against the benches this tile may set along its other parks' paths below.
+  const mall=yield* mallDetailSteps(city,parks,paths,{bounds,pace,mobile:options.mobile,sidewalks:options.sidewalks,paving:options.paving});
+  if(mall){treePoints.push(...mall.trees);group.add(...mall.meshes);if(mall.solids.length)options.onSolids?.(mall.solids);}
   if(treePoints.length){if(options.treeField)options.treeField.add(options.owner??'parks',treePoints);else{const trees=createStreetTrees(treePoints,{scale:1.65,grates:false});trees.name='Park specimen trees';group.add(trees);}}
   // Benches and restrained lamps sit beside real paths. Count is fixed per
   // length rather than per OSM segment, preventing dense clusters at junctions.
   for(const path of paths){
-    if('bridge' in path&&path.bridge)continue;
+    if('bridge' in path&&path.bridge||onMall(path)==='block')continue;
     if(due(pace))yield;
     let next=22+random()*25,distance=0;
     for(let i=1;i<path.points.length&&benches<benchBudget;i++){
@@ -303,7 +315,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   if(christianSciencePlaza){
     yield* christianSciencePlazaSteps(city,group,options);
   }
-  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
+  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
   (options.target??scene).add(group);return group;
 }
 

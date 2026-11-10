@@ -264,7 +264,7 @@ async function boot(){
     routeGraph(city);
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
-    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{mobile,detailed:()=>quality==='high',onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
+    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{mobile,detailed:()=>quality==='high',onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices),onSolids:boxes=>{physics!.addParapets(boxes);}});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
     const constructionZones=planConstructionZones(city,{seed:crypto.getRandomValues(new Uint32Array(1))[0],transitRoutes:transitData.routes});
     const construction=createConstruction(scene,city,physics,constructionZones,{hasGround:(x,z)=>!streamer||streamer.loaded.has(`${Math.floor(x/city.tiles!.size)}_${Math.floor(z/city.tiles!.size)}`)});
     construction.update(physics.getState());
@@ -274,7 +274,7 @@ async function boot(){
     const railData=await railRequest,rail=railData?createRailTracks(scene,city,physics,railData,{mobile}):undefined;
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     walker=createWalker(city,physics);const player=createPlayerModel(scene);player.group.visible=false;
-    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile});setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
+    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile,tiles:world.streamer});setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
     // What the chassis was touching when it was knocked: a car outranks a bus,
     // which outranks a wall; only the bare ground counts as a landing.
     const classifyImpact=(impact:Impact):ImpactKind=>{
@@ -481,6 +481,18 @@ async function boot(){
       gps:ui.gps,
       /** Browser specs: stream the tiles around a point and stand the player on foot there (walk mode). */
       walkTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>walker!.place(x,sampleVehicleSurface(city,x,z).height,z,yaw)),
+      // What the resident tiles have drawn of the Commonwealth Avenue Mall (commonwealth-mall.ts), summed over their park
+      // groups; `tiles` lists each one's Mall benches beside the benches and lamps it set along its other parks' paths.
+      commonwealthMall:()=>{
+        const total={trees:0,benches:0,fencePanels:0,walks:0,monuments:[] as string[],tiles:[] as {key:string;mallBenches:number;parkBenches:number;parkLamps:number}[]};
+        scene.traverse(o=>{
+          const m=o.userData.mall as {trees:number;benches:number;fencePanels:number;walks:number;monuments:string[]}|undefined;if(!m)return;
+          total.trees+=m.trees;total.benches+=m.benches;total.fencePanels+=m.fencePanels;total.walks+=m.walks;total.monuments.push(...m.monuments);
+          let tile=o.parent;while(tile&&!/^Tile -?\d+_-?\d+$/.test(tile.name))tile=tile.parent; // past the tile's `Tile scenery` group
+          total.tiles.push({key:tile?.name.slice(5)??'',mallBenches:m.benches,parkBenches:o.userData.benches??0,parkLamps:o.userData.lamps??0});
+        });
+        return total;
+      },
       /** Browser specs: the player on foot (`strike` knocks them down as a vehicle would). */
       walker,
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */
