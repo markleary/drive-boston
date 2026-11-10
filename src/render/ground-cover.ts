@@ -3,6 +3,7 @@ import type {Building,CityData,ParkPath,Point2} from '../types';
 import {pointInside} from '../simulation/roads.ts';
 import {sampleElevation,sampleTerrainNormal} from '../simulation/terrain.ts';
 import {FROG_POND,frogPondApron} from '../simulation/boston-common.ts';
+import {MALL_MONUMENTS,MALL_WALK_HALF,WOMENS_MEMORIAL_RADIUS,mallPathTest} from '../simulation/commonwealth-mall.ts';
 import {seeded,canvasTexture} from './materials';
 import {mergeSpatialGeometries} from './spatial-batches';
 import {insideEmbracePlaza} from './the-embrace';
@@ -34,21 +35,43 @@ export function createGrassMaterial(tint='#a2af84'){
 function segmentDistance(p:Point2,a:Point2,b:Point2){const dx=b[0]-a[0],dz=b[1]-a[1],t=THREE.MathUtils.clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dz)/(dx*dx+dz*dz||1),0,1);return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dz);}
 function polygonContains(p:Point2,rings:Point2[][]){return!!rings[0]&&pointInside(p,rings[0])&&!rings.slice(1).some(r=>pointInside(p,r));}
 type Segment={a:Point2;b:Point2;radius:number};
-/** Streamed tiles carry the park paths and buildings that a metro city.json leaves out. */
-export interface GroundCoverTiles{readonly loaded:ReadonlyMap<string,{tile:{parkPaths:ParkPath[];buildings:Building[]}}>}
+/** Streamed tiles carry the park paths, buildings and surveyed sidewalks that a metro city.json leaves out. */
+export interface GroundCoverTiles{readonly loaded:ReadonlyMap<string,{tile:{parkPaths:ParkPath[];buildings:Building[];sidewalks?:{rings:Point2[][]}[]}}>}
+type Paved={rings:Point2[][];minX:number;maxX:number;minZ:number;maxZ:number};
 export function createGroundCover(scene:THREE.Scene,city:CityData,tiles?:GroundCoverTiles){
   const group=new THREE.Group();group.name='Close grass and roadside puddles';scene.add(group);
   const parks=(city.parks??[]).filter(p=>/Boston Common|Public Garden|Back Bay Fens|Riverway|McLaughlin|Commonwealth Avenue Mall/i.test(p.name)).map(p=>({...p,minX:Math.min(...p.rings[0].map(v=>v[0])),maxX:Math.max(...p.rings[0].map(v=>v[0])),minZ:Math.min(...p.rings[0].map(v=>v[1])),maxZ:Math.max(...p.rings[0].map(v=>v[1]))}));
   const cell=40;
   const addPath=(barriers:Map<string,Segment[]>,points:Point2[],radius:number)=>{for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i];for(let x=Math.floor((Math.min(a[0],b[0])-radius)/cell);x<=Math.floor((Math.max(a[0],b[0])+radius)/cell);x++)for(let z=Math.floor((Math.min(a[1],b[1])-radius)/cell);z<=Math.floor((Math.max(a[1],b[1])+radius)/cell);z++){const key=`${x},${z}`,list=barriers.get(key)??[];list.push({a,b,radius});barriers.set(key,list);}}};
   const addBuildings=(cells:Map<string,Building[]>,buildings:Building[])=>{for(const b of buildings){for(let x=Math.floor(Math.min(...b.footprint.map(p=>p[0]))/cell);x<=Math.floor(Math.max(...b.footprint.map(p=>p[0]))/cell);x++)for(let z=Math.floor(Math.min(...b.footprint.map(p=>p[1]))/cell);z<=Math.floor(Math.max(...b.footprint.map(p=>p[1]))/cell);z++){const key=`${x},${z}`,list=cells.get(key)??[];list.push(b);cells.set(key,list);}}};
-  // Paths are drawn at their full width; the margin keeps blades off the ribbon's edge.
-  const indexArea=(paths:ParkPath[],buildings:Building[])=>{const barriers=new Map<string,Segment[]>(),buildingCells=new Map<string,Building[]>();for(const path of paths)addPath(barriers,path.points,path.width/2+.4);addBuildings(buildingCells,buildings);return{barriers,buildingCells};};
+  // Paths are drawn at their full width; the margin keeps blades off the ribbon's edge. A walk on the Commonwealth
+  // Avenue Mall is drawn no wider than its surveyed 6.3 m. Sidewalk polygons the inventory surveyed inside these
+  // parks (the Mall's walk, the paving round its monuments) are paved too, whatever the mapped path's line says.
+  const onMall=mallPathTest(city.parks??[]);
+  const indexArea=(paths:ParkPath[],buildings:Building[],sidewalks:{rings:Point2[][]}[]=[])=>{
+    const barriers=new Map<string,Segment[]>(),buildingCells=new Map<string,Building[]>(),paved=new Map<string,Paved[]>();
+    for(const path of paths)addPath(barriers,path.points,(onMall(path)?Math.min(path.width,MALL_WALK_HALF*2):path.width)/2+.4);addBuildings(buildingCells,buildings);
+    for(const walk of sidewalks){
+      const ring=walk.rings[0];if(!ring||ring.length<3)continue;
+      let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of ring){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}
+      if(!parks.some(a=>minX<a.maxX&&maxX>a.minX&&minZ<a.maxZ&&maxZ>a.minZ&&ring.some(p=>pointInside(p,a.rings[0]))))continue;
+      const entry={rings:walk.rings,minX,maxX,minZ,maxZ};
+      for(let x=Math.floor(minX/cell);x<=Math.floor(maxX/cell);x++)for(let z=Math.floor(minZ/cell);z<=Math.floor(maxZ/cell);z++){const key=`${x},${z}`,list=paved.get(key)??[];list.push(entry);paved.set(key,list);}
+    }
+    return{barriers,buildingCells,paved};
+  };
+  // The granite round of the Women's Memorial and each monument's own footing are not lawn either.
+  const monuments=MALL_MONUMENTS.map(m=>({x:m.at[0],z:m.at[1],radius:m.id==='women'?WOMENS_MEMORIAL_RADIUS+.2:1.6}));
   const roadBarriers=new Map<string,Segment[]>();for(const road of city.roads)addPath(roadBarriers,road.points,road.width/2+3.1);
   // A metro package streams paths and buildings per tile, so each loaded tile gets its own index.
   const areas=new Map<string,ReturnType<typeof indexArea>>();if(!tiles)areas.set('city',indexArea(city.parkPaths??[],city.buildings));
-  const syncTiles=()=>{if(!tiles)return false;let changed=false;for(const key of areas.keys())if(!tiles.loaded.has(key)){areas.delete(key);changed=true;}for(const [key,built]of tiles.loaded)if(!areas.has(key)){areas.set(key,indexArea(built.tile.parkPaths,built.tile.buildings));changed=true;}return changed;};
-  const blocked=(p:Point2,key:string)=>{if((roadBarriers.get(key)??[]).some(s=>segmentDistance(p,s.a,s.b)<s.radius))return true;for(const area of areas.values())if((area.barriers.get(key)??[]).some(s=>segmentDistance(p,s.a,s.b)<s.radius)||(area.buildingCells.get(key)??[]).some(b=>pointInside(p,b.footprint)))return true;return false;};
+  const syncTiles=()=>{if(!tiles)return false;let changed=false;for(const key of areas.keys())if(!tiles.loaded.has(key)){areas.delete(key);changed=true;}for(const [key,built]of tiles.loaded)if(!areas.has(key)){areas.set(key,indexArea(built.tile.parkPaths,built.tile.buildings,built.tile.sidewalks));changed=true;}return changed;};
+  const blocked=(p:Point2,key:string)=>{
+    if((roadBarriers.get(key)??[]).some(s=>segmentDistance(p,s.a,s.b)<s.radius)||monuments.some(m=>Math.hypot(p[0]-m.x,p[1]-m.z)<m.radius))return true;
+    for(const area of areas.values())if((area.barriers.get(key)??[]).some(s=>segmentDistance(p,s.a,s.b)<s.radius)||(area.buildingCells.get(key)??[]).some(b=>pointInside(p,b.footprint))
+      ||(area.paved.get(key)??[]).some(w=>p[0]>=w.minX&&p[0]<=w.maxX&&p[1]>=w.minZ&&p[1]<=w.maxZ&&polygonContains(p,w.rings)))return true;
+    return false;
+  };
   const waterExclusions=(city.water??[]).map(w=>{
     const rings=w.name===FROG_POND?[frogPondApron]:w.rings;
     return {rings,minX:Math.min(...rings[0].map(p=>p[0])),maxX:Math.max(...rings[0].map(p=>p[0])),minZ:Math.min(...rings[0].map(p=>p[1])),maxZ:Math.max(...rings[0].map(p=>p[1]))};

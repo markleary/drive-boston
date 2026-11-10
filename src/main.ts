@@ -264,7 +264,7 @@ async function boot(){
     routeGraph(city);
     ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
-    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{mobile,detailed:()=>quality==='high',onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices)});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
+    const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{mobile,detailed:()=>quality==='high',onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices),onSolids:boxes=>{physics!.addParapets(boxes);}});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
     const constructionZones=planConstructionZones(city,{seed:crypto.getRandomValues(new Uint32Array(1))[0],transitRoutes:transitData.routes});
     const construction=createConstruction(scene,city,physics,constructionZones,{hasGround:(x,z)=>!streamer||streamer.loaded.has(`${Math.floor(x/city.tiles!.size)}_${Math.floor(z/city.tiles!.size)}`)});
     construction.update(physics.getState());
@@ -481,6 +481,8 @@ async function boot(){
       gps:ui.gps,
       /** Browser specs: stream the tiles around a point and stand the player on foot there (walk mode). */
       walkTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>walker!.place(x,sampleVehicleSurface(city,x,z).height,z,yaw)),
+      // What the resident tiles have drawn of the Commonwealth Avenue Mall (commonwealth-mall.ts), summed over their park groups.
+      commonwealthMall:()=>{const total={trees:0,benches:0,fencePanels:0,walks:0,monuments:[] as string[]};scene.traverse(o=>{const m=o.userData.mall as typeof total|undefined;if(!m)return;total.trees+=m.trees;total.benches+=m.benches;total.fencePanels+=m.fencePanels;total.walks+=m.walks;total.monuments.push(...m.monuments);});return total;},
       /** Browser specs: the player on foot (`strike` knocks them down as a vehicle would). */
       walker,
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */

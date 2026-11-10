@@ -23,6 +23,7 @@ import { type createMaterials, facadeStyleIndex, hash, seeded } from './material
 import { splitHouseRoof, tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
 import { drapedRibbonInto, drapedStripInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurfaceSteps } from './terrain-ground';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
+import { mallGroundTest } from '../simulation/commonwealth-mall.ts';
 import { greenway, obsoleteGreenwayCurb, inGreenway } from '../simulation/greenway.ts';
 import { canopyHitsDeck, STREET_CANOPY } from '../simulation/deck-canopy.ts';
 import { spatialInstances } from './spatial-batches';
@@ -153,6 +154,8 @@ export function createTileBuilder(ctx: TileContext) {
   const parkStructure = (b: Building) => b.height < 30 && principalParks.some(p => { const box = areaBounds.get(p)!; return b.center[0] >= box.minX && b.center[0] <= box.maxX && b.center[1] >= box.minZ && b.center[1] <= box.maxZ && pointInside(b.center, p.rings[0]) && !p.rings.slice(1).some(r => pointInside(b.center, r)); });
   const grid = terrainGrid(city) ?? (() => { throw new Error('A metro city needs its elevation grid before tiles can be built'); })();
   const woodlandViewHeight = fellsViewHeight(city);
+  // The Commonwealth Avenue Mall plants its own rows: no street tree or grate on its lawns, nor before its fences.
+  const onMallLawn = mallGroundTest(city.parks ?? []);
   // Several tiles can be under construction: whichever needs the index first starts it, any of them may advance it.
   let junctions: JunctionIndex | undefined, junctionSteps: Generator<void, JunctionIndex> | undefined;
 
@@ -483,6 +486,7 @@ export function createTileBuilder(ctx: TileContext) {
       const treePositions: THREE.Vector3[] = [];
       const random = seeded(342 + hash(key) % 1000);
       const occupied = (x: number, z: number) => ctx.landmarkForecourt?.(x, z) || inGreenway(x,z) || inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
+      const planted = (x: number, z: number) => occupied(x, z) || onMallLawn(x, z);
       const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
       for (const road of roads.filter(r=>!r.tunnel)) for (let i = 1; i < road.points.length; i++) {
         const a = road.points[i - 1], b = road.points[i], radius = (road.pavedWidth ?? road.width) / 2 + .8, segment = { a, b, radius };
@@ -505,7 +509,7 @@ export function createTileBuilder(ctx: TileContext) {
           for (let d = 14; d < length - 8; d += 25) {
             for (const side of [-1, 1]) {
               const x = a[0] + tx * d - tz * verge * side, z = a[1] + tz * d + tx * verge * side;
-              const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (occupied(x, z) || inRoad(x, z) || taken.has(k)) continue; taken.add(k);
+              const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (planted(x, z) || inRoad(x, z) || taken.has(k)) continue; taken.add(k);
               if ((!/Boylston/.test(road.name) || random() > .5) && !canopyHitsDeck(city, x, z, height(x, z), STREET_CANOPY)) treePositions.push(new THREE.Vector3(x, height(x, z), z));
               if (side === 1 && !inRoad(x - tx * 5, z - tz * 5) && !occupied(x - tx * 5, z - tz * 5)) lamps.push(new THREE.Vector3(x - tx * 5, height(x - tx * 5, z - tz * 5), z - tz * 5));
             }
@@ -545,11 +549,14 @@ export function createTileBuilder(ctx: TileContext) {
       for(const path of tile.parkPaths)colliders.push(...physics.addFootbridge(subCity,path));
       // Shore banks and rock outcrops collide as meshes: noted as the parks build, then added a run of triangles at a
       // time between frames (mesh-chunks.ts: a harbour tile's bank in one piece held a frame for 40 to 58 ms).
-      const landscape: { vertices: Float32Array; indices: Uint32Array }[] = [];
+      const landscape: { vertices: Float32Array; indices: Uint32Array }[] = [], furnishings: Parameters<DrivingPhysics['addParapets']>[0][number][] = [];
       const addLandscapeCollider = (vertices: Float32Array, indices: Uint32Array) => { landscape.push({ vertices, indices }); };
       const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target,
-        budgets: { trees: 120, benches: 25 }, reserved: ctx.landmarkForecourt, pace, mobile: ctx.mobile, detailed: ctx.detailed, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider }));
+        budgets: { trees: 120, benches: 25 }, reserved: ctx.landmarkForecourt, pace, mobile: ctx.mobile, detailed: ctx.detailed, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider,
+        sidewalks: tile.sidewalks, paving: materials.sidewalk, onSolids: boxes => { furnishings.push(...boxes); } }));
       for (const mesh of landscape) for (const part of meshChunks(mesh.vertices, mesh.indices)) { if (due(pace)) yield 'parks'; colliders.push(physics.addStaticMesh(part.vertices, part.indices)); }
+      // Park fences and monuments stand as boxes, a few dozen a frame.
+      for (let i = 0; i < furnishings.length; i += 64) { if (due(pace)) yield 'parks'; colliders.push(...physics.addParapets(furnishings.slice(i, i + 64))); }
       stats.parkTrees = parks.userData.trees ?? 0;
     }
     yield 'parks';
