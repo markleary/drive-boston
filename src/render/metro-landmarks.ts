@@ -81,7 +81,7 @@ export function addMetroLandmarkDetails(scene: THREE.Scene, city: CityData): Met
       if (best) {
         const width = Math.min(best.length * .7, Math.max(10, text.length * .9)), height = width / text.length * 1.9;
         const y = (b.baseElevation ?? sampleElevation(city, ...b.center)) + Math.min(b.height - height, Math.max(6.5, b.height * .35));
-        const plate = new THREE.Mesh(new THREE.PlaneGeometry(width, height), textSign(text, '#efe6cf', '#1f2b2a', 1024, Math.round(1024 * height / width)));
+        const plate = new THREE.Mesh(new THREE.PlaneGeometry(width, height), textSign(text, {color:'#efe6cf',background:'#1f2b2a',width:1024,height:Math.round(1024*height/width)}));
         plate.position.set(best.mx + best.nx * .32, y, best.mz + best.nz * .32); plate.rotation.y = Math.atan2(best.nx, best.nz); plate.name = `Landmark sign: ${text}`; group.add(plate);
         add(new THREE.BoxGeometry(width + .4, height + .4, .12).rotateY(Math.atan2(best.nx, best.nz)).translate(best.mx + best.nx * .2, y, best.mz + best.nz * .2), plain('#2b2f2d'));
         signs++;

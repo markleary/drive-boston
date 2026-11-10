@@ -5,7 +5,7 @@ import {deckEdge,roadSlabGeometry} from '../simulation/road-surfaces.ts';
 import {harvardBridgeSpine,smootMarkers,SMOOT_METRES,SMOOT_TOTAL} from '../simulation/harvard-bridge.ts';
 
 /** Procedural painted Smoots: https://mitadmissions.org/blogs/entry/repainting-the-smoots/ */
-export function addHarvardBridgeDetails(scene:THREE.Object3D,city:CityData,options:{labelTexture?:THREE.Texture|null}={}){
+export function addHarvardBridgeDetails(scene:THREE.Object3D,city:CityData,options:{labelTexture?:THREE.Texture|null;mobile?:boolean}={}){
   const group=new THREE.Group();group.name='Harvard Bridge sidewalks and painted Smoots';
   const collisions:{id:string;vertices:Float32Array;indices:Uint32Array}[]=[],spine=harvardBridgeSpine(city);
   if(!spine)return{group,collisions};
@@ -44,7 +44,7 @@ export function addHarvardBridgeDetails(scene:THREE.Object3D,city:CityData,optio
     const major=smoot%10===0;add(quad(start+smoot*SMOOT_METRES,major?2:.65,.055,1.2),paints[smoot%3]);ticks++;
   }
   add(quad(start+SMOOT_TOTAL*SMOOT_METRES,2,.08,1.2),paints[0]);ticks++;
-  const texture=options.labelTexture===undefined?smootAtlas(markers):options.labelTexture;
+  const texture=options.labelTexture===undefined?smootAtlas(markers,options.mobile):options.labelTexture;
   const labels=new THREE.MeshStandardMaterial({map:texture??null,color:'#ffffff',transparent:true,alphaTest:.25,depthWrite:false,roughness:.97,polygonOffset:true,polygonOffsetFactor:-1});
   markers.forEach((marker,i)=>{
     const col=i%8,row=Math.floor(i/8),u0=col/8,u1=(col+1)/8,v0=1-(row+1)/8,v1=1-row/8;
@@ -57,8 +57,9 @@ export function addHarvardBridgeDetails(scene:THREE.Object3D,city:CityData,optio
   group.userData={markers:markers.map(m=>({smoot:m.smoot,label:m.label,distance:m.distance})),ticks,smootMetres:SMOOT_METRES,length,sidewalkWidth,accuracy:'Original painted interpretation of the Smoot tradition on the source bridge alignment'};
   scene.add(group);return{group,collisions};
 }
-function smootAtlas(markers:{smoot:number;label:string}[]){
-  const canvas=document.createElement('canvas');canvas.width=canvas.height=2048;const c=canvas.getContext('2d')!;c.textAlign='center';c.textBaseline='middle';
+function smootAtlas(markers:{smoot:number;label:string}[],mobile=false){
+  const scale=mobile ? .5 : 1;
+  const canvas=document.createElement('canvas');canvas.width=canvas.height=2048*scale;const c=canvas.getContext('2d')!;c.scale(scale,scale);c.textAlign='center';c.textBaseline='middle';
   markers.forEach((marker,i)=>{
     const x=(i%8)*256,y=Math.floor(i/8)*256;c.save();c.translate(x+128,y);c.lineJoin='round';c.strokeStyle='#49335a';c.lineWidth=5;
     c.font='bold 86px monospace';c.fillStyle='#f0d33a';c.strokeText(String(marker.smoot),0,78,235);c.fillText(String(marker.smoot),0,78,235);

@@ -100,9 +100,9 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
 
   const charlesBridges=addCharlesBridgeDetails(scene,city);buildingCollisions.push(...charlesBridges.collisions);
   roadStructures.userData.longfellow=charlesBridges.group.userData;
-  const harvardBridge=addHarvardBridgeDetails(scene,city);buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
+  const harvardBridge=addHarvardBridgeDetails(scene,city,{mobile:options.mobile});buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
   const tobinBridge=addTobinBridgeDetails(scene,city);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
-  const tunnels=addTunnels(scene,city);roadStructures.userData.tunnels=tunnels.group.userData;
+  const tunnels=addTunnels(scene,city,options.mobile);roadStructures.userData.tunnels=tunnels.group.userData;
 
   /** The original single-survey build: every road, curb, building and prop at once. */
   async function buildWholeCity(){
@@ -283,7 +283,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     for(const blade of blades){
       const bx=x+blade.offset[0],bz=z+blade.offset[1];
       signHardware.push(new THREE.BoxGeometry(2.67,.5,.045).rotateY(blade.yaw).translate(bx,y+blade.height,bz));
-      const plate=createStreetSign(blade.name);plate.position.set(bx,y+blade.height,bz);plate.rotation.y=blade.yaw;scene.add(plate);
+      const plate=createStreetSign(blade.name,options.mobile);plate.position.set(bx,y+blade.height,bz);plate.rotation.y=blade.yaw;scene.add(plate);
     }
   }
   mergeAdd(signHardware,iron);

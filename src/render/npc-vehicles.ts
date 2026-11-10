@@ -38,10 +38,10 @@ function vehicleMaterials(){
 
 /** Body and four local wheel pivots share each material/LOD batch. This keeps
  * spinning tires and steering on all silhouettes without a draw call per wheel. */
-export function createNPCVehicleBatches(parent:THREE.Group,capacity:number){
+export function createNPCVehicleBatches(parent:THREE.Group,capacity:number,mobile=false){
   if(!templates)throw new Error('Prepare NPC vehicle assets before creating traffic');
   const materials=vehicleMaterials();
-  const plates=createNPCPlateAtlas(capacity);materials.registration.map=plates.texture;
+  const plates=createNPCPlateAtlas(capacity,Math.random,mobile);materials.registration.map=plates.texture;
   const batches:{mesh:THREE.BatchedMesh;surface:Surface;detail:Detail;shapes:Map<string,number>;instances:number[][];sharedKey:string|null}[]=[];
   for(const detail of ['near','far'] as const)for(const surface of Object.keys(materials) as Surface[]){
     const geometries=NPC_VEHICLES.flatMap(spec=>{const parts=templates!.get(`${spec.type}-${detail}`)!;return[parts.body,...parts.wheels.map(w=>w.surfaces)].flatMap((part,i)=>{const g=part.get(surface);return g?[{key:`${spec.type}:${i}`,g}]:[];});});

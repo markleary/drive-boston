@@ -11,7 +11,8 @@ interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFi
 const CAR_IDS=Object.keys(CAR_POWERTRAINS) as PerformanceCarId[];
 const CAR_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high','upshift','downshift'] as const).map(layer=>carSound(id,layer)));
 const CAR_ENGINE_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high'] as const).map(layer=>carSound(id,layer)));
-const SOUNDS: SoundName[] = [...CAR_SOUNDS,'engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
+const COMMON_SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
+const SOUNDS = [...CAR_SOUNDS, ...COMMON_SOUNDS];
 const ONE_SHOTS = new Set<SoundName>([...CAR_IDS.flatMap(id=>[carSound(id,'upshift'),carSound(id,'downshift')]),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
 /** Velocity change (m/s in one physics step) below which a knock is a bump rather than a crash. */
 const LIGHT_IMPACT = 3.5;
@@ -29,13 +30,28 @@ export class DriveAudio {
   private electric?: {oscillator:OscillatorNode;gain:GainNode};
   private rotorFallback?: { oscillator: OscillatorNode; modulator: OscillatorNode; gain: GainNode };
   private carId:PlayerCarId=DEFAULT_CAR;
+  private wantedSounds = SOUNDS;
+  private loadingMobileSounds = false;
   private previousDriveGear=0;
   private lastShift=-Infinity;
   private shiftCount=0;
   private get carEngineReady(){const id=this.carId;return isPerformanceCar(id)&&(['idle','drive','high'] as const).every(layer=>this.loops.has(carSound(id,layer)));}
+  constructor(private readonly mobile = false) {
+    if (mobile) this.wantedSounds = COMMON_SOUNDS;
+  }
+
   setCar(id:PlayerCarId){
     if(id===this.carId)return;this.carId=id;this.previousDriveGear=0;this.gear=0;this.rpm=850;this.stopOneShots();
     if(this.context)for(const name of ['engine-idle','engine-drive',...CAR_SOUNDS] as SoundName[])this.loops.get(name)?.gain.gain.setTargetAtTime(0,this.context.currentTime,.025);
+    if (this.mobile) {
+      this.wantedSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3)];
+      for (const name of CAR_SOUNDS) {
+        if (this.wantedSounds.includes(name)) continue;
+        this.releaseSound(name);
+        this.failed.delete(name);
+      }
+      if (this.context) void this.loadMobileSounds();
+    }
   }
   private mode: TravelMode = 'drive';
   private disposed = false;
@@ -76,9 +92,9 @@ export class DriveAudio {
     return {
       carId:this.carId,shiftCount:this.shiftCount,context: this.context?.state ?? 'not-started', mode: this.mode,
       enabled: this.enabled, paused: this.paused || document.hidden,
-      loadedCount: this.buffers.size, expectedCount: SOUNDS.length,
+      loadedCount: this.buffers.size, expectedCount: this.wantedSounds.length,
       decodedBytes:[...this.buffers.values()].reduce((bytes,b)=>bytes+b.length*b.numberOfChannels*4,0),
-      loading: !this.disposed && Boolean(this.context) && this.buffers.size + this.failed.size < SOUNDS.length,
+      loading: !this.disposed && Boolean(this.context) && this.buffers.size + this.failed.size < this.wantedSounds.length,
       failed: [...this.failed], activeLoops: this.loops.size,
       activeOneShots: this.oneShots.size, fallback: Boolean(this.mode === 'drive' ? this.fallback : this.mode==='helicopter'?this.rotorFallback:false),
       masterGain: this.master?.gain.value ?? 0, rpm: Math.round(this.rpm), gear: this.gear + 1,
@@ -107,7 +123,8 @@ export class DriveAudio {
       window.addEventListener('pointerdown', this.resume, { capture: true });
       window.addEventListener('keydown', this.resume, { capture: true });
       const oscillator=context.createOscillator(),gain=context.createGain();oscillator.type='sine';oscillator.frequency.value=160;gain.gain.value=0;oscillator.connect(gain);gain.connect(this.master);oscillator.start();this.electric={oscillator,gain};
-      void this.loadSounds();
+      if (this.mobile) void this.loadMobileSounds();
+      else void Promise.all(SOUNDS.map(name => this.loadSound(name))).then(() => this.ensureFallbacks());
     }
     // Resume directly in the user gesture, even before the next simulation tick.
     void this.context.resume().catch(() => {});
@@ -304,8 +321,8 @@ export class DriveAudio {
   dispose() {
     this.disposed = true;
     this.stopOneShots();
-    for (const loop of this.loops.values()) { loop.source.stop(); loop.source.disconnect(); }
-    this.electric?.oscillator.stop();this.fallback?.oscillator.stop(); this.rotorFallback?.oscillator.stop(); this.rotorFallback?.modulator.stop(); this.loops.clear(); this.buffers.clear();
+    for (const name of this.buffers.keys()) this.releaseSound(name);
+    this.electric?.oscillator.stop();this.fallback?.oscillator.stop(); this.rotorFallback?.oscillator.stop(); this.rotorFallback?.modulator.stop();
     document.removeEventListener('visibilitychange', this.visibilityChanged);
     window.removeEventListener('pagehide', this.hidePage);
     window.removeEventListener('pointerdown', this.resume, { capture: true });
@@ -327,26 +344,58 @@ export class DriveAudio {
     this.master.gain.setTargetAtTime(target, this.context.currentTime, target === 0 ? 0.025 : 0.09);
   }
 
-  private async loadSounds() {
-    const context = this.context!;
-    await Promise.all(SOUNDS.map(async name => {
-      try {
-        const revision=name==='mclaren-720s-drive'||name==='mclaren-720s-high'?'?v=gt-exhaust-4':name==='supra-mk4-drive'||name==='supra-mk4-high'?'?v=six-exhaust-3':name.startsWith('mclaren-720s-')||name.startsWith('supra-mk4-')?'?v=exhaust-2':'';
-        const response = await fetch(`${import.meta.env.BASE_URL}audio/${name}.mp3${revision}`, { signal: AbortSignal.timeout(15_000) });
-        if (!response.ok) throw new Error('Audio unavailable');
-        let buffer = await context.decodeAudioData(await response.arrayBuffer());
-        if (this.disposed) return;
-        if (!ONE_SHOTS.has(name)) buffer = this.seamlessBuffer(buffer);
-        this.normalize(buffer);
-        this.buffers.set(name, buffer);
-        if (!ONE_SHOTS.has(name)) this.createLoop(name, buffer);
-      } catch {
-        if (!this.disposed) this.failed.add(name);
+  /** Bound both the resident car bank and the number of simultaneous mobile decodes. */
+  private async loadMobileSounds() {
+    if (this.loadingMobileSounds) return;
+    this.loadingMobileSounds = true;
+    try {
+      while (!this.disposed) {
+        const next = this.wantedSounds.find(name => !this.buffers.has(name) && !this.failed.has(name));
+        if (!next) break;
+        await this.loadSound(next);
+        this.ensureFallbacks();
       }
-    }));
+    } finally {
+      this.loadingMobileSounds = false;
+    }
+  }
+
+  private async loadSound(name: SoundName) {
+    const wanted = () => !this.disposed && this.wantedSounds.includes(name);
+    try {
+      const revision=name==='mclaren-720s-drive'||name==='mclaren-720s-high'?'?v=gt-exhaust-4':name==='supra-mk4-drive'||name==='supra-mk4-high'?'?v=six-exhaust-3':name.startsWith('mclaren-720s-')||name.startsWith('supra-mk4-')?'?v=exhaust-2':'';
+      const response = await fetch(`${import.meta.env.BASE_URL}audio/${name}.mp3${revision}`, { signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) throw new Error('Audio unavailable');
+      const encoded = await response.arrayBuffer();
+      if (!wanted()) return;
+      let buffer = await this.context!.decodeAudioData(encoded);
+      if (!wanted()) return;
+      if (!ONE_SHOTS.has(name)) buffer = this.seamlessBuffer(buffer);
+      this.normalize(buffer);
+      if (!ONE_SHOTS.has(name)) this.createLoop(name, buffer);
+      this.buffers.set(name, buffer);
+    } catch {
+      if (wanted()) this.failed.add(name);
+    }
+  }
+
+  private ensureFallbacks() {
+    if (this.disposed) return;
     // Synthesis is a last-resort fallback, never layered over recordings.
-    if (!this.disposed && this.failed.has('engine-idle') && this.failed.has('engine-drive')) this.createFallbackEngine();
-    if (!this.disposed && this.failed.has('helicopter-rotor')) this.createFallbackRotor();
+    if (!this.fallback && this.failed.has('engine-idle') && this.failed.has('engine-drive')) this.createFallbackEngine();
+    if (!this.rotorFallback && this.failed.has('helicopter-rotor')) this.createFallbackRotor();
+  }
+
+  private releaseSound(name: SoundName) {
+    const loop = this.loops.get(name);
+    if (loop) {
+      loop.source.stop();
+      loop.source.disconnect();
+      loop.filter.disconnect();
+      loop.gain.disconnect();
+      this.loops.delete(name);
+    }
+    this.buffers.delete(name);
   }
 
   private createLoop(name: SoundName, buffer: AudioBuffer) {

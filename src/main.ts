@@ -74,7 +74,7 @@ async function boot(){
   let transit:ReturnType<typeof createTransit>|undefined;
   let prudential:ReturnType<typeof addPrudentialCrown>|undefined;let metroLandmarks:ReturnType<typeof addMetroLandmarkDetails>|undefined;let tdGarden:ReturnType<typeof addTdGardenDetails>;
   let populateNeighborhood=()=>{};let setParkedNight=(_night:boolean)=>{};
-  const keys=new Set<string>(),audio=new DriveAudio();let cameraSnap=true,lookOffset=0,orbitPitch=.3,zoom=1;
+  const keys=new Set<string>(),audio=new DriveAudio(mobile);let cameraSnap=true,lookOffset=0,orbitPitch=.3,zoom=1;
   // One poll per frame: the interface takes menu presses first, then driving, flight and camera read the same frame.
   const gamepad=createGamepadReader();let pad=gamepad.idle(),padLook=0,padLookBack=false;
   const readGamepads=()=>{try{return navigator.getGamepads?.()??null;}catch{return null;}};
@@ -269,12 +269,12 @@ async function boot(){
     const construction=createConstruction(scene,city,physics,constructionZones,{hasGround:(x,z)=>!streamer||streamer.loaded.has(`${Math.floor(x/city.tiles!.size)}_${Math.floor(z/city.tiles!.size)}`)});
     construction.update(physics.getState());
     physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;
-    traffic=createTraffic(scene,city,physics,constructionZones,{deckDrawn:streamer?.deckDrawn});
+    traffic=createTraffic(scene,city,physics,constructionZones,{deckDrawn:streamer?.deckDrawn,mobile});
     transit=createTransit(scene,city,physics,transitData);
     const railData=await railRequest,rail=railData?createRailTracks(scene,city,physics,railData,{mobile}):undefined;
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     walker=createWalker(city,physics);const player=createPlayerModel(scene);player.group.visible=false;
-    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile,tiles:world.streamer});setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
+    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile,tiles:world.streamer,mobile});setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
     // What the chassis was touching when it was knocked: a car outranks a bus,
     // which outranks a wall; only the bare ground counts as a landing.
     const classifyImpact=(impact:Impact):ImpactKind=>{

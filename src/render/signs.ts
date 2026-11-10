@@ -4,12 +4,12 @@ import { textSign } from './materials';
 
 /** Two independently outward-facing surfaces: lettering reads left to right
  * from either approach, including when the sign is reflected in a window. */
-export function createStreetSign(name:string) {
+export function createStreetSign(name:string,mobile=false) {
   const front=new THREE.PlaneGeometry(2.65,.48).translate(0,0,.025);
   const back=new THREE.PlaneGeometry(2.65,.48).rotateY(Math.PI).translate(0,0,-.025);
   const geometry=mergeGeometries([front,back],false)!;
   front.dispose();back.dispose();
-  const material=textSign(name);
+  const material=textSign(name,{scale:mobile ? .5 : 1});
   material.side=THREE.FrontSide;
   const sign=new THREE.Mesh(geometry,material);
   sign.name=`Street sign: ${name}`;

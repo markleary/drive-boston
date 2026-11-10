@@ -40,10 +40,11 @@ function tiledWall(data:MeshData,road:Road,city:CityData){
 }
 
 /** A printed highway sign face: green, or a warning's amber on charcoal. */
-export function signMaterial(lines:string[],warning=false){
+export function signMaterial(lines:string[],warning=false,mobile=false){
   // Headless geometry tests do not need a canvas; the game always has one.
   if(typeof document==='undefined')return new THREE.MeshBasicMaterial({color:warning?'#d5a94f':'#17634e'});
-  const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=256;const ctx=canvas.getContext('2d')!;
+  const scale=mobile ? .5 : 1;
+  const canvas=document.createElement('canvas');canvas.width=1024*scale;canvas.height=256*scale;const ctx=canvas.getContext('2d')!;ctx.scale(scale,scale);
   ctx.fillStyle=warning?'#242823':'#12563f';ctx.fillRect(0,0,1024,256);ctx.strokeStyle=warning?'#f2ba4a':'#e1e9d9';ctx.lineWidth=7;ctx.strokeRect(12,12,1000,232);
   ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=warning?'#ffcf69':'#f2f4e6';
   for(let i=0;i<lines.length;i++){ctx.font=`600 ${lines.length>2?43:i===0?56:48}px Arial, sans-serif`;ctx.fillText(lines[i],512,lines.length===1?128:62+i*(140/(lines.length-1)),966);}
@@ -91,7 +92,7 @@ export function tunnelExitSigns(city:CityData){
 
 /** Source-aligned bores, portals and terminal closures. Geometry comes from
  * simulation/tunnels, so a visible wall cannot close a physically open merge. */
-export function addTunnels(scene:THREE.Object3D,city:CityData){
+export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false){
   const roads=city.roads.filter(r=>r.tunnel&&r.elevations),group=new THREE.Group();group.name='Central Artery tunnels';
   const tunnelRoads={...city,roads};
   const tiles=wallTexture(),paving=asphaltTexture();
@@ -112,7 +113,7 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
   const signPanel=(width:number,height:number,lines:string[],warning=false)=>{
     // Highway signs have one printed face. A solid metal panel hides that
     // texture from drivers approaching the rear, including wrong-way travel.
-    const face=new THREE.Mesh(new THREE.PlaneGeometry(width,height),signMaterial(lines,warning));
+    const face=new THREE.Mesh(new THREE.PlaneGeometry(width,height),signMaterial(lines,warning,mobile));
     face.userData.tunnelSignFace=true;
     const back=new THREE.Mesh(new THREE.BoxGeometry(width,height,.08),darkMetal);
     back.name='Tunnel sign backing';back.position.z=-.055;face.add(back);
