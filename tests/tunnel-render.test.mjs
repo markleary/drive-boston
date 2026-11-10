@@ -70,7 +70,11 @@ test('real tunnel sign fronts face approaching traffic and their backs hide mirr
         assert.ok(normal.dot(travel)*(face.userData.backwards?1:-1)>.999,`${face.name} orientation follows its mapped carriageway`);
       }
     }
-    const reported=view.group.getObjectByName('EXIT ↗ / Government Center / Clinton Street');assert.ok(reported,'covers the exact sign reported in the screenshot');
+    const reported=view.group.getObjectByName('EXIT 17A ↗ / Government Center / Clinton Street');assert.ok(reported,'the Government Center approach has its current exit number');
+    const numbered=tunnelExitSigns({...city,roads}).map(sign=>sign.lines.join(' / '));
+    assert.ok(numbered.includes('EXIT 17 ↗ / Government Center / North End'));
+    assert.ok(numbered.includes('EXIT 16B ↗ / Purchase Street / Oliver Street'));
+    assert.ok(numbered.includes('EXIT 16A ↗ / Purchase Street / South Station'));
   }finally{dispose(view.group);}
 });
 

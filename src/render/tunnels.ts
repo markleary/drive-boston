@@ -58,6 +58,14 @@ function destination(road:Road){
   return parts.length>1?['EXIT  ↗',parts[0],parts.slice(1).join(' / ')]:['EXIT  ↗',target];
 }
 
+// The confirmed MassDOT numbers for the corresponding Central Artery ramps.
+const numberedExits = new Map([
+  ['central-artery-government-center-south-off', '17A'],
+  ['central-artery-north-end-north-off', '17'],
+  ['central-artery-purchase-east-south-off', '16B'],
+  ['central-artery-purchase-west-south-off', '16A'],
+]);
+
 /** Match each mapped exit to its bore or parent exit ramp at the start. Height is
  * essential: north/south bores sometimes overlap in plan at different levels. */
 export function tunnelExitSigns(city:CityData){
@@ -73,8 +81,10 @@ export function tunnelExitSigns(city:CityData){
     }
     if(!best)continue;
     const branch=tunnelPointAt(ramp,Math.min(35,tunnelStations(ramp).at(-1)!)),p=tunnelPointAt(best.road,best.station+30);
-    const right=-(branch.x-p.x)*Math.cos(p.yaw)+(branch.z-p.z)*Math.sin(p.yaw),target=ramp.name.split('·')[0].trim(),parts=target.split('/').map(s=>s.trim());
-    signs.push({road:best.road,station:best.station-40,lines:[`EXIT ${right>=0?'↗':'↖'}`,...parts.slice(0,2)],rampId:ramp.id});
+    const right=-(branch.x-p.x)*Math.cos(p.yaw)+(branch.z-p.z)*Math.sin(p.yaw);
+    const number=numberedExits.get(ramp.id),target=ramp.name.split('·')[0].trim();
+    const parts=number==='17'?['Government Center','North End']:target.split('/').map(s=>s.trim()).slice(0,2);
+    signs.push({road:best.road,station:best.station-40,lines:[`EXIT${number?' '+number:''} ${right>=0?'↗':'↖'}`,...parts],rampId:ramp.id});
   }
   return signs;
 }
