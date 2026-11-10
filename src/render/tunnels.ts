@@ -5,6 +5,7 @@ import {tunnelGeometry,tunnelStations,tunnelCoveredAt,tunnelAt,tunnelPointAt} fr
 import {PartBatches,box} from './geometry-writer.ts';
 import {createTunnelCeilingMaterial,tiledTunnelCeiling} from './tunnel-ceiling.ts';
 import {tunnelContinuation,TUNNEL_CONTINUATION_LENGTH} from './tunnel-continuation.ts';
+import {inheritRoadHeadlights} from './road-headlights.ts';
 
 /** Procedural wall tilework is shared by every bore. Metre UVs keep the tile
  * joints and the green guidance band aligned to the local, sloping floor. */
@@ -92,7 +93,7 @@ export function tunnelExitSigns(city:CityData){
 
 /** Source-aligned bores, portals and terminal closures. Geometry comes from
  * simulation/tunnels, so a visible wall cannot close a physically open merge. */
-export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false){
+export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false,headlightSource?:THREE.Material){
   const roads=city.roads.filter(r=>r.tunnel&&r.elevations),group=new THREE.Group();group.name='Central Artery tunnels';
   const tunnelRoads={...city,roads};
   const tiles=wallTexture(),paving=asphaltTexture();
@@ -101,6 +102,8 @@ export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false){
   const ceiling=createTunnelCeilingMaterial();
   const concrete=new THREE.MeshStandardMaterial({color:'#b1b2a7',emissive:'#999c91',emissiveIntensity:.13,roughness:.96});
   const white=new THREE.MeshStandardMaterial({color:'#ede9ca',emissive:'#e9e6c9',emissiveIntensity:.25,roughness:.88});
+  inheritRoadHeadlights(headlightSource,asphalt);
+  inheritRoadHeadlights(headlightSource,white);
   const amber=new THREE.MeshBasicMaterial({color:'#e7b74b'}),darkMetal=new THREE.MeshStandardMaterial({color:'#394342',roughness:.8,metalness:.3});
   const lightMaterial=new THREE.MeshBasicMaterial({color:'#fff1c9',toneMapped:false}),batches=new PartBatches(180),matrix=new THREE.Matrix4();
   let fixtures=0,signs=0,closures=0,metres=0;

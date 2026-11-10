@@ -5,12 +5,13 @@ import {roadProjection,sampleRoadElevation} from '../simulation/road-surfaces.ts
 import {sampleElevation} from '../simulation/terrain.ts';
 import {buildingAt} from '../simulation/city-tiles.ts';
 import {PartBatches,TriangleWriter,box} from './geometry-writer.ts';
+import {inheritRoadHeadlights} from './road-headlights.ts';
 
 /** An original procedural model on the source-aligned decks: built-up green
  * steel, two cantilever peaks over the main river, and the Little Mystic Warren
  * span. Truss proportions follow the published 1,525/800/439-foot spans; the
  * model is an interpretation, not a surveyed engineering model. */
-export function addTobinBridgeDetails(scene:THREE.Object3D,city:CityData){
+export function addTobinBridgeDetails(scene:THREE.Object3D,city:CityData,headlightSource?:THREE.Material){
   const group=new THREE.Group();group.name='Tobin Bridge · green double-deck cantilever';
   const collisions:{id:string;vertices:Float32Array;indices:Uint32Array}[]=[];
   const spine=tobinBridgeSpine(city);if(!spine)return{group,collisions};
@@ -21,6 +22,7 @@ export function addTobinBridgeDetails(scene:THREE.Object3D,city:CityData){
   const concrete=new THREE.MeshStandardMaterial({color:'#aaa28b',roughness:.94});
   const paleConcrete=new THREE.MeshStandardMaterial({color:'#bcb49b',roughness:.92});
   const paint=new THREE.MeshStandardMaterial({color:'#e6e6d5',roughness:.88});
+  inheritRoadHeadlights(headlightSource,paint);
   const steel=new THREE.MeshStandardMaterial({color:'#65716e',roughness:.52,metalness:.55});
   const lamps=new THREE.MeshStandardMaterial({color:'#fff3d3',emissive:'#ffd89c',emissiveIntensity:.2,roughness:.42});
   const batches=new PartBatches(256),solid=new TriangleWriter(),matrix=new THREE.Matrix4(),rotation=new THREE.Quaternion(),unit=new THREE.Vector3(1,1,1),axis=new THREE.Vector3(0,0,1);

@@ -269,7 +269,7 @@ async function boot(){
     const construction=createConstruction(scene,city,physics,constructionZones,{hasGround:(x,z)=>!streamer||streamer.loaded.has(`${Math.floor(x/city.tiles!.size)}_${Math.floor(z/city.tiles!.size)}`)});
     construction.update(physics.getState());
     physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;
-    traffic=createTraffic(scene,city,physics,constructionZones,{deckDrawn:streamer?.deckDrawn,mobile});
+    traffic=createTraffic(scene,city,physics,constructionZones,{deckDrawn:streamer?.deckDrawn,mobile,headlights:world.roadHeadlights});
     transit=createTransit(scene,city,physics,transitData);
     const railData=await railRequest,rail=railData?createRailTracks(scene,city,physics,railData,{mobile}):undefined;
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
