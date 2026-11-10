@@ -71,3 +71,40 @@ test('changing facial detail preserves each walker position and complexion',()=>
     }
   }finally{model.dispose();group.traverse(o=>o.geometry?.dispose());materials.forEach(m=>m.dispose());}
 });
+
+test('walkers out of the main view are drawn last and left out of its passes, each part still its own person\'s',()=>{
+  const crowd=()=>Array.from({length:10},(_,id)=>({id,position:new THREE.Vector3(id*4,0,id%3),yaw:id*.4,height:.95+id*.01,width:1,speed:1,bag:id%2===0,scarf:id%3===0,outfit:id%5}));
+  const mainCamera=new THREE.PerspectiveCamera(),other=new THREE.PerspectiveCamera();
+  const build=camera=>{const group=new THREE.Group(),materials=new Set(),people=crowd(),model=createPedestrianModel(group,people,materials,{mainCamera:camera});return{group,materials,people,model};};
+  const plain=build(),culled=build(mainCamera),phone=build(mainCamera);
+  // A part's instances as comparable records (matrix, colour, limb joints), with the person each belongs to.
+  const records=(part,count)=>Array.from({length:count},(_,index)=>{
+    const {mesh}=part,values=[...mesh.instanceMatrix.array.slice(index*16,index*16+16)];
+    if(mesh.instanceColor)values.push(...mesh.instanceColor.array.slice(index*3,index*3+3));
+    for(const name of ['limbStart','limbJoint','limbEnd']){const attribute=mesh.geometry.getAttribute(name);if(attribute)values.push(...attribute.array.slice(index*3,index*3+3));}
+    return {owner:part.owner[index],values};
+  });
+  try{
+    for(const [step,shown] of [[0,[1,0,1,1,0,0,0,1,0,0]],[1,[0,0,0,0,0,1,0,0,0,0]],[2,[1,1,1,1,1,1,1,1,1,1]],[3,[0,1,1,0,1,0,1,1,0,1]],[4,[0,0,0,0,0,0,0,0,0,0]]]){
+      // No time passes between poses: an unposed walker's blink and breath wait for it, which is not the subject here.
+      const near=i=>i%2===0,distance=.3+step*.21;
+      plain.people.forEach((p,i)=>plain.model.pose(i,p,distance,1,0,near(i)));plain.model.flush();
+      // A desktop poses everyone (a reflection capture draws them all); a phone only those in view.
+      culled.model.begin();culled.people.forEach((p,i)=>culled.model.pose(i,p,distance,1,0,near(i)));culled.model.flush(shown);
+      phone.model.begin();phone.people.forEach((p,i)=>{if(shown[i])phone.model.pose(i,p,distance,1,0,near(i));});phone.model.flush(shown);
+      for(let k=0;k<plain.model.parts.length;k++){
+        const reference=plain.model.parts[k],part=culled.model.parts[k],name=reference.mesh.name,expected=records(reference,reference.all);
+        const front=expected.filter(r=>shown[r.owner]),back=expected.filter(r=>!shown[r.owner]);
+        assert.equal(part.all,reference.all,name);assert.equal(part.view,front.length,name);
+        assert.deepEqual(records(part,part.all).map(r=>r.values),[...front,...back].map(r=>r.values),`${name}: the people in view first, everyone's own pose and colours (step ${step})`);
+        // The main view and its shadow map draw the people in view; any other camera draws everyone.
+        part.mesh.onBeforeRender(null,null,mainCamera);assert.equal(part.mesh.count,front.length);
+        part.mesh.onBeforeRender(null,null,other);assert.equal(part.mesh.count,reference.all);
+        part.mesh.onBeforeShadow();assert.equal(part.mesh.count,front.length);
+        // The phone never posed the others: what it draws is the same people in view.
+        const mobile=phone.model.parts[k];assert.equal(mobile.view,front.length,name);
+        assert.deepEqual(records(mobile,mobile.view).map(r=>r.values),front.map(r=>r.values),`${name}: unposed walkers leave the shown ones intact (step ${step})`);
+      }
+    }
+  }finally{for(const f of [plain,culled,phone]){f.model.dispose();f.group.traverse(o=>o.geometry?.dispose());f.materials.forEach(m=>m.dispose());}}
+});

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { IndexedSurfaceWriter, SurfaceBatches } from './indexed-surfaces.ts';
-import { staticDetailBatchSteps, type Warm } from './static-batches.ts';
+import { freezeTransforms, staticDetailBatchSteps, type Warm } from './static-batches.ts';
 import { disposeTileResources } from './tile-resources.ts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
@@ -13,7 +13,7 @@ import { junctionIndexSteps, planCrosswalkSteps, STRIPE_LENGTH, type JunctionInd
 import { curbRoadClearance } from '../simulation/road-curbs.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
-import { sampleElevation, terrainGrid } from '../simulation/terrain.ts';
+import { sampleElevation, terrainGrid, terrainVertexNormal } from '../simulation/terrain.ts';
 import { inTransitCorridor, shareTransitCorridors } from '../simulation/transit-corridors.ts';
 import { planTrafficSignals, type PlacedSignal } from '../simulation/signal-placement.ts';
 import { usesExactBuildingCollision } from '../simulation/building-collisions.ts';
@@ -58,8 +58,7 @@ import { townFrontages } from './town-frontages';
 import { housePlan } from './house-plan';
 import { housePalette, houseRoof } from './house-styles';
 import { cityParkDetailSteps, areaBoundsOf, type Bounds } from './city-parks';
-import { parkSurfaceSteps } from './area-surfaces.ts';
-import { boundingSphereSteps } from './paced-geometry.ts';
+import { DrapedSurface } from './draped-surface.ts';
 import { fellsViewHeight } from './fells-woodland.ts';
 import type { TreeField } from './foliage';
 
@@ -193,13 +192,12 @@ export function createTileBuilder(ctx: TileContext) {
       const j0 = Math.max(0, Math.floor((z0 - grid.originZ) / cs)), j1 = Math.min(grid.height - 1, Math.floor((z1 - grid.originZ) / cs) + 1);
       const w = i1 - i0 + 1, h = j1 - j0 + 1;
       if (w >= 2 && h >= 2) {
-        const positions = new Float32Array(w * h * 3), normals = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), heights = grid.heights, W = grid.width, H = grid.height;
+        const positions = new Float32Array(w * h * 3), normals = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), heights = grid.heights, W = grid.width, normal = [0, 1, 0];
         for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
           const gi = i0 + i, gj = j0 + j, n = j * w + i, x = grid.originX + gi * cs, z = grid.originZ + gj * cs;
           positions[n * 3] = x; positions[n * 3 + 1] = heights[gj * W + gi]; positions[n * 3 + 2] = z; uv[n * 2] = x / 4; uv[n * 2 + 1] = z / 4;
-          const hl = heights[gj * W + Math.max(gi - 1, 0)], hr = heights[gj * W + Math.min(gi + 1, W - 1)], hu = heights[Math.max(gj - 1, 0) * W + gi], hd = heights[Math.min(gj + 1, H - 1) * W + gi];
-          const nx = -(hr - hl) / (2 * cs), nz = -(hd - hu) / (2 * cs), length = Math.hypot(nx, 1, nz);
-          normals[n * 3] = nx / length; normals[n * 3 + 1] = 1 / length; normals[n * 3 + 2] = nz / length;
+          // The draped pavement and lawns interpolate these same normals (draped-surface.ts).
+          terrainVertexNormal(grid, gi, gj, normal); normals[n * 3] = normal[0]; normals[n * 3 + 1] = normal[1]; normals[n * 3 + 2] = normal[2];
         }
         const indices = new Uint32Array((w - 1) * (h - 1) * 6); let o = 0;
         for (let j = 0; j < h - 1; j++) for (let i = 0; i < w - 1; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; indices[o++] = a; indices[o++] = c; indices[o++] = b; indices[o++] = b; indices[o++] = c; indices[o++] = d; }
@@ -335,28 +333,24 @@ export function createTileBuilder(ctx: TileContext) {
       // disagreement with the curb line hides under the roadway), asphalt
       // driveway faces (above the lawn and the sidewalks they were cut around,
       // below the street asphalt) and concrete curb islands, merged per material.
-      const paved: [THREE.BufferGeometry[], THREE.Material, string, Point2[][][], number][] = [[[], materials.sidewalk, 'Sidewalks', tile.sidewalks.filter(w => w.material !== 'brick').map(w => w.rings), .03], [[], materials.brick, 'Brick sidewalks', tile.sidewalks.filter(w => w.material === 'brick').map(w => w.rings), .03], [[], materials.asphalt, 'Driveways', tile.driveways, .035], [[], materials.sidewalk, 'Curb islands', tile.islands, .05]];
-      if (tile.streetPavement) paved.push([[],materials.asphalt,'Streets',tile.streetPavement,.045],[[],materials.sidewalk,'Street sidewalks',tile.streetSidewalks ?? [],.012]);
-      if (tile.deckPavement) paved.push([[],materials.asphalt,'Paved embankments',tile.deckPavement,.03]);
+      const paved: [THREE.Material, string, Point2[][][], number][] = [[materials.sidewalk, 'Sidewalks', tile.sidewalks.filter(w => w.material !== 'brick').map(w => w.rings), .03], [materials.brick, 'Brick sidewalks', tile.sidewalks.filter(w => w.material === 'brick').map(w => w.rings), .03], [materials.asphalt, 'Driveways', tile.driveways, .035], [materials.sidewalk, 'Curb islands', tile.islands, .05]];
+      if (tile.streetPavement) paved.push([materials.asphalt,'Streets',tile.streetPavement,.045],[materials.sidewalk,'Street sidewalks',tile.streetSidewalks ?? [],.012]);
+      if (tile.deckPavement) paved.push([materials.asphalt,'Paved embankments',tile.deckPavement,.03]);
       // Shopfront forecourts in the northern town centres, between the sidewalk band and the walls (town-frontages.ts).
-      paved.push([[],materials.sidewalk,'Shop frontages',townFrontages(subCity,tile.buildings),.02]);
+      paved.push([materials.sidewalk,'Shop frontages',townFrontages(subCity,tile.buildings),.02]);
       // Cross Street's brick access lane shares the plaza surface. Its source
       // road ribbon otherwise paints asphalt over the plaza and strands its
       // real curb in an apparent traffic lane. Keep the curb and vehicle access.
-      paved.push([[],frontageBrick,'Cross Street brick frontage',greenway.frontages.filter(a=>a.tile===key).map(a=>a.rings),.09]);
-      // A tile's generated street pavement is one polygon spanning the whole tile: draped and clipped a few milliseconds a frame.
-      for (const [list, , , rings, y] of paved) for (const polygon of rings) {
-        if (due(pace)) yield 'roads';
-        const surface = yield* stage('roads', parkSurfaceSteps(city, polygon, { offset: y, pace }));
-        const geometry = yield* stage('roads', clipPortalSurfaceSteps(city, surface, pace)); if (geometry.attributes.position?.count) list.push(geometry); else geometry.dispose();
-      }
-      for (const [list, material, name] of paved) {
-        if (!list.length) continue;
-        if (due(pace)) yield 'roads';
-        const merged = mergeGeometries(list); for (const g of list) g.dispose(); if (!merged) continue;
-        // Bounds now, a few milliseconds a frame, rather than in the first render that culls the mesh.
-        yield* stage('roads', boundingSphereSteps(merged, pace));
-        const mesh = new THREE.Mesh(merged, material); mesh.name = name; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh);
+      paved.push([frontageBrick,'Cross Street brick frontage',greenway.frontages.filter(a=>a.tile===key).map(a=>a.rings),.09]);
+      // Each layer is one shared-vertex mesh on the terrain's own triangles (draped-surface.ts). A tile's generated
+      // street pavement is one polygon spanning the whole tile: draped, merged and clipped a few milliseconds a frame.
+      for (const [material, name, polygons, y] of paved) {
+        if (!polygons.length) continue;
+        const surface = new DrapedSurface(city, { offset: y, pace });
+        for (const polygon of polygons) { if (due(pace)) yield 'roads'; yield* stage('roads', surface.add(polygon)); }
+        const geometry = yield* stage('roads', surface.geometrySteps());
+        if (!geometry.index!.count) { geometry.dispose(); continue; }
+        const mesh = new THREE.Mesh(geometry, material); mesh.name = name; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh);
       }
     }
     yield 'roads';
@@ -576,8 +570,10 @@ export function createTileBuilder(ctx: TileContext) {
         stats.housePorches = (details.userData.porches ?? 0) + (details.userData.porticos ?? 0);
       }
     }
-    // Repacking an entire tile into BatchedMesh duplicates its vertex buffers. Mobile keeps its already grouped road/shell buffers.
-    group.userData.batching = ctx.mobile ? { sources: 0, batches: 0 } : yield* stage('details', staticDetailBatchSteps(group, pace, ctx.warm));
+    // Repacking an entire tile into BatchedMesh duplicates its vertex buffers. Mobile keeps its already grouped
+    // road/shell buffers; either way nothing in the tile moves again, so its local matrices are composed once.
+    if (ctx.mobile) { freezeTransforms(group); group.userData.batching = { sources: 0, batches: 0 }; }
+    else group.userData.batching = yield* stage('details', staticDetailBatchSteps(group, pace, ctx.warm));
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
     const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps, signals: placements, stats, dispose: () => dispose(built, owned) };

@@ -142,14 +142,25 @@ const hairs=[0x302b26,0x544231,0x837059,0x29282a,0x8e8b80];
  * figure the camera follows at arm's length (the player on foot): an anatomical torso that
  * narrows to the waist and slopes into the shoulders, a modelled neck, arms that hang
  * beside the ribs instead of standing off them, and finer cloth and face meshes. */
-export function createPedestrianModel(group:THREE.Group,people:PedestrianAppearance[],materials:Set<THREE.Material>,{closeUp=false}:{closeUp?:boolean}={}){
+export function createPedestrianModel(group:THREE.Group,people:PedestrianAppearance[],materials:Set<THREE.Material>,{closeUp=false,mainCamera}:{closeUp?:boolean;/** The view `flush(shown)` culls for; any other camera (a reflection capture) draws everyone. */mainCamera?:THREE.Camera}={}){
   const count=people.length,batches:THREE.InstancedMesh[]=[];
+  // Which person each instance of a part belongs to, and how many instances the part draws: all of them, and
+  // those of the people `flush(shown)` put first.
+  interface Layout{mesh:THREE.InstancedMesh;owner:Int32Array;all:number;view:number;home?:Float32Array;}
+  const layouts:Layout[]=[];
   function batch(name:string,geometry:THREE.BufferGeometry,multiplier=1,roughness=.9,capacity=count*multiplier){
     const material=new THREE.MeshStandardMaterial({color:0xffffff,roughness});materials.add(material);
     const mesh=new THREE.InstancedMesh(geometry,material,capacity);mesh.name=name;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);mesh.castShadow=true;mesh.receiveShadow=true;mesh.frustumCulled=false;
+    const layout:Layout={mesh,owner:Int32Array.from({length:capacity},(_,index)=>Math.floor(index/multiplier)),all:capacity,view:capacity};layouts.push(layout);
+    if(mainCamera){
+      // The instance count is read at each draw: the main view and its shadow map take the people in view, the rest everyone.
+      mesh.onBeforeRender=(_renderer,_scene,camera)=>{mesh.count=camera===mainCamera?layout.view:layout.all;};
+      mesh.onBeforeShadow=()=>{mesh.count=layout.view;};
+    }
     group.add(mesh);batches.push(mesh);return mesh;
   }
+  const layoutOf=(mesh:THREE.InstancedMesh)=>layouts.find(l=>l.mesh===mesh)!;
   const sphere=new THREE.SphereGeometry(.5,10,8);
   // Hem, waist, ribs, chest, shoulder line, trapezius, neck base.
   const torsoSections:Section[]=closeUp?[[-.5,0,0],[-.5,.47,.50],[-.36,.46,.50],[-.2,.43,.47],[-.03,.44,.48],[.14,.49,.52],[.28,.53,.51],[.38,.535,.46],[.44,.47,.39],[.48,.33,.32],[.5,.2,.27],[.5,0,0]]
@@ -196,7 +207,7 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
   const skin=batch('Necks hands and ears',closeUp?new THREE.SphereGeometry(.5,18,12):sphere,5,.82);
   // Close up the neck is a column that widens into the shoulders, not a ball under the chin.
   const neck=closeUp?batch('Necks',tailored([[-.5,0,0],[-.5,.72,.62],[-.3,.56,.54],[0,.47,.5],[.3,.46,.5],[.5,.5,.52],[.5,0,0]],20),1,.82):undefined;
-  const hair=['Short cropped hair','Side parted hair','Fuller hair'].map((name,style)=>batch(name,hairGeometry(style),1,.78,people.filter((_,i)=>i%3===style).length));
+  const hair=['Short cropped hair','Side parted hair','Fuller hair'].map((name,style)=>{const mesh=batch(name,hairGeometry(style),1,.78,people.filter((_,i)=>i%3===style).length);layoutOf(mesh).owner.forEach((_,index,owner)=>{owner[index]=index*3+style;});return mesh;});
   const longHair=batch('Long hairstyles',sphere);
   // Rounded shoes retain a flat outsole, with a higher heel and a tapered toe.
   const shoeGeometry=new THREE.SphereGeometry(.5,12,8),shoePositions=shoeGeometry.attributes.position;
@@ -249,9 +260,14 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
     for(let j=0;j<5;j++)tint(skin,i*5+j,complexion);
     if(neck)tint(neck,i,complexion);
   });
+  // Each part's colours by person, as set above: a partition rewrites the live buffer from these.
+  for(const layout of layouts)if(layout.mesh!==heads&&layout.mesh!==distantHeads&&layout.mesh.instanceColor)layout.home=(layout.mesh.instanceColor.array as Float32Array).slice();
+  const nearLayout=layoutOf(heads),farLayout=layoutOf(distantHeads);
   const actor=new THREE.Matrix4(),local=new THREE.Matrix4(),world=new THREE.Matrix4();
   const position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),euler=new THREE.Euler(),forwardLean=new THREE.Quaternion(),ACROSS=new THREE.Vector3(1,0,0);
   const blend=new Float32Array(count).fill(1),visualTime=new Float32Array(count);
+  // Partition scratch: the largest part's matrices, its draw order, and who was shown last frame.
+  const widest=layouts.reduce((n,l)=>Math.max(n,l.owner.length),0),scratch=new Float32Array(widest*16),order=new Int32Array(widest),ownerScratch=new Int32Array(widest),lastShown=new Uint8Array(count).fill(1);
   function place(mesh:THREE.InstancedMesh,index:number,p:Point,s:Point,rx=0,ry=0,rz=0){
     rotation.setFromEuler(euler.set(rx,ry,rz));local.compose(position.set(...p),rotation,scale.set(...s));world.multiplyMatrices(actor,local);mesh.setMatrixAt(index,world);
   }
@@ -289,7 +305,7 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
     const headY=1.623+bob,headTurn=THREE.MathUtils.lerp(person.gaze??Math.sin(distance*.29+i*1.7)*.085,(i%2?.42:-.42),sprawl);
     const faceWidth=.176*(.96+(i%5)*.02),headSize:Point=[faceWidth,.232,.202];
     const headMesh=detailed?heads:distantHeads,headIndex=detailed?nearHeadCount++:farHeadCount++;
-    place(headMesh,headIndex,[sway,headY,.014],headSize,0,headTurn);tint(headMesh,headIndex,complexions[i]);
+    place(headMesh,headIndex,[sway,headY,.014],headSize,0,headTurn);tint(headMesh,headIndex,complexions[i]);(detailed?nearLayout:farLayout).owner[headIndex]=i;
     if(neck){place(neck,i,[sway,1.494+bob,.004],[.126,.115,.122]);place(skin,i*5,[0,0,0],[0,0,0]);}
     else place(skin,i*5,[sway,1.478+bob,.006],[.108,.135,.10]);
     place(hair[i%3],Math.floor(i/3),[sway,headY,.014],headSize,0,headTurn);
@@ -358,10 +374,41 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
       place(straps,index,[side*.106+sway,bob+.065,-.012],person.bag?[1,1,1]:[0,0,0]);
     }
   }
-  return {pose,dispose(){
+  return {pose,
+  /** Node tests: each instanced part with the person every instance belongs to and its draw counts. */
+  parts:layouts,
+  dispose(){
     for(const mesh of batches){const material=mesh.material as THREE.MeshStandardMaterial;material.map=null;material.bumpMap=null;}
     cloth.dispose();face.dispose();strands.dispose();
-  },flush(){heads.count=nearHeadCount;distantHeads.count=farHeadCount;
+  },
+  /** Start a frame's posing when not every person is posed, or not in order (posing person 0 does the same). */
+  begin(){nearHeadCount=0;farHeadCount=0;},
+  /** Publish the frame's poses. With `shown` (a flag per person) each part's instances are partitioned, the
+   * shown people's first: the main view and its shadow map then draw only those (`mainCamera`), and people
+   * left out need not have been posed unless another camera draws them. */
+  flush(shown?:ArrayLike<number|boolean>){
+    heads.count=nearHeadCount;distantHeads.count=farHeadCount;nearLayout.all=nearHeadCount;farLayout.all=farHeadCount;
+    // Static colours follow the partition only when it changes.
+    let recolour=false;
+    if(shown){for(let i=0;i<count;i++)if(!!shown[i]!==!!lastShown[i]){recolour=true;lastShown[i]=shown[i]?1:0;}}
+    else for(let i=0;i<count;i++)if(!lastShown[i]){recolour=true;lastShown[i]=1;}
+    for(const layout of layouts){
+      const {mesh,owner,all}=layout,matrices=mesh.instanceMatrix.array as Float32Array,colours=mesh.instanceColor?.array as Float32Array|undefined,dynamic=mesh===heads||mesh===distantHeads;
+      let view=0;for(let index=0;index<all;index++)if(lastShown[owner[index]])view++;
+      layout.view=view;
+      // All or none of a part's instances in view: they already stand in their own order.
+      if(view===all||view===0){if(recolour&&layout.home&&colours){colours.set(layout.home);mesh.instanceColor!.needsUpdate=true;}continue;}
+      // Shown instances first, each group in its own order.
+      let front=0,back=view;for(let index=0;index<all;index++)order[lastShown[owner[index]]?front++:back++]=index;
+      const move=(live:Float32Array,size:number,from:Float32Array=scratch)=>{if(from===scratch)scratch.set(live.subarray(0,all*size));for(let slot=0;slot<all;slot++){const source=order[slot]*size,target=slot*size;for(let k=0;k<size;k++)live[target+k]=from[source+k];}};
+      move(matrices,16);
+      if(dynamic){
+        if(colours)move(colours,3);
+        // The head slots now belong to other people.
+        ownerScratch.set(owner.subarray(0,all));for(let slot=0;slot<all;slot++)owner[slot]=ownerScratch[order[slot]];
+      }else if(layout.home&&colours&&recolour){move(colours,3,layout.home);mesh.instanceColor!.needsUpdate=true;}
+      if(mesh===arms||mesh===legs)for(const attribute of ['limbStart','limbJoint','limbEnd'])move(mesh.geometry.getAttribute(attribute).array as Float32Array,3);
+    }
     for(const mesh of [heads,distantHeads])if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
     for(const mesh of batches)mesh.instanceMatrix.needsUpdate=true;
     for(const mesh of [arms,legs])for(const attribute of ['limbStart','limbJoint','limbEnd'])mesh.geometry.getAttribute(attribute).needsUpdate=true;

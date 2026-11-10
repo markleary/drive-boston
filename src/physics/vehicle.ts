@@ -334,7 +334,11 @@ export class DrivingPhysics {
     }
     }
     const before = this.body.linvel(), speedBefore = Math.hypot(before.x, before.y, before.z), q0 = this.body.rotation();
-    this.world.step();
+    // world.step() minus its closing pass over every collider handle. Rapier maps there the handles a step
+    // itself created or removed, which only its soft bodies do; with a neighbourhood's ten thousand static
+    // colliders streamed in, those two wasm calls per collider cost more than the step.
+    const w = this.world;
+    w.physicsPipeline.step(w.gravity, w.integrationParameters, w.islands, w.broadPhase, w.narrowPhase, w.bodies, w.colliders, w.softBodies, w.impulseJoints, w.multibodyJoints, w.ccdSolver);
     // A knock is a velocity change no tire or suspension force can produce in
     // one step. Record what the chassis touched so the sound matches the object.
     const after = this.body.linvel(), gravity = this.world.gravity;
