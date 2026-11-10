@@ -1,5 +1,6 @@
 import type {DriveInput} from '../types';
 import type {FlightInput} from '../simulation/helicopter';
+import type {WalkInput} from '../simulation/walker';
 
 /** Button indices of the W3C "standard" gamepad layout, named for an Xbox controller. */
 export const PAD_BUTTONS={A:0,B:1,X:2,Y:3,LB:4,RB:5,LT:6,RT:7,View:8,Menu:9,LS:10,RS:11,Up:12,Down:13,Left:14,Right:15} as const;
@@ -110,6 +111,13 @@ export function padFlightInput(frame:PadFrame):FlightInput{
   if(!frame.connected)return{forward:0,strafe:0,turn:0,lift:0};
   const bumpers=Number(frame.held.has('RB'))-Number(frame.held.has('LB'));
   return{forward:0-frame.ly,strafe:frame.lx,turn:clamp(frame.rx+bumpers),lift:frame.rt-frame.lt};
+}
+
+/** On foot: the left stick walks (its deflection sets the pace), the right stick turns the view,
+ * A jumps, and RT, X or a held left-stick click runs. */
+export function padWalkInput(frame:PadFrame):WalkInput{
+  if(!frame.connected)return{forward:0,strafe:0,turn:0,run:false,jump:false};
+  return{forward:0-frame.ly,strafe:frame.lx,turn:clamp(frame.rx),run:frame.rt>.3||frame.held.has('X')||frame.held.has('LS'),jump:frame.held.has('A')};
 }
 
 export interface NavBox{left:number;top:number;right:number;bottom:number}

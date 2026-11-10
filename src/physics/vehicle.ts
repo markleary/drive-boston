@@ -381,6 +381,8 @@ export class DrivingPhysics {
   /** The player's reset (R): set the vehicle upright on the nearest clear road
    * at its level, the same placement as an overturned car's recovery. */
   resetToRoad(){this.recoverFromCrash(this.body.translation());}
+  /** Bring the vehicle to the nearest clear road at `position`'s level, as when the player walked away from it and wants it back. */
+  resetNear(position:{x:number;y:number;z:number}){this.recoverFromCrash({x:position.x,y:position.y+.5,z:position.z});}
 
   /** An overturned, fallen or lost vehicle (car or bike) is set upright on the
    * nearest clear road at the crash's level; the last explicit reset point is
