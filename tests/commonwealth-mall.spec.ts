@@ -1,6 +1,6 @@
 import {test,expect,type Page} from '@playwright/test';
 
-type Mall={trees:number;benches:number;fencePanels:number;walks:number;monuments:string[]};
+type Mall={trees:number;benches:number;fencePanels:number;walks:number;monuments:string[];tiles:{key:string;mallBenches:number;parkBenches:number;parkLamps:number}[]};
 type Snapshot={state:{x:number;z:number};walker:{x:number;z:number};walkers:{x:number;z:number}[];tiles:{keys:string[]}};
 type Hooks={snapshot():Snapshot;commonwealthMall():Mall;walkTo(x:number,z:number,yaw:number):void;travelTo(x:number,z:number,yaw:number):void};
 
@@ -32,6 +32,12 @@ test('the Commonwealth Avenue Mall: a fenced lawn, a walk through its gate, walk
   for(const name of ['Patrick Andrew Collins','Vendome Firefighters Memorial','William Lloyd Garrison','Samuel Eliot Morison',"Boston Women's Memorial"])expect(mall.monuments).toContain(name);
   expect(new Set(mall.monuments).size).toBe(mall.monuments.length);
   expect(mall.trees).toBeGreaterThan(200);expect(mall.benches).toBeGreaterThan(40);expect(mall.fencePanels).toBeGreaterThanOrEqual(80);
+  // The Mall's benches are its own. The tile that holds five of its blocks has more of them than the 25 benches a
+  // tile may set along its park paths, and still sets those along its other parks' paths, with their lamps.
+  const home=mall.tiles.find(tile=>tile.key==='-1_-1')!;
+  expect(home.mallBenches).toBeGreaterThan(25);
+  expect(home.parkBenches,'benches along the other park paths of the Mall\'s tile').toBeGreaterThanOrEqual(20);expect(home.parkBenches).toBeLessThanOrEqual(25);
+  expect(home.parkLamps).toBeGreaterThanOrEqual(3);
 
   // Arriving from across the city, as a map trip does, the neighborhood's walkers are placed afresh: some of them
   // in the two files of the centre walk, none on the lawn beside it.

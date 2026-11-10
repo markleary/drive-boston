@@ -481,8 +481,18 @@ async function boot(){
       gps:ui.gps,
       /** Browser specs: stream the tiles around a point and stand the player on foot there (walk mode). */
       walkTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>walker!.place(x,sampleVehicleSurface(city,x,z).height,z,yaw)),
-      // What the resident tiles have drawn of the Commonwealth Avenue Mall (commonwealth-mall.ts), summed over their park groups.
-      commonwealthMall:()=>{const total={trees:0,benches:0,fencePanels:0,walks:0,monuments:[] as string[]};scene.traverse(o=>{const m=o.userData.mall as typeof total|undefined;if(!m)return;total.trees+=m.trees;total.benches+=m.benches;total.fencePanels+=m.fencePanels;total.walks+=m.walks;total.monuments.push(...m.monuments);});return total;},
+      // What the resident tiles have drawn of the Commonwealth Avenue Mall (commonwealth-mall.ts), summed over their park
+      // groups; `tiles` lists each one's Mall benches beside the benches and lamps it set along its other parks' paths.
+      commonwealthMall:()=>{
+        const total={trees:0,benches:0,fencePanels:0,walks:0,monuments:[] as string[],tiles:[] as {key:string;mallBenches:number;parkBenches:number;parkLamps:number}[]};
+        scene.traverse(o=>{
+          const m=o.userData.mall as {trees:number;benches:number;fencePanels:number;walks:number;monuments:string[]}|undefined;if(!m)return;
+          total.trees+=m.trees;total.benches+=m.benches;total.fencePanels+=m.fencePanels;total.walks+=m.walks;total.monuments.push(...m.monuments);
+          let tile=o.parent;while(tile&&!/^Tile -?\d+_-?\d+$/.test(tile.name))tile=tile.parent; // past the tile's `Tile scenery` group
+          total.tiles.push({key:tile?.name.slice(5)??'',mallBenches:m.benches,parkBenches:o.userData.benches??0,parkLamps:o.userData.lamps??0});
+        });
+        return total;
+      },
       /** Browser specs: the player on foot (`strike` knocks them down as a vehicle would). */
       walker,
       /** Browser specs: use the aircraft's normal safe reset at an explicit altitude. */

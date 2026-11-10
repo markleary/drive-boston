@@ -279,9 +279,10 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       if(!canopyHitsDeck(city,x,z,y,PARK_CANOPY))treePoints.push({position:new THREE.Vector3(x,y+.025,z),species,scale});
     }
   }
-  // The Mall's rows, fences, benches and monuments, likewise outside the budget.
+  // The Mall's rows, fences, benches and monuments, likewise outside the budgets: its benches are counted in its own
+  // statistics (`userData.mall`), not against the benches this tile may set along its other parks' paths below.
   const mall=yield* mallDetailSteps(city,parks,paths,{bounds,pace,mobile:options.mobile,sidewalks:options.sidewalks,paving:options.paving});
-  if(mall){treePoints.push(...mall.trees);group.add(...mall.meshes);if(mall.solids.length)options.onSolids?.(mall.solids);benches+=mall.stats.benches;}
+  if(mall){treePoints.push(...mall.trees);group.add(...mall.meshes);if(mall.solids.length)options.onSolids?.(mall.solids);}
   if(treePoints.length){if(options.treeField)options.treeField.add(options.owner??'parks',treePoints);else{const trees=createStreetTrees(treePoints,{scale:1.65,grates:false});trees.name='Park specimen trees';group.add(trees);}}
   // Benches and restrained lamps sit beside real paths. Count is fixed per
   // length rather than per OSM segment, preventing dense clusters at junctions.
