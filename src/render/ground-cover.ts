@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type {Building,CityData,ParkPath,Point2} from '../types';
 import {pointInside} from '../simulation/roads.ts';
 import {sampleElevation,sampleTerrainNormal} from '../simulation/terrain.ts';
+import {FROG_POND,frogPondApron} from '../simulation/boston-common.ts';
 import {seeded,canvasTexture} from './materials';
 import {mergeSpatialGeometries} from './spatial-batches';
 import {insideEmbracePlaza} from './the-embrace';
@@ -48,7 +49,10 @@ export function createGroundCover(scene:THREE.Scene,city:CityData,tiles?:GroundC
   const areas=new Map<string,ReturnType<typeof indexArea>>();if(!tiles)areas.set('city',indexArea(city.parkPaths??[],city.buildings));
   const syncTiles=()=>{if(!tiles)return false;let changed=false;for(const key of areas.keys())if(!tiles.loaded.has(key)){areas.delete(key);changed=true;}for(const [key,built]of tiles.loaded)if(!areas.has(key)){areas.set(key,indexArea(built.tile.parkPaths,built.tile.buildings));changed=true;}return changed;};
   const blocked=(p:Point2,key:string)=>{if((roadBarriers.get(key)??[]).some(s=>segmentDistance(p,s.a,s.b)<s.radius))return true;for(const area of areas.values())if((area.barriers.get(key)??[]).some(s=>segmentDistance(p,s.a,s.b)<s.radius)||(area.buildingCells.get(key)??[]).some(b=>pointInside(p,b.footprint)))return true;return false;};
-  const waters=(city.water??[]).map(w=>({...w,minX:Math.min(...w.rings[0].map(p=>p[0])),maxX:Math.max(...w.rings[0].map(p=>p[0])),minZ:Math.min(...w.rings[0].map(p=>p[1])),maxZ:Math.max(...w.rings[0].map(p=>p[1]))}));
+  const waterExclusions=(city.water??[]).map(w=>{
+    const rings=w.name===FROG_POND?[frogPondApron]:w.rings;
+    return {rings,minX:Math.min(...rings[0].map(p=>p[0])),maxX:Math.max(...rings[0].map(p=>p[0])),minZ:Math.min(...rings[0].map(p=>p[1])),maxZ:Math.max(...rings[0].map(p=>p[1]))};
+  });
   const grassGeometry=new THREE.BufferGeometry(),positions:number[]=[],colors:number[]=[];
   for(let blade=0;blade<5;blade++){
     const angle=blade*2.39996,dx=Math.cos(angle),dz=Math.sin(angle),spread=blade*.025,base=[dx*spread,0,dz*spread],height=.055+(blade%3)*.025,width=.012;
@@ -67,7 +71,7 @@ export function createGroundCover(scene:THREE.Scene,city:CityData,tiles?:GroundC
       const random=seeded(Math.imul(ix,73856093)^Math.imul(iz,19349663)),x=ix*1.1+(random()-.5)*.8,z=iz*1.1+(random()-.5)*.8,p:Point2=[x,z];
       if(Math.hypot(x-observer.x,z-observer.z)>radius||!parks.some(a=>x>a.minX&&x<a.maxX&&z>a.minZ&&z<a.maxZ&&polygonContains(p,a.rings)))continue;
       if(insideEmbracePlaza(x,z,-.6))continue;
-      if(waters.some(w=>x>w.minX&&x<w.maxX&&z>w.minZ&&z<w.maxZ&&polygonContains(p,w.rings)))continue;
+      if(waterExclusions.some(w=>x>w.minX&&x<w.maxX&&z>w.minZ&&z<w.maxZ&&polygonContains(p,w.rings)))continue;
       const key=`${Math.floor(x/cell)},${Math.floor(z/cell)}`;
       if(blocked(p,key))continue;
       dummy.position.set(x,sampleElevation(city,x,z)+.027,z);dummy.rotation.set(0,random()*Math.PI*2,0);dummy.scale.setScalar(.7+random()*.8);dummy.updateMatrix();tuft.setMatrixAt(count++,dummy.matrix);
