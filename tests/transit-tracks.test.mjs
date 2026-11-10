@@ -13,6 +13,11 @@ test('each western branch gets reserved rail and catenary while Heath Street sta
  assert.equal(reservedTrack({line:'Green-E'},[-2600,1500]),false);
  assert.equal(reservedTrack({line:'Green-E'},[-2200,1000]),true);
  const tracks=createTransitTracks(city,['Green-B','Green-C','Green-D'].map((line,i)=>route(line,[[-6000,i*100],[-5000,i*100]])),transitPoint,()=>0);
+ // Nothing is laid until the observer comes within sight of it; then the cells beside them at once, the rest a call at a time.
+ assert.equal(tracks.group.children.length,0);assert.ok(tracks.cellCount>=3);
+ tracks.updateVisibility(0,0);assert.equal(tracks.builtCount,0,'track 5 km away stays unbuilt');
+ tracks.updateVisibility(-5500,0);const near=tracks.builtCount;assert.ok(near>0&&near<tracks.cellCount,'the cells beside the observer are laid in the same call');
+ for(let i=0;i<tracks.cellCount;i++)tracks.updateVisibility(-5500,0);assert.equal(tracks.builtCount,tracks.cellCount,'every cell within sight follows');
  tracks.group.updateMatrixWorld(true);
  for(const z of [0,100,200]){
   const ray=new THREE.Raycaster(new THREE.Vector3(-5500,10,z),new THREE.Vector3(0,-1,0));
@@ -20,9 +25,16 @@ test('each western branch gets reserved rail and catenary while Heath Street sta
  }
  const poles=tracks.group.children.filter(o=>o.name==='Catenary poles');
  for(const z of [0,100,200])assert.ok(poles.some(p=>{p.geometry.computeBoundingBox();return p.geometry.boundingBox.min.z<z&&p.geometry.boundingBox.max.z>z;}),'each branch needs its own supports');
- tracks.updateVisibility(0,0);assert.ok(tracks.group.children.every(m=>!m.visible));
- tracks.updateVisibility(-5500,0);assert.ok(tracks.group.children.every(m=>m.visible));
+ assert.ok(tracks.group.children.every(m=>m.visible));
+ // 1,000 m of double rail in 3 m pieces of 36 vertices each, on three lines; no texture coordinates on plain steel.
+ const rails=tracks.group.children.filter(o=>o.name==='Standard gauge Green Line rails');
+ assert.equal(rails.reduce((n,m)=>n+m.geometry.attributes.position.count,0),3*333*2*36);assert.ok(tracks.group.children.every(m=>!m.geometry.attributes.uv&&m.geometry.attributes.normal));
  for(const mesh of tracks.group.children){mesh.geometry.computeBoundingBox();assert.ok(mesh.geometry.boundingBox.max.x-mesh.geometry.boundingBox.min.x<330,'geometry remains locally cullable');}
+ // Just out of drawing range the track stays built but hidden; well beyond it the cells are dropped and their buffers freed.
+ tracks.updateVisibility(-3700,0);assert.ok(tracks.builtCount>0);assert.ok(tracks.group.children.some(m=>!m.visible));
+ let disposed=0;for(const mesh of tracks.group.children)mesh.geometry.addEventListener('dispose',()=>disposed++);const built=tracks.group.children.length;
+ tracks.updateVisibility(0,0);assert.equal(tracks.builtCount,0);assert.equal(tracks.group.children.length,0);assert.equal(disposed,built);
+ tracks.updateVisibility(-5500,0,true);assert.equal(tracks.builtCount,tracks.cellCount,'an arrival may ask for everything in sight at once');tracks.dispose();
 });
 
 test('one articulated car per service follows its track and the D ignores overhead road signals',async()=>{

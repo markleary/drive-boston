@@ -177,9 +177,21 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
     }
   }
   const exits=tunnelExitSigns(city);for(const exit of exits)sign(exit.road,exit.station,exit.lines);
-  for(const object of batches.meshes()){object.name='Tunnel fixtures and markings';object.castShadow=false;object.receiveShadow=true;group.add(object);}
+  const fixtureCells=batches.meshes(),ahead=new THREE.Vector3();
+  for(const object of fixtureCells){object.name='Tunnel fixtures and markings';object.castShadow=false;object.receiveShadow=true;group.add(object);}
   const fill=new THREE.PointLight('#fff1d3',0,52,1.4);fill.name='Nearby tunnel light';group.add(fill);
   group.userData={roads:roads.length,metres:Math.round(metres),fixtures,signs,advanceExitSigns:exits.length,closures,darkContinuations:closures,continuationLength:TUNNEL_CONTINUATION_LENGTH,tiledCeilings:true,alignment:'Boston official surveyed street centerlines',heights:'Estimated drivable profiles; not engineering survey'};
   scene.add(group);
-  return{group,update(position:{x:number;y:number;z:number}){const inside=tunnelAt(city,position.x,position.z,position.y);fill.visible=!!inside?.covered;fill.intensity=fill.visible?38:0;fill.position.set(position.x,inside?Math.min(inside.ceiling-.4,position.y+2):position.y,position.z);}};
+  return{group,
+    /** `view` (from above ground): the camera and the depth at which the fog is complete. A cell of lights and
+     * markings wholly beyond it is skipped: they stand inside the bores and trenches, below every horizon, so what
+     * shows in their place (a wall, the far ground) is the fog's colour as they were. */
+    update(position:{x:number;y:number;z:number},view?:{camera:THREE.Camera;fogFar:number}){
+      const inside=tunnelAt(city,position.x,position.z,position.y);fill.visible=!!inside?.covered;fill.intensity=fill.visible?38:0;fill.position.set(position.x,inside?Math.min(inside.ceiling-.4,position.y+2):position.y,position.z);
+      if(view)ahead.set(0,0,-1).applyQuaternion(view.camera.quaternion);
+      for(const cell of fixtureCells){
+        const sphere=cell.geometry.boundingSphere!,eye=view?.camera.position;
+        cell.visible=!view||(sphere.center.x-eye!.x)*ahead.x+(sphere.center.y-eye!.y)*ahead.y+(sphere.center.z-eye!.z)*ahead.z-sphere.radius<=view.fogFar;
+      }
+    }};
 }

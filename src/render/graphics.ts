@@ -47,8 +47,31 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   // The normal override used by GTAO cannot preserve alpha-cutout leaves. Keep
   // their opaque cards out of that buffer while retaining their real shadows.
   // Streamed tiles add and remove such objects; `scene.userData.version` says when to look again.
-  let exclusions: THREE.Object3D[] = [], version: unknown = Symbol('unscanned');
-  const refresh = () => { if (scene.userData.version === version) return; version = scene.userData.version; exclusions = []; scene.traverse(object => { if (object.userData.noAO) exclusions.push(object); }); };
+  let exclusions: THREE.Object3D[] = [], strokes: THREE.Object3D[] = [], version: unknown = Symbol('unscanned');
+  const refresh = () => {
+    if (scene.userData.version === version) return; version = scene.userData.version; exclusions = []; strokes = [];
+    scene.traverse(object => { if (object.userData.noAO) exclusions.push(object); if ((object as THREE.Points).isPoints || (object as THREE.Line).isLine) strokes.push(object); });
+  };
+  // GTAO keeps points and lines out of its normal buffer by walking the whole
+  // scene before that pass, every frame; the list changes only when the scene
+  // does, so it is taken in the same scan as the exclusions above.
+  const pass = ao as unknown as { _overrideVisibility?: () => void; _restoreVisibility?: () => void };
+  if (pass._overrideVisibility && pass._restoreVisibility) {
+    let hidden: THREE.Object3D[] = [];
+    pass._overrideVisibility = () => { hidden = strokes.filter(object => object.visible); for (const object of hidden) object.visible = false; };
+    pass._restoreVisibility = () => { for (const object of hidden) object.visible = true; hidden = []; };
+  }
+  // A material draws batched, instanced and plain meshes with different program
+  // variants, and switching variant costs a parameter scan and cache-key build.
+  // three keeps instanced and skinned draws of a material together but not
+  // batched ones; here each kind runs together within its material. Under GTAO's
+  // single override material the kinds come first, since every mesh shares it.
+  // Among opaque draws the depth test, not their order, decides each pixel.
+  type Item = { groupOrder: number; renderOrder: number; material: { id: number }; object: THREE.Object3D; z: number; id: number };
+  const kind = (object: THREE.Object3D) => (object as THREE.BatchedMesh).isBatchedMesh ? 4 : ((object as THREE.InstancedMesh).isInstancedMesh ? 2 : 0) + ((object as THREE.SkinnedMesh).isSkinnedMesh ? 1 : 0);
+  const byMaterial = (a: Item, b: Item) => a.groupOrder - b.groupOrder || a.renderOrder - b.renderOrder || a.material.id - b.material.id || kind(a.object) - kind(b.object) || a.z - b.z || a.id - b.id;
+  const byKind = (a: Item, b: Item) => a.groupOrder - b.groupOrder || a.renderOrder - b.renderOrder || kind(a.object) - kind(b.object) || a.z - b.z || a.id - b.id;
+  renderer.setOpaqueSort(byMaterial);
   const renderAO = ao.render.bind(ao);
   ao.render = (r, write, read, dt, mask) => {
     refresh();
@@ -56,8 +79,9 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
     const autoShadow = r.shadowMap.autoUpdate;
     r.shadowMap.autoUpdate = false;
     visible.forEach(object => { object.visible = false; });
+    r.setOpaqueSort(byKind);
     try { renderAO(r, write, read, dt, mask); }
-    finally { visible.forEach(object => { object.visible = true; }); r.shadowMap.autoUpdate = autoShadow; }
+    finally { r.setOpaqueSort(byMaterial); visible.forEach(object => { object.visible = true; }); r.shadowMap.autoUpdate = autoShadow; }
   };
   const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .13, .32, 1.35);
   composer.addPass(beauty); composer.addPass(ao); composer.addPass(bloom); composer.addPass(new OutputPass());
@@ -108,6 +132,6 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
       composer.render(dt);
     },
     get quality() { return quality; },
-    dispose() { for(const pass of composer.passes)pass.dispose(); composer.dispose(); depth.dispose(); },
+    dispose() { renderer.setOpaqueSort(null); for(const pass of composer.passes)pass.dispose(); composer.dispose(); depth.dispose(); },
   };
 }

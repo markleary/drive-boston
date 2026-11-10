@@ -63,8 +63,14 @@ function spreadByBlock<T>(items:T[],point:(item:T)=>Point2,size=650):T[]{
   return result;
 }
 
+export interface StreetLifeOptions {
+  /** The main view: walkers outside it (and out of reach of it with their shadows) are left out of its draws. */ camera?: THREE.Camera;
+  /** False where no other camera draws the walkers (a phone has no reflection captures): those out of view are not posed either. */ poseHidden?: boolean;
+}
+// A walker's reach into the view: the body, thrown clear of the ground at worst, and its shadow under a low sun.
+const WALKER_REACH = 10;
 /** Ambient walkers follow verified sidewalk stretches; they do not enter traffic. */
-export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: DrivingPhysics, constructionZones: readonly ConstructionZone[] = []) {
+export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: DrivingPhysics, constructionZones: readonly ConstructionZone[] = [], options: StreetLifeOptions = {}) {
   const group = new THREE.Group(); group.name = 'StreetLife'; scene.add(group);
   const peopleGroup = new THREE.Group(); peopleGroup.name = 'Pedestrians'; group.add(peopleGroup);
   const parkedGroup = new THREE.Group(); parkedGroup.name = 'ParkedVehicles'; group.add(parkedGroup);
@@ -191,7 +197,8 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   }
 
   const count = pedestrians.length;
-  const pedestrianModel = createPedestrianModel(peopleGroup,pedestrians,ownedMaterials);
+  const pedestrianModel = createPedestrianModel(peopleGroup,pedestrians,ownedMaterials,{mainCamera:options.camera});
+  const shown = new Uint8Array(count), viewFrustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), reach = new THREE.Sphere(new THREE.Vector3(), WALKER_REACH), poseHidden = options.poseHidden ?? true;
 
   const parked: ParkedVehicle[] = [];
   const candidates: { segment: Segment; x: number; z: number; side: number; yaw: number; score: number }[] = [];
@@ -342,7 +349,11 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       relocationTime=0;
       refill(observer,player);
     }
-    const step=Math.max(0,Math.min(.1,dt));
+    const step=Math.max(0,Math.min(.1,dt)),view=options.camera;
+    if(view){view.updateMatrixWorld();viewFrustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(view.projectionMatrix,view.matrixWorldInverse),view.coordinateSystem,(view as THREE.Camera&{reversedDepth?:boolean}).reversedDepth);}
+    // Whether this walker reaches the main view, and so whether it is drawn there (and, on a phone, posed at all).
+    const inView=(i:number,person:StreetPedestrian)=>{reach.center.copy(person.position);reach.center.y+=1;const visible=!view||viewFrustum.intersectsSphere(reach);shown[i]=visible?1:0;return visible||poseHidden;};
+    pedestrianModel.begin();
     pedestrians.forEach((person, i) => {
       const route = person.route, travel = route.length / person.speed, turn = 1.45, cycle = 2 * (travel + turn);
       if(step>0&&!person.knocked&&player){
@@ -352,7 +363,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       }
       if(person.knocked){
         updateKnocked(person,person.knocked,step);
-        if(person.knocked){pedestrianModel.pose(i,person,0,0,dt,!observer||Math.hypot(person.position.x-observer.x,person.position.z-observer.z)<65);return;}
+        if(person.knocked){if(inView(i,person))pedestrianModel.pose(i,person,0,0,dt,!observer||Math.hypot(person.position.x-observer.x,person.position.z-observer.z)<65);return;}
       }
       const clock = ((elapsed + person.phase) % cycle+cycle)%cycle;
       let along = 0, yaw = route.yaw, walking = 1;
@@ -371,9 +382,9 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       const laps=Math.floor((elapsed+person.phase)/cycle);
       const walked=clock<travel?clock*person.speed:clock<travel+turn?route.length:
         clock<2*travel+turn?route.length+(clock-travel-turn)*person.speed:2*route.length;
-      pedestrianModel.pose(i,person,laps*route.length*2+walked,walking,dt,!observer||Math.hypot(x-observer.x,z-observer.z)<65);
+      if(inView(i,person))pedestrianModel.pose(i,person,laps*route.length*2+walked,walking,dt,!observer||Math.hypot(x-observer.x,z-observer.z)<65);
     });
-    pedestrianModel.flush();
+    pedestrianModel.flush(view?shown:undefined);
   }
   update(0, 0);
   return {

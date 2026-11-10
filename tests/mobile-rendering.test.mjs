@@ -38,7 +38,8 @@ test('mobile skyline releases old geometry and rebuilds after travel or detailed
   view.update(new THREE.Vector3(500,0,500),0);
   view.update(new THREE.Vector3(500,0,500),0);
   assert.equal(view.buildingCount,2);
-  let disposed=0;for(const mesh of view.group.children)mesh.geometry.addEventListener('dispose',()=>disposed++);
+  // A chunk owns its boxes' instance buffers (the unit box is shared) and its ground sheet's geometry.
+  let disposed=0;for(const mesh of view.group.children)(mesh instanceof THREE.InstancedMesh?mesh:mesh.geometry).addEventListener('dispose',()=>disposed++);
   view.update(new THREE.Vector3(8500,0,500),0);
   assert.equal(disposed,4);assert.equal(view.buildingCount,1);assert.equal(view.stats().residentChunks,1);
   view.setChunkDetailed('8_0',true);assert.equal(view.stats().geometryBytes,0);

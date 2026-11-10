@@ -12,7 +12,8 @@ import { farPassageFootprints, isTunnelPassageFar } from '../simulation/tunnel-p
  * (its minimum-area oriented rectangle; a sprawling complex by its massing
  * fragments instead) and a coarse terrain sheet, both per 1 km chunk. The
  * streamer hides a chunk's pair once its detailed tile is built, and nothing
- * here depends on which tiles are loaded. */
+ * here depends on which tiles are loaded. A chunk's boxes are instances of one
+ * unit box (a matrix and a wall colour each), not thirty vertices apiece. */
 export interface FarCityView { group: THREE.Group; setChunkDetailed(key: string, detailed: boolean): void; update(position: THREE.Vector3, altitude: number): void; chunkCount: number; buildingCount: number; stats(): { residentChunks: number; buildings: number; geometryBytes: number }; }
 
 const FAR_STEP = 5; // grid cells per coarse terrain vertex (30 m at 6 m cells)
@@ -31,43 +32,53 @@ function styleColor(style: number) {
 export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false, replaced?: ReadonlySet<FarBuilding>): FarCityView | undefined {
   const metro = city as MetroCity; if (!metro.far || !metro.tiles) return undefined;
   const group = new THREE.Group(); group.name = 'Distant metro'; scene.add(group);
-  const chunks = new Map<string, { buildings?: THREE.Mesh; ground?: THREE.Mesh; detailed: boolean; center: THREE.Vector3; count: number }>();
-  const size = metro.tiles.size, buildingMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
+  const chunks = new Map<string, { buildings?: THREE.InstancedMesh; ground?: THREE.Mesh; detailed: boolean; center: THREE.Vector3; count: number }>();
+  const size = metro.tiles.size;
   const groundMaterial = new THREE.MeshLambertMaterial({ color: '#b9bea8' });
   let buildingCount = 0;
   const colors = Array.from({ length: HOUSE_FAR_STYLE + HOUSE_PALETTES.length }, (_, i) => styleColor(i)), roofColor = new THREE.Color('#7d7a72');
+  // Colours travel as bytes, walls per instance and the roof's in the shader, at the eight bits the vertex colours had.
+  const byte = (value: number) => Math.floor(value * 255);
+  const buildingMaterial = new THREE.MeshLambertMaterial();
+  buildingMaterial.onBeforeCompile = shader => {
+    shader.uniforms.farRoof = { value: new THREE.Vector3(byte(roofColor.r) / 255, byte(roofColor.g) / 255, byte(roofColor.b) / 255) };
+    shader.vertexShader = 'attribute float roof;\nuniform vec3 farRoof;\n' + shader.vertexShader.replace('#include <color_vertex>', '#include <color_vertex>\nvColor.rgb = mix( vColor.rgb, farRoof, roof );');
+  };
+  buildingMaterial.customProgramCacheKey = () => 'far-city-boxes-1';
   const grid = terrainGrid(city);
   for (const key of metro.tiles.keys) {
     const [tx, tz] = key.split('_').map(Number);
     chunks.set(key, { detailed: false, count: 0, center: new THREE.Vector3((tx + .5) * size, 0, (tz + .5) * size) });
   }
+  // The unit box: x and z from -1 to 1 (along and across the hull's rectangle), y from 0 to 1. Five faces (no
+  // floor), flat normals from a non-indexed layout: 30 vertices. Walls wind counter-clockwise seen from outside:
+  // the per-building boxes this replaces wound them the other way, so a distant block showed the inside of its
+  // far walls, lit by normals facing away from the viewer.
+  const unitBox = new THREE.BufferGeometry();
+  {
+    const positions = new Float32Array(30 * 3), normals = new Float32Array(30 * 3), roof = new Float32Array(30); let v = 0;
+    const put = (su: number, y: number, sv: number, nx: number, ny: number, nz: number, top = 0) => { positions[v * 3] = su; positions[v * 3 + 1] = y; positions[v * 3 + 2] = sv; normals[v * 3] = nx; normals[v * 3 + 1] = ny; normals[v * 3 + 2] = nz; roof[v++] = top; };
+    for (const [su0, sv0, su1, sv1, nu, nv] of [[1, -1, 1, 1, 1, 0], [-1, 1, -1, -1, -1, 0], [-1, -1, 1, -1, 0, -1], [1, 1, -1, 1, 0, 1]]) {
+      for (const [su, sv, y] of [[su0, sv0, 0], [su1, sv1, 1], [su1, sv1, 0], [su0, sv0, 0], [su0, sv0, 1], [su1, sv1, 1]]) put(su, y, sv, nu, 0, nv);
+    }
+    for (const [su, sv] of [[-1, -1], [1, 1], [1, -1], [-1, -1], [-1, 1], [1, 1]]) put(su, 1, sv, 0, 1, 0, 1);
+    unitBox.setAttribute('position', new THREE.BufferAttribute(positions, 3)); unitBox.setAttribute('normal', new THREE.BufferAttribute(normals, 3)); unitBox.setAttribute('roof', new THREE.BufferAttribute(roof, 1));
+  }
+  const placement = new THREE.Matrix4();
   function buildBuildings(tile: FarTile) {
     // A hidden complex is boxed by its massing fragments, which share its chunk and so hide with its tile.
     // A tunnel-passage building is boxed by the pieces its detailed shell keeps (see tunnel-passages.ts).
     const list = tile.buildings.filter(b => !replaced?.has(b) && drawsFarMassing(b) && b.height >= 3 && b.footprint.length >= 3).flatMap(b => isTunnelPassageFar(tile.key, b) ? farPassageFootprints(city, b).map(footprint => ({ ...b, footprint })) : [b]);
     if (!list.length) return;
-    // Five faces per box (no floor), flat normals from a non-indexed layout: 30 vertices.
-    const count = list.length, positions = new Float32Array(count * 30 * 3), normals = new Float32Array(count * 30 * 3), color = new Uint8Array(count * 30 * 3);
-    let v = 0;
-    const put = (x: number, y: number, z: number, nx: number, ny: number, nz: number, c: THREE.Color) => {
-      positions[v * 3] = x; positions[v * 3 + 1] = y; positions[v * 3 + 2] = z; normals[v * 3] = nx; normals[v * 3 + 1] = ny; normals[v * 3 + 2] = nz;
-      color[v * 3] = c.r * 255; color[v * 3 + 1] = c.g * 255; color[v * 3 + 2] = c.b * 255; v++;
-    };
-    for (const b of list) {
-      const box = orientedBox(b.footprint), y0 = b.base - 1, y1 = b.base + b.height, wall = colors[Math.min(b.style, colors.length - 1)] ?? colors[0];
-      const corner = (su: number, sv: number, y: number) => [box.cx + box.ux * box.half * su - box.uz * box.halfPerp * sv, y, box.cz + box.uz * box.half * su + box.ux * box.halfPerp * sv] as const;
-      const faces: [number, number, number, number, number, number][] = [[1, -1, 1, 1, 1, 0], [-1, 1, -1, -1, -1, 0], [-1, -1, 1, -1, 0, -1], [1, 1, -1, 1, 0, 1]];
-      for (const [su0, sv0, su1, sv1, nu, nv] of faces) {
-        const nx = box.ux * nu - box.uz * nv, nz = box.uz * nu + box.ux * nv, a = corner(su0, sv0, y0), bb = corner(su1, sv1, y0), c = corner(su1, sv1, y1), d = corner(su0, sv0, y1);
-        for (const p of [a, bb, c, a, c, d]) put(p[0], p[1], p[2], nx, 0, nz, wall);
-      }
-      const r = [corner(-1, -1, y1), corner(1, -1, y1), corner(1, 1, y1), corner(-1, 1, y1)];
-      for (const p of [r[0], r[2], r[1], r[0], r[3], r[2]]) put(p[0], p[1], p[2], 0, 1, 0, roofColor);
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(color, 3, true)); geometry.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geometry, buildingMaterial); mesh.name = `Distant blocks ${tile.key}`; mesh.userData.noAO = true; mesh.receiveShadow = false; mesh.castShadow = false;
+    const count = list.length, mesh = new THREE.InstancedMesh(unitBox, buildingMaterial, count), tint = new Uint8Array(count * 3);
+    list.forEach((b, i) => {
+      // From a metre below the base to the top; the rectangle's axes carry its half lengths.
+      const box = orientedBox(b.footprint), y0 = b.base - 1, wall = colors[Math.min(b.style, colors.length - 1)] ?? colors[0];
+      placement.set(box.ux * box.half, 0, -box.uz * box.halfPerp, box.cx, 0, b.height + 1, 0, y0, box.uz * box.half, 0, box.ux * box.halfPerp, box.cz, 0, 0, 0, 1);
+      mesh.setMatrixAt(i, placement); tint[i * 3] = byte(wall.r); tint[i * 3 + 1] = byte(wall.g); tint[i * 3 + 2] = byte(wall.b);
+    });
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(tint, 3, true); mesh.computeBoundingSphere();
+    mesh.name = `Distant blocks ${tile.key}`; mesh.userData.noAO = true; mesh.receiveShadow = false; mesh.castShadow = false;
     group.add(mesh); buildingCount += count;
     const chunk = chunks.get(tile.key)!; chunk.buildings = mesh; chunk.count = count;
   }
@@ -92,7 +103,9 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
   }
   function release(key: string) {
     const chunk = chunks.get(key)!;
-    for (const mesh of [chunk.buildings, chunk.ground]) if (mesh) { group.remove(mesh); mesh.geometry.dispose(); }
+    // The boxes' geometry is shared: a chunk owns only its instance buffers.
+    if (chunk.buildings) { group.remove(chunk.buildings); chunk.buildings.dispose(); }
+    if (chunk.ground) { group.remove(chunk.ground); chunk.ground.geometry.dispose(); }
     buildingCount -= chunk.count; chunk.count = 0; chunk.buildings = undefined; chunk.ground = undefined;
   }
   function build(key: string) {
@@ -127,9 +140,10 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     let residentChunks = 0, geometryBytes = 0;
     for (const chunk of chunks.values()) {
       if (chunk.buildings || chunk.ground) residentChunks++;
-      for (const mesh of [chunk.buildings, chunk.ground]) if (mesh) {
-        for (const attribute of Object.values(mesh.geometry.attributes)) geometryBytes += attribute.array.byteLength;
-        geometryBytes += mesh.geometry.index?.array.byteLength ?? 0;
+      if (chunk.buildings) geometryBytes += chunk.buildings.instanceMatrix.array.byteLength + (chunk.buildings.instanceColor?.array.byteLength ?? 0);
+      if (chunk.ground) {
+        for (const attribute of Object.values(chunk.ground.geometry.attributes)) geometryBytes += attribute.array.byteLength;
+        geometryBytes += chunk.ground.geometry.index?.array.byteLength ?? 0;
       }
     }
     return { residentChunks, buildings: buildingCount, geometryBytes };

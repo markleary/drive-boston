@@ -66,6 +66,15 @@ export function sampleTerrainNormal(city: TerrainCity, x: number, z: number) {
   return { x: -gx / length, y: 1 / length, z: -gz / length };
 }
 
+/** The terrain mesh's vertex normal at grid vertex (i, j), from the heights either side of it along each axis
+ * (the vertex's own height stands in beyond the grid's rim). Ground layers draped on the terrain shade with it. */
+export function terrainVertexNormal(grid: ElevationGrid, i: number, j: number, out: number[]) {
+  const W = grid.width, H = grid.height, heights = grid.heights, cs = grid.cellSize;
+  const hl = heights[j * W + Math.max(i - 1, 0)], hr = heights[j * W + Math.min(i + 1, W - 1)], hu = heights[Math.max(j - 1, 0) * W + i], hd = heights[Math.min(j + 1, H - 1) * W + i];
+  const nx = -(hr - hl) / (2 * cs), nz = -(hd - hu) / (2 * cs), length = Math.hypot(nx, 1, nz);
+  out[0] = nx / length; out[1] = 1 / length; out[2] = nz / length;
+}
+
 /** Heading preserved in x/z; local +Y follows the support plane. No Three/DOM dependency. */
 export function terrainRotation(city: TerrainCity, x: number, z: number, yaw: number) {
   return rotationFromNormal(sampleTerrainNormal(city, x, z),yaw);

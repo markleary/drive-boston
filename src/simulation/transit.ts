@@ -303,6 +303,6 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
    }
   },
   setNight(night:boolean){group.traverse(o=>{if(o instanceof THREE.Mesh&&o.material instanceof THREE.MeshStandardMaterial&&['head','tail'].includes(o.name))o.material.emissiveIntensity=night?2.4:.3;});},
-  dispose(){for(const a of actors)for(const b of a.bodies)physics.world.removeRigidBody(b);const geometries=new Set<THREE.BufferGeometry>(),materials=new Set<THREE.Material>(),textures=new Set<THREE.Texture>();group.traverse(o=>{if(o instanceof THREE.Mesh){geometries.add(o.geometry);(Array.isArray(o.material)?o.material:[o.material]).forEach(m=>materials.add(m));}});geometries.forEach(g=>g.dispose());materials.forEach(m=>{for(const value of Object.values(m))if(value instanceof THREE.Texture)textures.add(value);m.dispose();});textures.forEach(t=>t.dispose());scene.remove(group);}
+  dispose(){tracks.dispose();for(const a of actors)for(const b of a.bodies)physics.world.removeRigidBody(b);const geometries=new Set<THREE.BufferGeometry>(),materials=new Set<THREE.Material>(),textures=new Set<THREE.Texture>();group.traverse(o=>{if(o instanceof THREE.Mesh){geometries.add(o.geometry);(Array.isArray(o.material)?o.material:[o.material]).forEach(m=>materials.add(m));}});geometries.forEach(g=>g.dispose());materials.forEach(m=>{for(const value of Object.values(m))if(value instanceof THREE.Texture)textures.add(value);m.dispose();});textures.forEach(t=>t.dispose());scene.remove(group);}
  };
 }

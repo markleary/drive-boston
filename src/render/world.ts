@@ -319,12 +319,12 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   // Legacy scene downloads can finish during a lost context too. The first
   // environment render must wait even though geometry preparation can proceed.
   await options.waitForContext?.();setLighting('golden');
-  function update(position:THREE.Vector3,time:number,stream=true,flightShadows=false){
+  function update(position:THREE.Vector3,time:number,stream=true,flightShadows=false,camera?:THREE.Camera){
     updateWater(time);
     underground=!!tunnelAt(city,position.x,position.z,position.y)?.covered;
-    tunnels.update?.(position);
     const fog=scene.fog as THREE.Fog;
     fog.color.set(underground?'#171c1d':mode==='night'?'#162536':mode==='golden'?'#b5b7b2':'#b6c9d5');fog.near=underground?55:250;fog.far=underground?230:1050;
+    tunnels.update?.(position,camera&&!underground?{camera,fogFar:fog.far}:undefined);
     sky.visible=!underground&&mode!=='night';
     sun.intensity=underground?.08:mode==='night'?.16:mode==='golden'?3.6:3.4;hemi.intensity=underground?.38:mode==='night'?.24:.68;
     const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);
@@ -374,6 +374,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     if(probeFace<0){
       if(!reflectionDirty&&(!highQuality||time-lastProbeTime<2.5||probePosition.distanceToSquared(position)<144))return;
       probe.position.copy(position);probe.position.y=underground?position.y:Math.max(height(position.x,position.z)+2.1,position.y);
+      probe.updateMatrixWorld(true); // the frame's one scene update ran before the probe moved
       probePosition.copy(position);lastProbeTime=time;probeFace=0;
       // The first capture and lighting changes render all six faces now so the
       // new environment shows at once. Travel refreshes spread the six faces

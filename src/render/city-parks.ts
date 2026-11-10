@@ -8,7 +8,8 @@ import {roadSlabGeometry,deckEdge} from '../simulation/road-surfaces.ts';
 import {canopyHitsDeck,PARK_CANOPY} from '../simulation/deck-canopy.ts';
 import { canvasTexture, seeded } from './materials';
 import { createStreetTrees, type TreeField, type TreePlanting } from './foliage';
-import { drapedRibbonInto,clipPortalSurfaceSteps } from './terrain-ground';
+import { drapedRibbonInto } from './terrain-ground';
+import { DrapedSurface } from './draped-surface.ts';
 import { PartBatches, TriangleWriter, box, type Part } from './geometry-writer';
 import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
@@ -121,14 +122,15 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const treeBudget=options.budgets?.trees??760,benchBudget=options.budgets?.benches??140;
   const batches=new PartBatches(240),matrix=new THREE.Matrix4();
   const part=(g:Part,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{batches.part(g,m,matrix.makeRotationY(yaw).setPosition(x,y,z));};
-  const lawns:THREE.BufferGeometry[]=[],gardens:THREE.BufferGeometry[]=[],woods:THREE.BufferGeometry[]=[],plazas:THREE.BufferGeometry[]=[],waterSheets:THREE.BufferGeometry[]=[],bankPositions:number[]=[];
+  // Ground layers by finish, each one shared-vertex mesh on the terrain's own triangles (draped-surface.ts).
+  const layer=()=>new DrapedSurface(city,{bounds,pace}),lawns=layer(),gardens=layer(),woods=layer(),plazas=layer();
+  const waterSheets:THREE.BufferGeometry[]=[],bankPositions:number[]=[];
   for(const park of parks){
     if(due(pace))yield;
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
     const list=isFellsWoodland(park)?woods:/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??'')?plazas:/public garden/i.test(park.name)?gardens:lawns;
-    // A large park or basin covers thousands of DEM cells: its surface is draped a few milliseconds a frame.
-    const surface=yield* parkSurfaceSteps(city,park.rings,{bounds,pace});
-    const geometry=yield* clipPortalSurfaceSteps(city,surface,pace);if(geometry.attributes.position.count)list.push(geometry);else geometry.dispose();
+    // A large park covers thousands of DEM cells: its surface is draped a few milliseconds a frame.
+    yield* list.add(park.rings);
   }
   for(const water of waters){
     if(due(pace))yield;
@@ -156,11 +158,16 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     options.onShore?.(vertices,ids);
     const mesh=new THREE.Mesh(bank,lawn);mesh.name='Sloping water banks';mesh.receiveShadow=true;group.add(mesh);
   }
-  for(const [list,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[woods,forestFloor,'Fells forest floor'],[plazas,pathMaterial,'Plazas'],[waterSheets,waterMaterial,'Water']] as const){
-    if(!list.length)continue;
+  for(const [surface,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[woods,forestFloor,'Fells forest floor'],[plazas,pathMaterial,'Plazas']] as const){
+    if(!surface.stats.polygons)continue;
     if(due(pace))yield;
-    const merged=mergeGeometries(list,false);list.forEach(g=>g.dispose());if(!merged)continue;yield* boundingSphereSteps(merged,pace);
-    const mesh=new THREE.Mesh(merged,material);mesh.name=name;mesh.receiveShadow=true;if(material===waterMaterial)mesh.userData.noAO=true;group.add(mesh);
+    const geometry=yield* surface.geometrySteps();if(!geometry.index!.count){geometry.dispose();continue;}
+    const mesh=new THREE.Mesh(geometry,material);mesh.name=name;mesh.receiveShadow=true;group.add(mesh);
+  }
+  if(waterSheets.length){
+    if(due(pace))yield;
+    const merged=mergeGeometries(waterSheets,false);waterSheets.forEach(g=>g.dispose());
+    if(merged){yield* boundingSphereSteps(merged,pace);const mesh=new THREE.Mesh(merged,waterMaterial);mesh.name='Water';mesh.receiveShadow=true;mesh.userData.noAO=true;group.add(mesh);}
   }
   let bridges=0,benches=0,lamps=0;
   for(const path of paths){
