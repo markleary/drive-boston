@@ -274,7 +274,7 @@ async function boot(){
     const railData=await railRequest,rail=railData?createRailTracks(scene,city,physics,railData,{mobile}):undefined;
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     walker=createWalker(city,physics);const player=createPlayerModel(scene);player.group.visible=false;
-    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile});setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
+    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile,tiles:world.streamer});setParkedNight=streetLife.setNight;setParkedNight((lighting as LightingMode)==='night');
     // What the chassis was touching when it was knocked: a car outranks a bus,
     // which outranks a wall; only the bare ground counts as a landing.
     const classifyImpact=(impact:Impact):ImpactKind=>{

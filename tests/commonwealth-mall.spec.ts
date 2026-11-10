@@ -1,7 +1,7 @@
 import {test,expect,type Page} from '@playwright/test';
 
 type Mall={trees:number;benches:number;fencePanels:number;walks:number;monuments:string[]};
-type Snapshot={state:{x:number;z:number};walker:{x:number;z:number};tiles:{keys:string[]}};
+type Snapshot={state:{x:number;z:number};walker:{x:number;z:number};walkers:{x:number;z:number}[];tiles:{keys:string[]}};
 type Hooks={snapshot():Snapshot;commonwealthMall():Mall;walkTo(x:number,z:number,yaw:number):void;travelTo(x:number,z:number,yaw:number):void};
 
 // The block from Exeter Street to Fairfield Street in its own frame: metres west of its Exeter Street end along the
@@ -9,10 +9,11 @@ type Hooks={snapshot():Snapshot;commonwealthMall():Mall;walkTo(x:number,z:number
 const EAST=[-466.91,-125.55],AXIS=[-.93859,.3449],NORTH=[-.3449,-.93859],WEST=Math.atan2(AXIS[0],AXIS[1]);
 const at=(s:number,v:number):[number,number]=>[EAST[0]+AXIS[0]*s+NORTH[0]*v,EAST[1]+AXIS[1]*s+NORTH[1]*v];
 const along=(p:{x:number;z:number})=>(p.x-EAST[0])*AXIS[0]+(p.z-EAST[1])*AXIS[1];
+const across=(p:{x:number;z:number})=>(p.x-EAST[0])*NORTH[0]+(p.z-EAST[1])*NORTH[1];
 
 async function hold(page:Page,key:string,ms:number){await page.keyboard.down(key);try{await page.waitForTimeout(ms);}finally{await page.keyboard.up(key);}}
 
-test('the Commonwealth Avenue Mall: a fenced lawn, a walk through its gate, a monument on the block',async({page},testInfo)=>{
+test('the Commonwealth Avenue Mall: a fenced lawn, a walk through its gate, walkers on it and a monument on the block',async({page},testInfo)=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   page.on('console',message=>{if(message.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)/i.test(message.text()))errors.push(message.text());});
   // Exeter Street, where it crosses the Mall.
@@ -32,9 +33,16 @@ test('the Commonwealth Avenue Mall: a fenced lawn, a walk through its gate, a mo
   expect(new Set(mall.monuments).size).toBe(mall.monuments.length);
   expect(mall.trees).toBeGreaterThan(200);expect(mall.benches).toBeGreaterThan(40);expect(mall.fencePanels).toBeGreaterThanOrEqual(80);
 
-  // On foot from the Exeter Street sidewalk: the walk leads through the gate, toward Samuel Eliot Morison on his rock.
+  // Arriving from across the city, as a map trip does, the neighborhood's walkers are placed afresh: some of them
+  // in the two files of the centre walk, none on the lawn beside it.
   await page.keyboard.press('Digit4');
+  await page.evaluate(()=>(window as unknown as {__backbay:Hooks}).__backbay.walkTo(-2600,1500,0));
+  await page.waitForTimeout(1500);
+  // On foot from the Exeter Street sidewalk: the walk leads through the gate, toward Samuel Eliot Morison on his rock.
   await walkTo(at(-2.5,.2));
+  const onBlock=async()=>(await snapshot()).walkers.filter(w=>along(w)>1&&along(w)<182&&Math.abs(across(w))<14.5);
+  await expect.poll(async()=>(await onBlock()).length,{timeout:20000}).toBeGreaterThanOrEqual(3);
+  for(const walker of await onBlock())expect(Math.abs(across(walker)),'a walker keeps to the centre walk').toBeLessThan(2.6);
   await page.waitForTimeout(800);
   await page.screenshot({path:testInfo.outputPath('mall-from-exeter-street.png')});
   await hold(page,'KeyW',6000);
