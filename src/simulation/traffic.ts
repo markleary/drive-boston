@@ -3,6 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import type { CityData, Point2, VehicleState, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import {createNPCVehicleBatches} from '../render/npc-vehicles.ts';
+import type {RoadHeadlights} from '../render/road-headlights.ts';
 import {NPC_BODY_LIFT,TRAFFIC_CAPACITY,npcVehicleAt,npcPaint,type NPCVehicleSpec} from './npc-vehicle-specs.ts';
 import {createNPCVehicleColliders} from '../physics/npc-vehicle.ts';
 import { sampleElevation } from './terrain.ts';
@@ -310,7 +311,7 @@ export function blendJoin(points:Point2[],roads:Road[],next:Point2[],road:Road,k
 
 /** Lightweight local traffic; all routes follow the imported directed road graph.
  * `deckDrawn` hides traffic until its supporting deck is visible. */
-export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[],{deckDrawn,mobile}:{deckDrawn?:(road:Road)=>boolean;mobile?:boolean}={}) {
+export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[],{deckDrawn,mobile,headlights}:{deckDrawn?:(road:Road)=>boolean;mobile?:boolean;headlights?:RoadHeadlights}={}) {
   const { nodes, heights, edges } = roadGraph(city);
   const zonesByRoad=new Map<string,ConstructionZone[]>(),lanes=new Map<Edge,Point2[]>();
   for(const zone of constructionZones){const list=zonesByRoad.get(zone.roadId)??[];list.push(zone);zonesByRoad.set(zone.roadId,list);}
@@ -682,8 +683,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     for(const collider of actor.colliders)collider.setEnabled(!hidden);
   }
   function draw(index:number){
+    const actor=actors[index];
     lift.set(0,NPC_BODY_LIFT,0).applyQuaternion(rotation);meshPosition.copy(position).sub(lift);matrix.compose(meshPosition,rotation,scale);
-    fleet.draw(index,matrix,actors[index].color,Math.hypot(actors[index].x-drawObserver.x,actors[index].z-drawObserver.z),actors[index].steering);
+    fleet.draw(index,matrix,actor.color,Math.hypot(actor.x-drawObserver.x,actor.z-drawObserver.z),actor.steering);
+    headlights?.add(index,matrix,actor.spec.length/2,actor.spec.width);
   }
   /** A struck vehicle becomes a sliding, spinning dynamic compound body, carrying
    * its lane speed into the collision; its taller shape rests on the road. The
@@ -1105,6 +1108,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       detectKnocks();
       for(const actor of actors)if(!actor.knocked&&!actor.rejoin&&actor.path.length-actor.distance<40&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<=localRadius*1.35)extendRoute(actor);
       const keepers=actors.map(actor=>!actor.knocked&&!actor.rejoin&&!actor.parked),{limits,blockers}=rightsOfWay(keepers,external);
+      headlights?.beginFrame(observer.x,observer.z);
       for (let index = 0; index < actors.length; index++) {
         const actor = actors[index];
         if(actor.parked)continue;
@@ -1224,11 +1228,14 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         setDeckVisibility(actor,road);if(actor.hidden)fleet.hide(index);else draw(index);
       }
       fleet.flush();
+      headlights?.endFrame();
     },
     setNight(night: boolean) {fleet.setNight(night);},
     dispose() {
       for (const actor of actors) physics.world.removeRigidBody(actor.body);
       fleet.dispose();
+      headlights?.beginFrame(0,0);
+      headlights?.endFrame();
       scene.remove(group);
     },
   };

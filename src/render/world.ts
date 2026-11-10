@@ -39,6 +39,8 @@ import { updateWater } from './water-material';
 import { updateSunShadow } from './shadows';
 import { addTunnels } from './tunnels';
 import { tunnelAt,inTunnelApproach } from '../simulation/tunnels.ts';
+import { createRoadHeadlights } from './road-headlights';
+import { TRAFFIC_CAPACITY } from '../simulation/npc-vehicle-specs';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; warm?: Warm; upload?: Upload; }
 
@@ -46,6 +48,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const metro=isMetroCity(city)?city:undefined;
   if(!metro)prepareNeighborhoodArchitecture(city);
   const materials=createMaterials(!!options.mobile);
+  const roadHeadlights=createRoadHeadlights(TRAFFIC_CAPACITY);
+  for(const material of [materials.asphalt,materials.paint,materials.yellow])roadHeadlights.apply(material);
   const height=(x:number,z:number)=>sampleElevation(city,x,z);
   scene.background=null;scene.fog=new THREE.Fog('#aeb9bc',250,1050);
   const hemi=new THREE.HemisphereLight(0xb8d9f1,0x625343,.6);scene.add(hemi);
@@ -101,8 +105,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const charlesBridges=addCharlesBridgeDetails(scene,city);buildingCollisions.push(...charlesBridges.collisions);
   roadStructures.userData.longfellow=charlesBridges.group.userData;
   const harvardBridge=addHarvardBridgeDetails(scene,city,{mobile:options.mobile});buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
-  const tobinBridge=addTobinBridgeDetails(scene,city);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
-  const tunnels=addTunnels(scene,city,options.mobile);roadStructures.userData.tunnels=tunnels.group.userData;
+  const tobinBridge=addTobinBridgeDetails(scene,city,materials.asphalt);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
+  const tunnels=addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;
 
   /** The original single-survey build: every road, curb, building and prop at once. */
   async function buildWholeCity(){
@@ -299,6 +303,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const direction=new THREE.Vector3(-270,255,330);
   function setLighting(next:LightingMode){
     mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);
+    roadHeadlights.setNight(night);
     sky.visible=!night;environmentSky.visible=!night;
     scene.background=night?new THREE.Color('#07111e'):null;
     environmentScene.background=night?new THREE.Color('#152638'):null;
@@ -414,5 +419,5 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     probeTarget?.dispose();sun.shadow.map?.dispose();sun.shadow.map=null;
     pmrem.dispose();pmrem=new THREE.PMREMGenerator(renderer);
   }
-  return {setLighting,update,updateReflections,setQuality,releaseGraphicsTargets,get shadowMapSize(){return sun.shadow.mapSize.x;},get shadowCoverage(){return {halfExtent:sun.shadow.camera.right,far:sun.shadow.camera.far};},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,streamer,far};
+  return {setLighting,update,updateReflections,setQuality,releaseGraphicsTargets,get shadowMapSize(){return sun.shadow.mapSize.x;},get shadowCoverage(){return {halfExtent:sun.shadow.camera.right,far:sun.shadow.camera.far};},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,roadHeadlights,streamer,far};
 }
