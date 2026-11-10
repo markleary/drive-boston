@@ -29,6 +29,8 @@ import { PartBatches, box } from './geometry-writer';
 import { due, UNPACED, type Pace } from './pacing';
 import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
+import { createI93ExitSign } from './i93-exit-signs';
+import { planI93ExitSigns } from '../simulation/i93-exit-signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { roadStructureSteps } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
@@ -109,6 +111,8 @@ export function createTileBuilder(ctx: TileContext) {
   const frontageBrick=materials.brick.clone();frontageBrick.polygonOffset=false;
   const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
   const chelseaLiftSteel = new THREE.MeshStandardMaterial({ color: '#9ea7a3', roughness: .72, metalness: .3 });
+  const signSteel = new THREE.MeshStandardMaterial({ color: '#a9b4b6', roughness: .68, metalness: .25 });
+  const exitSigns = planI93ExitSigns(city.roads);
   const isChelseaLiftFrame = (building: Building) => building.id === 'osm-way-196751230';
   const height = (x: number, z: number) => sampleElevation(city, x, z);
   // Road, signal and area lookups by 250 m cell, built once for the metro.
@@ -223,6 +227,13 @@ export function createTileBuilder(ctx: TileContext) {
       yield* stage('structures', roadStructureSteps(group, subCity, materials.asphalt, elevated, pace, city));
       for (const road of elevated) { if (due(pace)) yield 'structures'; colliders.push(...physics.addRoadDeck(subCity, road)); }
       stats.structures = elevated.length;
+    }
+    for (const sign of exitSigns) {
+      if (!insideTile(sign.approach.x, sign.approach.z)) continue;
+      if (due(pace)) yield 'structures';
+      const exit = createI93ExitSign(sign, height, signSteel);
+      group.add(exit.group);
+      owned.push(exit.material);
     }
     partial.structuresReady = true;
     yield 'structures';

@@ -35,6 +35,39 @@ const sideView=(name:string,x:number,y:number,z:number,dx:number,dz:number,dista
  const l=Math.hypot(dx,dz)||1,cx=x-dz/l*distance,cz=z+dx/l*distance;return {name,x:cx,y:y+rise,z:cz,yaw:Math.atan2(x-cx,z-cz),pitch};
 };
 
+test('Exit 22 signs appear ahead on their own I-93 carriageway',async({page,request},testInfo)=>{
+ test.setTimeout(240000);
+ await page.setViewportSize({width:1600,height:900});
+ const {roads}:{roads:Road[]}=await(await request.get('/data/city.json')).json();
+ const errors:string[]=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.goto('/');
+ await page.getByTestId('start-drive').click({timeout:90000});
+ await page.keyboard.press('c');
+ for(const {dir,roadId,fromEnd,legend} of [
+  {dir:'nb',roadId:'i93-nb-11',fromEnd:22,legend:'Exit 22 · Mystic Valley Pkwy / Arlington'},
+  {dir:'sb',roadId:'i93-sb-24',fromEnd:124,legend:'Exit 22 · Revere Beach Pkwy / Everett / Revere'},
+ ]){
+  const road=roads.find(r=>r.id===roadId)!;
+  const {x,z,yaw}=along(road,length(road)-fromEnd);
+  await page.evaluate(({x,z,yaw,roadId})=>(window as any).__backbay.travelTo(x,z,yaw,roadId),{x,z,yaw,roadId});
+  await streamed(page);
+  const signName=`I-93 advance sign: i93-${dir}-exit-22`;
+  await expect.poll(()=>page.evaluate(({signName,legend})=>{
+   const api=(window as any).__backbay,state=api.snapshot().state;
+   const sign=api.scene.getObjectByName(signName),face=sign?.getObjectByName(legend);
+   if(!face)return false;
+   const dx=sign.position.x-state.x,dz=sign.position.z-state.z;
+   const forward=dx*Math.sin(state.yaw)+dz*Math.cos(state.yaw);
+   const facesDriver=dx*Math.sin(sign.rotation.y)+dz*Math.cos(sign.rotation.y)<0;
+   return forward>20&&forward<60&&facesDriver&&face.material.map?.image.width===768;
+  },{signName,legend}),{timeout:60000}).toBe(true);
+  await expect(page.locator('#toast')).not.toHaveClass(/visible/);
+  await page.screenshot({path:testInfo.outputPath(`exit-22-${dir}.png`)});
+ }
+ expect(errors).toEqual([]);
+});
+
 test('the Zakim viaduct draws from the north before its distant owner finishes building',async({page},testInfo)=>{
  await page.goto('/');
  await page.getByTestId('start-drive').click({timeout:90000});
