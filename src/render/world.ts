@@ -31,6 +31,7 @@ import { createFarCity } from './far-city';
 import { addArchitecturalLandmarks } from './architectural-landmarks';
 import { createTileStreamer, type TileStreamer } from './tile-streaming';
 import type { Warm } from './static-batches';
+import type { Upload } from './paced-upload';
 import { addCharlesBridgeDetails } from './charles-bridges';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 import { addTobinBridgeDetails } from './tobin-bridge';
@@ -39,7 +40,7 @@ import { updateSunShadow } from './shadows';
 import { addTunnels } from './tunnels';
 import { tunnelAt,inTunnelApproach } from '../simulation/tunnels.ts';
 
-export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; warm?: Warm; }
+export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; warm?: Warm; upload?: Upload; }
 
 export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene,city:CityData,options:WorldOptions={}) {
   const metro=isMetroCity(city)?city:undefined;
@@ -88,7 +89,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     far=createFarCity(scene,city,!!options.mobile,architecturalLandmarks.farHulls);
     const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
     const parkTrees=createTreeField({scale:1.65,grates:false});parkTrees.group.name='Park specimen trees';scene.add(parkTrees.group);
-    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,detailed:()=>highQuality,warm:options.warm,replacedBuildings:architecturalLandmarks.replaced,landmarkForecourt:architecturalLandmarks.occupied},options.read,far,!!options.mobile);
+    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,detailed:()=>highQuality,warm:options.warm,upload:options.upload,replacedBuildings:architecturalLandmarks.replaced,landmarkForecourt:architecturalLandmarks.occupied},options.read,far,!!options.mobile);
     buildingChunks=streamer.buildingChunks;lampPositions=streamer.lampPositions;signalPlacements=streamer.signals;
     roadStructures=new THREE.Group();roadStructures.name='Streamed road structures';
     const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);
@@ -319,7 +320,21 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   // Legacy scene downloads can finish during a lost context too. The first
   // environment render must wait even though geometry preparation can proceed.
   await options.waitForContext?.();setLighting('golden');
-  function update(position:THREE.Vector3,time:number,stream=true,flightShadows=false,camera?:THREE.Camera){
+  // The flight shadow map spreads its 4,096 texels over 2.2 km (shadows.ts), 0.54 m each: window reveals, shopfront
+  // fittings, signal heads and lamp poles are narrower than one and leave no mark in it, yet were half of that pass's
+  // triangles. They cast only into the close map of the ground views. Looked up when the mode or the tiles change.
+  const FINE_CASTER=/facade depth|storefronts|traffic signals|Lamp poles/;
+  let fineFlight:boolean|undefined,fineVersion:unknown;
+  function fineCasters(flight:boolean){
+    if(!streamer||(flight===fineFlight&&scene.userData.version===fineVersion))return;
+    fineFlight=flight;fineVersion=scene.userData.version;
+    for(const tile of streamer.loaded.values())tile.group.traverse(object=>{
+      const data=object.userData;
+      if(data.fineCaster===undefined)data.fineCaster=object.castShadow&&(FINE_CASTER.test(object.name)||FINE_CASTER.test(object.parent?.name??''));
+      if(data.fineCaster)object.castShadow=!flight;
+    });
+  }
+  function update(position:THREE.Vector3,time:number,stream=true,flightShadows=false,camera?:THREE.Camera,flying=false){
     updateWater(time);
     underground=!!tunnelAt(city,position.x,position.z,position.y)?.covered;
     const fog=scene.fog as THREE.Fog;
@@ -328,8 +343,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     sky.visible=!underground&&mode!=='night';
     sun.intensity=underground?.08:mode==='night'?.16:mode==='golden'?3.6:3.4;hemi.intensity=underground?.38:mode==='night'?.24:.68;
     const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);
-    updateSunShadow(sun,position,groundY,direction,flightShadows);sky.position.copy(position);
-    if(stream)streamer?.update(position,altitude);far?.update(position,altitude);
+    updateSunShadow(sun,position,groundY,direction,flightShadows);fineCasters(flightShadows);sky.position.copy(position);
+    if(stream)streamer?.update(position,altitude,flying);far?.update(position,altitude);
     for(const mesh of buildingChunks){const sphere=mesh.geometry.boundingSphere!;mesh.visible=Math.hypot(sphere.center.x-position.x,sphere.center.z-position.z)<1100+altitude*2+sphere.radius;}
     const night=mode==='night';
     if(night){

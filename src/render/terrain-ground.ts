@@ -121,12 +121,14 @@ function drapedSurfaceInto(sink:TriangleSink,city:CityData,offset:number,surface
     const clipped=clipTunnelPortals(city,vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
     if(clipped.vertices!==vertices){v.length=0;for(const i of clipped.indices){const x=clipped.vertices[i*3],y=clipped.vertices[i*3+1],z=clipped.vertices[i*3+2];v.push(x,y,z,x/5,z/5);}}
   }
-  const n=v.length/5,sums=new Map<string,number[]>(),keys=new Array<string>(n);
+  // Corners that coincide to 2 cm share a smoothed normal. The key is the pair of rounded coordinates as one number
+  // (a string per vertex was a tenth of a tile's road stage: every lane dash and crosswalk stripe passes here).
+  const n=v.length/5,sums=new Map<number,number[]>(),keys=new Float64Array(n);
   for(let i=0;i<n;i+=3){
     const ax=v[i*5],ay=v[i*5+1],az=v[i*5+2],bx=v[i*5+5],by=v[i*5+6],bz=v[i*5+7],cx=v[i*5+10],cy=v[i*5+11],cz=v[i*5+12];
     const abx=ax-bx,aby=ay-by,abz=az-bz,cbx=cx-bx,cby=cy-by,cbz=cz-bz;
     let nx=cby*abz-cbz*aby,ny=cbz*abx-cbx*abz,nz=cbx*aby-cby*abx;const length=Math.hypot(nx,ny,nz);if(length>0){nx/=length;ny/=length;nz/=length;}
-    for(let k=i;k<i+3;k++){const key=keys[k]=`${Math.round(v[k*5]*50)},${Math.round(v[k*5+2]*50)}`,s=sums.get(key);if(s){s[0]+=nx;s[1]+=ny;s[2]+=nz;}else sums.set(key,[nx,ny,nz]);}
+    for(let k=i;k<i+3;k++){const key=keys[k]=(Math.round(v[k*5]*50)+16777216)*67108864+Math.round(v[k*5+2]*50)+16777216,s=sums.get(key);if(s){s[0]+=nx;s[1]+=ny;s[2]+=nz;}else sums.set(key,[nx,ny,nz]);}
   }
   sink.reserve(n);
   for(let k=0;k<n;k++){const s=sums.get(keys[k])!,l=Math.hypot(s[0],s[1],s[2])||1;sink.vertex(v[k*5],v[k*5+1],v[k*5+2],s[0]/l,s[1]/l,s[2]/l,v[k*5+3],v[k*5+4]);}

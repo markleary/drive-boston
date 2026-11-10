@@ -4,6 +4,22 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { canvasTexture, hash, seeded } from './materials.ts';
 
 const windTime={value:0};
+/** Detail levels by distance from the observer, on Detailed and on Balanced: the nearest out to the first distance,
+ * the middle one out to the second, the coarsest beyond. Each level has its own arrangement of leaf cards (48 small,
+ * 24 medium, 12 large), so a tree that swapped whole from one to the next changed shape: from a helicopter 160 m up
+ * the second boundary is a ring 277 m out, sweeping across the middle of the view four times a second. Instead a
+ * level's cards shrink and the next level's grow, inside the nearer level's range, over `treeLodBands`; the swap
+ * of instance pools that follows changes nothing on screen. */
+const LOD_DISTANCE={high:[100,320],balanced:[60,210]} as const;
+/** The pools are refreshed four times a second (or after 25 m), so the observer may have moved this far since a
+ * tree was last sorted: the blend is complete this far short of the level's edge. */
+const LOD_LAG=15;
+/** Start and end (metres from the observer) of the blend from the first level to the second, then the second to the third. */
+export function treeLodBands(high:boolean):[number,number,number,number]{
+  const [near,mid]=LOD_DISTANCE[high?'high':'balanced'];
+  return [near-LOD_LAG-near*.3,near-LOD_LAG,mid-LOD_LAG-mid*.28,mid-LOD_LAG];
+}
+const treeLod={value:new THREE.Vector4(...treeLodBands(true))},treeObserver={value:new THREE.Vector3()};
 const SPECIES=[
   {name:'maple',height:7.8,spread:3.1,tall:2.5,hue:70,color:'#aabf85'},
   {name:'elm',height:9.4,spread:3.4,tall:3.7,hue:79,color:'#9fb484'},
@@ -16,14 +32,26 @@ const STREET_SPECIES=SPECIES.flatMap((s,i)=>s.parkOnly?[]:[i]);
 const PARK_SPECIES=SPECIES.map((_,i)=>i);
 const LODS=[0,1,2];
 let resources:{bark:THREE.MeshStandardMaterial;leaves:{near:THREE.MeshStandardMaterial;distant:THREE.MeshStandardMaterial;depth:THREE.MeshDepthMaterial}[];geometries:{wood:THREE.BufferGeometry;leaves:THREE.BufferGeometry}[][]}|undefined;
+/** `flutter`: a leaf material. Its cards carry `cardCentre` and `cardFade` (see `geometryFor`) and are scaled about
+ * their centres by the blend between detail levels at the tree's distance from the observer; areas, not sides, are
+ * blended, so the crown keeps its cover half way. The shadow pass draws with the same uniforms (its own camera is
+ * the sun's, not the observer). */
 function wind(material:THREE.Material,flutter=false){
-  material.onBeforeCompile=shader=>{shader.uniforms.treeTime=windTime;shader.vertexShader='uniform float treeTime;\n'+shader.vertexShader;shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.treeTime=windTime;shader.uniforms.treeLod=treeLod;shader.uniforms.treeObserver=treeObserver;
+    shader.vertexShader=`uniform float treeTime;${flutter?'uniform vec4 treeLod;uniform vec3 treeObserver;attribute vec3 cardCentre;attribute float cardFade;':''}\n`+shader.vertexShader;shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>
+    ${flutter?`float cardLevel=abs(cardFade);
+    if(cardLevel>.5){
+      vec2 band=cardLevel>1.5?treeLod.zw:treeLod.xy;
+      float blend=smoothstep(band.x,band.y,distance(treeObserver,(modelMatrix*vec4(instanceMatrix[3].xyz,1.)).xyz));
+      transformed=cardCentre+(transformed-cardCentre)*sqrt(cardFade>0.?1.-blend:blend);
+    }`:''}
     float windPhase=instanceMatrix[3].x*.041+instanceMatrix[3].z*.037;
     float windWeight=pow(clamp(position.y/11.,0.,1.),2.);
     transformed.x+=sin(treeTime*.85+windPhase)*windWeight*.12;
     transformed.z+=cos(treeTime*.61+windPhase)*windWeight*.065;
     ${flutter?'transformed.y+=sin(treeTime*2.4+position.x*1.7+position.z)*windWeight*.035;':''}`);};
-  material.customProgramCacheKey=()=>`boston-trees-2-${flutter}`;
+  material.customProgramCacheKey=()=>`boston-trees-3-${flutter}`;
 }
 function leafTexture(species:number){
   const canvas=document.createElement('canvas');canvas.width=canvas.height=256;const c=canvas.getContext('2d')!,random=seeded(1207+species*391);
@@ -55,8 +83,21 @@ function leafTexture(species:number){
   }
   return canvasTexture(canvas);
 }
+/** The leaf cards of one detail level, each with the point it is placed at. */
+function leafCards(species:number,lod:number){
+  const s=SPECIES[species],random=seeded(5103+species*713),cards:{card:THREE.BufferGeometry;centre:THREE.Vector3}[]=[],matrix=new THREE.Matrix4(),q=new THREE.Quaternion();
+  const count=[48,24,12][lod];
+  for(let j=0;j<count;j++){
+    const a=j*2.399963,unit=(j+.5)/count,vertical=1-2*unit,radius=Math.sqrt(Math.max(0,1-vertical*vertical));
+    const spread=s.spread*(species===3?.25+.75*unit:1-(s.taper??0)*vertical);
+    const x=Math.cos(a)*radius*spread,z=Math.sin(a)*radius*spread,y=s.height+vertical*s.tall-(species===3?1.2:0);
+    const card=new THREE.PlaneGeometry([2.6,3.8,5.1][lod]*(s.cardWidth??(species===2?.85:1)),[2.4,3.5,4.8][lod]),centre=new THREE.Vector3(x,y,z);
+    const euler=new THREE.Euler((random()-.5)*1.9,a,(random()-.5)*1.2);q.setFromEuler(euler);matrix.compose(centre,q,new THREE.Vector3(1,1,1));card.applyMatrix4(matrix);cards.push({card,centre});
+  }
+  return cards;
+}
 function geometryFor(species:number,lod:number){
-  const s=SPECIES[species],random=seeded(5103+species*713),wood:THREE.BufferGeometry[]=[],leaves:THREE.BufferGeometry[]=[];
+  const s=SPECIES[species],wood:THREE.BufferGeometry[]=[],leaves:THREE.BufferGeometry[]=[];
   const matrix=new THREE.Matrix4(),q=new THREE.Quaternion(),up=new THREE.Vector3(0,1,0);
   function branch(a:THREE.Vector3,b:THREE.Vector3,r:number){const d=b.clone().sub(a);q.setFromUnitVectors(up,d.clone().normalize());matrix.compose(a.clone().add(b).multiplyScalar(.5),q,new THREE.Vector3(1,1,1));wood.push(new THREE.CylinderGeometry(r*.5,r,d.length(),lod===0?7:5).applyMatrix4(matrix));}
   branch(new THREE.Vector3(),new THREE.Vector3(.12,s.height,0),species===1?.24:.19);
@@ -65,14 +106,15 @@ function geometryFor(species:number,lod:number){
     const a=new THREE.Vector3(.08,startY+j*.23,0),b=new THREE.Vector3(Math.cos(angle)*s.spread*.6,endY,Math.sin(angle)*s.spread*.6);
     branch(a,b,.075);if(lod===0){const end=b.clone().add(new THREE.Vector3(Math.cos(angle+.4)*s.spread*.35,-.3,Math.sin(angle+.4)*s.spread*.35));branch(b,end,.032);}
   }
-  const count=[48,24,12][lod];
-  for(let j=0;j<count;j++){
-    const a=j*2.399963,unit=(j+.5)/count,vertical=1-2*unit,radius=Math.sqrt(Math.max(0,1-vertical*vertical));
-    const spread=s.spread*(species===3?.25+.75*unit:1-(s.taper??0)*vertical);
-    const x=Math.cos(a)*radius*spread,z=Math.sin(a)*radius*spread,y=s.height+vertical*s.tall-(species===3?1.2:0);
-    const card=new THREE.PlaneGeometry([2.6,3.8,5.1][lod]*(s.cardWidth??(species===2?.85:1)),[2.4,3.5,4.8][lod]);
-    const euler=new THREE.Euler((random()-.5)*1.9,a,(random()-.5)*1.2);q.setFromEuler(euler);matrix.compose(new THREE.Vector3(x,y,z),q,new THREE.Vector3(1,1,1));card.applyMatrix4(matrix);leaves.push(card);
-  }
+  // The level's own cards, which give way toward its far edge (`cardFade` +1 in the first level, +2 in the second,
+  // 0 in the last, which has no further level), then the next level's, which take over there (-1, -2): exactly the
+  // cards that level draws, so the two pools show the same tree where one hands over to the other.
+  const tag=(card:THREE.BufferGeometry,centre:THREE.Vector3,fade:number)=>{
+    const n=card.getAttribute('position').count,centres=new Float32Array(n*3);for(let i=0;i<n;i++)centre.toArray(centres,i*3);
+    card.setAttribute('cardCentre',new THREE.BufferAttribute(centres,3));card.setAttribute('cardFade',new THREE.BufferAttribute(new Float32Array(n).fill(fade),1));leaves.push(card);
+  };
+  for(const {card,centre} of leafCards(species,lod))tag(card,centre,lod<2?lod+1:0);
+  if(lod<2)for(const {card,centre} of leafCards(species,lod+1))tag(card,centre,-(lod+1));
   const result={wood:mergeGeometries(wood,false)!,leaves:mergeGeometries(leaves,false)!};for(const g of [...wood,...leaves])g.dispose();return result;
 }
 function assets(){
@@ -135,7 +177,7 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
     if(!dirty&&high===lastHigh&&flightShadows===lastFlightShadows&&time-last<.25&&observer.distanceToSquared(lastObserver)<25**2)return;
     last=time;lastObserver.copy(observer);lastHigh=high;lastFlightShadows=flightShadows;dirty=false;
     for(const row of pending)for(const list of row)list.length=0;
-    const near=high?100:60,mid=high?320:210;
+    const [near,mid]=LOD_DISTANCE[high?'high':'balanced'];
     for(const site of sites){
       const dx=site.p.x-observer.x,dz=site.p.z-observer.z,horizontal=dx*dx+dz*dz;
       if(horizontal>900**2)continue;
@@ -183,7 +225,7 @@ export function createStreetTrees(positions:(THREE.Vector3|TreePlanting)[],optio
 const fields=new WeakMap<THREE.Scene,{list:THREE.Group[];version:unknown}>();
 /** Fields are found by one scene scan, repeated whenever `scene.userData.version` changes (streamed tiles). */
 export function updateFoliage(scene:THREE.Scene,observer:THREE.Vector3,time:number,high=true,flightShadows=false){
-  windTime.value=time;let cached=fields.get(scene);
+  windTime.value=time;treeObserver.value.copy(observer);treeLod.value.set(...treeLodBands(high));let cached=fields.get(scene);
   if(!cached||cached.version!==scene.userData.version){const list:THREE.Group[]=[];scene.traverse(o=>{if(o instanceof THREE.Group&&o.userData.updateFoliage)list.push(o);});cached={list,version:scene.userData.version};fields.set(scene,cached);}
   for(const field of cached.list)field.userData.updateFoliage(observer,time,high,flightShadows);
 }

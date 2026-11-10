@@ -239,6 +239,9 @@ export function tdGardenFinish(kind:Exclude<TdGardenSurface,'open'|'other'>,mobi
   return material;
 }
 
+/** Paint every finish now (40 ms of canvas work) instead of in the frame that first builds the arena's tile. */
+export function prepareTdGardenFinishes(mobile=false){for(const kind of Object.keys(PAINT) as Exclude<TdGardenSurface,'open'|'other'>[])tdGardenFinish(kind,mobile);}
+
 export interface TdGardenDetails{group:THREE.Group;collisions:{id:string;vertices:Float32Array;indices:Uint32Array}[];setNight(night:boolean):void}
 
 /** The 1995 arena over North Station and the Hub on Causeway in front of it,

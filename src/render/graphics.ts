@@ -4,6 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createPacedUploads, type Upload } from './paced-upload.ts';
 
 export type QualityMode = 'high' | 'balanced';
 
@@ -28,7 +29,9 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
       setQuality(mode: QualityMode) { quality = mode; resize(); }, resize,
       render(_dt: number) { renderer.render(scene, camera); },
       // Phones keep their tiles' meshes as built (no static batches to prepare).
-      warm(_mesh: THREE.Mesh) { return () => true; },
+      warm(_mesh: THREE.Mesh) { return () => true; }, warmPasses(_root: THREE.Object3D) {}, settlePrograms() { return Promise.resolve(); }, prepare(_root: THREE.Object3D) { return { meshes: 0, textures: 0 }; },
+      // and upload each mesh when it is first drawn: their vertex arrays are freed then (upload-release.ts).
+      upload: undefined as Upload | undefined,
       get quality() { return quality; },
       dispose() {},
     };
@@ -105,11 +108,25 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
    * override and the shadow map's depth material. With KHR_parallel_shader_compile
    * the driver links them off the main thread; the result says when all are
    * ready, since a draw before then would wait for the link. */
+  const warmed = new Map<string, () => boolean>();
   function warm(mesh: THREE.Mesh) {
-    const material = mesh.material as THREE.Material & { map?: THREE.Texture | null; alphaMap?: THREE.Texture | null }, fog = scene.fog, previous = renderer.getRenderTarget();
-    const passes: [THREE.Material, THREE.Scene['fog']][] = [[material, fog]], programs: { isReady(): boolean }[] = [];
+    if (Array.isArray(mesh.material)) return () => true;
+    // Programs are shared by material and variant: a second mesh of the same kind waits on the first one's link, or
+    // not at all. The key holds what selects a variant here (the kind of mesh, its shadow flags and attributes, the
+    // passes in use, the lights in the scene); a changed material, quality or time of day warms again.
+    let lights = 0; for (const child of scene.children) if ((child as THREE.Light).isLight && child.visible) lights += child.castShadow ? 17 : 1;
+    const key = [mesh.material.uuid, mesh.material.version, kindOf(mesh), mesh.castShadow, mesh.receiveShadow, Object.keys(mesh.geometry.attributes).sort().join(','), ao.enabled, renderer.shadowMap.enabled, lights].join('|');
+    const known = warmed.get(key); if (known) return known;
+    const ready = link(mesh); warmed.set(key, ready); if (warmed.size > 4096) warmed.clear();
+    return ready;
+  }
+  type Mapped = THREE.Material & { map?: THREE.Texture | null; alphaMap?: THREE.Texture | null };
+  function link(mesh: THREE.Mesh, own = true) {
+    const material = mesh.material as Mapped, fog = scene.fog, previous = renderer.getRenderTarget();
+    const passes: [THREE.Material, THREE.Scene['fog']][] = own ? [[material, fog]] : [], programs: Program[] = [];
     if (ao.enabled) passes.push([ao.normalMaterial, fog]);
     if (mesh.castShadow && renderer.shadowMap.enabled) {
+      // As WebGLShadowMap sets its depth material from each caster: the map is passed on whether or not it cuts anything out.
       depth.side = material.shadowSide ?? shadowSide[material.side]; depth.map = material.map ?? null; depth.alphaMap = material.alphaMap ?? null; depth.alphaTest = material.alphaToCoverage ? .5 : material.alphaTest;
       passes.push([depth, null]); // the shadow pass draws without a scene, so without fog
     }
@@ -118,13 +135,64 @@ export function createGraphics(renderer: THREE.WebGLRenderer, scene: THREE.Scene
     try {
       for (const [pass, passFog] of passes) {
         mesh.material = pass; scene.fog = passFog;
-        for (const used of renderer.compile(mesh, camera, scene)) { const program = (renderer.properties.get(used) as { currentProgram?: { isReady(): boolean } }).currentProgram; if (program) programs.push(program); }
+        for (const compiled of renderer.compile(mesh, camera, scene)) { const program = (renderer.properties.get(compiled) as { currentProgram?: Program }).currentProgram; if (program) programs.push(program); }
       }
     } finally { mesh.material = material; scene.fog = fog; renderer.setRenderTarget(previous); }
-    return () => programs.every(program => program.isReady());
+    let used = false;
+    return () => { if (!used && programs.every(program => program.isReady())) { firstUse(programs); used = true; } return used; };
+  }
+  type Program = { isReady(): boolean; getUniforms?(): unknown };
+  /** three reads a program's link log and uniforms on its first draw: calls that wait for the GPU process to finish
+   * what it has queued, however long ago the link completed. Asked here, before the frame's own commands are queued,
+   * the wait is short; in the middle of a shadow or view pass it was 30 to 40 ms. */
+  function firstUse(programs: Program[]) { for (const program of programs) program.getUniforms?.(); }
+  /** Resolves once every program the renderer holds has linked (or after `limit` ms) and been through its first use. */
+  function settlePrograms(limit = 5000) {
+    return new Promise<void>(resolve => {
+      const end = performance.now() + limit;
+      const poll = () => {
+        const list = (renderer.info.programs ?? []) as unknown as Program[], linked = list.every(program => program.isReady());
+        if (linked || performance.now() > end) { firstUse(list.filter(program => program.isReady())); resolve(); } else setTimeout(poll, 16);
+      };
+      poll();
+    });
+  }
+  const kindOf = (mesh: THREE.Mesh) => { const m = mesh as THREE.Mesh & { isBatchedMesh?: boolean; isInstancedMesh?: boolean; isSkinnedMesh?: boolean }; return m.isBatchedMesh ? 'batched' : m.isInstancedMesh ? 'instanced' : m.isSkinnedMesh ? 'skinned' : 'plain'; };
+  /** Start linking the shadow and normal pass programs of everything under `root`, in view or not. The startup
+   * compile covers each material's own program; these two passes draw with stand-ins whose variants (kind of mesh,
+   * side, cutout map) otherwise link in the frame a mesh first falls inside the shadow map or the view: a landmark's
+   * cutout sign held one for 37 ms a kilometre into a flight. One compile per distinct variant, a few dozen in all. */
+  function warmPasses(root: THREE.Object3D) {
+    const seen = new Set<string>();
+    root.traverse(object => {
+      const mesh = object as THREE.Mesh; if (!mesh.isMesh || !mesh.material || Array.isArray(mesh.material) || !mesh.geometry?.attributes.position) return;
+      const material = mesh.material as Mapped, casts = mesh.castShadow;
+      const key = [kindOf(mesh), casts && (material.shadowSide ?? material.side), casts && !!material.map, casts && !!material.alphaMap, casts && (material.alphaToCoverage || material.alphaTest > 0), !!mesh.geometry.attributes.uv].join('|');
+      if (seen.has(key)) return; seen.add(key);
+      link(mesh, false);
+    });
+  }
+  const upload = createPacedUploads(renderer, camera);
+  /** Send to the GPU, while the game is still loading, what its first frames will not draw: the textures and large
+   * vertex arrays of everything under `root`. three uploads each on first use, so a landmark modelled at startup
+   * held the frame that first brought it into the view or the shadow map (the arena's cutout sign texture: 35 ms a
+   * kilometre into a flight). A mesh with its own render hook (a reflector) is left to its first draw. */
+  function prepare(root: THREE.Object3D) {
+    const meshes: THREE.Mesh[] = [], textures = new Set<THREE.Texture>();
+    root.traverse(object => {
+      const mesh = object as THREE.Mesh & { isBatchedMesh?: boolean }; if (!mesh.isMesh || !mesh.geometry?.attributes.position) return;
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) if (material) for (const value of Object.values(material)) if ((value as THREE.Texture | null)?.isTexture) textures.add(value as THREE.Texture);
+      if (mesh.isBatchedMesh || !Object.prototype.hasOwnProperty.call(mesh, 'onBeforeRender')) meshes.push(mesh);
+    });
+    for (const texture of textures) {
+      const kind = texture as THREE.Texture & { isRenderTargetTexture?: boolean; isVideoTexture?: boolean; isDepthTexture?: boolean }, image = texture.image as { width?: number } | null;
+      if (image?.width && !kind.isRenderTargetTexture && !kind.isVideoTexture && !kind.isDepthTexture) renderer.initTexture(texture);
+    }
+    for (const _ of upload(meshes)); // not paced: every slice now
+    return { meshes: meshes.length, textures: textures.size };
   }
   return {
-    setQuality, resize, warm,
+    setQuality, resize, warm, warmPasses, settlePrograms, prepare, upload: upload as Upload | undefined,
     render(dt: number) {
       // GTAO swaps the buffers. Start each frame with the same MSAA beauty
       // target, then compose into the single-sample buffer.

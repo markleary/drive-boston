@@ -28,7 +28,7 @@ type TunnelVolume=Portal&{road:Road;x:number;z:number;y:number;gx:number;gz:numb
  * so no full-height wall slivers stand beside or between the ramps. */
 const OPEN_SKY_MARGIN=8;
 type TunnelCity=Pick<CityData,'roads'>&Partial<Pick<CityData,'bounds'|'elevation'>>;
-type TunnelIndex={roads:Map<string,Road[]>;portals:Map<string,Portal[]>;portalList:Portal[];volumes:Map<string,TunnelVolume[]>;shellVolumes:Map<string,TunnelVolume[]>;wallVolumes:Map<string,TunnelVolume[]>;elevation?:CityData['elevation']};
+type TunnelIndex={roads:Map<string,Road[]>;portals:Map<string,Portal[]>;portalList:Portal[];portalBounds?:{minX:number;maxX:number;minZ:number;maxZ:number};volumes:Map<string,TunnelVolume[]>;shellVolumes:Map<string,TunnelVolume[]>;wallVolumes:Map<string,TunnelVolume[]>;elevation?:CityData['elevation']};
 const emptyRoads:Road[]=[];
 const indexes=new WeakMap<Road[],TunnelIndex>();
 const key=(x:number,z:number)=>`${Math.floor(x/CELL)},${Math.floor(z/CELL)}`;
@@ -119,12 +119,26 @@ function index(city:TunnelCity){
       }
     }
   }
-  const result={roads,portals,portalList,volumes,shellVolumes,wallVolumes,elevation:city.elevation};indexes.set(source,result);return result;
+  let portalBounds:TunnelIndex['portalBounds'];
+  for(const p of portalList)portalBounds=portalBounds?{minX:Math.min(portalBounds.minX,p.minX),maxX:Math.max(portalBounds.maxX,p.maxX),minZ:Math.min(portalBounds.minZ,p.minZ),maxZ:Math.max(portalBounds.maxZ,p.maxZ)}:{minX:p.minX,maxX:p.maxX,minZ:p.minZ,maxZ:p.maxZ};
+  const result={roads,portals,portalList,portalBounds,volumes,shellVolumes,wallVolumes,elevation:city.elevation};indexes.set(source,result);return result;
 }
 function polygonSign(p:Point2[]){let area=0;for(let i=0;i<p.length;i++){const a=p[i],b=p[(i+1)%p.length];area+=a[0]*b[1]-b[0]*a[1];}return Math.sign(area)||1;}
 function inside(p:Point2,polygon:Point2[]){const sign=polygonSign(polygon);return polygon.every((a,i)=>{const b=polygon[(i+1)%polygon.length];return sign*((b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]))>=-1e-7;});}
 export function hasTunnelPortals(city:TunnelCity){return !!index(city).portalList.length;}
-export function tunnelPortalBoundsIntersect(city:TunnelCity,minX:number,maxX:number,minZ:number,maxZ:number){return index(city).portalList.some(p=>p.minX<=maxX&&p.maxX>=minX&&p.minZ<=maxZ&&p.maxZ>=minZ);}
+/** Every portal's bounds (a test compares the lookup below with a plain scan of these). */
+export function tunnelPortalBounds(city:TunnelCity){return index(city).portalList.map(p=>({minX:p.minX,maxX:p.maxX,minZ:p.minZ,maxZ:p.maxZ}));}
+/** Whether any portal's bounds meet the given ones. A lane dash or a curb stone asks this once each, thousands a tile:
+ * most are outside every portal's reach, the rest look only in the 32 m cells they touch (a portal is filed under every
+ * cell its bounds cover, so two overlapping boxes share one). */
+export function tunnelPortalBoundsIntersect(city:TunnelCity,minX:number,maxX:number,minZ:number,maxZ:number){
+  const data=index(city),all=data.portalBounds;
+  if(!all||minX>all.maxX||maxX<all.minX||minZ>all.maxZ||maxZ<all.minZ)return false;
+  const x0=Math.floor(minX/CELL),x1=Math.floor(maxX/CELL),z0=Math.floor(minZ/CELL),z1=Math.floor(maxZ/CELL);
+  if((x1-x0+1)*(z1-z0+1)>data.portals.size)return data.portalList.some(p=>p.minX<=maxX&&p.maxX>=minX&&p.minZ<=maxZ&&p.maxZ>=minZ);
+  for(let x=x0;x<=x1;x++)for(let z=z0;z<=z1;z++){const list=data.portals.get(`${x},${z}`);if(list)for(const p of list)if(p.minX<=maxX&&p.maxX>=minX&&p.minZ<=maxZ&&p.maxZ>=minZ)return true;}
+  return false;
+}
 /** Inside a clearance volume over an open-air stretch, the column clipTunnelClearance removes from a passage shell. */
 export function inOpenSkyClearance(city:TunnelCity,x:number,z:number){return (index(city).volumes.get(key(x,z))??[]).some(v=>v.open&&x>=v.minX&&x<=v.maxX&&z>=v.minZ&&z<=v.maxZ&&inside([x,z],v.polygon));}
 export function inTunnelPortal(city:TunnelCity,x:number,z:number){return (index(city).portals.get(key(x,z))??[]).some(p=>inside([x,z],p.polygon));}

@@ -162,3 +162,32 @@ test('waiting for programs gives up after its time limit',async()=>{
   while(!steps.next().done){assert.equal(pace.deadline,-Infinity);yields++;pace.deadline=0;await new Promise(resolve=>setTimeout(resolve,5));}
   assert.ok(yields>0);assert.ok(performance.now()-began>=30);
 });
+test('a batch is shown only after its arrays have been sent, and its sources stay until then',()=>{
+  const root=sourceRoot(5),pace={deadline:Infinity},order=[];let sent;
+  const upload=function*(meshes,given){
+    assert.equal(given,pace);assert.equal(meshes.length,1);sent=meshes[0];
+    assert.ok(sent instanceof THREE.BatchedMesh);assert.equal(sent.instanceCount,5);
+    // Three slices, a frame apart: the batch is hidden and every source still draws.
+    for(let slice=0;slice<3;slice++){order.push('slice');assert.equal(sent.visible,false);assert.equal(root.children.filter(o=>!(o instanceof THREE.BatchedMesh)&&o.visible).length,5);yield;}
+  };
+  const steps=staticDetailBatchSteps(root,pace,mesh=>{order.push('warm');return ()=>{order.push('ready');return true;};},upload);
+  let result;do{pace.deadline=performance.now()+1e4;result=steps.next();}while(!result.done);
+  assert.deepEqual(order,['warm','ready','slice','slice','slice'],'programs first, then the arrays');
+  assert.equal(sent.visible,true);assert.deepEqual(root.children,[sent]);assert.deepEqual(result.value,{sources:5,batches:1});
+});
+test('meshes in a hidden staging group are batched all the same, into the root that shows',()=>{
+  const root=new THREE.Group(),staging=sourceRoot(4),ignored=sourceRoot(3),shown=sourceRoot(2);
+  staging.userData.staging=true;staging.visible=false;ignored.visible=false;root.add(staging,ignored,shown);
+  // One material across the staged and the shown sources: they share a batch.
+  const material=staging.children[0].material;for(const group of [ignored,shown])for(const mesh of group.children)mesh.material=material;
+  for(const [i,mesh] of [...staging.children,...shown.children].entries())mesh.position.set(i*7,0,3);
+  const hidden=new THREE.Mesh(new THREE.BoxGeometry(),material);hidden.geometry.clearGroups();hidden.visible=false;staging.add(hidden);
+  assert.deepEqual(batchStaticDetails(root),{sources:6,batches:1});
+  const batch=root.children.find(o=>o instanceof THREE.BatchedMesh);
+  assert.ok(batch,'the batch joins the visible root, not the staging group');assert.equal(batch.visible,true);assert.equal(batch.instanceCount,6);
+  assert.deepEqual(staging.children,[hidden],'a mesh hidden on its own stays out and stays put');assert.equal(shown.children.length,0);
+  assert.equal(ignored.children.length,3,'a hidden group that is not staging is left alone');
+  // Parts were placed by their world position.
+  const box=new THREE.Box3();batch.geometry.computeBoundingBox();box.copy(batch.geometry.boundingBox);
+  assert.ok(box.max.x>35&&box.min.z>2);
+});

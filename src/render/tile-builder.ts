@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { IndexedSurfaceWriter, SurfaceBatches } from './indexed-surfaces.ts';
 import { freezeTransforms, staticDetailBatchSteps, type Warm } from './static-batches.ts';
+import type { Upload } from './paced-upload.ts';
 import { disposeTileResources } from './tile-resources.ts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
@@ -26,7 +27,9 @@ import { greenway, obsoleteGreenwayCurb, inGreenway } from '../simulation/greenw
 import { canopyHitsDeck, STREET_CANOPY } from '../simulation/deck-canopy.ts';
 import { spatialInstances } from './spatial-batches';
 import { PartBatches, box } from './geometry-writer';
-import { due, UNPACED, type Pace } from './pacing';
+import { computeBounds } from './fast-bounds';
+import { meshChunks } from '../simulation/mesh-chunks';
+import { due, until, UNPACED, type Pace } from './pacing';
 import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
 import { createI93ExitSign } from './i93-exit-signs';
@@ -44,7 +47,7 @@ import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
 import { isStateHouse, createStateHouseShellMaterials, splitStateHouseShell } from './state-house';
 import { isSymphonyHall, createSymphonyHallMaterials, splitSymphonyHallShell } from './symphony-hall';
 import { isSouthStation, createSouthStationMaterials, splitSouthStationShell } from './south-station';
-import { isTdGarden, splitTdGardenShell, tdGardenFinish } from './td-garden';
+import { isTdGarden, prepareTdGardenFinishes, splitTdGardenShell, tdGardenFinish } from './td-garden';
 import { createPrudentialPenthouseMaterial, isPrudential, splitPrudentialShell } from './prudential';
 import { createMissionChurchMaterials, isMissionChurch, splitMissionChurchShell } from './mission-church';
 import { landmarkShellMaterial } from './metro-landmarks';
@@ -74,18 +77,21 @@ export interface TileContext {
   ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material; mobile?: boolean;
   detailed?: () => boolean;
   /** Starts linking a new static batch's shader programs, so the build can show it once they are ready. */ warm?: Warm;
+  /** Sends new meshes' arrays to the GPU a slice a frame (paced-upload.ts); absent on a phone. */ upload?: Upload;
 }
 export interface TileStats {
   buildings: number; exactMeshes: number; triangles: number; roads: number; structures: number; trees: number; lamps: number; signs: number; signals: number; parkTrees: number; storefronts: number; facades: number; rooftops: number; porches: number; housePorches: number; colliders: number;
   /** Wall-clock span from the first generator step to completion. */ buildMs: number;
   /** Main-thread time inside the generator, in total and per completed stage (filled in by the streamer). */ cpuMs: number; stageMs?: Record<string, number>;
+  /** Metres from the observer to the tile when its decks were in and when it was finished (filled in by the streamer's frame loop). */ structuresDistance?: number; finishDistance?: number;
 }
 export interface BuiltTile {
   key: string; tile: CityTile; group: THREE.Group; bounds: Bounds; colliders: RAPIER.Collider[]; meshes: THREE.Mesh[]; lamps: THREE.Vector3[]; signals: PlacedSignal[]; stats: TileStats;
   dispose(): void;
 }
 export type TileStage = 'survey' | 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
-export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; ownedMaterials?: THREE.Material[]; surveyDeck?: string; structuresReady?: boolean; }
+/** `scenery`: everything after the terrain and decks. The streamer hides it while the tile builds beyond clear view, so its meshes are neither drawn nor uploaded before the static batches replace them. */
+export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; ownedMaterials?: THREE.Material[]; surveyDeck?: string; structuresReady?: boolean; scenery?: THREE.Group; }
 
 /** Run a paced helper as one named stage: each pause it takes becomes a yield of that stage. */
 function* stage<T>(name: TileStage, steps: Generator<void, T>): Generator<TileStage, T> { let r = steps.next(); while (!r.done) { yield name; r = steps.next(); } return r.value; }
@@ -112,6 +118,9 @@ export function createTileBuilder(ctx: TileContext) {
   const chelseaLiftSteel = new THREE.MeshStandardMaterial({ color: '#9ea7a3', roughness: .72, metalness: .3 });
   const signSteel = new THREE.MeshStandardMaterial({ color: '#a9b4b6', roughness: .68, metalness: .25 });
   const exitSigns = planI93ExitSigns(city.roads);
+  // Painted while the game loads (the arena's finishes, the northern towns' house walls and roofs: about 40 ms of
+  // canvas work each); a phone, which may never see either, paints them with the first tile that needs them.
+  if (!ctx.mobile) { prepareTdGardenFinishes(); materials.houses(); }
   const isChelseaLiftFrame = (building: Building) => building.id === 'osm-way-196751230';
   const height = (x: number, z: number) => sampleElevation(city, x, z);
   // Road, signal and area lookups by 250 m cell, built once for the metro.
@@ -144,7 +153,8 @@ export function createTileBuilder(ctx: TileContext) {
   const parkStructure = (b: Building) => b.height < 30 && principalParks.some(p => { const box = areaBounds.get(p)!; return b.center[0] >= box.minX && b.center[0] <= box.maxX && b.center[1] >= box.minZ && b.center[1] <= box.maxZ && pointInside(b.center, p.rings[0]) && !p.rings.slice(1).some(r => pointInside(b.center, r)); });
   const grid = terrainGrid(city) ?? (() => { throw new Error('A metro city needs its elevation grid before tiles can be built'); })();
   const woodlandViewHeight = fellsViewHeight(city);
-  let junctions: JunctionIndex | undefined;
+  // Several tiles can be under construction: whichever needs the index first starts it, any of them may advance it.
+  let junctions: JunctionIndex | undefined, junctionSteps: Generator<void, JunctionIndex> | undefined;
 
   /** `partial` is owned by the caller so an interrupted build can be undone with `abandon`. */
   function* build(tile: CityTile, partial: PartialTile = { group: new THREE.Group(), colliders: [], key: tile.key, tile }, pace: Pace = UNPACED): Generator<TileStage, BuiltTile> {
@@ -157,8 +167,10 @@ export function createTileBuilder(ctx: TileContext) {
     const subCity: CityData = { ...city, roads, buildings: tile.buildings, signals: collect(signalCells, grow(bounds, 40), s => s[0] >= x0 - 40 && s[0] < x1 + 40 && s[1] >= z0 - 40 && s[1] < z1 + 40), curbs: tile.curbs, parkPaths: tile.parkPaths,
       parks: collect(parkCells, bounds, p => overlaps(areaBounds.get(p)!, bounds)), water: collect(waterCells, grow(bounds, 30), w => overlaps(areaBounds.get(w)!, grow(bounds, 30))) };
     shareTransitCorridors(subCity, city);
+    // Terrain and structures go straight into the tile's group; the scenery that follows into its own (see PartialTile).
+    let target = group;
     const addBatches = (batches: Pick<PartBatches, 'meshes'>) => {
-      for (const m of batches.meshes()) { m.receiveShadow = true; if (m.material === materials.asphalt) m.renderOrder = -1; else if (m.material === materials.sidewalk) m.renderOrder = -2; group.add(m); }
+      for (const m of batches.meshes()) { m.receiveShadow = true; if (m.material === materials.asphalt) m.renderOrder = -1; else if (m.material === materials.sidewalk) m.renderOrder = -2; target.add(m); }
     };
 
     // The viaduct extends beyond its owner tile. Publish the surveyed shell
@@ -174,7 +186,7 @@ export function createTileBuilder(ctx: TileContext) {
         const material = landmarkShellMaterial(zakim, isRoof, materials) ?? materials.roof;
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = 'Boston surveyed buildings'; mesh.castShadow = true; mesh.receiveShadow = true;
-        geometry.computeBoundingSphere(); meshes.push(mesh); shell.add(mesh);
+        computeBounds(geometry, false); meshes.push(mesh); shell.add(mesh);
       }
       if (due(pace)) yield 'survey';
       colliders.push(physics.addStaticMesh(survey.positions, tileCollisionIndices(survey)));
@@ -252,6 +264,8 @@ export function createTileBuilder(ctx: TileContext) {
       yield 'survey';
     }
 
+    { const scenery = new THREE.Group(); scenery.name = 'Tile scenery'; scenery.userData.staging = true; group.add(scenery); partial.scenery = target = scenery; }
+
     // House typologies first: the shop frontages below skip houses.
     prepareNeighborhoodArchitecture(subCity, tile.buildings);
 
@@ -312,7 +326,7 @@ export function createTileBuilder(ctx: TileContext) {
         const borders = new Map(tile.borderPavements.map(p => [p.road, p]));
         const edgesOf = (road: Road) => { const p = pavementOf(road) ?? borders.get(road.id); return p && p.edges.length >= 8 ? pavementEdges(tile, p) : undefined; };
         // The citywide junction index (20k roads) is built once, paced across frames by the first tile that needs it.
-        if (!junctions) { const steps = junctionIndexSteps(city.roads, city.signals); let r = steps.next(); while (!r.done) { if (due(pace)) yield 'roads'; r = steps.next(); } junctions = r.value; }
+        while (!junctions) { junctionSteps ??= junctionIndexSteps(city.roads, city.signals); const r = junctionSteps.next(); if (r.done) junctions = r.value; else if (due(pace)) yield 'roads'; }
         // Planned over every road within 40 m of the owned roads' extents (a road owned by its midpoint can end 200 m
         // into the next tile), so the thinning sees the candidates across the tile border; drawn for the owned ones.
         const reach: Bounds = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
@@ -350,7 +364,7 @@ export function createTileBuilder(ctx: TileContext) {
         for (const polygon of polygons) { if (due(pace)) yield 'roads'; yield* stage('roads', surface.add(polygon)); }
         const geometry = yield* stage('roads', surface.geometrySteps());
         if (!geometry.index!.count) { geometry.dispose(); continue; }
-        const mesh = new THREE.Mesh(geometry, material); mesh.name = name; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh);
+        const mesh = new THREE.Mesh(geometry, material); mesh.name = name; mesh.receiveShadow = true; mesh.renderOrder = -2; target.add(mesh);
       }
     }
     yield 'roads';
@@ -395,7 +409,7 @@ export function createTileBuilder(ctx: TileContext) {
         if (ctx.replacedBuildings?.has(b.id)) continue;
         stats.triangles += (data.facade.length + data.roof.length) / 3;
         // Hand-modelled northern landmarks replace their extruded shell, hull and foundation skirt.
-        if (replacesTileShell(b)) { const model = buildMelroseLandmark(city, b, !!ctx.mobile); if (model) { group.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); continue; } }
+        if (replacesTileShell(b)) { const model = buildMelroseLandmark(city, b, !!ctx.mobile); if (model) { target.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); continue; } }
         const style = facadeStyleIndex(b), isStone = parkStructure(b), fenway = isFenwayBuilding(b);
         const choose = (isRoof: boolean) => {
           let material: THREE.Material = isRoof ? materials.roof : materials.facades[style];
@@ -415,7 +429,7 @@ export function createTileBuilder(ctx: TileContext) {
           // The map draws this shell's outline instead of its convex hull, which would cover the streets it spans.
           if (!b.structure) addBuildingPlan(city, b, data);
           const source = tileSourceGeometry(data);
-          const footing = b.structure ? undefined : addSourceFooting(group, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));
+          const footing = b.structure ? undefined : addSourceFooting(target, city, b, source); if (footing) colliders.push(physics.addStaticMesh(footing.vertices, footing.indices));
           source.dispose();
         } else { const hull = physics.addBuildingHull(b); if (hull) colliders.push(hull); }
         // Generated northern houses: palette-tinted walls, slope-mapped roof covering, painted soffits and fascia, an optional corner tower.
@@ -456,10 +470,10 @@ export function createTileBuilder(ctx: TileContext) {
       for (const { material, geometries } of buckets.values()) {
         if (due(pace)) yield 'buildings';
         const geometry = mergeGeometries(geometries, false); for (const g of geometries) g.dispose(); if (!geometry) continue;
-        const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'Boston surveyed buildings'; geometry.computeBoundingSphere(); meshes.push(mesh); group.add(mesh);
+        const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'Boston surveyed buildings'; computeBounds(geometry, false); meshes.push(mesh); target.add(mesh);
       }
       const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b) && !replacesTileShell(b) && !ctx.replacedBuildings?.has(b.id)) });
-      if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; group.add(mesh); } else footings.dispose();
+      if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; target.add(mesh); } else footings.dispose();
       addTileBuildings(city, tile);
     }
     yield 'buildings';
@@ -505,7 +519,7 @@ export function createTileBuilder(ctx: TileContext) {
       if (lamps.length) {
         const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(.055, .1, 5.7, 6), ctx.iron, lamps.length), bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(.27, 8, 6), ctx.lampMat, lamps.length);
         lamps.forEach((p, i) => { dummy.position.copy(p).add(new THREE.Vector3(0, 2.85, 0)); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); poles.setMatrixAt(i, dummy.matrix); dummy.position.y = p.y + 5.85; dummy.updateMatrix(); bulbs.setMatrixAt(i, dummy.matrix); });
-        poles.castShadow = true; poles.name = 'Lamp poles'; bulbs.name = 'Lamp globes'; group.add(...spatialInstances(poles, 500), ...spatialInstances(bulbs, 500));
+        poles.castShadow = true; poles.name = 'Lamp poles'; bulbs.name = 'Lamp globes'; target.add(...spatialInstances(poles, 500), ...spatialInstances(bulbs, 500));
       }
       const hardware = new PartBatches(500), matrix = new THREE.Matrix4();
       for (const { position: [x, z], blades } of streetSigns) {
@@ -515,7 +529,7 @@ export function createTileBuilder(ctx: TileContext) {
         for (const blade of blades) {
           const bx = x + blade.offset[0], bz = z + blade.offset[1];
           writer.box(box(2.67, .5, .045), matrix.makeRotationY(blade.yaw).setPosition(bx, y + blade.height, bz));
-          const plate = createStreetSign(blade.name); plate.position.set(bx, y + blade.height, bz); plate.rotation.y = blade.yaw; group.add(plate); owned.push(plate.material as THREE.Material);
+          const plate = createStreetSign(blade.name); plate.position.set(bx, y + blade.height, bz); plate.rotation.y = blade.yaw; target.add(plate); owned.push(plate.material as THREE.Material);
         }
       }
       addBatches(hardware);
@@ -523,15 +537,19 @@ export function createTileBuilder(ctx: TileContext) {
     yield 'props';
 
     const placements = planTrafficSignals(subCity);
-    if (placements.length) createTrafficSignals(group, subCity, placements);
+    if (placements.length) createTrafficSignals(target, subCity, placements);
     stats.signals = placements.length;
     yield 'signals';
 
     {
       for(const path of tile.parkPaths)colliders.push(...physics.addFootbridge(subCity,path));
-      const addLandscapeCollider = (vertices: Float32Array, indices: Uint32Array) => { colliders.push(physics.addStaticMesh(vertices, indices)); };
-      const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target: group,
+      // Shore banks and rock outcrops collide as meshes: noted as the parks build, then added a run of triangles at a
+      // time between frames (mesh-chunks.ts: a harbour tile's bank in one piece held a frame for 40 to 58 ms).
+      const landscape: { vertices: Float32Array; indices: Uint32Array }[] = [];
+      const addLandscapeCollider = (vertices: Float32Array, indices: Uint32Array) => { landscape.push({ vertices, indices }); };
+      const parks = yield* stage('parks', cityParkDetailSteps(scene, subCity, { bounds, owner: key, treeField: ctx.parkTrees, target,
         budgets: { trees: 120, benches: 25 }, reserved: ctx.landmarkForecourt, pace, mobile: ctx.mobile, detailed: ctx.detailed, fellsViewHeight: woodlandViewHeight, onShore: addLandscapeCollider, onRock: addLandscapeCollider }));
+      for (const mesh of landscape) for (const part of meshChunks(mesh.vertices, mesh.indices)) { if (due(pace)) yield 'parks'; colliders.push(physics.addStaticMesh(part.vertices, part.indices)); }
       stats.parkTrees = parks.userData.trees ?? 0;
     }
     yield 'parks';
@@ -544,14 +562,14 @@ export function createTileBuilder(ctx: TileContext) {
       const half = Math.ceil(detailBuildings.length / 2), subsets = [detailBuildings.slice(0, half), detailBuildings.slice(half)];
       for (const subset of ctx.mobile ? [] : subsets) {
         if (!subset.length) continue;
-        const facades = yield* stage('details', facadeDetailSteps(scene, subCity, { buildings: subset, sampler, budget: 1300, target: group, pace }));
+        const facades = yield* stage('details', facadeDetailSteps(scene, subCity, { buildings: subset, sampler, budget: 1300, target, pace }));
         stats.facades += facades.userData.facades ?? 0;
       }
-      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 35 : 100, target: group, pace })); stats.storefronts = shops.userData.storefrontCount ?? 0;
+      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 35 : 100, target, pace })); stats.storefronts = shops.userData.storefrontCount ?? 0;
       if (!ctx.mobile) {
-        const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: detailBuildings, meshes, budget: 90, target: group, pace })); stats.rooftops = roofs.userData.units ?? 0;
+        const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: detailBuildings, meshes, budget: 90, target, pace })); stats.rooftops = roofs.userData.units ?? 0;
       }
-      const porches = yield* stage('details', neighborhoodDetailSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 20 : 60, target: group, pace })); stats.porches = porches.userData.porches ?? 0;
+      const porches = yield* stage('details', neighborhoodDetailSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 20 : 60, target, pace })); stats.porches = porches.userData.porches ?? 0;
       const houses = detailBuildings.filter(b => b.houseStyle);
       if (houses.length) {
         // Roof height over a point, from the house's own packaged roof triangles (chimney footing and clearance).
@@ -566,14 +584,21 @@ export function createTileBuilder(ctx: TileContext) {
           }
           return best > -Infinity ? best : undefined;
         };
-        const homes = materials.houses(), details = yield* stage('details', houseDetailSteps(scene, subCity, { buildings: houses, roofs: homes.roofs, trimRoof: homes.trim, roofTop, porchBudget: ctx.mobile ? 24 : 140, target: group, pace, mobile: ctx.mobile }));
+        const homes = materials.houses(), details = yield* stage('details', houseDetailSteps(scene, subCity, { buildings: houses, roofs: homes.roofs, trimRoof: homes.trim, roofTop, porchBudget: ctx.mobile ? 24 : 140, target, pace, mobile: ctx.mobile }));
         stats.housePorches = (details.userData.porches ?? 0) + (details.userData.porticos ?? 0);
       }
     }
     // Repacking an entire tile into BatchedMesh duplicates its vertex buffers. Mobile keeps its already grouped
     // road/shell buffers; either way nothing in the tile moves again, so its local matrices are composed once.
     if (ctx.mobile) { freezeTransforms(group); group.userData.batching = { sources: 0, batches: 0 }; }
-    else group.userData.batching = yield* stage('details', staticDetailBatchSteps(group, pace, ctx.warm));
+    else group.userData.batching = yield* stage('details', staticDetailBatchSteps(group, pace, ctx.warm, ctx.upload));
+    // What stays unbatched (building shells, a lone pavement layer, water) goes to the GPU the same way before the tile shows.
+    if (ctx.upload) {
+      const rest: THREE.Mesh[] = []; group.traverse(o => { if (o instanceof THREE.Mesh && !(o instanceof THREE.BatchedMesh)) rest.push(o); });
+      // A material or variant this session has not drawn yet (a landmark's finish, a house palette) links off the main thread first.
+      if (ctx.warm) { const linked = rest.map(mesh => ctx.warm!(mesh)); yield* stage('details', until(() => linked.every(ready => ready()), pace)); }
+      yield* stage('details', ctx.upload(rest, pace));
+    }
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
     const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps, signals: placements, stats, dispose: () => dispose(built, owned) };

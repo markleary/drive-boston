@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { CityData, Point2 } from '../types';
 import { sampleElevation, terrainGrid, terrainVertexNormal, type ElevationGrid } from '../simulation/terrain.ts';
 import { clipTunnelPortalSteps, tunnelPortalBoundsIntersect } from '../simulation/tunnels.ts';
+import { computeBounds } from './fast-bounds.ts';
 import { due, type Pace } from './pacing.ts';
 
 /** Ground polygons (street pavement, sidewalks, driveways, lawns) draped on the
@@ -440,7 +441,7 @@ export class DrapedSurface {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geometry.setIndex(new THREE.BufferAttribute(total > 65535 ? indices : Uint16Array.from(indices), 1));
-    if (total) { if (due(pace)) yield; geometry.computeBoundingSphere(); }
+    if (total) { if (due(pace)) yield; computeBounds(geometry, false); }
     return geometry;
   }
   geometry(): THREE.BufferGeometry { const steps = this.geometrySteps(); let r = steps.next(); while (!r.done) r = steps.next(); return r.value; }

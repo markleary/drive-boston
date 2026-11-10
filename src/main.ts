@@ -218,7 +218,7 @@ async function boot(){
     const transitData:TransitData=await transitResponse.json();reserveTransitCorridors(city,transitData.routes);
     const fleetResponse=await fetch(`${import.meta.env.BASE_URL}models/traffic-fleet.glb`);if(!fleetResponse.ok)throw new Error('The traffic models could not be loaded. Please reload.');await prepareNPCVehicles(await fleetResponse.arrayBuffer());
     await contextGate.wait();
-    if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait,warm:mesh=>graphics?.warm(mesh)??(()=>true)});}
+    if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait,warm:mesh=>graphics?.warm(mesh)??(()=>true),upload:mobile?undefined:function*(meshes,pace){if(graphics?.upload)yield* graphics.upload(meshes,pace);}});}
     else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile,waitForContext:contextGate.wait})]);physics=results[0];world=results[1];}
     const streamer=world.streamer;
     const tireTracks=createTireTracks(scene,city,createTireSurfaceSampler(city,()=>Array.from(streamer?.loaded.values()??[],entry=>entry.tile)));
@@ -458,7 +458,7 @@ async function boot(){
       camera.near=flying?1:.15;camera.lookAt(look);camera.updateProjectionMatrix();cameraSnap=false;
       playerCar!.setCameraPosition(camera.position);
       const flightShadows=flying&&quality==='high'&&!mobile;
-      world!.update(target,elapsed,!mobile||!paused,flightShadows,camera);rail?.update(target.x,target.z);construction.update(state,carState);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);updateFoliage(scene,camera.position,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
+      world!.update(target,elapsed,!mobile||!paused,flightShadows,camera,flying);rail?.update(target.x,target.z);construction.update(state,carState);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);updateFoliage(scene,camera.position,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
       for(const impact of physics!.takeImpacts())if(!paused)audio.impact(classifyImpact(impact),impact.severity);
       for(const speed of streetLife.takeHits())if(!paused)audio.impact('pedestrian',speed);
@@ -507,13 +507,16 @@ async function boot(){
           const warmTarget=new THREE.WebGLRenderTarget(1,1,{type:THREE.HalfFloatType});startupTarget=warmTarget;
           const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(warmTarget);
           let compiled:Promise<unknown>;
-          try{compiled=renderer.compileAsync(scene,camera);}
+          // With the same lights showing, the shadow and normal pass variants of everything in the scene (graphics.ts).
+          try{compiled=renderer.compileAsync(scene,camera);graphics!.warmPasses(scene);}
           catch(error){warmTarget.dispose();startupTarget=undefined;throw error;}
           finally{renderer.setRenderTarget(previousTarget);}
           return compiled.finally(()=>{warmTarget.dispose();if(startupTarget===warmTarget)startupTarget=undefined;});
         });
       }
     }
+    // Textures and vertex arrays of everything built so far go to the GPU now, not in the frame that first sees each (graphics.ts).
+    if(!mobile)await contextGate.run(()=>{ensureGraphics();graphics!.prepare(scene);return graphics!.settlePrograms();});
     // Only start the persistent RAF loop after a valid first frame. A lost
     // context retries this frame without leaving a second animation loop behind.
     await contextGate.run(()=>new Promise<void>((resolve,reject)=>requestAnimationFrame(now=>{

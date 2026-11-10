@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { computeBounds } from './fast-bounds.ts';
+import type { Upload } from './paced-upload.ts';
 import { drain, due, until, type Pace } from './pacing.ts';
 
 /** Starts linking the shader programs every pass will draw `mesh` with and
@@ -14,10 +16,12 @@ export type Warm=(mesh:THREE.Mesh)=>()=>boolean;
  * Parts go in already placed (see `cullStaticBatch`).
  */
 export function batchStaticDetails(root:THREE.Group){return drain(staticDetailBatchSteps(root));}
-export function* staticDetailBatchSteps(root:THREE.Group,pace?:Pace,warm?:Warm):Generator<void,{sources:number;batches:number}>{
+export function* staticDetailBatchSteps(root:THREE.Group,pace?:Pace,warm?:Warm,upload?:Upload):Generator<void,{sources:number;batches:number}>{
   const buckets=new Map<string,THREE.Mesh<THREE.BufferGeometry,THREE.Material>[]>();
   root.updateWorldMatrix(true,true);
-  root.traverseVisible(object=>{
+  // Visible objects, and a group marked `staging`: a tile's scenery is hidden while it builds far away, its meshes are sources all the same.
+  const visit=(object:THREE.Object3D,found:(object:THREE.Object3D)=>void)=>{found(object);for(const child of object.children)if(child.visible||child.userData.staging)visit(child,found);};
+  if(root.visible)visit(root,object=>{
     if(!(object instanceof THREE.Mesh)||object instanceof THREE.InstancedMesh||object instanceof THREE.BatchedMesh||
       object.name==='Boston surveyed buildings'||!object.visible||!object.frustumCulled||Array.isArray(object.material)||
       object.material.transparent||object.geometry.groups.length||object.customDepthMaterial||object.customDistanceMaterial||
@@ -53,7 +57,7 @@ export function* staticDetailBatchSteps(root:THREE.Group,pace?:Pace,warm?:Warm):
     for(const {mesh,placed,geometries} of parts){
       for(const geometry of geometries){
         if(due(pace))yield;
-        if(!geometry.boundingSphere)geometry.computeBoundingSphere();
+        if(!geometry.boundingSphere)computeBounds(geometry,false);
         const sphere=geometry.boundingSphere!,id=batch.addGeometry(geometry),range=batch.getGeometryRangeAt(id)!;batch.addInstance(id);
         bounds[n*4]=sphere.center.x;bounds[n*4+1]=sphere.center.y;bounds[n*4+2]=sphere.center.z;bounds[n*4+3]=sphere.radius;ranges[n*2]=range.start;ranges[n*2+1]=range.count;n++;
         if(geometry!==mesh.geometry)geometry.dispose();
@@ -65,6 +69,8 @@ export function* staticDetailBatchSteps(root:THREE.Group,pace?:Pace,warm?:Warm):
     for(let i=0;i<count;i++){sphere.center.set(bounds[i*4],bounds[i*4+1],bounds[i*4+2]);sphere.radius=bounds[i*4+3];whole.union(sphere);}
     batch.boundingSphere=whole;cullStaticBatch(batch,bounds,ranges);
     if(warm){if(due(pace))yield;yield* until(warm(batch),pace);}
+    // Its arrays reach the GPU a slice a frame instead of whole in the frame that first draws it (paced-upload.ts).
+    if(upload)yield* upload([batch],pace);
     // Swap in one step, so no part draws twice or goes missing for a frame.
     batch.visible=true;
     for(const mesh of list){mesh.removeFromParent();mesh.geometry.dispose();}
@@ -131,7 +137,7 @@ export function splitStaticGeometry(geometry:THREE.BufferGeometry,cellSize=128):
 export function* splitStaticGeometrySteps(geometry:THREE.BufferGeometry,cellSize=128,pace?:Pace):Generator<void,THREE.BufferGeometry[]>{
   const p=geometry.attributes.position,index=geometry.index,corners=index?index.count:p?.count??0;
   if(!p||corners<300||Object.values(geometry.attributes).some(a=>a instanceof THREE.InterleavedBufferAttribute))return [geometry];
-  geometry.computeBoundingBox();const box=geometry.boundingBox!,size=box.getSize(new THREE.Vector3());
+  computeBounds(geometry);const box=geometry.boundingBox!,size=box.getSize(new THREE.Vector3());
   if(Math.max(size.x,size.z)<=cellSize)return [geometry];
   // Triangles by cell, counted first so each cell's corner list is filled in place (no key or list per triangle).
   // A triangle with a vertex that is not a finite number (a degenerate detail part) gets a cell of its own.
@@ -175,7 +181,7 @@ export function* splitStaticGeometrySteps(geometry:THREE.BufferGeometry,cellSize
       for(let i=0;i<count;i++){const v=vertices[i]*size,o=i*size;for(let j=0;j<size;j++)array[o+j]=from[v+j];}
       const attribute=new THREE.BufferAttribute(array,size,a.normalized);attribute.gpuType=a.gpuType;part.setAttribute(name,attribute);
     }
-    part.computeBoundingBox();part.computeBoundingSphere();parts.push(part);
+    computeBounds(part);parts.push(part);
   }
   return parts;
 }

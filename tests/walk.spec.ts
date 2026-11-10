@@ -41,8 +41,10 @@ test('walk mode: step out, walk, run, jump, first person, sidewalk reset and bac
     await expect(page.locator('#journey-label')).toHaveText('RUNNING');
     await expect.poll(async()=>(await snapshot(page)).walker.run).toBeGreaterThan(.9);
     await page.screenshot({path:testInfo.outputPath('walk-running.png')});
-    await page.keyboard.press('Space');
-    await expect.poll(async()=>(await snapshot(page)).walker.grounded,{intervals:[30]}).toBe(false);
+    // Held until the walker has left the ground: the game reads the key once a frame, and a press released at
+    // once is over before the next frame whenever the frame loop has time to spare.
+    await page.keyboard.down('Space');
+    try{await expect.poll(async()=>(await snapshot(page)).walker.grounded,{intervals:[30]}).toBe(false);}finally{await page.keyboard.up('Space');}
     await expect.poll(async()=>(await snapshot(page)).walker.grounded).toBe(true);
   }finally{await page.keyboard.up('Shift');await page.keyboard.up('w');}
   await expect.poll(async()=>(await snapshot(page)).walker.speed).toBeLessThan(.05);
