@@ -7,7 +7,18 @@ export interface PedestrianAppearance {
   orientation?:THREE.Quaternion;
   /** 0..1 limp posture: arms flung out, legs splayed, eyes shut, as after a knock-down. */
   sprawl?:number;
+  /** 0..1 running gait: longer airborne strides, a forward lean and pumping, bent arms. The caller
+   * then passes `distance` in walking strides (metres moved divided by `strideScale(run)`). */
+  run?:number;
+  /** 0..1 off the ground in a jump or fall: legs tucked, arms out for balance. */
+  air?:number;
+  /** Head turn (radians, positive left) in place of the idle glance, as toward where the player looks. */
+  gaze?:number;
+  /** Fixed colours in place of the ones picked by index. */
+  look?:{coat?:number;trousers?:number;shoes?:number;soles?:number;skin?:number;hair?:number;shirt?:number};
 }
+/** How much longer a stride is at `run` (0..1) than at a walk. */
+export const strideScale=(run:number)=>1+1.9*Math.max(0,Math.min(1,run));
 type Point = [number,number,number];
 type Section = [number,number,number]; // height, half width, half depth
 
@@ -66,7 +77,7 @@ function headGeometry(rings=40,segments=48){
 }
 /** A neutral complexion atlas multiplies each actor's skin color. Shadows and
  * small color changes supply eyelids, brows, nostrils and lips without decals. */
-function faceTexture(){
+function faceTexture(closeUp=false){
   const size=256,data=new Uint8Array(size*size*4);
   for(let row=0;row<size;row++)for(let col=0;col<size;col++){
     const y=(row+.5)/size*1.01-.51,angle=((col+.5)/size)*Math.PI*2-Math.PI,[width]=headSection(y);
@@ -80,11 +91,12 @@ function faceTexture(){
     const lips=Math.exp(-((x/.145)**6)-((y-lipLine)/.022)**2);
     const mouth=Math.exp(-((x/.128)**6)-((y-lipLine+.004)/.0045)**2);
     const noise=((Math.imul(col+row*size,374761393)>>>20)%31)/31-.5;
-    const base=.985-front*(socket*.08+nostril*.48+brows*.58+mouth*.28)+noise*.004;
+    // Seen close, a dark mouth line reads as an open mouth: the close-up face keeps its lips together.
+    const lipTone=closeUp?.5:1,base=.985-front*(socket*.08+nostril*(closeUp?.34:.48)+brows*(closeUp?.5:.58)+mouth*(closeUp?.1:.28))+noise*.004;
     const offset=(row*size+col)*4;
-    data[offset]=Math.round(255*Math.max(0,base-front*lips*.12));
-    data[offset+1]=Math.round(255*Math.max(0,base-front*(cheeks*.045+lips*.29)));
-    data[offset+2]=Math.round(255*Math.max(0,base-front*(cheeks*.055+lips*.27)));data[offset+3]=255;
+    data[offset]=Math.round(255*Math.max(0,base-front*lips*.12*lipTone));
+    data[offset+1]=Math.round(255*Math.max(0,base-front*(cheeks*.045+lips*.29*lipTone)));
+    data[offset+2]=Math.round(255*Math.max(0,base-front*(cheeks*.055+lips*.27*lipTone)));data[offset+3]=255;
   }
   const texture=new THREE.DataTexture(data,size,size);texture.colorSpace=THREE.SRGBColorSpace;texture.magFilter=THREE.LinearFilter;texture.minFilter=THREE.LinearMipmapLinearFilter;texture.generateMipmaps=true;texture.needsUpdate=true;return texture;
 }
@@ -126,8 +138,11 @@ const skins=[0xb28165,0xd6a789,0x8f624b,0x654636,0xc39976,0xe0b69a];
 const hairs=[0x302b26,0x544231,0x837059,0x29282a,0x8e8b80];
 
 /** Shared instanced parts keep the entire sidewalk population at a fixed draw
- * count. Appearance and posing are independent of sidewalk routing. */
-export function createPedestrianModel(group:THREE.Group,people:PedestrianAppearance[],materials:Set<THREE.Material>){
+ * count. Appearance and posing are independent of sidewalk routing. `closeUp` builds the
+ * figure the camera follows at arm's length (the player on foot): an anatomical torso that
+ * narrows to the waist and slopes into the shoulders, a modelled neck, arms that hang
+ * beside the ribs instead of standing off them, and finer cloth and face meshes. */
+export function createPedestrianModel(group:THREE.Group,people:PedestrianAppearance[],materials:Set<THREE.Material>,{closeUp=false}:{closeUp?:boolean}={}){
   const count=people.length,batches:THREE.InstancedMesh[]=[];
   function batch(name:string,geometry:THREE.BufferGeometry,multiplier=1,roughness=.9,capacity=count*multiplier){
     const material=new THREE.MeshStandardMaterial({color:0xffffff,roughness});materials.add(material);
@@ -136,7 +151,10 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
     group.add(mesh);batches.push(mesh);return mesh;
   }
   const sphere=new THREE.SphereGeometry(.5,10,8);
-  const torso=batch('Tailored jackets',tailored([[-.5,0,0],[-.5,.46,.51],[-.25,.44,.48],[.05,.47,.49],[.27,.51,.47],[.40,.45,.39],[.49,.22,.26],[.50,0,0]],16));
+  // Hem, waist, ribs, chest, shoulder line, trapezius, neck base.
+  const torsoSections:Section[]=closeUp?[[-.5,0,0],[-.5,.47,.50],[-.36,.46,.50],[-.2,.43,.47],[-.03,.44,.48],[.14,.49,.52],[.28,.53,.51],[.38,.535,.46],[.44,.47,.39],[.48,.33,.32],[.5,.2,.27],[.5,0,0]]
+    :[[-.5,0,0],[-.5,.46,.51],[-.25,.44,.48],[.05,.47,.49],[.27,.51,.47],[.40,.45,.39],[.49,.22,.26],[.50,0,0]];
+  const torso=batch('Tailored jackets',tailored(torsoSections,closeUp?28:16));
   const pelvis=batch('Trouser hips',tailored([[-.5,0,0],[-.47,.42,.40],[0,.50,.48],[.45,.47,.44],[.5,0,0]]));
   // One tube spans each whole limb. The vertex shader bends its sections
   // around the elbow/knee, keeping the fabric continuous at the joint. The
@@ -175,7 +193,9 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
   const legs=articulated('Continuous trousers',[[-.5,0,0],[-.5,.045,.050],[-.33,.051,.057],[-.17,.059,.065],[0,.062,.068],[.16,.070,.078],[.33,.083,.089],[.42,.083,.087],[.5,0,0]]);
   const heads=batch('Faces',headGeometry(),1,.82),distantHeads=batch('Distant faces',headGeometry(14,20),1,.82);
   let nearHeadCount=0,farHeadCount=0;
-  const skin=batch('Necks hands and ears',sphere,5,.82);
+  const skin=batch('Necks hands and ears',closeUp?new THREE.SphereGeometry(.5,18,12):sphere,5,.82);
+  // Close up the neck is a column that widens into the shoulders, not a ball under the chin.
+  const neck=closeUp?batch('Necks',tailored([[-.5,0,0],[-.5,.72,.62],[-.3,.56,.54],[0,.47,.5],[.3,.46,.5],[.5,.5,.52],[.5,0,0]],20),1,.82):undefined;
   const hair=['Short cropped hair','Side parted hair','Fuller hair'].map((name,style)=>batch(name,hairGeometry(style),1,.78,people.filter((_,i)=>i%3===style).length));
   const longHair=batch('Long hairstyles',sphere);
   // Rounded shoes retain a flat outsole, with a higher heel and a tapered toe.
@@ -202,32 +222,35 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
   const coatHem=batch('Skirts',tailored([[-.5,0,0],[-.49,.5,.48],[.30,.43,.42],[.5,.40,.40]]));
   const eyeWhites=batch('Eyes',new THREE.SphereGeometry(.5,10,6),2,.5),irises=batch('Irises',new THREE.CircleGeometry(.5,12),2,.65);
   eyeWhites.castShadow=irises.castShadow=false;
-  const seamPath=new THREE.CatmullRomCurve3([[0,-.44,.509],[0,-.24,.487],[0,.05,.497],[0,.26,.481],[0,.40,.402]].map(p=>new THREE.Vector3(...p)));
+  // The front seam (a zip, close up) lies on the jacket's own front profile.
+  const seamPath=new THREE.CatmullRomCurve3((closeUp?torsoSections.slice(2,-4).map(([y,,depth]):Point=>[0,y,depth+.004]):[[0,-.44,.509],[0,-.24,.487],[0,.05,.497],[0,.26,.481],[0,.40,.402]] as Point[]).map(p=>new THREE.Vector3(...p)));
   const seams=batch('Jacket seams',new THREE.TubeGeometry(seamPath,20,.004,4,false));seams.castShadow=false;
   const pockets=batch('Pocket welts',new THREE.BoxGeometry(1,1,1),2);pockets.castShadow=false;
-  const cloth=fabricTexture(),face=faceTexture(),strands=hairTexture();
+  const cloth=fabricTexture(),face=faceTexture(closeUp),strands=hairTexture();
   for(const mesh of [torso,pelvis,arms,legs,coatHem,pockets]){
     const material=mesh.material as THREE.MeshStandardMaterial;material.map=cloth;material.bumpMap=cloth;material.bumpScale=.00065;
   }
   for(const mesh of [heads,distantHeads])(mesh.material as THREE.MeshStandardMaterial).map=face;
   for(const mesh of [...hair,longHair]){const material=mesh.material as THREE.MeshStandardMaterial;material.map=strands;material.bumpMap=strands;material.bumpScale=.0004;material.roughness=.78;}
-  const color=new THREE.Color();
+  const color=new THREE.Color(),complexions:number[]=[];
   function tint(mesh:THREE.InstancedMesh,index:number,value:number){mesh.setColorAt(index,color.setHex(value));}
   people.forEach((person,i)=>{
-    const coat=coats[i%coats.length],pants=trousers[(i*3)%trousers.length],complexion=skins[i%skins.length],hairstyle=hairs[i%hairs.length];
+    const look=person.look??{},coat=look.coat??coats[i%coats.length],pants=look.trousers??trousers[(i*3)%trousers.length],complexion=look.skin??skins[i%skins.length],hairstyle=look.hair??hairs[i%hairs.length];
+    complexions[i]=complexion;
     tint(torso,i,coat);tint(pelvis,i,pants);tint(heads,i,complexion);tint(hair[i%3],Math.floor(i/3),hairstyle);tint(longHair,i,hairstyle);
-    tint(collar,i,[0xd3d2c5,0x9daeb2,0x383a42][i%3]);tint(coatHem,i,person.outfit===1?pants:coat);
+    tint(collar,i,look.shirt??[0xd3d2c5,0x9daeb2,0x383a42][i%3]);tint(coatHem,i,person.outfit===1?pants:coat);
     tint(bags,i,i%2?0x574538:0x273638);tint(scarves,i,i%2?0x8b6e4d:0x4d6770);
     tint(seams,i,color.setHex(coat).multiplyScalar(.65).getHex());
     for(let j=0;j<2;j++){
       tint(arms,i*2+j,coat);tint(legs,i*2+j,pants);
-      tint(shoes,i*2+j,i%3===0?0x645248:0x252b2e);tint(soles,i*2+j,i%3?0x777971:0x282b29);tint(straps,i*2+j,0x373c3a);tint(eyeWhites,i*2+j,0xa6a096);tint(irises,i*2+j,[0x3f3329,0x4b5955,0x5c5141,0x303434][i%4]);
+      tint(shoes,i*2+j,look.shoes??(i%3===0?0x645248:0x252b2e));tint(soles,i*2+j,look.soles??(i%3?0x777971:0x282b29));tint(straps,i*2+j,0x373c3a);tint(eyeWhites,i*2+j,0xa6a096);tint(irises,i*2+j,[0x3f3329,0x4b5955,0x5c5141,0x303434][i%4]);
       tint(pockets,i*2+j,color.setHex(coat).multiplyScalar(.78).getHex());
     }
     for(let j=0;j<5;j++)tint(skin,i*5+j,complexion);
+    if(neck)tint(neck,i,complexion);
   });
   const actor=new THREE.Matrix4(),local=new THREE.Matrix4(),world=new THREE.Matrix4();
-  const position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),euler=new THREE.Euler();
+  const position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion(),euler=new THREE.Euler(),forwardLean=new THREE.Quaternion(),ACROSS=new THREE.Vector3(1,0,0);
   const blend=new Float32Array(count).fill(1),visualTime=new Float32Array(count);
   function place(mesh:THREE.InstancedMesh,index:number,p:Point,s:Point,rx=0,ry=0,rz=0){
     rotation.setFromEuler(euler.set(rx,ry,rz));local.compose(position.set(...p),rotation,scale.set(...s));world.multiplyMatrices(actor,local);mesh.setMatrixAt(index,world);
@@ -242,22 +265,33 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
   function pose(i:number,person:PedestrianAppearance,distance:number,walking:number,dt:number,detailed=true){
     if(i===0){nearHeadCount=0;farHeadCount=0;}
     blend[i]=THREE.MathUtils.damp(blend[i],walking,10,Math.max(0,Math.min(.1,dt)));
-    const amount=blend[i],stride=1.12,cycle=distance/(stride*person.height),gait=cycle*Math.PI*2;
-    const bob=Math.cos((cycle-.31)*Math.PI*4)*.020*amount+(1-amount)*.045,sway=Math.sin(gait)*.012*amount;
-    const sprawl=THREE.MathUtils.clamp(person.sprawl??0,0,1);
-    if(person.orientation)rotation.copy(person.orientation);else rotation.setFromAxisAngle(THREE.Object3D.DEFAULT_UP,person.yaw);
+    const sprawl=THREE.MathUtils.clamp(person.sprawl??0,0,1),air=THREE.MathUtils.clamp(person.air??0,0,1)*(1-sprawl),run=THREE.MathUtils.clamp(person.run??0,0,1)*(1-sprawl);
+    // The gait fades while airborne; a runner's stride lengthens around the same cycle.
+    const amount=blend[i]*(1-air*.75),stride=1.12*strideScale(run),cycle=distance/(1.12*person.height),gait=cycle*Math.PI*2;
+    // Standing still, the chest rises with each breath and the weight drifts between the feet.
+    const still=(1-amount)*(1-sprawl)*(1-air),breath=Math.sin((visualTime[i]+i*.9)*1.7)*.004*still;
+    // A walker rides highest over the planted leg; a runner sinks onto it and is highest in flight between strides.
+    const bob=Math.cos((cycle-.31-.12*run)*Math.PI*4)*.020*(1+2.2*run)*amount+(1-amount)*.045-.03*run*amount,sway=Math.sin(gait)*.012*amount+Math.sin((visualTime[i]+i)*.45)*.006*still;
+    // A runner leans from the ankles; the feet are levelled against it below.
+    const lean=.14*run*amount+.05*air,slope=Math.tan(lean);
+    if(person.orientation)rotation.copy(person.orientation);else{rotation.setFromAxisAngle(THREE.Object3D.DEFAULT_UP,person.yaw);if(lean>0)rotation.multiply(forwardLean.setFromAxisAngle(ACROSS,lean));}
     actor.compose(person.position,rotation,scale.set(person.width*person.height,person.height,person.height));
-    const hipY=.895+bob,bodyY=1.14+bob,twist=Math.sin(gait)*.035*amount;
-    const longCoat=person.outfit===3,build=.94+(i%7)*.018;
-    place(torso,i,[sway,bodyY-(longCoat?.055:0),.012],[.425*build,longCoat?.70:.59,.285*(.97+i%3*.03)],.025*amount,twist,-sway*.6);
+    // Close up the shoulders sit at their anatomical height (0.82 of the stature), which shortens the neck to match.
+    const hipY=.895+bob,bodyY=(closeUp?1.168:1.14)+bob+breath,twist=Math.sin(gait)*.035*(1+2.2*run)*amount;
+    const longCoat=person.outfit===3,build=closeUp?1:.94+(i%7)*.018;
+    // Half-widths in metres at height 1: the ribcage, then shoulder, elbow and wrist out from the spine.
+    const chest=closeUp?.365:.425,girth=closeUp?.262:.285*(.97+i%3*.03),shoulderX=closeUp?.166:.181*build,elbowX=closeUp?.203:.222,wristX=closeUp?.197:.216;
+    place(torso,i,[sway,bodyY-(longCoat?.055:0),.012],[chest*build,longCoat?.70:.59,girth],.025*amount,twist,-sway*.6);
     place(pelvis,i,[sway,hipY+.015,0],[.32,.22,.245],0,-twist);
-    place(collar,i,[sway,1.442+bob,.006],[.122,.033,.112],0,twist);
-    place(seams,i,[sway,bodyY-(longCoat?.055:0),.012],[.425*build,longCoat?.70:.59,.285*(.97+i%3*.03)],.025*amount,twist,-sway*.6);
-    const headY=1.623+bob,headTurn=THREE.MathUtils.lerp(Math.sin(distance*.29+i*1.7)*.085,(i%2?.42:-.42),sprawl);
+    // Close up, the jacket's stand collar wraps the base of the neck.
+    place(collar,i,[sway,(closeUp?1.472:1.442)+bob,.006],closeUp?[.139,.05,.13]:[.122,.033,.112],0,twist);
+    place(seams,i,[sway,bodyY-(longCoat?.055:0),.012],[chest*build,longCoat?.70:.59,girth],.025*amount,twist,-sway*.6);
+    const headY=1.623+bob,headTurn=THREE.MathUtils.lerp(person.gaze??Math.sin(distance*.29+i*1.7)*.085,(i%2?.42:-.42),sprawl);
     const faceWidth=.176*(.96+(i%5)*.02),headSize:Point=[faceWidth,.232,.202];
     const headMesh=detailed?heads:distantHeads,headIndex=detailed?nearHeadCount++:farHeadCount++;
-    place(headMesh,headIndex,[sway,headY,.014],headSize,0,headTurn);tint(headMesh,headIndex,skins[i%skins.length]);
-    place(skin,i*5,[sway,1.478+bob,.006],[.108,.135,.10]);
+    place(headMesh,headIndex,[sway,headY,.014],headSize,0,headTurn);tint(headMesh,headIndex,complexions[i]);
+    if(neck){place(neck,i,[sway,1.494+bob,.004],[.126,.115,.122]);place(skin,i*5,[0,0,0],[0,0,0]);}
+    else place(skin,i*5,[sway,1.478+bob,.006],[.108,.135,.10]);
     place(hair[i%3],Math.floor(i/3),[sway,headY,.014],headSize,0,headTurn);
     place(longHair,i,[sway,1.532+bob,-.062],i%4===1?[.177,.24,.12]:[0,0,0],0,headTurn);
     place(bags,i,[sway,1.17+bob,-.165],person.bag?[.255,.35,.15]:[0,0,0],.06);
@@ -267,37 +301,51 @@ export function createPedestrianModel(group:THREE.Group,people:PedestrianAppeara
     const blinkPhase=(visualTime[i]+i*.71)%(3.7+(i%5)*.43),blink=(blinkPhase<.16?1-.94*Math.sin(blinkPhase/.16*Math.PI):1)*(1-sprawl*.9);
     for(let sideIndex=0;sideIndex<2;sideIndex++){
       const side=sideIndex===0?-1:1,index=i*2+sideIndex;
-      const step=((cycle+sideIndex*.5)%1+1)%1,stance=.62,extent=stride*stance*.5;
+      // Walking keeps a foot down 62% of the cycle; running shortens that until both are airborne between strides.
+      // A runner lands closer under the body and pushes off well behind it, rolling up onto the toe.
+      const step=((cycle+sideIndex*.5)%1+1)%1,stance=.62-.30*run,front=stride*stance*(.5-.12*run),back=front-stride*stance,heel=.16*run;
       let footZ:number,lift=0,pitch=0;
-      if(step<stance){footZ=extent-stride*step;pitch=.10*(1-step/stance)-.12*Math.pow(step/stance,5);}
-      else{
+      if(step<stance){
+        const u=step/stance,push=THREE.MathUtils.smoothstep(u,.55,1);
+        footZ=front-stride*step;pitch=.10*(1-u)-.12*Math.pow(u,5)-.85*run*push;lift=heel*push;
+      }else{
         const t=(step-stance)/(1-stance),smooth=t*t*(3-2*t);
         // Hermite endpoints match stance velocity, so the foot eases through
         // toe-off and heel strike without the sinusoidal treadmill slide.
-        footZ=-extent+2*extent*smooth-stride*(1-stance)*(2*t*t*t-3*t*t+t);
-        lift=Math.pow(Math.sin(t*Math.PI),1.5)*.075;pitch=-Math.sin(t*Math.PI)*.28;
+        footZ=back+(front-back)*smooth-stride*(1-stance)*(2*t*t*t-3*t*t+t);
+        // The running foot kicks up behind the body early in the swing, then reaches forward low.
+        const arc=Math.sin(Math.pow(t,1-.4*run)*Math.PI),settle=(1-t)*(1-t);
+        lift=Math.pow(arc,1.5)*(.075+.30*run)+heel*settle;pitch=-arc*(.28+.5*run)-.85*run*settle;
       }
       footZ*=amount;lift*=amount;pitch*=amount;
+      // Off the ground both knees come up, one foot ahead of the other, toes down.
+      if(air>0){footZ=THREE.MathUtils.lerp(footZ,sideIndex?.11:-.15,air);lift=THREE.MathUtils.lerp(lift,.07+sideIndex*.07,air);pitch=THREE.MathUtils.lerp(pitch,-.3,air);}
       const contactIndex=THREE.MathUtils.clamp((pitch+.35)/.5*256,0,256),lower=Math.floor(contactIndex);
       // A limp body splays its legs: one knee drawn up, the other leg trailing.
       const footX=THREE.MathUtils.lerp(side*.09,side*.27,sprawl),shoeY=THREE.MathUtils.lerp(lerpContact(lower,contactIndex-lower)+lift,.06+sideIndex*.1,sprawl);
       footZ=THREE.MathUtils.lerp(footZ,sideIndex?.28:-.22,sprawl);
-      const hip:Point=[side*.088+sway,hipY,0],ankle:Point=[footX,shoeY+.045,footZ-.015];
+      const footY=shoeY+footZ*slope,footPitch=pitch-lean;
+      const hip:Point=[side*.088+sway,hipY,0],ankle:Point=[footX,footY+.045,footZ-.015];
       const dy=ankle[1]-hip[1],dz=ankle[2]-hip[2],length=Math.hypot(dy,dz),bone=.430;
       const bend=Math.sqrt(Math.max(0,bone*bone-length*length*.25));
       const knee:Point=[side*.092+sway*.4,hip[1]+dy*.5+dz/length*bend,dz*.5-dy/length*bend];
       limb(legs,index,ankle,knee,hip);
-      place(shoes,index,[footX,shoeY,footZ+.043],[.117,.105,.255],pitch);
-      place(soles,index,[footX,shoeY-.031,footZ+.043],[.12,.028,.26],pitch);
-      const phase=gait+sideIndex*Math.PI,armSwing=-Math.cos(phase)*(.24+(i%4)*.015)*amount;
-      const shoulder:Point=[side*.181*build+sway,1.366+bob,.005];
-      const elbow:Point=[side*.222+sway,shoulder[1]-Math.cos(armSwing)*.277,.005+Math.sin(armSwing)*.277];
-      const elbowBend=.18+.12*(.5+.5*Math.sin(phase+.7))*amount;
-      const hand:Point=[side*.216+sway,elbow[1]-Math.cos(armSwing+elbowBend)*.254,elbow[2]+Math.sin(armSwing+elbowBend)*.254];
+      place(shoes,index,[footX,footY,footZ+.043],[.117,.105,.255],footPitch);
+      place(soles,index,[footX,footY-.031,footZ+.043],[.12,.028,.26],footPitch);
+      const phase=gait+sideIndex*Math.PI,armSwing=(-Math.cos(phase)*(.24+(i%4)*.015+.5*run)-.14*run)*amount;
+      const shoulder:Point=[side*shoulderX+sway,(closeUp?1.418:1.366)+bob+breath,.005];
+      const elbow:Point=[side*elbowX+sway,shoulder[1]-Math.cos(armSwing)*.277,.005+Math.sin(armSwing)*.277];
+      const elbowBend=.18+(.12*(.5+.5*Math.sin(phase+.7))+1.2*run)*amount;
+      const hand:Point=[side*wristX+sway,elbow[1]-Math.cos(armSwing+elbowBend)*.254,elbow[2]+Math.sin(armSwing+elbowBend)*.254];
       if(sprawl>0){
         // Arms flung outward and slightly up, as a body thrown off balance.
         const flungElbow:Point=[side*.44+sway,1.33+sideIndex*.05,.09-sideIndex*.12],flungHand:Point=[side*.66+sway,1.27+sideIndex*.12,.2-sideIndex*.3];
         for(let axis=0;axis<3;axis++){elbow[axis]=THREE.MathUtils.lerp(elbow[axis],flungElbow[axis],sprawl);hand[axis]=THREE.MathUtils.lerp(hand[axis],flungHand[axis],sprawl);}
+      }
+      if(air>0){
+        // Arms lifted away from the body for balance.
+        const outElbow:Point=[side*.35+sway,1.20+bob,.07],outHand:Point=[side*.47+sway,1.06+bob,.25];
+        for(let axis=0;axis<3;axis++){elbow[axis]=THREE.MathUtils.lerp(elbow[axis],outElbow[axis],air*.85);hand[axis]=THREE.MathUtils.lerp(hand[axis],outHand[axis],air*.85);}
       }
       limb(arms,index,hand,elbow,shoulder);
       place(skin,i*5+1+sideIndex,[hand[0],hand[1]-.024,hand[2]+.005],[.060,.108,.038],armSwing+elbowBend);

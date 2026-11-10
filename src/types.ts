@@ -36,4 +36,4 @@ export interface DriveInput { throttle: number; brake: number; steer: number; ha
 export interface VehicleState { x: number; y: number; z: number; yaw: number; speed: number; steering: number; }
 export type LightingMode = 'golden' | 'day' | 'night';
 export type CameraMode = 'chase' | 'hood' | 'aerial';
-export type TravelMode = 'drive' | 'helicopter' | 'bike';
+export type TravelMode = 'drive' | 'helicopter' | 'bike' | 'walk';

@@ -22,7 +22,7 @@ export function createTouchDrivingState() {
   let mode:TouchDrivingMode='analog',travelMode:TravelMode='drive',suspended=true;
   let gear:1|-1=1,speed=0,stick:Stick={x:0,y:0};
   const held=new Map<number,TouchDrivingAction>();
-  const active=()=>!suspended&&travelMode!=='helicopter';
+  const active=()=>!suspended&&travelMode!=='helicopter'&&travelMode!=='walk';
   const isHeld=(action:TouchDrivingAction)=>[...held.values()].includes(action);
   const reset=()=>{held.clear();stick={x:0,y:0};};
   return {
@@ -91,7 +91,7 @@ export function createTouchDrivingControls(host:HTMLElement,options:{isPaused:()
   const captures=new Map<number,HTMLElement>(),stickKeys=new Set<string>();
   let stickPointer:number|null=null,travelMode:TravelMode='drive',suspended=true;
   const on=(element:EventTarget,type:string,handler:EventListener)=>{element.addEventListener(type,handler);disposers.push(()=>element.removeEventListener(type,handler));};
-  const canInteract=()=>!suspended&&!options.isPaused()&&travelMode!=='helicopter'&&!document.hidden;
+  const canInteract=()=>!suspended&&!options.isPaused()&&travelMode!=='helicopter'&&travelMode!=='walk'&&!document.hidden;
   const radii=()=>({x:Math.max(1,(pad.clientWidth-knob.offsetWidth)/2-10),y:Math.max(1,(pad.clientHeight-knob.offsetHeight)/2-10)});
   const refreshGears=()=>{for(const button of gears){button.disabled=!state.canChangeGear();button.setAttribute('aria-pressed',String((button.dataset.direction==='drive'?1:-1)===state.getGear()));}};
   const refresh=()=>{
@@ -166,7 +166,7 @@ export function createTouchDrivingControls(host:HTMLElement,options:{isPaused:()
     root.querySelectorAll<HTMLElement>('.touch-stick-forward,.touch-stick-backward').forEach(element=>element.hidden=mode==='analog');refresh();
   }
   function setTravelMode(mode:TravelMode){
-    if(travelMode!==mode)reset();travelMode=mode;state.setTravelMode(mode);root.hidden=mode==='helicopter';
+    if(travelMode!==mode)reset();travelMode=mode;state.setTravelMode(mode);root.hidden=mode==='helicopter'||mode==='walk';
     const handbrake=root.querySelector<HTMLButtonElement>('.touch-handbrake')!;
     handbrake.textContent=mode==='bike'?'BIKE BRAKE':'HANDBRAKE';handbrake.setAttribute('aria-label',mode==='bike'?'Brake bike':'Handbrake');
     root.querySelector<HTMLElement>('.wheelie-touch')!.hidden=mode!=='bike';refresh();

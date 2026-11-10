@@ -11,11 +11,11 @@
 @media(max-width:700px){.map-header>div{max-width:180px}.map-header h2{font-size:27px;line-height:1.05;max-width:170px}.map-header .close-map{flex-shrink:0;gap:7px;padding:10px 12px;font-size:10px}.controls-grid{font-size:11px}.map-destination{min-width:0}.map-destination strong{overflow-wrap:anywhere}}
 .not-started .hud{opacity:0;visibility:hidden;pointer-events:none}
 .travel-switch{position:absolute;top:88px;left:28px;display:flex;gap:2px;padding:3px;border:1px solid #ffffff24;border-radius:22px;background:#233b3bbd;backdrop-filter:blur(12px)}.travel-switch button{display:flex;align-items:center;gap:9px;border:0;border-radius:18px;background:transparent;color:#f5f1e4a3;padding:9px 12px;font-size:10px;letter-spacing:.02em}.travel-switch button.active{background:#f1eddf;color:var(--ink)}.travel-switch kbd{border-color:currentColor;opacity:.5;font-size:8px;padding:1px 3px}.altitude-readout{margin:2px 0 12px;padding-top:10px;border-top:1px solid #fff3}.altitude-number{font-size:25px;font-weight:500;font-variant-numeric:tabular-nums;letter-spacing:-.025em}.altitude-unit{font-size:9px;letter-spacing:.1em;margin-left:8px}.altitude-caption{display:flex;justify-content:space-between;gap:16px;font-size:8px;text-transform:uppercase;letter-spacing:.12em;margin-top:4px;opacity:.75}.altitude-caption span{font-variant-numeric:tabular-nums}.flying .speed-value{font-size:52px}.flight-touch{position:absolute;bottom:88px;left:50%;transform:translateX(-50%);display:none;gap:8px}.flight-touch.suspended{visibility:hidden}.flying .touch-controls .brake{display:none}
-@media(pointer:coarse){.flying .flight-touch{display:flex}.flight-touch .touch-btn{width:44px;height:44px}.flying .minimap-wrap{bottom:180px}.flying .speed-cluster{bottom:178px}.flying .speed-value{font-size:40px}}
-@media(max-width:700px){.travel-switch{left:50%;top:124px;transform:translateX(-50%);padding:2px;white-space:nowrap}.travel-switch button{padding:8px 12px}.travel-switch kbd{display:none}.toast{top:153px}.flying .speed-value{font-size:40px}.altitude-number{font-size:22px}.altitude-caption{gap:9px;font-size:7px}.altitude-readout{margin-bottom:8px}.flight-touch{bottom:83px}.flying .touch-controls{gap:39px}}
-@media(max-height:500px){.travel-switch{top:77px;left:28px;transform:none}.flying .speed-value{font-size:34px}.flying .altitude-number{font-size:19px}.flying .altitude-readout{padding-top:4px;margin-bottom:4px}.flying .minimap-wrap{bottom:106px}.flying .speed-cluster{bottom:101px}}
+@media(pointer:coarse){.flying .flight-touch,.walking .flight-touch{display:flex}.flight-touch .touch-btn{width:44px;height:44px}.flying .minimap-wrap,.walking .minimap-wrap{bottom:180px}.flying .speed-cluster,.walking .speed-cluster{bottom:178px}.flying .speed-value{font-size:40px}}
+@media(max-width:700px){.travel-switch{left:50%;top:124px;transform:translateX(-50%);padding:2px;white-space:nowrap}.travel-switch button{padding:8px 12px}.travel-switch kbd{display:none}.toast{top:153px}.flying .speed-value{font-size:40px}.altitude-number{font-size:22px}.altitude-caption{gap:9px;font-size:7px}.altitude-readout{margin-bottom:8px}.flight-touch{bottom:83px}.flying .touch-controls,.walking .touch-controls{gap:39px}}
+@media(max-height:500px){.travel-switch{top:77px;left:28px;transform:none}.flying .speed-value{font-size:34px}.flying .altitude-number{font-size:19px}.flying .altitude-readout{padding-top:4px;margin-bottom:4px}.flying .minimap-wrap,.walking .minimap-wrap{bottom:106px}.flying .speed-cluster,.walking .speed-cluster{bottom:101px}}
 
-@media(max-height:500px) and (pointer:coarse){.flying .minimap-wrap{display:none}.flying .speed-cluster{bottom:163px}.flight-touch{bottom:80px}.flying .touch-controls{bottom:18px}}
+@media(max-height:500px) and (pointer:coarse){.flying .minimap-wrap,.walking .minimap-wrap{display:none}.flying .speed-cluster,.walking .speed-cluster{bottom:163px}.flight-touch{bottom:80px}.flying .touch-controls,.walking .touch-controls{bottom:18px}}
 .brand-symbol{padding-right:0;letter-spacing:-.04em}.map-destinations{display:flex;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior:contain;padding:3px 2px 9px;scrollbar-width:thin;scrollbar-color:#8a9d8c66 transparent}.map-destination{flex:0 0 auto;min-width:145px;max-width:220px}.map-destination strong{white-space:normal}.map-tools button svg{width:17px;height:17px}.map-note{bottom:35px}
 @media(max-width:700px){.brand-subtitle{max-width:155px;font-size:7px;letter-spacing:.09em}.map-destinations{display:flex;grid-template-columns:none;max-width:calc(100% - 30px);bottom:15px}.map-destination{min-width:140px;max-width:180px}.map-destination strong{font-size:11px}.map-note{display:none}}
 /* The atlas reserves space for its destinations, so fitting the city never
@@ -181,7 +181,7 @@ html,body{height:100dvh}
 #interface.touch-enabled .touch-actions .wheelie-touch{width:66px}
 #interface.touch-enabled [data-control-mode=joystick] .touch-actions{left:auto;right:var(--touch-right);bottom:var(--touch-bottom);flex-direction:column}
 #interface.touch-enabled .flight-touch{display:none;inset:0;transform:none;pointer-events:none}
-#interface.touch-enabled.flying .flight-touch{display:block}
+#interface.touch-enabled.flying .flight-touch,#interface.touch-enabled.walking .flight-touch{display:block}
 #interface.touch-enabled .flight-movement,#interface.touch-enabled .flight-actions{position:absolute;bottom:var(--touch-bottom)}
 #interface.touch-enabled .flight-movement{left:var(--touch-left)}
 #interface.touch-enabled .flight-actions{right:var(--touch-right)}
@@ -211,7 +211,7 @@ html,body{height:100dvh}
   #interface.touch-enabled .touch-actions{bottom:calc(var(--touch-bottom) + 109px);gap:6px}
   #interface.touch-enabled .touch-actions .touch-handbrake{width:84px;font-size:10px}
   #interface.touch-enabled .touch-actions .wheelie-touch{width:58px;font-size:9px}
-  #interface.touch-enabled.flying .speed-cluster{max-width:calc(100% - 200px)}
+  #interface.touch-enabled.flying .speed-cluster,#interface.touch-enabled.walking .speed-cluster{max-width:calc(100% - 200px)}
   #interface.touch-enabled.flying .altitude-readout{border:0;padding:0;margin:2px 0}
   #interface.touch-enabled.flying .altitude-number{font-size:12px}
   #interface.touch-enabled.flying .altitude-caption{display:none}
@@ -289,3 +289,7 @@ html,body{height:100dvh}
 #interface.touch-enabled .map-route-clear{min-height:44px;touch-action:manipulation}
 /* Toasts stay readable over the atlas, which answers a map tap with one ("No streets near there"). */
 .toast{z-index:4}
+
+/* On foot the flight pad's altitude pair reads Run and Jump. */
+.flight-pad .touch-btn.word{font-size:10px;font-weight:700;letter-spacing:.06em}
+#interface.touch-enabled .flight-pad .touch-btn.word{font-size:10px}

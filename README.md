@@ -40,16 +40,17 @@ Neighborhood names and boundaries follow the [City of Boston neighborhood GIS la
 
 | Input | Action |
 | --- | --- |
-| 1 / 2 / 3 | Car / Ultra Bee / helicopter |
+| 1 / 2 / 3 / 4 | Car / Ultra Bee / helicopter / on foot |
 | W / Up | Accelerate |
 | S / Down | Brake, then reverse |
 | A / D or Left / Right | Steer |
-| Space | Handbrake (car) / both brakes (bike) |
+| Space | Handbrake (car) / both brakes (bike) / jump (on foot) |
+| Shift | Run while held (on foot) / descend (helicopter) |
 | X | Three-second wheelie while accelerating on the Ultra Bee |
 | C | Chase, hood, or aerial camera |
 | Mouse drag / wheel | Look around / camera distance |
 | M | Open or close the city atlas |
-| R | Set the car or bike upright on the nearest road, facing your heading (the helicopter returns to the Boylston starting point) |
+| R | Set the car or bike upright on the nearest road, facing your heading (the helicopter returns to the Boylston starting point; on foot you are put back on the closest sidewalk) |
 | F / N | Horn / sound toggle |
 | H | Hide the HUD |
 | P | Toggle performance stats |
@@ -64,21 +65,23 @@ A standard (Xbox-layout) controller works everywhere, including the title screen
 
 | Controller | Action |
 | --- | --- |
-| Left stick | Steer (car, bike) / fly forward, back and sideways (helicopter) |
-| RT | Accelerate / climb |
+| Left stick | Steer (car, bike) / fly forward, back and sideways (helicopter) / walk, faster the further it is pushed (on foot) |
+| RT | Accelerate / climb / run while held (on foot; X or a held left-stick press also run) |
 | LT | Brake in proportion while rolling, then reverse near a stop / descend |
-| A | Handbrake (car) / both brakes (bike) |
+| A | Handbrake (car) / both brakes (bike) / jump (on foot) |
 | X | Ultra Bee wheelie |
-| Right stick | Look around while driving (press it to look back) / turn and tilt the camera in flight; LB / RB also turn |
+| Right stick | Look around while driving (press it to look back) / turn and tilt the camera in flight and on foot; LB / RB also turn the helicopter |
 | Left stick press | Horn |
 | Y | Chase, hood, or aerial camera |
 | D-pad left / right | Previous / next vehicle |
-| D-pad down | Reset the active vehicle |
+| D-pad down | Reset the active vehicle (on foot: back to the closest sidewalk) |
 | View | Open or close the city atlas (left stick pans, triggers zoom, Y centers on you, X shows everything, RB sets a GPS destination at the crosshair, LB clears it) |
 | Menu | Pause / settings |
 | D-pad or left stick, A, B | Move between buttons, press the focused one, go back (title screen, settings, atlas places) |
 
 In **helicopter mode**, W/S fly forward/backward, A/D move sideways, Q/E turn, **Space rises**, and **Shift descends**. Forward flight reaches about **120 MPH**; releasing the controls brings the aircraft into a hover. The HUD control hints stay visible throughout driving and flight while the HUD is enabled. C switches between chase, cockpit, and overhead views; drag vertically to tilt the aerial inspection view and use the wheel for distance. The instruments display speed in MPH and altitude in feet above the terrain directly below the helicopter. Flight stays inside the prototype boundary, at least 4 meters above terrain and below a ceiling 350 meters above the highest terrain point, with conservative rotor clearance around buildings and continuous collision checks against bridge decks and detailed building openings. This is assisted exploration flight; landing and aerodynamic damage are not simulated.
+
+In **walk mode** (4), you step out beside your vehicle, which stays where you left it with its brakes held. W/S/A/D move relative to the view (A/D also swing the over-the-shoulder camera after you, so the keyboard alone walks an arc), Q/E or a mouse drag turn the view, **Shift runs** (about 12 MPH against a 4 MPH walk) and **Space jumps**; curbs and steps up to about 40 cm are simply walked over. C switches between the over-the-shoulder, first-person and overhead views. The player is drawn with the sidewalk walkers' tailored figure in a close-up build: anatomical shoulder height and neck, a torso that narrows to the waist, arms that hang beside the ribs, a breathing idle stance, a head that turns toward where you look, and separate walking, running (lean from the ankles, a flight phase between strides, heel kick, pumping bent arms) and airborne poses. Traffic and buses treat a player on foot as something in their lane and slow or stop for them; a vehicle that still reaches you above about 3 MPH knocks you down exactly as it does a sidewalk walker (thrown, tumbling, lying still, then getting up), after which you walk on. **R** puts you back on the closest sidewalk if you get stuck. Returning to the car or bike gets in where it stands if it is within 12 m, and otherwise brings it to the nearest street beside you; switching to the helicopter lifts off from where you stand, and switching from it sets you down on the sidewalk below. On touch screens the helicopter pad moves the walker, with its altitude pair relabelled **Run** (hold) and **Jump**.
 
 In **Ultra Bee mode** (2), ride a white/yellow electric dirt bike with a dark-cyan forged-frame likeness, knobby spoked wheels, and a rider wearing an original red Fox V1 Toxsyk-inspired motocross helmet with a vented chin guard, full black face mask, and black/white graphics. W/S control throttle and brake/reverse assist; A/D turn the front wheel, forks and handlebars as the bike banks; the rider’s hands follow the grips. Space applies both brakes. **Accelerate above walking pace, then press X** for a wheelie lasting up to three seconds; braking or releasing the throttle brings the front wheel down. Release and press X again after recovery to repeat. Touch devices gain a Wheelie button; controller X performs the same stunt. C includes a rider-eye camera. If a crash leaves the bike on its side, automatic recovery places it upright on the nearest clear road near the crash, preserving the road level at bridges and underpasses. R still returns to the Boylston starting point.
 
@@ -115,6 +118,7 @@ Press **P** for performance stats or **backtick (`)** for the debug/location pan
 - Water has sheltered pond ripples, livelier open-river motion, sun highlights, and reflections that strengthen at shallow viewing angles. A shared normal texture stays continuous across streamed tiles; desktop uses the local environment reflections and mobile retains sky reflections.
 - Rapier car and two-wheel Ultra Bee controllers with suspension, braking, reverse, tire slip, and building/traffic collisions; the bike adds banked steering and a physical three-second wheelie. Collisions take no damage: a hard hit dips the nose, spins the car on an offset hit or can roll it on a hard side hit (a crumple-height torque added to Rapier's flat-wall response), struck traffic cars are shoved as dynamic bodies that roll on free wheels, grip sideways like tyres and spin (their driver brakes after a moment), then settle and ease back into their lane once the way back is clear of the player (they respawn elsewhere if a wall or parked car blocks it), buses and trolleys hold their ground, and a car left on its roof or side is set upright on the nearest clear road near the crash, exactly as the Ultra Bee recovers.
 - An original helicopter with curved canopy, skids, animated main/tail rotors, assisted flight, swept building/roof clearance, and chase/cockpit/overhead views.
+- A player on foot: a capsule moved by Rapier's character controller over the same terrain, deck, building and vehicle colliders the car uses, with walking, running and jumping, over-the-shoulder and first-person views, synthesized footsteps, the vehicle knock-down the sidewalk walkers have, and a reset to the closest sidewalk.
 - Rooftop mechanical details placed only where the actual source mesh provides a flat clearance area; green street-name blades on a sparse set of corners (Boston leaves most intersections unsigned), each running parallel to the street it names, with the side street's blade above the main street's at some corners and readable from both sides.
 - A detailed player coupe; a bounded fleet of up to 77 realistic compact cars, full-size sedans, minivans, pickups, and light-duty box trucks, with randomly selected type-specific paint colors. Commercial neighborhoods such as Back Bay, Downtown, Chinatown, the North End, and the Seaport target 58 local vehicles; Fenway, Longwood, the South End, Charlestown, Allston, East Boston, Cambridge, Somerville, Brookline, Chelsea, Everett, Medford, and Malden, plus downtown Melrose along Main Street, target 38; residential neighborhoods target 22. Moving and parked NPCs use type-specific compound Rapier bodies with representative masses and computed inertia; parked cars can be shoved by impacts. Wheels roll with actual travel and front wheels steer; NPCs attempt a clear, road-bounded swerve to avoid an imminent head-on with the player, then return to their lane. At junctions and merges each NPC looks along its route: where two cars' paths (or a car's and a bus's or trolley's) would meet, exactly one goes first, a car does not pull across a junction it cannot get through, and a route near the player is extended before it runs out, so cars do not lock together in a junction or park at the end of a street. Near/far model detail and material batching keep the fleet bounded. Front/rear Massachusetts plates use fictional registrations; parked cars retain their meters. See [fleet artwork and physics notes](public/models/README.md). No NYC taxi or autonomous-taxi models.
 - Thirty-eight MBTA-style buses on nine real routes in both directions (the 1 along Massachusetts Avenue from Nubian to Harvard, the 9, 23, 28, 39, 57, 66 and 86, and the 131 from Malden Center through the Oak Grove busway to Melrose Highlands), one bus per 4 km of route (at most three per direction), plus ten single-car articulated Green Line trolleys on the B, C, D and E western surface branches, with rail/catenary detail, station dwells, traffic signals, bridge-deck following and player avoidance. Buses keep to the right-hand lane and change lanes around a trolley sharing the street on Mission Hill. Buses have rounded bodywork, wheel wells, framed tinted glazing, yellow/teal livery, destination displays, detailed wheels, engine vents, and folded bicycle racks. Trolleys have sculpted silver/green bodywork, two flexible joints, framed windows and doors, round cab lights, route displays, roof equipment and raised pantographs. The B follows Commonwealth Avenue to Boston College, the C follows Beacon Street to Cleveland Circle, and the D follows its reserved railway through Brookline to the existing map boundary beyond Reservoir; all branches end at their actual subway portals. The **Huntington · Museum of Fine Arts** destination offers a convenient view of the 39 and the E together. Speeds and frequency are game settings, not live MBTA operations.

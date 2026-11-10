@@ -63,7 +63,7 @@ export class DriveAudio {
     this.mode = mode; this.previousDriveGear=0;this.stopOneShots();
     if (!this.context) return;
     const now = this.context.currentTime;
-    const silent: SoundName[] = mode === 'helicopter' ? ['engine-idle', 'engine-drive', 'tire-road', 'tire-skid'] : mode==='bike'?['engine-idle','engine-drive','helicopter-rotor','tire-skid']:['helicopter-rotor'];
+    const silent: SoundName[] = mode === 'helicopter' ? ['engine-idle', 'engine-drive', 'tire-road', 'tire-skid'] : mode==='bike'?['engine-idle','engine-drive','helicopter-rotor','tire-skid']:mode==='walk'?['engine-idle','engine-drive','helicopter-rotor','tire-road','tire-skid']:['helicopter-rotor'];
     if(mode!=='drive')silent.push(...CAR_SOUNDS);
     this.electric?.gain.gain.setTargetAtTime(0,now,.1);
     for (const name of silent) this.loops.get(name)?.gain.gain.setTargetAtTime(0, now, 0.1);
@@ -141,6 +141,10 @@ export class DriveAudio {
         this.rotorFallback.modulator.frequency.setTargetAtTime(17 + power * 2, now, 0.2);
       }
       return;
+    }
+    if(this.mode==='walk'){
+      // On foot only the city is heard; footsteps arrive one at a time from the gait.
+      this.rpm=0;this.gear=0;this.setLoop('city-ambience',.2,1,5200);return;
     }
     if(this.mode==='bike'){
       this.rpm=0;this.gear=0;
@@ -259,6 +263,20 @@ export class DriveAudio {
     source.connect(filter); filter.connect(gain); gain.connect(this.master!); this.oneShots.add(source);
     source.onended = () => { this.oneShots.delete(source); source.disconnect(); filter.disconnect(); gain.disconnect(); };
     source.start();
+  }
+
+  /** One footfall of the player on foot: a short, dull tap, firmer at a run (`run` 0..1). */
+  footstep(run: number) {
+    const context = this.context;
+    if (!context || !this.master || this.mode !== 'walk' || this.muted || this.paused || document.hidden || this.disposed) return;
+    const now = context.currentTime, length = Math.floor(context.sampleRate * .08), buffer = context.createBuffer(1, length, context.sampleRate), samples = buffer.getChannelData(0);
+    for (let i = 0; i < length; i++) samples[i] = (Math.random() * 2 - 1) * Math.exp(-i / length * 7);
+    const source = context.createBufferSource(); source.buffer = buffer;
+    const filter = context.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = 380 + Math.random() * 160 + clamp(run) * 220; filter.Q.value = .9;
+    const gain = context.createGain(); gain.gain.value = .05 + clamp(run) * .07;
+    source.connect(filter); filter.connect(gain); gain.connect(this.master); this.oneShots.add(source);
+    source.onended = () => { this.oneShots.delete(source); source.disconnect(); filter.disconnect(); gain.disconnect(); };
+    source.start(now);
   }
 
   /** One collision sound. `severity` is the chassis velocity change of the knock
