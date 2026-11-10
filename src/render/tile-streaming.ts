@@ -127,7 +127,10 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
     let nearest = Infinity, pressing = Infinity; for (const t of wanted) if (ready(t.key)) { nearest = Math.min(nearest, t.distance); pressing = Math.min(pressing, t.score); }
     budget = buildSlice(outside, motion.speed, nearest, pressing, mobile);
     // Scenery of a tile under construction shows as it is built only where it can be seen clearly (see PartialTile).
-    if (!mobile) for (const entry of builds.values()) if (entry.partial.scenery) entry.partial.scenery.visible = tileDistance(entry.tile, x, z) <= SCENERY_RADIUS;
+    // Set for every build now and again for each build worked on below: the builder creates the group, visible, in
+    // the middle of a slice, and whatever it adds before the slice ends would draw for this one frame.
+    const stageScenery = (entry: Active) => { if (!mobile && entry.partial.scenery) entry.partial.scenery.visible = tileDistance(entry.tile, x, z) <= SCENERY_RADIUS; };
+    for (const entry of builds.values()) stageScenery(entry);
     const choose = (): OrderedTile | undefined => {
       const pick = pickTile(wanted, { ready, structured: key => !!builds.get(key)?.partial.structuresReady, distance: tile => tileDistance(tile, x, z), finishing: finishing !== undefined && builds.has(finishing) ? finishing : undefined, grounded: !flying });
       if (pick) return pick;
@@ -161,7 +164,7 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
         if (performance.now() > pace.deadline) break;
       }
       // The partial group draws this frame; note its uploads so finish() can free them.
-      if (!done) uploads?.watch(entry.partial.group);
+      if (!done) { stageScenery(entry); uploads?.watch(entry.partial.group); }
       if (pace.deadline === -Infinity) rested.add(entry.key);
       if (performance.now() > sliceEnd) break;
     }
