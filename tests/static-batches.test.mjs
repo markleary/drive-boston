@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import * as THREE from 'three';
-import {batchStaticDetails,splitStaticGeometry,staticDetailBatchSteps} from '../src/render/static-batches.ts';
+import {batchStaticDetails,showBatches,splitStaticGeometry,staticDetailBatchSteps} from '../src/render/static-batches.ts';
 import {drain,UNPACED,until} from '../src/render/pacing.ts';
 
 const triangles=g=>{
@@ -190,4 +190,33 @@ test('meshes in a hidden staging group are batched all the same, into the root t
   // Parts were placed by their world position.
   const box=new THREE.Box3();batch.geometry.computeBoundingBox();box.copy(batch.geometry.boundingBox);
   assert.ok(box.max.x>35&&box.min.z>2);
+});
+test('held batches stay hidden with their sources in place until they are shown together',()=>{
+  // Two materials, so two batches. One set stands in a hidden staging group (a far tile's scenery), and one of its
+  // meshes shares a material with meshes in the visible root (a road deck beside street asphalt).
+  const root=sourceRoot(4),staging=sourceRoot(3),deck=root.children[0].material;
+  staging.userData.staging=true;staging.visible=false;staging.children[0].material=deck;root.add(staging);
+  for(const [i,mesh] of [...root.children.filter(o=>o instanceof THREE.Mesh),...staging.children].entries())mesh.position.set(i*6,0,0);
+  const extra=new THREE.Mesh(new THREE.BoxGeometry(),staging.children[1].material);extra.geometry.clearGroups();extra.position.x=60;staging.add(extra);
+  const sources=[...root.children.filter(o=>o instanceof THREE.Mesh),...staging.children],disposed=new Set();
+  for(const mesh of sources)mesh.geometry.addEventListener('dispose',()=>disposed.add(mesh));
+  const held=new Map(),pace={deadline:-Infinity},steps=staticDetailBatchSteps(root,pace,undefined,undefined,held);
+  const check=()=>{
+    const batches=root.children.filter(o=>o instanceof THREE.BatchedMesh);
+    assert.ok(batches.every(batch=>!batch.visible),'no batch shows before the others');
+    assert.ok(sources.every(mesh=>mesh.parent&&mesh.visible),'every source is where it was');
+    assert.equal(disposed.size,0);
+    return batches.length;
+  };
+  let result=steps.next(),yields=0;while(!result.done){check();yields++;result=steps.next();}
+  assert.ok(yields>4);assert.deepEqual(result.value,{sources:8,batches:2});
+  assert.equal(check(),2);assert.equal(held.size,2);
+  assert.deepEqual([...held.values()].map(list=>list.length).sort(),[3,5],'the deck\'s material gathers the four meshes in the root and the one staged mesh that shares it');
+  showBatches(held);
+  const batches=root.children.filter(o=>o instanceof THREE.BatchedMesh);
+  assert.equal(batches.length,2);assert.ok(batches.every(batch=>batch.visible&&batch.parent===root));
+  assert.deepEqual(batches.map(batch=>batch.instanceCount).sort(),[3,5]);
+  assert.equal(disposed.size,8);assert.ok(sources.every(mesh=>!mesh.parent));
+  assert.deepEqual(root.children.filter(o=>o instanceof THREE.Mesh&&!(o instanceof THREE.BatchedMesh)),[]);assert.equal(staging.children.length,0);
+  assert.equal(held.size,0);
 });

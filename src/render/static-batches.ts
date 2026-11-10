@@ -16,7 +16,18 @@ export type Warm=(mesh:THREE.Mesh)=>()=>boolean;
  * Parts go in already placed (see `cullStaticBatch`).
  */
 export function batchStaticDetails(root:THREE.Group){return drain(staticDetailBatchSteps(root));}
-export function* staticDetailBatchSteps(root:THREE.Group,pace?:Pace,warm?:Warm,upload?:Upload):Generator<void,{sources:number;batches:number}>{
+/** Finished batches that have not taken their sources' place yet, each with the sources it replaces. */
+export type HeldBatches=Map<THREE.BatchedMesh,THREE.Mesh[]>;
+/** Swap every held batch in for its sources, in one step: no part draws twice or goes missing for a frame. */
+export function showBatches(held:HeldBatches){
+  for(const [batch,sources] of held){batch.visible=true;for(const mesh of sources){mesh.removeFromParent();mesh.geometry.dispose();}}
+  held.clear();
+}
+/** `held`: instead of showing each batch as soon as it is ready, leave it hidden with its sources in place and note
+ * it here, for the caller to show them together (`showBatches`). A tile does: its batches join the group that is
+ * always visible (they replace road decks as well as scenery), so shown one by one they would appear ahead of the
+ * rest of a tile whose scenery is hidden until it is finished. */
+export function* staticDetailBatchSteps(root:THREE.Group,pace?:Pace,warm?:Warm,upload?:Upload,held?:HeldBatches):Generator<void,{sources:number;batches:number}>{
   const buckets=new Map<string,THREE.Mesh<THREE.BufferGeometry,THREE.Material>[]>();
   root.updateWorldMatrix(true,true);
   // Visible objects, and a group marked `staging`: a tile's scenery is hidden while it builds far away, its meshes are sources all the same.
@@ -71,9 +82,7 @@ export function* staticDetailBatchSteps(root:THREE.Group,pace?:Pace,warm?:Warm,u
     if(warm){if(due(pace))yield;yield* until(warm(batch),pace);}
     // Its arrays reach the GPU a slice a frame instead of whole in the frame that first draws it (paced-upload.ts).
     if(upload)yield* upload([batch],pace);
-    // Swap in one step, so no part draws twice or goes missing for a frame.
-    batch.visible=true;
-    for(const mesh of list){mesh.removeFromParent();mesh.geometry.dispose();}
+    if(held)held.set(batch,list);else showBatches(new Map([[batch,list]]));
     sources+=list.length;batches++;
   }
   // These roots contain static tile details. Material uniforms (signals, lamps)

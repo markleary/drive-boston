@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { IndexedSurfaceWriter, SurfaceBatches } from './indexed-surfaces.ts';
-import { freezeTransforms, staticDetailBatchSteps, type Warm } from './static-batches.ts';
+import { freezeTransforms, showBatches, staticDetailBatchSteps, type HeldBatches, type Warm } from './static-batches.ts';
 import type { Upload } from './paced-upload.ts';
 import { disposeTileResources } from './tile-resources.ts';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -591,13 +591,20 @@ export function createTileBuilder(ctx: TileContext) {
     // Repacking an entire tile into BatchedMesh duplicates its vertex buffers. Mobile keeps its already grouped
     // road/shell buffers; either way nothing in the tile moves again, so its local matrices are composed once.
     if (ctx.mobile) { freezeTransforms(group); group.userData.batching = { sources: 0, batches: 0 }; }
-    else group.userData.batching = yield* stage('details', staticDetailBatchSteps(group, pace, ctx.warm, ctx.upload));
-    // What stays unbatched (building shells, a lone pavement layer, water) goes to the GPU the same way before the tile shows.
-    if (ctx.upload) {
-      const rest: THREE.Mesh[] = []; group.traverse(o => { if (o instanceof THREE.Mesh && !(o instanceof THREE.BatchedMesh)) rest.push(o); });
-      // A material or variant this session has not drawn yet (a landmark's finish, a house palette) links off the main thread first.
-      if (ctx.warm) { const linked = rest.map(mesh => ctx.warm!(mesh)); yield* stage('details', until(() => linked.every(ready => ready()), pace)); }
-      yield* stage('details', ctx.upload(rest, pace));
+    else {
+      // The batches stay hidden, their sources in place, until the rest of the tile is on the GPU too: everything
+      // then changes in this one step, which is also the step the streamer shows the tile's scenery in.
+      const held: HeldBatches = new Map();
+      group.userData.batching = yield* stage('details', staticDetailBatchSteps(group, pace, ctx.warm, ctx.upload, held));
+      // What stays unbatched (building shells, a lone pavement layer, water) goes to the GPU the same way.
+      if (ctx.upload) {
+        const replaced = new Set([...held.values()].flat()), rest: THREE.Mesh[] = [];
+        group.traverse(o => { if (o instanceof THREE.Mesh && !(o instanceof THREE.BatchedMesh) && !replaced.has(o)) rest.push(o); });
+        // A material or variant this session has not drawn yet (a landmark's finish, a house palette) links off the main thread first.
+        if (ctx.warm) { const linked = rest.map(mesh => ctx.warm!(mesh)); yield* stage('details', until(() => linked.every(ready => ready()), pace)); }
+        yield* stage('details', ctx.upload(rest, pace));
+      }
+      showBatches(held);
     }
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
