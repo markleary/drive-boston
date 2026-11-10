@@ -310,7 +310,7 @@ export function blendJoin(points:Point2[],roads:Road[],next:Point2[],road:Road,k
 
 /** Lightweight local traffic; all routes follow the imported directed road graph.
  * `deckDrawn` hides traffic until its supporting deck is visible. */
-export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[],{deckDrawn}:{deckDrawn?:(road:Road)=>boolean}={}) {
+export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[],{deckDrawn,mobile}:{deckDrawn?:(road:Road)=>boolean;mobile?:boolean}={}) {
   const { nodes, heights, edges } = roadGraph(city);
   const zonesByRoad=new Map<string,ConstructionZone[]>(),lanes=new Map<Edge,Point2[]>();
   for(const zone of constructionZones){const list=zonesByRoad.get(zone.roadId)??[];list.push(zone);zonesByRoad.set(zone.roadId,list);}
@@ -565,7 +565,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
 
   const actors: Actor[] = [];
   const group = new THREE.Group(); group.name = 'AmbientTraffic'; scene.add(group);
-  const fleet=createNPCVehicleBatches(group,COUNT);
+  const fleet=createNPCVehicleBatches(group,COUNT,mobile);
   const spawnPlayer = physics.getState();
   let drawObserver:Pick<VehicleState,'x'|'z'>=spawnPlayer;
   const edgeActivity=new Map(edges.map(edge=>[edge.id,activityAt(...edge.points[Math.floor(edge.points.length/2)]).traffic]));

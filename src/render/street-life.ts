@@ -70,6 +70,7 @@ function spreadByBlock<T>(items:T[],point:(item:T)=>Point2,size=650):T[]{
 }
 
 export interface StreetLifeOptions {
+  mobile?: boolean;
   /** The main view: walkers outside it (and out of reach of it with their shadows) are left out of its draws. */ camera?: THREE.Camera;
   /** False where no other camera draws the walkers (a phone has no reflection captures): those out of view are not posed either. */ poseHidden?: boolean;
   /** A metro's streamed tiles: the park paths of the resident ones are walked too (a whole-city package lists its paths itself). */ tiles?: StreetLifeTiles;
@@ -298,7 +299,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       segment.a[1] + segment.tz * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) + segment.tx * meterOffset];
     parked.push({ type:spec.type,mass:spec.mass,id: parked.length, road: segment.road.name, x, y:sampleElevation(city,x,z), z, yaw, meter: sidewalkClear(meter, .25) ? meter : null });
   }
-  const parkedFleet=createNPCVehicleBatches(parkedGroup,Math.max(1,parked.length));
+  const parkedFleet=createNPCVehicleBatches(parkedGroup,Math.max(1,parked.length),options.mobile);
   const parkedBodies:(RAPIER.RigidBody|undefined)[]=[],colliders:RAPIER.Collider[]=[],parkedColors:THREE.Color[]=[];
   const dummy=new THREE.Object3D(),parkedLift=new THREE.Vector3();
   for(const [i,vehicle] of parked.entries()){

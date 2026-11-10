@@ -39,14 +39,47 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
 test('touch settings expose all four cars in a scrollable panel',async({browser},info)=>{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const page=await context.newPage();
   try{
-    await start(page);await page.locator('#open-settings').click();
+    const requests:string[]=[];
+    page.on('request',request=>{
+      const path=new URL(request.url()).pathname;
+      if(path.includes('/audio/'))requests.push(path.split('/').at(-1)!);
+    });
+    await page.addInitScript(()=>{
+      localStorage.setItem('boston-player-car-v1','supra-mk4');
+      const decode=AudioContext.prototype.decodeAudioData;
+      let active=0,peak=0;
+      Object.assign(window,{audioDecodePeak:()=>peak});
+      AudioContext.prototype.decodeAudioData=function(...args){
+        peak=Math.max(peak,++active);
+        return decode.apply(this,args).finally(()=>active--);
+      };
+    });
+    await start(page);
+    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(16);
+    await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe('supra-mk4');
+    expect(requests.filter(name=>name.startsWith('supra-mk4'))).toHaveLength(5);
+    expect(requests.some(name=>name.startsWith('mclaren'))).toBe(false);
+    const supraBytes=(await snap(page)).audio.decodedBytes;
+    await page.locator('#open-settings').click();
     for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Toyota Supra Mk4','supra-mk4']]){
       const car=page.getByRole('button',{name,exact:true});await car.scrollIntoViewIfNeeded();await car.tap();
       await expect(car).toHaveAttribute('aria-pressed','true');expect((await snap(page)).carId).toBe(id);
       const bounds=await car.boundingBox();expect(bounds!.x).toBeGreaterThanOrEqual(0);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(390);
+      if(id==='harbor-s4'){
+        const audio=(await snap(page)).audio;
+        expect(audio.loadedCount).toBe(11);
+        expect(audio.activeLoops).toBe(6);
+        expect(audio.decodedBytes).toBeLessThan(supraBytes);
+      }
     }
     await page.screenshot({path:info.outputPath('garage-mobile.png')});await page.locator('#close-settings').tap();
     expect((await snap(page)).paused).toBe(false);
+    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(16);
+    const audio=(await snap(page)).audio;
+    expect(audio.engineProfile).toBe('supra-mk4');
+    expect(audio.decodedBytes).toBe(supraBytes);
+    expect(audio.failed).toEqual([]);
+    expect(await page.evaluate(()=>(window as any).audioDecodePeak())).toBe(1);
   }finally{await context.close();}
 });
 

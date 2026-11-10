@@ -533,7 +533,7 @@ export function createTileBuilder(ctx: TileContext) {
         for (const blade of blades) {
           const bx = x + blade.offset[0], bz = z + blade.offset[1];
           writer.box(box(2.67, .5, .045), matrix.makeRotationY(blade.yaw).setPosition(bx, y + blade.height, bz));
-          const plate = createStreetSign(blade.name); plate.position.set(bx, y + blade.height, bz); plate.rotation.y = blade.yaw; target.add(plate); owned.push(plate.material as THREE.Material);
+          const plate = createStreetSign(blade.name, ctx.mobile); plate.position.set(bx, y + blade.height, bz); plate.rotation.y = blade.yaw; target.add(plate); owned.push(plate.material as THREE.Material);
         }
       }
       addBatches(hardware);

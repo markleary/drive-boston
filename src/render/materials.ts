@@ -352,9 +352,9 @@ export function createMaterials(mobile=false) {
   };
 }
 
-export function textSign(text: string, color = '#e9e1ca', background = '#254539', width = 512, height = 96) {
-  const c = document.createElement('canvas'); c.width=width;c.height=height;
-  const ctx=c.getContext('2d')!;ctx.fillStyle=background;ctx.fillRect(0,0,width,height);
+export function textSign(text: string, { color = '#e9e1ca', background = '#254539', width = 512, height = 96, scale = 1 } = {}) {
+  const c = document.createElement('canvas'); c.width=width*scale;c.height=height*scale;
+  const ctx=c.getContext('2d')!;ctx.scale(scale,scale);ctx.fillStyle=background;ctx.fillRect(0,0,width,height);
   ctx.strokeStyle=color;ctx.lineWidth=3;ctx.strokeRect(5,5,width-10,height-10);
   ctx.fillStyle=color;ctx.font=`600 ${Math.min(43, width/text.length*1.5)}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,width/2,height/2,width-24);
   return new THREE.MeshStandardMaterial({map:canvasTexture(c),roughness:.85,side:THREE.DoubleSide});
