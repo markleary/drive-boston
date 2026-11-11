@@ -145,6 +145,8 @@ test('a car on Dartmouth Street drives down the open ramp into the Turnpike, and
   const first=along(ramp,0),back=12,from={x:first.x-Math.sin(first.yaw)*back,z:first.z-Math.cos(first.yaw)*back};
   await page.evaluate(([x,z,yaw])=>(window as any).__backbay.travelTo(x,z,yaw),[from.x,from.z,first.yaw] as const);await streamed(page);
   const street=(await snapshot(page)).state;expect(Math.abs(street.y-.66-first.y),`${id}: the car starts on the street the ramp leaves`).toBeLessThan(.5);
+  // The Dartmouth Street entrance is signed overhead, as it is on the street: 90 West, New York, on a gantry at the ramp's mouth.
+  if(id==='i90-wb-entrance-copley')await expect.poll(()=>page.evaluate(()=>(window as any).__backbay.scene.getObjectByName('Entrance sign: i90-wb-entrance-copley')?.children.map((c:any)=>c.name)??null),{timeout:60000}).toEqual(['I-90 WEST · New York','Gantry and sign backing']);
   await page.screenshot({path:testInfo.outputPath(`${shot}.png`)});
   // Steered along the ramp at a town pace: it must stay on the roadway all the way under the roof, never left up on the ground over it.
   const keys=new Set<string>(),set=async(k:string,on:boolean)=>{if(on&&!keys.has(k)){await page.keyboard.down(k);keys.add(k);}else if(!on&&keys.has(k)){await page.keyboard.up(k);keys.delete(k);}};
