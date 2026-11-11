@@ -1,4 +1,5 @@
 import {test,expect,type Page} from '@playwright/test';
+import {highwayMasts,mastHead} from '../src/simulation/highway-lighting';
 
 type Road={id:string;name:string;points:[number,number][];elevations?:number[];deckWidths?:number[];width:number;closed?:'start'|'end';tunnel?:{covered:[number,number][];clearance:number};kind?:string};
 const snapshot=(page:Page)=>page.evaluate(()=>(window as any).__backbay.snapshot());
@@ -58,6 +59,15 @@ test('the Turnpike and Storrow Drive: the car rides their decks, cuts and tunnel
  // The Turnpike carries highway traffic, on its own records.
  await expect.poll(async()=>{const t=(await snapshot(page)).traffic;return t.filter((a:any)=>a.motorway>0&&Math.hypot(a.x-s.state.x,a.z-s.state.z)<600).length;},{timeout:60000}).toBeGreaterThanOrEqual(4);
  await page.screenshot({path:testInfo.outputPath('south-end-cut-westbound.png')});
+ // At night the pooled lights around the car shine from the Turnpike's luminaires: each hangs in a mast's head, not metres under it.
+ const heads=highway.filter(r=>/^i90-(eb|wb)-\d+$/.test(r.id)).flatMap(r=>highwayMasts(r as any).map(mastHead));
+ const underHeads=async()=>(await page.evaluate(()=>{const out:number[][]=[];(window as any).__backbay.scene.traverse((o:any)=>{if(o.name==='Night lamp light'&&o.visible)out.push([o.position.x,o.position.y,o.position.z]);});return out;}))
+  .flatMap(([x,y,z])=>{const head=heads.find(h=>Math.hypot(h.x-x,h.z-z)<.5);return head?[head.y-y]:[];});
+ await page.evaluate(()=>(document.querySelector('[data-light="night"]') as HTMLElement).click());
+ await expect.poll(async()=>(await underHeads()).length,{timeout:30000}).toBeGreaterThanOrEqual(3);
+ for(const drop of await underHeads())expect(Math.abs(drop),'a mast\'s night light hangs in its luminaire').toBeLessThan(.1);
+ await page.screenshot({path:testInfo.outputPath('south-end-cut-night.png')});
+ await page.evaluate(()=>(document.querySelector('[data-light="golden"]') as HTMLElement).click());
 
  // Columbus Avenue crosses the cut on a level bridge: no ramp, no wall across it.
  const ramp=streets.find(r=>r.id==='14733-0-0-deck')!,street=streets.find(r=>r.id==='14733-0-0')!;

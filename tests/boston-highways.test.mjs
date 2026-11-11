@@ -9,7 +9,7 @@ import {tunnelCoveredAt,tunnelGeometry,tunnelPointAt,tunnelStations} from '../sr
 import {deckUndersideAt,roadProjection,roadWidthAt,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 import {planI93ExitSigns} from '../src/simulation/i93-exit-signs.ts';
 import {planHighwaySigns,warningLegend} from '../src/simulation/highway-signs.ts';
-import {highwayMasts,MAST_SPACING} from '../src/simulation/highway-lighting.ts';
+import {highwayMasts,mastHead,MAST_ARM,MAST_HEIGHT,MAST_LIGHT,MAST_SPACING,STREET_LIGHT} from '../src/simulation/highway-lighting.ts';
 import {roadGraph} from '../src/simulation/traffic.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 
@@ -63,6 +63,25 @@ test('the Turnpike is lit along its carriageways and Storrow Drive and the ramps
   const bridged=highwayMasts(deck('i90-eb-01',line(0,400)),(x,z,above)=>x>170&&x<190?above+2:Infinity);
   assert.equal(bridged.length,masts.length-1);assert.ok(!bridged.some(m=>m.x>170&&m.x<190)&&highwayMasts(deck('i90-eb-01',line(0,400)),()=>Infinity).length===masts.length);
   assert.deepEqual(highwayMasts({...deck('i90-eb-exit-131',line(0,400)),kind:'motorway_link'}),[]);
+});
+
+test('a mast\'s night light shines from its luminaire and lights the road beneath as a street lamp does',()=>{
+  const east=highwayMasts(deck('i90-eb-01',line(0,400)))[0],west=highwayMasts(deck('i90-wb-01',line(400,0)))[0];
+  for(const mast of [east,west]){
+    const head=mastHead(mast),inward=-Math.sign(mast.z);
+    assert.ok(Math.abs(head.x-mast.x)<1e-9&&Math.abs(head.z-(mast.z+inward*MAST_ARM))<1e-9,'the head hangs over the lanes at the end of the arm');
+    assert.ok(head.y-mast.y>MAST_HEIGHT-.6&&head.y-mast.y<MAST_HEIGHT,'at the top of the mast');
+    // The night light is given the road under the head and rises from there: it stands inside the head (0.12 m deep), as a
+    // street lamp's stands inside its globe, so the fixture is not lit by its own light, and never metres below it.
+    assert.ok(Math.abs(mast.y+MAST_LIGHT.rise-head.y)<.06,`the light hangs ${(head.y-mast.y-MAST_LIGHT.rise).toFixed(2)} m from the middle of the head`);
+  }
+  assert.deepEqual(STREET_LIGHT,{rise:5.6,intensity:70,distance:21},'street lamps keep their light');
+  // What reaches the road r metres from the point under a light: three's point light falls off with the square of the
+  // distance and fades out at its reach (getDistanceAttenuation), times the cosine at the road.
+  const onRoad=(light,r)=>{const d=Math.hypot(light.rise,r);return light.intensity/(d*d)*(1-(d/light.distance)**4)**2*light.rise/d;};
+  const under=onRoad(MAST_LIGHT,0)/onRoad(STREET_LIGHT,0);
+  assert.ok(under>.55&&under<.7,`the road under a mast is lit ${under.toFixed(2)} times as brightly as under a street lamp`);
+  assert.ok(onRoad(MAST_LIGHT,10)>1.5*onRoad(STREET_LIGHT,10)&&onRoad(MAST_LIGHT,MAST_SPACING/2)>0,'higher up, it lights a wider pool: across three lanes and to the middle between two masts');
 });
 
 // ---- the installed package
