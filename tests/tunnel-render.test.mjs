@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import {readFileSync} from 'node:fs';
-import {addTunnels,tunnelExitSigns} from '../src/render/tunnels.ts';
+import {addTunnels,highwayLegend,tunnelExitSigns} from '../src/render/tunnels.ts';
 import {tunnelGeometry,tunnelPointAt} from '../src/simulation/tunnels.ts';
 import {sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 
@@ -103,4 +103,17 @@ test('solid edge paint opens at a shared merge but remains on independent stacke
     assert.equal(paintedAt(merged,5.3,0,34),false,'a solid border does not cross the shared merge pavement');
     assert.equal(paintedAt(stacked,5.3,0,34),true,'another bore underneath does not erase an independent road edge');
   }finally{dispose(merged.group);dispose(stacked.group);}
+});
+
+test('a generated highway exit is signed by its number, or by none where its name gives none',()=>{
+  const legend=name=>highwayLegend({name}).join(' / ');
+  assert.equal(legend('I-90 East · Exit 133 Prudential Center / Copley Square'),'EXIT 133  ↗ / Prudential Center / Copley Square');
+  assert.equal(legend('I-90 East · Exit 134B to I-93 North'),'EXIT 134B  ↗ / I-93 North');
+  assert.equal(legend('Storrow Drive East · Exit to Beacon Street / Arlington Street'),'EXIT  ↗ / Beacon Street / Arlington Street','the \'to\' of an unnumbered exit is no exit number');
+  assert.equal(legend('Storrow Drive West · Exit to Charlesgate'),'EXIT  ↗ / Charlesgate');
+  assert.equal(legend('Storrow Drive West · Exit to the Bowker Overpass'),'EXIT  ↗ / Bowker Overpass','a panel names the place without its article');
+  assert.equal(legend('I-90 East · Exit 135 to the South Boston Haul Road'),'EXIT 135  ↗ / South Boston Haul Road');
+  assert.equal(legend('I-90 · Entrance to I-93 North'),'I-93  NORTH / Zakim Bridge  ↑');
+  assert.equal(legend('Storrow Drive East · Back Bay'),'Storrow Drive  EAST / Government Center  ↑');
+  assert.equal(legend('I-90 West'),'I-90  WEST / Back Bay · Worcester  ↑');
 });

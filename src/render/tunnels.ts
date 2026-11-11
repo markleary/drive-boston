@@ -66,10 +66,12 @@ export function signMaterial(lines:string[],warning=false,mobile=false){
 }
 /** What lies ahead on each generated highway, for the overhead signs in its tunnels. */
 const AHEAD:Record<string,string>={'I-90 East':'Logan Airport','I-90 West':'Back Bay · Worcester','Storrow Drive East':'Government Center','Storrow Drive West':'Kenmore Square','Route 1A North':'Revere','Route 1A South':'Boston'};
-/** The legend of a generated highway record (`Road.highway`), named 'I-90 East · Exit 133 Prudential Center / Copley Square'. */
+/** The legend of a generated highway record (`Road.highway`), named 'I-90 East · Exit 133 Prudential Center / Copley Square',
+ * 'I-90 East · Exit 134B to I-93 North' or, where the exits carry no number (Storrow Drive), 'Storrow Drive West · Exit to Charlesgate'. */
 export function highwayLegend(road:Road){
-  const [route,rest='']=road.name.split('·').map(s=>s.trim()),exit=/^Exit\s+(\S+)\s+(?:to\s+)?(.*)$/.exec(rest),onward=/to (I-\d+) (\w+)$/.exec(rest);
-  if(exit)return [`EXIT ${exit[1]}  ↗`,...exit[2].split('/').map(s=>s.trim()).slice(0,2)];
+  // An exit's number is the word after 'Exit', unless that word is the 'to' of an unnumbered exit; the panel names the place without 'to' or 'the'.
+  const [route,rest='']=road.name.split('·').map(s=>s.trim()),exit=/^Exit\s+(?:to\s+|(\S+)\s+(?:to\s+)?)(?:the\s+)?(.*)$/.exec(rest),onward=/to (I-\d+) (\w+)$/.exec(rest);
+  if(exit)return [`EXIT${exit[1]?` ${exit[1]}`:''}  ↗`,...exit[2].split('/').map(s=>s.trim()).slice(0,2)];
   if(onward)return [`${onward[1]}  ${onward[2].toUpperCase()}`,onward[2]==='North'?'Zakim Bridge  ↑':'South Station  ↑'];
   const shield=route.replace(/\s+(East|West|North|South)$/,(_,d:string)=>`  ${d.toUpperCase()}`);
   return [shield,`${AHEAD[route]??rest}  ↑`];
