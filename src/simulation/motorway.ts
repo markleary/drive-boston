@@ -4,6 +4,20 @@ import type {Point2,Road} from '../types';
  * Artery's motorway tunnels. Their traffic runs lane by lane at highway speed,
  * and they carry no signals, pedestrians or street furniture. */
 export const isMotorway=(road:Road)=>road.lanes!==undefined||(!!road.tunnel&&/^motorway(_link)?$/.test(road.kind??''));
+/** A generated highway deck (I-93, the Turnpike, Storrow Drive): a `lanes` deck that is not a tunnel. Its rails
+ * stand along embankments and cuts too, and open only where a ramp lands on a street. */
+export const isHighwayDeck=(road:Road)=>road.lanes!==undefined&&!!road.bridge&&!road.tunnel;
+/** The stretches of a tunnel record that lie open to the sky, as polylines. A walled cut of the Turnpike is a tunnel
+ * record too (the runtime cuts the ground at its pavement and walls it); `tunnel.covered` lists its roofed parts. */
+export function openStretches(road:Road):Point2[][]{
+  if(!road.tunnel||road.points.length<2)return[];
+  const along=stations(road.points),total=along[along.length-1],out:Point2[][]=[];
+  const at=(s:number):Point2=>{let i=1;while(i<along.length-1&&along[i]<s)i++;const t=(s-along[i-1])/((along[i]-along[i-1])||1),a=road.points[i-1],b=road.points[i];return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];};
+  const piece=(a:number,b:number)=>{if(b-a<1)return;out.push([at(a),...road.points.filter((_,i)=>along[i]>a+1e-6&&along[i]<b-1e-6),at(b)]);};
+  let cursor=0;
+  for(const [a,b]of [...(road.tunnel.covered??[[0,total]])].sort((p,q)=>p[0]-q[0])){piece(cursor,Math.min(a,total));cursor=Math.max(cursor,b);}
+  piece(cursor,total);return out;
+}
 /** 2 for a highway carriageway, 1 for its ramps, 0 for every other street. */
 export const speedClass=(road:Road)=>!isMotorway(road)?0:road.kind==='motorway_link'?1:2;
 export const LANE_WIDTH=3.65;

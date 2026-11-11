@@ -46,11 +46,13 @@ test('Central Artery desktop interiors, surface ramp, Zakim connection and south
   test.setTimeout(300000);await page.setViewportSize({width:1600,height:900});const errors:string[]=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(m.text()))errors.push(m.text());});
   const data=await(await request.get('/data/central-artery.json')).json(),roads=data.roads as Road[];
+  // The tunnel layer also draws the Turnpike's and Storrow Drive's walled cuts and tunnels (boston-highways.json).
+  const highway=((await(await request.get('/data/boston-highways.json')).json()).roads as Road[]).length;
   const main=roads.filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd).sort((a,b)=>(tunnelStations(b).at(-1)??0)-(tunnelStations(a).at(-1)??0))[0];expect(main).toBeTruthy();
   const station=interiorStation(main),p=tunnelPointAt(main,station);
   await installTunnelDriver(page,{x:p.x,z:p.z,yaw:p.yaw,roadId:main.id});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
-  await page.waitForTimeout(1400);let s=await snapshot(page);expect(s.state.y).toBeLessThan(p.y+2);expect(s.bridges.tunnels.roads).toBe(roads.length);expect(s.tiles.failed).toBe(0);
+  await page.waitForTimeout(1400);let s=await snapshot(page);expect(s.state.y).toBeLessThan(p.y+2);expect(s.bridges.tunnels.roads).toBe(roads.length+highway);expect(s.tiles.failed).toBe(0);
   await page.screenshot({path:testInfo.outputPath('central-artery-interior-desktop.png')});
   await follow(page,main,station,station+100);await page.keyboard.press('c');await page.waitForTimeout(500);await page.screenshot({path:testInfo.outputPath('central-artery-hood.png')});
   await page.keyboard.press('c');await page.waitForTimeout(500);s=await snapshot(page);const at=roadProjection(main,s.state.x,s.state.z),current=tunnelStations(main)[at.index]+(tunnelStations(main)[at.index+1]-tunnelStations(main)[at.index])*at.t;

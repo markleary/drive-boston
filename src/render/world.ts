@@ -11,7 +11,7 @@ import { createStreetTrees, createTreeField } from './foliage';
 import { createStreetSign } from './signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { sampleElevation, terrainRange } from '../simulation/terrain';
-import { drapedRibbon, terrainTiles, foundationGeometry, backBayPaving } from './terrain-ground';
+import { drapedRibbon, terrainTiles, foundationGeometry, backBayPaving, clipPortalSurface } from './terrain-ground';
 import { mergeSpatialGeometries, spatialInstances } from './spatial-batches';
 import { createTrafficSignals, updateTrafficSignals } from './traffic-signals';
 import { createGrassMaterial } from './ground-cover';
@@ -30,6 +30,8 @@ import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import { createFarCity } from './far-city';
 import { addArchitecturalLandmarks } from './architectural-landmarks';
 import { createTileStreamer, type TileStreamer } from './tile-streaming';
+import type { Lamp } from './tile-builder';
+import { STREET_LIGHT } from '../simulation/highway-lighting';
 import type { Warm } from './static-batches';
 import type { Upload } from './paced-upload';
 import { addCharlesBridgeDetails } from './charles-bridges';
@@ -78,7 +80,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const lampMat=new THREE.MeshStandardMaterial({color:'#fff0cc',emissive:'#ffca76',emissiveIntensity:.15});
   const buildingMap=new Map<string,Building>();
   const buildingCollisions:{id:string;vertices:Float32Array;indices:Uint32Array}[]=[];
-  let buildingChunks:THREE.Mesh[]=[],lampPositions:THREE.Vector3[]=[],signalPlacements:PlacedSignal[]=[],roadStructures:THREE.Group,streamer:TileStreamer|undefined,updateSignals=updateTrafficSignals;
+  let buildingChunks:THREE.Mesh[]=[],lampPositions:Lamp[]=[],signalPlacements:PlacedSignal[]=[],roadStructures:THREE.Group,streamer:TileStreamer|undefined,updateSignals=updateTrafficSignals;
   let far:ReturnType<typeof createFarCity>;
   let architecturalLandmarks: ReturnType<typeof addArchitecturalLandmarks> | undefined;
 
@@ -113,7 +115,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const ribbon=(points:Point2[],width:number,y:number)=>drapedRibbon(city,points,width,y);
   const buildingChunks:THREE.Mesh[]=[];
   for(const geometry of terrainTiles(city)){const ground=new THREE.Mesh(geometry,groundMaterial);ground.position.y=-.04;ground.receiveShadow=true;ground.renderOrder=-3;scene.add(ground);}
-  const oldDistrictPaving=new THREE.Mesh(backBayPaving(city),materials.sidewalk);oldDistrictPaving.receiveShadow=true;oldDistrictPaving.renderOrder=-2;scene.add(oldDistrictPaving);
+  const oldDistrictPaving=new THREE.Mesh(clipPortalSurface(city,backBayPaving(city)),materials.sidewalk);oldDistrictPaving.receiveShadow=true;oldDistrictPaving.renderOrder=-2;scene.add(oldDistrictPaving);
   const streets:THREE.BufferGeometry[]=[],sidewalks:THREE.BufferGeometry[]=[],lines:THREE.BufferGeometry[]=[],yellow:THREE.BufferGeometry[]=[];
   const crossingKeys=new Set<string>();
   for(const road of city.roads){
@@ -297,7 +299,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
 
   // Lamp lights are hidden outside night mode: a light at intensity 0 adds
   // nothing but still costs a loop iteration in every lit fragment.
-  const localLights:THREE.PointLight[]=[];for(let i=0;i<8;i++){const light=new THREE.PointLight(0xffcc89,0,21,2);light.visible=false;scene.add(light);localLights.push(light);}
+  const localLights:THREE.PointLight[]=[];for(let i=0;i<8;i++){const light=new THREE.PointLight(0xffcc89,0,STREET_LIGHT.distance,2);light.name='Night lamp light';light.visible=false;scene.add(light);localLights.push(light);}
   const nearLamps=new Int32Array(localLights.length),nearDistances=new Float64Array(localLights.length);
   let mode:LightingMode='golden',underground=false;
   const direction=new THREE.Vector3(-270,255,330);
@@ -361,9 +363,10 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
         let j=count<slots?count++:slots-1;while(j>0&&nearDistances[j-1]>d){nearDistances[j]=nearDistances[j-1];nearLamps[j]=nearLamps[j-1];j--;}
         nearDistances[j]=d;nearLamps[j]=i;
       }
-      localLights.forEach((l,i)=>{if(i<count){l.position.copy(lampPositions[nearLamps[i]]);l.position.y+=5.6;}});
+      // Each light hangs where its lamp shines from, with that lamp's strength and reach: a street lamp's globe, or a Turnpike luminaire 10 m up.
+      localLights.forEach((l,i)=>{if(i<count){const lamp=lampPositions[nearLamps[i]],light=lamp.light??STREET_LIGHT;l.position.copy(lamp);l.position.y+=light.rise;l.distance=light.distance;l.userData.intensity=light.intensity;}});
     }
-    for(const l of localLights){l.visible=night;l.intensity=night?70:0;}
+    for(const l of localLights){l.visible=night;l.intensity=night?l.userData.intensity??STREET_LIGHT.intensity:0;}
     updateSignals(time);
   }
   // One face of CubeCamera.update: mipmaps are generated only after face 5.

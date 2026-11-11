@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {roundedPath,pathRoad,join,lane,roadGraph} from '../src/simulation/traffic.ts';
 import {bridgeBarriers,deckEdge,sampleRoadElevation,deckEdgeGrounded,junctionMouths,RAIL_LIP,SHELF_DROP,MOUTH_REACH} from '../src/simulation/road-surfaces.ts';
+import {isHighwayDeck} from '../src/simulation/motorway.ts';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 
 // A ramp or bridge deck ends on an ordinary street at grade. The street keeps its
@@ -73,7 +74,7 @@ test('street junctions and grounded non-interstate bridge edges stay open across
   const offenders=[];let rails=0,shelves=0;
   for(const road of city.roads){
     if(!road.elevations||road.tunnel)continue;
-    const interstate=road.bridge?.id==='i93'&&road.lanes!==undefined;
+    const interstate=isHighwayDeck(road);
     const mouths=interstate?[road.startLevel===0?road.points[0]:undefined,road.endLevel===0?road.points.at(-1):undefined].filter(Boolean):junctionMouths(city,road);
     for(const p of bridgeBarriers(city,road)){
       rails++;const hit=roadProjection(road,p.x,p.z),n=Math.hypot(p.x-hit.x,p.z-hit.z)||1,ox=(p.x-hit.x)/n,oz=(p.z-hit.z)/n,base=p.y-.38;

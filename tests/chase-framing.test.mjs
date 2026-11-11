@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import {createCar} from '../src/render/car.ts';
-import {applyChaseViewOffset,groundChaseFraming,portraitChaseInset} from '../src/render/chase-framing.ts';
+import {applyChaseViewOffset,boomCeiling,groundChaseFraming,portraitChaseInset,ROOF_ROOM} from '../src/render/chase-framing.ts';
 
 function screenBounds(box,camera,width,height){
   camera.updateMatrixWorld();const points=[];
@@ -40,4 +40,20 @@ test('desktop and landscape keep their existing chase boom and projection',()=>{
   applyChaseViewOffset(camera,393,852,220);assert.equal(camera.view.enabled,true);
   camera.aspect=852/393;applyChaseViewOffset(camera,852,393,0);
   assert.equal(camera.view.enabled,false);assert.ok(camera.projectionMatrix.equals(expected),'rotation must remove the portrait offset');
+});
+
+test('a third-person camera keeps under a tunnel roof lower than its boom reaches',()=>{
+  const roofed={ceiling:3.2,covered:true},cut={ceiling:3.4,covered:false};
+  assert.equal(boomCeiling(undefined,undefined),undefined,'no limit in the open');
+  assert.equal(boomCeiling(cut,cut),undefined,'nor in a walled cut without a roof');
+  assert.equal(boomCeiling(roofed,roofed),3.2-ROOF_ROOM);
+  assert.equal(boomCeiling(cut,roofed),3.4-ROOF_ROOM,'entering: the vehicle is under the roof and the camera, still in the cut behind it, comes down at its own place');
+  assert.equal(boomCeiling(roofed,cut),3.2-ROOF_ROOM,'leaving: the camera is under the roof after the vehicle has left it');
+  assert.equal(boomCeiling(roofed,undefined),3.2-ROOF_ROOM,'the vehicle has left the tunnel record altogether');
+  assert.equal(boomCeiling(undefined,roofed),3.2-ROOF_ROOM,'the boom swings out of the tunnel\'s plan: the roof over the vehicle');
+  // The car's body rides 0.66 m over the road. Storrow Drive's roof (3.2 m) is lower than the boom, the Turnpike's (4.2 m) and the Central Artery's (5.2 m) are not.
+  const boom=.66+groundChaseFraming(false,0,1,0,false).height;
+  assert.ok(3.2-ROOF_ROOM<boom,'Storrow Drive\'s tunnel lowers the camera');assert.ok(4.2-ROOF_ROOM>boom&&5.2-ROOF_ROOM>boom,'the higher tunnels leave it where it was');
+  // The near plane (0.15 m, at most 60 degrees of view) reaches 0.09 m above the eye of a level camera.
+  assert.ok(ROOF_ROOM>2*.15*Math.tan(Math.PI/6));
 });

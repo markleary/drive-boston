@@ -57,11 +57,12 @@ function paths(roads:Road[]):Path[]{
 /** Build stable world-space anchors once. Layout only visits nearby buckets;
  * screen-space exclusions keep text clear of markers and the circular edge.
  * A motorway deck labels by its route ("I-93 North", not each piece's place
- * after ` · `), and its ramps carry no label; the tunnels keep their names. */
+ * after ` · `), and its ramps carry no label; so do the Turnpike's tunnel and
+ * walled-cut records (`highway`); the Central Artery's tunnels keep their names. */
 export function createMinimapLabeler(roads:Road[]){
   const groups=new Map<string,Road[]>(),buckets=new Map<string,Anchor[]>(),cell=128;
   for(const road of roads){
-    const highway=road.tunnel?0:speedClass(road);
+    const highway=road.tunnel&&!road.highway?0:speedClass(road);
     if(!road.name||road.width<7||highway===1||/alley|unnamed|private|service/i.test(road.name))continue;
     const name=highway?road.name.split(' · ')[0].trim():road.name,group=groups.get(name)??[];group.push(road);groups.set(name,group);
   }

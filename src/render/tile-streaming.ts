@@ -4,7 +4,7 @@ import { loadTile, type CityTile, type Reader } from '../simulation/city-tiles.t
 import { RoadTileCoverage } from '../simulation/road-tile-coverage.ts';
 import type { PlacedSignal } from '../simulation/signal-placement.ts';
 import type { FarCityView } from './far-city';
-import { createTileBuilder, type BuiltTile, type PartialTile, type TileContext, type TileStage } from './tile-builder';
+import { createTileBuilder, type BuiltTile, type Lamp, type PartialTile, type TileContext, type TileStage } from './tile-builder';
 import type { Pace } from './pacing';
 import { buildSlice, createMotion, orderTiles, pickTile, SYNC_RADIUS, type OrderedTile } from './stream-order.ts';
 import { createUploadRelease } from './upload-release';
@@ -12,7 +12,7 @@ import { createUploadRelease } from './upload-release';
 export interface TileStreamer {
   group: THREE.Group;
   /** Live arrays: the world's update loop iterates them every frame. */
-  buildingChunks: THREE.Mesh[]; lampPositions: THREE.Vector3[]; signals: PlacedSignal[];
+  buildingChunks: THREE.Mesh[]; lampPositions: Lamp[]; signals: PlacedSignal[];
   /** `flying`: the observer is in the air, where no tile is ever finished in one frame for its colliders' sake. */
   update(position: THREE.Vector3, altitude: number, flying?: boolean): void;
   /** Build the neighborhood and its road owners; false if any required tile failed to load. */
@@ -56,7 +56,7 @@ export function createTileStreamer(ctx: TileContext, read: Reader, far?: FarCity
   /** `finishing`: the tile whose scenery is being built. `working`: the tile the last frame worked on, if any. */
   let finishing: string | undefined, working: Active | undefined, queued: string | undefined, waiting = 0, focus: { x: number; z: number; until: number } | undefined, version = 0;
   const pace: Pace = { deadline: Infinity }, motion = createMotion(); let lastEnd = 0, budget = 0;
-  const buildingChunks: THREE.Mesh[] = [], lampPositions: THREE.Vector3[] = [], signals: PlacedSignal[] = [];
+  const buildingChunks: THREE.Mesh[] = [], lampPositions: Lamp[] = [], signals: PlacedSignal[] = [];
   const refreshLive = () => {
     buildingChunks.length = 0; lampPositions.length = 0; signals.length = 0;
     for (const t of loaded.values()) { buildingChunks.push(...t.meshes); lampPositions.push(...t.lamps); signals.push(...t.signals); }

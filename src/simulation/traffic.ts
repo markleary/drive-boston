@@ -164,7 +164,8 @@ export function roadGraph(city: CityData) {
       for(const laneOffset of lanes){
         const edge:Edge={ id: edges.length, start: a, end: b, points: ps, length, name: road.name, width: road.width, oneway: road.oneway !== 0,road,laneOffset };
         if(sink)edge.sink=true;if(source)edge.source=true;
-        if(city.coverage?.length&&!lane(edge).every(p=>covered(p[0],p[1])))continue;
+        // Streets stop at the edge of the mapped land; a tunnel road runs on under the water beyond it (the Turnpike under the harbour to East Boston).
+        if(city.coverage?.length&&!road.tunnel&&!lane(edge).every(p=>covered(p[0],p[1])))continue;
         edges.push(edge);
       }
     };

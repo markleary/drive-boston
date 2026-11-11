@@ -35,6 +35,10 @@ import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
 import { createI93ExitSign } from './i93-exit-signs';
 import { planI93ExitSigns } from '../simulation/i93-exit-signs';
+import { createWarningSign } from './highway-signs';
+import { planHighwaySigns } from '../simulation/highway-signs';
+import { highwayMasts, mastHead, MAST_ARM, MAST_HEIGHT, MAST_LIGHT, type LampLight } from '../simulation/highway-lighting';
+import { deckUndersideAt } from '../simulation/road-surfaces';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { roadStructureSteps } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
@@ -86,8 +90,10 @@ export interface TileStats {
   /** Main-thread time inside the generator, in total and per completed stage (filled in by the streamer). */ cpuMs: number; stageMs?: Record<string, number>;
   /** Metres from the observer to the tile when its decks were in and when it was finished (filled in by the streamer's frame loop). */ structuresDistance?: number; finishDistance?: number;
 }
+/** A lamp's position on the ground, for the pooled night lights (world.ts): a street lamp's light unless the lamp carries its own. */
+export type Lamp = THREE.Vector3 & { light?: LampLight };
 export interface BuiltTile {
-  key: string; tile: CityTile; group: THREE.Group; bounds: Bounds; colliders: RAPIER.Collider[]; meshes: THREE.Mesh[]; lamps: THREE.Vector3[]; signals: PlacedSignal[]; stats: TileStats;
+  key: string; tile: CityTile; group: THREE.Group; bounds: Bounds; colliders: RAPIER.Collider[]; meshes: THREE.Mesh[]; lamps: Lamp[]; signals: PlacedSignal[]; stats: TileStats;
   dispose(): void;
 }
 export type TileStage = 'survey' | 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
@@ -118,7 +124,7 @@ export function createTileBuilder(ctx: TileContext) {
   const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
   const chelseaLiftSteel = new THREE.MeshStandardMaterial({ color: '#9ea7a3', roughness: .72, metalness: .3 });
   const signSteel = new THREE.MeshStandardMaterial({ color: '#a9b4b6', roughness: .68, metalness: .25 });
-  const exitSigns = planI93ExitSigns(city.roads);
+  const exitSigns = planI93ExitSigns(city.roads), warningSigns = planHighwaySigns(city);
   // Painted while the game loads (the arena's finishes, the northern towns' house walls and roofs: about 40 ms of
   // canvas work each); a phone, which may never see either, paints them with the first tile that needs them.
   if (!ctx.mobile) { prepareTdGardenFinishes(); materials.houses(); }
@@ -164,7 +170,7 @@ export function createTileBuilder(ctx: TileContext) {
     const began = performance.now(), key = tile.key, size = tile.size, x0 = tile.tx * size, z0 = tile.tz * size, x1 = x0 + size, z1 = z0 + size;
     const bounds: Bounds = { minX: x0, maxX: x1, minZ: z0, maxZ: z1 }, insideTile = (x: number, z: number) => x >= x0 && x < x1 && z >= z0 && z < z1;
     const group = partial.group; group.name = `Tile ${key}`;
-    const colliders = partial.colliders, meshes: THREE.Mesh[] = [], owned = partial.ownedMaterials ??= [], lamps: THREE.Vector3[] = [];
+    const colliders = partial.colliders, meshes: THREE.Mesh[] = [], owned = partial.ownedMaterials ??= [], lamps: Lamp[] = [], highwayLamps: Lamp[] = [];
     const stats: TileStats = { buildings: 0, exactMeshes: 0, triangles: 0, roads: 0, structures: 0, trees: 0, lamps: 0, signs: 0, signals: 0, parkTrees: 0, storefronts: 0, facades: 0, rooftops: 0, porches: 0, housePorches: 0, colliders: 0, buildMs: 0, cpuMs: 0 };
     const near = grow(bounds, 80), roads = roadsNear(near), ownedRoads = roads.filter(r => { const m = midpoint(r); return insideTile(m[0], m[1]); });
     const subCity: CityData = { ...city, roads, buildings: tile.buildings, signals: collect(signalCells, grow(bounds, 40), s => s[0] >= x0 - 40 && s[0] < x1 + 40 && s[1] >= z0 - 40 && s[1] < z1 + 40), curbs: tile.curbs, parkPaths: tile.parkPaths,
@@ -227,6 +233,8 @@ export function createTileBuilder(ctx: TileContext) {
         if (overlaps(bounds, BACK_BAY_PAVING)) {
           if (due(pace)) yield 'terrain';
           const paving = backBayPaving(city, { i0, i1, j0, j1 });
+          // The paving lies on the ground, so an open ramp's portal cuts it as it cuts the terrain (the Turnpike's Dartmouth Street entrance).
+          if (paving.attributes.position?.count) yield* stage('terrain', clipPortalSurfaceSteps(city, paving, pace));
           if (paving.attributes.position?.count) { const mesh = new THREE.Mesh(paving, materials.sidewalk); mesh.name = 'Back Bay paving'; mesh.receiveShadow = true; mesh.renderOrder = -2; group.add(mesh); } else paving.dispose();
         }
       }
@@ -243,10 +251,32 @@ export function createTileBuilder(ctx: TileContext) {
     }
     for (const sign of exitSigns) {
       if (!insideTile(sign.approach.x, sign.approach.z)) continue;
+      // (a street bridge over the road right there would stand in the panel)
+      if (deckUndersideAt(city, sign.approach.x, sign.approach.z, sign.approach.y + 2.5) < sign.approach.y + 9) continue;
       if (due(pace)) yield 'structures';
       const exit = createI93ExitSign(sign, height, signSteel);
       group.add(exit.group);
       owned.push(exit.material);
+    }
+    // Storrow Drive's CARS ONLY and LOW CLEARANCE warnings (their yellow faces are shared by every tile, so none is this tile's to dispose).
+    for (const place of warningSigns) if (insideTile(place.approach.x, place.approach.z)) group.add(createWarningSign(place, height, signSteel));
+    // The Turnpike's lighting masts: a pole at the right edge, an arm over the lanes and a luminaire that glows with
+    // the street lamps at night; the pooled night lights hang in the nearest luminaires as they do in a street lamp's globe.
+    const masts = ownedRoads.flatMap(road => highwayMasts(road, (x, z, above) => deckUndersideAt(city, x, z, above)));
+    if (masts.length) {
+      const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(.09, .14, MAST_HEIGHT, 8), ctx.iron, masts.length), arms = new THREE.InstancedMesh(new THREE.BoxGeometry(MAST_ARM, .09, .11), ctx.iron, masts.length), heads = new THREE.InstancedMesh(new THREE.BoxGeometry(.95, .12, .38), ctx.lampMat, masts.length), post = new THREE.Object3D();
+      masts.forEach((m, i) => {
+        // Local +x points across the road from the mast toward the lanes.
+        post.rotation.set(0, m.yaw, 0); post.scale.set(1, 1, 1);
+        post.position.set(m.x, m.y + MAST_HEIGHT / 2 - .3, m.z); post.updateMatrix(); poles.setMatrixAt(i, post.matrix);
+        const reach = (d: number) => post.position.set(m.x + Math.cos(m.yaw) * d, m.y + MAST_HEIGHT - .35, m.z - Math.sin(m.yaw) * d);
+        reach(MAST_ARM / 2); post.updateMatrix(); arms.setMatrixAt(i, post.matrix);
+        const head = mastHead(m); post.position.set(head.x, head.y, head.z); post.updateMatrix(); heads.setMatrixAt(i, post.matrix);
+        // The lamp is the road under that head, like a street lamp's foot; its night light hangs MAST_LIGHT.rise over it, in the head.
+        highwayLamps.push(Object.assign(new THREE.Vector3(head.x, m.y, head.z), { light: MAST_LIGHT }));
+      });
+      poles.castShadow = true; poles.name = 'Turnpike lighting masts'; arms.name = 'Turnpike mast arms'; heads.name = 'Turnpike luminaires';
+      for (const mesh of [poles, arms, heads]) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); group.add(mesh); }
     }
     partial.structuresReady = true;
     yield 'structures';
@@ -615,7 +645,7 @@ export function createTileBuilder(ctx: TileContext) {
     }
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
-    const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps, signals: placements, stats, dispose: () => dispose(built, owned) };
+    const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps: [...lamps, ...highwayLamps], signals: placements, stats, dispose: () => dispose(built, owned) };
     return built;
   }
 

@@ -76,5 +76,16 @@ class BuildingClearancePackageTest(unittest.TestCase):
   fresh=self.path/'fresh.bin';tileformat.write_tile(fresh,header,geometry)
   self.assertEqual(fresh.read_bytes(),(self.path/'tiles/t_0_0.bin').read_bytes())
 
+ def test_a_building_over_a_highway_record_takes_exact_collision_from_the_stage_record(self):
+  # build-boston-highways.py lists the buildings whose convex proxy would stand in one of its roads; no surface street says so.
+  self.city['roads']=[];self.write_city()
+  (self.path/'provenance.json').write_text(json.dumps({'bostonHighways':{'buildings':{'mesh':[{'id':'over-road','tile':'0_0','roads':['i90-wb']}],'passages':[],'removed':[]}}}))
+  prepare_package(self.path);header,_=tileformat.read_tile(self.path/'tiles/t_0_0.bin');entry=header['buildings'][0]
+  self.assertEqual((entry['collision'],entry['highwayOverlaps']),('mesh',['i90-wb']));self.assertNotIn('roadOverlaps',entry);self.assertEqual(flags(self.path)[:2],[7,15],'and its far proxy is exact')
+  before=snapshot(self.path);self.assertEqual(prepare_package(self.path)['changedTiles'],[]);self.assertEqual(snapshot(self.path),before,'a rerun changes nothing')
+  (self.path/'provenance.json').write_text(json.dumps({'bostonHighways':{'buildings':{'mesh':[],'passages':[],'removed':[]}}}));prepare_package(self.path)
+  entry=tileformat.read_tile(self.path/'tiles/t_0_0.bin')[0]['buildings'][0];self.assertNotIn('collision',entry);self.assertNotIn('highwayOverlaps',entry)
+  self.assertEqual(flags(self.path)[:2],[5,13],'the flag goes when the stage no longer lists the building')
+
 
 if __name__=='__main__':unittest.main()
