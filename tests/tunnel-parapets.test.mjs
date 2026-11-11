@@ -44,6 +44,27 @@ test('open parapets bridge terrain dips with straight grades and guard a crest b
   }finally{probe.dispose();}
 });
 
+test('a highway ramp\'s walls rise from the street beyond its landing and keep their height where a deck continues it',()=>{
+  // Flat ground; the ramp lies on its street for 12 m, then goes down at 5% in a slot of its own.
+  const points=Array.from({length:41},(_,i)=>[0,i*3]),elevations=points.map(p=>-Math.max(0,p[1]-12)*.05);
+  const ramp={id:'i90-wb-entrance-test',name:'I-90 West · Entrance from Test Street',kind:'motorway_link',points,elevations,width:6,deckWidths:points.map(()=>6),oneway:1,lanes:1,highway:'i90',startLevel:0,endLevel:-1,tunnel:{clearance:4.2,covered:[],surfaceLandings:[[0,12]]}};
+  const elevation={width:21,height:51,cellSize:3,originX:-30,originZ:-15,heights:Array(21*51).fill(0)};
+  const landed=wallProbe({roads:[ramp],elevation},ramp);
+  // The same slot where a deck with its own barrier continues it instead: no landing, a lifted end.
+  const cut={...ramp,id:'i90-wb-02',startLevel:-1,elevations:points.map(p=>-.2-Math.max(0,p[1]-12)*.05),tunnel:{clearance:4.2,covered:[]}},walled=wallProbe({roads:[cut],elevation},cut);
+  try{
+    for(const side of [-1,1]){
+      assert.equal(landed.at(6,side).top,undefined,'no wall beside the landing');
+      const nose=landed.at(12.2,side);assert.ok(nose.top>-.05&&nose.top<.15,`the wall starts at the street's surface (${nose.top})`);
+      let previous=nose.top;
+      for(let s=12.5;s<=60;s+=.5){const p=landed.at(s,side);assert.ok(p.top>=previous-1e-6,'and only rises along the slot');previous=p.top;}
+      assert.ok(landed.at(14,side).top<.5,'a low nose where the lanes of the street pass the slot\'s mouth');
+      for(let s=21;s<=118;s+=1)assert.ok(landed.at(s,side).top>=.799,'full height once the road has gone down a curb\'s depth');
+      assert.ok(walled.at(.3,side).top>=.799,'a cut without a landing keeps its full wall from its first metre');
+    }
+  }finally{landed.dispose();walled.dispose();}
+});
+
 test('every shipped open tunnel wall stays above its endpoint grade and surrounding ground',async()=>{
   const city=await loadMetroCity({tiles:[]});let spans=0,samples=0;
   for(const road of city.roads.filter(r=>r.tunnel)){
@@ -61,7 +82,9 @@ test('every shipped open tunnel wall stays above its endpoint grade and surround
           for(let s=start;s<end;s+=1){
             const p=probe.at(s,side),grade=a.top+(b.top-a.top)*(s-start)/(end-start);
             assert.ok(p.top>=grade-.035,`${road.id} side ${side} station ${s}: cap dips below its straight endpoint grade`);
-            if(s>12&&total-s>12)assert.ok(p.top>=Math.max(p.floor,p.ground)+.77,`${road.id}: terrain and roadway remain guarded`);
+            // (a wall rises from the street over the 12 m beyond a landing on the ground, as it does from an artery ramp's end)
+            const nose=(road.startLevel===0&&tunnelSurfaceLandingAt(road,lo-.01)&&s-lo<=12)||(road.endLevel===0&&tunnelSurfaceLandingAt(road,hi+.01)&&hi-s<=12);
+            if(s>12&&total-s>12&&!nose)assert.ok(p.top>=Math.max(p.floor,p.ground)+.77,`${road.id}: terrain and roadway remain guarded`);
             samples++;
           }
         }

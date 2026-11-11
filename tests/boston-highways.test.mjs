@@ -5,9 +5,10 @@ import * as THREE from 'three';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 import {addTunnels,highwayLegend} from '../src/render/tunnels.ts';
 import {isHighwayDeck,isMotorway,openStretches,stations} from '../src/simulation/motorway.ts';
-import {tunnelCoveredAt,tunnelGeometry,tunnelPointAt,tunnelStations} from '../src/simulation/tunnels.ts';
+import {inTunnelPortal,tunnelCoveredAt,tunnelGeometry,tunnelPointAt,tunnelStations,tunnelSurfaceLandingAt} from '../src/simulation/tunnels.ts';
 import {deckUndersideAt,roadProjection,roadWidthAt,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 import {planI93ExitSigns} from '../src/simulation/i93-exit-signs.ts';
+import {planEntranceSigns,entranceGantry,entranceSignStands,ENTRANCE_CLEARANCE,ENTRANCE_PANEL,GANTRY_SETBACK} from '../src/simulation/entrance-signs.ts';
 import {planHighwaySigns,warningLegend} from '../src/simulation/highway-signs.ts';
 import {highwayMasts,mastHead,MAST_ARM,MAST_HEIGHT,MAST_LIGHT,MAST_SPACING,STREET_LIGHT} from '../src/simulation/highway-lighting.ts';
 import {roadGraph} from '../src/simulation/traffic.ts';
@@ -40,6 +41,23 @@ test('exit signs stand ahead of the gore on the carriageway a ramp leaves, numbe
   assert.equal(by['i90-eb-exit-131'].road.id,'i90-eb-02');assert.equal(by['i90-eb-exit-131'].station,400-120);assert.equal(by['i90-eb-exit-131'].number,'131');
   const storrow=by['storrow-eb-exit-clarendon'];
   assert.equal(storrow.number,undefined,'Storrow Drive\'s exits carry no number');assert.ok(storrow.scale<1&&storrow.road.id==='storrow-eb-01'&&Math.abs(storrow.station-(300-80))<1e-9);
+});
+
+test('an entrance sign stands over the ramp beyond its street landing, in the open',()=>{
+  // The reviewed legend is the Dartmouth Street entrance's: a ramp level on its street for 12 m, then down a slot to its roof.
+  const points=line(0,240,0,3),ramp=(extra={})=>({...cut('i90-wb-entrance-copley',points,[[130,240]]),kind:'motorway_link',lanes:1,width:6,deckWidths:points.map(()=>6),name:'I-90 West · Entrance from Dartmouth Street',
+    elevations:points.map(p=>-Math.max(0,p[0]-12)*.04),startLevel:0,tunnel:{clearance:4.2,covered:[[130,240]],surfaceLandings:[[0,12]]},...extra});
+  const [sign]=planEntranceSigns([deck('i90-wb-19',line(240,400)),ramp()]);
+  assert.equal(sign.station,12+GANTRY_SETBACK,'beyond the landing, where the walls of the slot have risen');
+  assert.deepEqual([sign.shield,sign.direction,[...sign.lines],sign.pike],['90','WEST',['New York'],true]);
+  const gantry=entranceGantry(sign);
+  assert.deepEqual(gantry.posts.map(p=>[p.x,+p.z.toFixed(2)]),[[21,-3.55],[21,3.55]],'a post behind each wall of the slot');
+  assert.ok(Math.abs(gantry.bottom-(sign.approach.y+ENTRANCE_CLEARANCE))<1e-9&&Math.abs(gantry.top-gantry.bottom-ENTRANCE_PANEL.height)<1e-9&&ENTRANCE_CLEARANCE>=5,'the panel hangs clear of a truck on the ramp');
+  // No landing: the ramp's first metres. Under a roof or on a ramp too short for it there is none, and none without the ramp.
+  assert.equal(planEntranceSigns([ramp({tunnel:{clearance:4.2,covered:[[130,240]]}})])[0].station,GANTRY_SETBACK);
+  assert.deepEqual(planEntranceSigns([ramp({tunnel:{clearance:4.2,covered:[[15,240]],surfaceLandings:[[0,12]]}})]),[]);
+  assert.deepEqual(planEntranceSigns([{...ramp(),points:points.slice(0,7),elevations:points.slice(0,7).map(()=>0),deckWidths:points.slice(0,7).map(()=>6)}]),[]);
+  assert.deepEqual(planEntranceSigns([deck('i90-wb-19',line(240,400))]),[]);
 });
 
 test('Storrow Drive\'s warnings stand on their records in the open',()=>{
@@ -260,3 +278,75 @@ test('no ground stands in the pavement of an installed highway deck',()=>{
     }
   }
 });
+
+
+test('a ramp lies on its street inside its landing and goes down in the open beyond it: the Dartmouth Street and Haul Road entrances',()=>{
+  // The runtime keeps the ground whole over a surface landing and builds no wall beside it. A landing that ran on over a road
+  // already below the ground buried it: the Dartmouth Street entrance had 180 m of Huntington Avenue's island over it.
+  const across=(road,s,f)=>{const p=tunnelPointAt(road,s),c=Math.cos(p.yaw),n=Math.sin(p.yaw);return f.map(o=>sampleElevation(city,p.x+c*o*p.width/2,p.z-n*o*p.width/2)).sort((a,b)=>a-b);};
+  let landings=0;
+  for(const road of highway.filter(r=>r.tunnel?.surfaceLandings)){
+    const total=tunnelStations(road).at(-1);
+    for(const [a,b] of road.tunnel.surfaceLandings){
+      if(!((a<.01&&road.startLevel===0)||(b>total-.01&&road.endLevel===0)))continue;   // (a mouth where a street joins a walled road is no landing on the ground)
+      landings++;
+      for(let s=a;s<=b;s=s<b&&s+1>b?b:s+1){
+        const lanes=across(road,s,[-2/3,-1/3,0,1/3,2/3]),over=lanes[2]-tunnelPointAt(road,s).y;
+        assert.ok(over<=.2,`the ground stands ${over.toFixed(2)} m over ${road.id} inside its landing, ${s.toFixed(1)} m along it`);
+      }
+    }
+  }
+  assert.ok(landings>=6,`${landings} landings on the ground`);
+  for(const [id,reach] of [['i90-wb-entrance-copley',12],['i90-eb-entrance-135',24]]){
+    const road=byId.get(id),total=tunnelStations(road).at(-1),[landing]=road.tunnel.surfaceLandings,roof=Math.min(...road.tunnel.covered.map(c=>c[0]));
+    assert.deepEqual(landing,[0,reach],`${id} lands on its street for ${reach} m`);
+    assert.ok(roof>100&&roof<total,`${id} is roofed from ${roof} m`);
+    // On the street's surface to the end of the landing, then down without a step, never steeper than its grade.
+    for(let s=0;s<=reach;s+=1)assert.ok(Math.abs(across(road,s,[-1/3,0,1/3])[1]-tunnelPointAt(road,s).y)<.05,`${id} leaves the street's surface ${s} m along it`);
+    for(let s=reach;s<roof;s+=1){
+      const p=tunnelPointAt(road,s),q=tunnelPointAt(road,s+1);assert.ok(Math.abs(q.y-p.y)<=.106,`${id} steeper than 10.5% at ${s}`);
+      // the slot is open: no roof, the ground cut over the whole pavement, and no landing left to keep it
+      if(s>reach+1){assert.ok(!tunnelCoveredAt(road,s)&&!tunnelSurfaceLandingAt(road,s));for(const o of [-.9,0,.9])assert.ok(inTunnelPortal(city,p.x+Math.cos(p.yaw)*o*p.width/2,p.z-Math.sin(p.yaw)*o*p.width/2),`ground left over ${id} at ${s}`);}
+    }
+    for(const s of [2,reach-2]){const p=tunnelPointAt(road,s);assert.ok(!inTunnelPortal(city,p.x,p.z),`${id}: the junction keeps its ground ${s} m along the ramp`);}
+    const deep=tunnelPointAt(road,roof-5);assert.ok(across(road,roof-5,[0])[0]-deep.y>4,`${id} is ${ (across(road,roof-5,[0])[0]-deep.y).toFixed(1)} m down where its roof begins`);
+  }
+  // Huntington Avenue's two carriageways run beside the Dartmouth Street slot on ground of their own: the slot is the survey's 6 m,
+  // inside the island between them, and the ground under each carriageway's lanes is whole from the junction on. (Their centre
+  // lines leave the ramp's own vertex, so the lanes are measured as traffic drives them: 0.17 of the measured roadway either side.)
+  const ramp=byId.get('i90-wb-entrance-copley');assert.ok(Math.max(...ramp.deckWidths)<=6);
+  for(const id of ['15703-0-0','15708-0-0']){
+    const street=city.roads.find(r=>r.id===id),along=stations(street.points),lane=Math.min(3,street.pavedWidth*.17);let checked=0;
+    assert.ok(street.oneway&&street.pavedWidth>=6.5,`${street.name} (${id}) keeps its two lanes`);
+    for(let d=6;d<120;d+=1){
+      let i=1;while(i<along.length-1&&along[i]<d)i++;
+      const t=(d-along[i-1])/(along[i]-along[i-1]),a=street.points[i-1],b=street.points[i],l=Math.hypot(b[0]-a[0],b[1]-a[1]),x=a[0]+(b[0]-a[0])*t,z=a[1]+(b[1]-a[1])*t,nx=-(b[1]-a[1])/l,nz=(b[0]-a[0])/l;
+      for(const o of [-lane,0,lane]){assert.ok(!inTunnelPortal(city,x+nx*o,z+nz*o),`a lane of ${street.name} (${id}) is cut for the ramp ${d} m along it`);checked++;}
+    }
+    assert.ok(checked>300);
+  }
+});
+
+test('the Dartmouth Street entrance is signed overhead: 90 West, New York, on a gantry at the mouth of its slot',()=>{
+  const signs=planEntranceSigns(city.roads);assert.deepEqual(signs.map(s=>s.rampId),['i90-wb-entrance-copley']);
+  const [sign]=signs,road=sign.road,landing=road.tunnel.surfaceLandings[0][1],roof=Math.min(...road.tunnel.covered.map(c=>c[0])),gantry=entranceGantry(sign);
+  assert.ok(sign.station>landing+5&&sign.station<landing+15&&sign.station<roof-60,`the gantry stands ${sign.station} m along the ramp, at its mouth`);
+  assert.ok(entranceSignStands(city,sign),'nothing stands in the panel or on a post\'s place: the tile builds it');
+  // The panel clears the ramp and the street beside it; each post stands on the island's ground behind a wall of the slot,
+  // outside the cut and clear of the lanes of the avenue's two carriageways.
+  assert.ok(gantry.bottom-sign.approach.y>=5&&gantry.bottom-sampleElevation(city,gantry.posts[0].x,gantry.posts[0].z)>=4.3);
+  const lanes=['15703-0-0','15708-0-0'].flatMap(id=>{const street=city.roads.find(r=>r.id===id),offset=Math.min(3,street.pavedWidth*.17);return [-offset,offset].map(o=>({street,o}));});
+  for(const post of gantry.posts){
+    assert.ok(!inTunnelPortal(city,post.x,post.z),'a post stands on the ground, not in the slot');
+    assert.ok(Math.abs(sampleElevation(city,post.x,post.z)-sampleElevation(city,sign.approach.x,sign.approach.z))<.3,'on the level island');
+    for(const {street,o} of lanes){
+      let near=Infinity;
+      for(let i=1;i<street.points.length;i++){
+        const a=street.points[i-1],b=street.points[i],l=Math.hypot(b[0]-a[0],b[1]-a[1]),nx=-(b[1]-a[1])/l,nz=(b[0]-a[0])/l,ax=a[0]+nx*o,az=a[1]+nz*o,dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((post.x-ax)*dx+(post.z-az)*dz)/(l*l)));
+        near=Math.min(near,Math.hypot(post.x-ax-dx*t,post.z-az-dz*t));
+      }
+      assert.ok(near>1.4,`a post stands ${near.toFixed(2)} m from the centre of a lane of ${street.name} (${street.id})`);
+    }
+  }
+});
+

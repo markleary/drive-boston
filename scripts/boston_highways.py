@@ -68,7 +68,14 @@ Storrow Drive its lane counts, its tunnel and its posted clearances.
   pavements overlap, and land on the graded street vertex (on the deck, where
   the vertex is a bridge's). Ramps ending on a Central Artery tunnel road take
   its height there, so the Turnpike joins I-93 inside the existing tunnel and
-  the bores keep their southern closures.
+  the bores keep their southern closures. A tunnel record that lands on a
+  street has a `surfaceLandings` interval, over which the runtime keeps the
+  ground whole and builds no wall: it reaches as far as the road lies on the
+  street's roadway and ends where the ground first stands over the road
+  (landing_interval). A route with a reviewed `landing` is held on its street
+  for that length before it descends (street_stretch: the Dartmouth Street
+  entrance to the nose of the island between Huntington Avenue's carriageways,
+  the Haul Road entrance to where the curbs part it from the road).
 - Signs: the sidecar lists Storrow Drive's warnings (`signs`): CARS ONLY where
   traffic comes onto it and LOW CLEARANCE, with the height the OpenStreetMap way
   posts, ahead of every structure it passes under (warning_signs).
@@ -153,6 +160,7 @@ BLEND=40             # an OpenStreetMap filler's ends shift onto the layer 8 seg
 SLIVER=.6            # source vertices closer than this are one vertex
 SHORT=12             # no record shorter than this unless ramps meet the road at both its ends
 LANDING_LIP=.15      # ground this far over a ramp inside its street landing's taper is no longer the street it meets
+LANDING_STEP=.05     # and a landing that ends for it ends where the ground first stood this far over the road: the step the runtime leaves there
 SIGN_IN=25           # a CARS ONLY sign stands this far along Storrow Drive from where traffic comes onto it
 SIGN_AHEAD=70        # and a LOW CLEARANCE sign this far before the structure
 TO_FEET=Transformer.from_crs(4326,2249,always_xy=True)
@@ -178,6 +186,8 @@ def smooth(t):return I.smooth(t)
 VIADUCT=7.0          # the Allston viaduct's deck over the rail yard beneath it (nothing mapped crosses under it)
 # A route lists layer 8 OBJECTIDs in travel order; 'w<id>' is an OpenStreetMap way that fills a gap between
 # two segments (cut between their ends). `lanes`: (first segment of a run, lanes). `names`: (first segment, name).
+# `landing`: the reviewed length a ramp runs on the street it lands on before it leaves for its own cut (street_stretch),
+# `width`: its reviewed pavement width.
 def R(id,name,parts,lanes=1,kind='motorway_link',bridge='i90',**extra):
  return {'id':id,'name':name,'parts':parts,'lanes':lanes,'kind':kind,'bridge':bridge,**extra}
 
@@ -214,8 +224,11 @@ TURNPIKE=[
  R('i90-wb-entrance-massachusetts-avenue','I-90 West · Entrance from Massachusetts Avenue',[9178]),
  # The Stuart Street branch (11048, 11047, 9177) dives under both carriageways and climbs 11 m to the street in 80 m: left out.
  R('i90-eb-exit-133','I-90 East · Exit 133 Prudential Center / Copley Square',[15053,15054,15724,15723]),
- # Layer 8 leaves the Dartmouth Street entrance at level 0 along Huntington Avenue, which it runs beneath to the tunnel.
- R('i90-wb-entrance-copley','I-90 West · Entrance from Dartmouth Street',[10257,10258],level=-1),
+ # Layer 8 leaves the Dartmouth Street entrance at level 0 along Huntington Avenue, which it runs beneath to the tunnel:
+ # it goes down a walled slot in the island between the avenue's two carriageways. The curb survey (layer 6) puts the
+ # island's nose 12 m from the Dartmouth Street vertex and the slot's inner curbs 6 m apart; by their class width (15 m
+ # each, 15 m apart) the carriageways would carry the ramp on their own pavement as far as Exeter Street.
+ R('i90-wb-entrance-copley','I-90 West · Entrance from Dartmouth Street',[10257,10258],level=-1,landing=12,width=6.0),
  R('i90-wb-entrance-clarendon','I-90 West · Entrance from Clarendon Street',[11069]),
  R('i90-wb-entrance-arlington','I-90 West · Entrance from Arlington Street',[14293]),
  # South Bay: the Turnpike and the Central Artery tunnel
@@ -238,7 +251,8 @@ TURNPIKE=[
  R('i90-eb-exit-135','I-90 East · Exit 135 South Boston',[11117],spans=[{'from':[2038.252,252.661],'to':[2189.1,229.8],'level':-1}]),
  R('i90-eb-exit-135-congress','I-90 East · Exit 135 to Congress Street',[18017]),
  R('i90-eb-exit-135-haul-road','I-90 East · Exit 135 to the South Boston Haul Road',[11024,14778]),
- R('i90-eb-entrance-135','I-90 East · Entrance from the South Boston Haul Road',[17593,10364]),
+ # The entrance leaves the Haul Road as a lane on its pavement; the curb survey has the two roadways apart 24 m on.
+ R('i90-eb-entrance-135','I-90 East · Entrance from the South Boston Haul Road',[17593,10364],landing=24),
  R('i90-wb-entrance-135','I-90 West · Entrance from the South Boston Haul Road',[11020,8712]),
  # East Boston, Exit 137 and Route 1A
  R('i90-eb-exit-137','I-90 East · Exit 137 Logan Airport',[11065]),
@@ -430,8 +444,11 @@ def street_cap(plan,streets,lines,tree):
 
 
 class Plan(I.Plan):
- """An I-93 plan whose underground stations (`candidate`) have no ground floor at all: they follow the natural line under their ceilings."""
+ """An I-93 plan whose underground stations (`candidate`) have no ground floor at all: they follow the natural line under
+ their ceilings. `street` marks the stations of a reviewed street landing (street_stretch), `reach` its length at each end."""
  candidate=();water=None
+ def __init__(self,*args):
+  super().__init__(*args);self.street=[False]*len(self.points);self.reach=[0.,0.];self.on_deck=[False,False]
  def wet_at(self,k):return bool(self.water_polygons) and any(poly.covers(Point(self.points[k])) for poly in self.water_polygons)
  def bounds(self):
   low,high,target,weight,soft=super().bounds()
@@ -461,6 +478,7 @@ def plans_of(source,city,routes):
   parkway=spec['bridge']=='storrow'   # no shoulders: the lanes and a kerb's width
   if parkway:widths=I.taper(rp,[(l-1)*LANE+3.0 for l in lanes],60) if main else [5.6]*len(rp)
   else:widths=I.taper(rp,[I.mainline_width(l) for l in lanes],80) if main else I.taper(rp,[I.RAMP_WIDTHS[min(2,l)] for l in lanes],40)
+  if 'width' in spec:widths=[float(spec['width'])]*len(rp)   # reviewed against the curb survey
   level=[int(ways[o]['tags']['layer']) for o in ro]
   plan=Plan(spec['id'],rp,ro,widths,spec.get('grade',I.MAINLINE_GRADE if main else TUNNEL_RAMP_GRADE if min(level)<0 or spec.get('level',0)<0 else I.RAMP_GRADE),lanes)
   if not main or parkway:plan.radius=I.RAMP_RADIUS
@@ -535,10 +553,38 @@ def measure_ground(plan,ground,raw):
  lanes (the middle two thirds of the width), plan.edge the highest across the full width, and plan.terrain, the
  ground the profile follows: the median across the lanes at or above source level 0, less the fill the
  grader laid across the road for a street (`raw` is the survey grid), and the lowest across the full width
- below level 0, where an open cut narrower than the survey resolves shows only as its floor."""
+ below level 0, where an open cut narrower than the survey resolves shows only as its floor. plan.mid is the graded
+ ground itself, the median across the lanes: the surface of the street a road lands on (street_stretch)."""
  n=len(plan.points);x=cross_sections(plan,.5);g=np.array([[ground(float(a),float(b)) for a,b in row] for row in x]);r=np.array([[raw(float(a),float(b)) for a,b in row] for row in x])
- plan.edge=g.max(1).tolist();plan.high=g[:,1:6].max(1).tolist();plan.low=g.min(1).tolist();fill=np.median(np.where(g-r>FILL,r,g)[:,1:6],axis=1)
+ plan.edge=g.max(1).tolist();plan.high=g[:,1:6].max(1).tolist();plan.low=g.min(1).tolist();plan.mid=np.median(g[:,1:6],axis=1).tolist();fill=np.median(np.where(g-r>FILL,r,g)[:,1:6],axis=1)
  plan.terrain=[plan.low[i] if plan.level[i]<0 else float(fill[i]) for i in range(n)]
+
+
+def pavement_reach(line,width,e,streets):
+ """How far a line of pavement `width` runs from its end `e` (0 start, 1 end) over the roadway of the streets it lands
+ on there (each by its class width, 0.4 m more), 6 m at least."""
+ total=line.length;extent=0.
+ for r,_ in streets:
+  other=LineString(r['points']);radius=(r['width']+width)/2+.4;part=line.intersection(other.buffer(radius))
+  for g in getattr(part,'geoms',[part]):
+   if g.geom_type!='LineString' or g.is_empty:continue
+   lo,hi=sorted([line.project(Point(g.coords[0])),line.project(Point(g.coords[-1]))]);start,end=(lo,hi) if e==0 else (total-hi,total-lo)
+   if start<=.5:extent=max(extent,end)
+ return min(max(extent,6.0),total)
+
+
+def street_stretch(plan,e):
+ """Keep a road on the street it lands on at end `e` over the reviewed `landing` of its spec, the length it runs on that
+ street's roadway (measured on the curb survey where the class widths misjudge the junction: pavement_reach had the
+ Dartmouth Street entrance on Huntington Avenue's pavement for 180 m). The stations of that stretch are the street's
+ (plan.street): they are held on its surface (plan.mid; a floor alone is rounded into a hump ahead of the descent) and
+ are no candidates for cover, so the road's descent begins where the roadway ends. Left to its source level, or to the
+ survey under the grader's fill (measure_ground), it went down inside the junction instead, under ground that is the
+ street's and stays whole."""
+ n=len(plan.points);plan.reach[e]=float(plan.spec['landing'])
+ for i in range(n):
+  if (plan.along[i] if e==0 else plan.along[-1]-plan.along[i])<=plan.reach[e]+.01:
+   plan.street[i]=True;plan.terrain[i]=plan.mid[i];plan.allowance[i]=0.;plan.fixed.setdefault(i,round(plan.mid[i],4))
 
 
 def overhead(plan,streets,lines,tree,buildings,water):
@@ -592,9 +638,10 @@ def natural(plan,ends,open_):
  level without any cover over it. `ends` gives the known height of an end below ground (None: unknown)."""
  n=len(plan.points);xs=[];ys=[]
  for i in range(n):
-  if plan.level[i]>=0 or open_[i]:xs.append(float(plan.along[i]));ys.append(plan.terrain[i]+I.TERRAIN_RISE)
+  if plan.street[i]:xs.append(float(plan.along[i]));ys.append(plan.terrain[i])
+  elif plan.level[i]>=0 or open_[i]:xs.append(float(plan.along[i]));ys.append(plan.terrain[i]+I.TERRAIN_RISE)
  for e,i in ((0,0),(1,n-1)):
-  if plan.level[i]<0 and not open_[i]:
+  if plan.level[i]<0 and not open_[i] and not plan.street[i]:
    y=ends[e] if ends[e] is not None else plan.low[i]-(plan.clearance+ROOF+COVER)
    if e==0:xs.insert(0,float(plan.along[0]));ys.insert(0,y)
    else:xs.append(float(plan.along[-1]));ys.append(y)
@@ -610,7 +657,8 @@ def cover(plan,ends=(None,None)):
  PORTAL_ZONE is a portal's slope or a gap in the survey: the road keeps the line there, in the open. A longer
  one is real ground under a carriageway, which goes down under it (but for its first EDGE metres beside an open
  stretch); a ramp stays on the line, in the open. A station under mapped water stays under its bed, one under a
- surface street under the street, one under a building under the building's base (the roof slab against it); the
+ surface street under the street, one under a building under the building's base (the roof slab against it); a
+ station of a street stretch (street_stretch) is on its street, not under anything; the
  stage closes the survey's cut under a building, and under a street that has sunk into it (plan.sunk), over the
  road (plan.lid). A carriageway at source level 0 under a building is treated the same way where the base leaves
  the headroom within DIP_MAX of its ground (Parcel 12 over the cut at Massachusetts Avenue).
@@ -619,7 +667,7 @@ def cover(plan,ends=(None,None)):
  # A carriageway at source level 0 passes under a building as one below level 0 does, where the building's base leaves the headroom within DIP_MAX under its own ground.
  base=[min((plan.buildings[j]['base'] for j in plan.above[i]),default=math.inf) for i in range(n)]
  roofed=[plan.main and plan.level[i]==0 and base[i]<math.inf and base[i]-.05-need>=plan.terrain[i]+I.TERRAIN_RISE-DIP_MAX for i in range(n)]
- under=[plan.level[i]<0 or roofed[i] for i in range(n)]
+ under=[(plan.level[i]<0 or roofed[i]) and not plan.street[i] for i in range(n)]
  for a,b,rise in plan.rises:
   for i in range(a,b+1):plan.floor[i]=max(plan.floor[i],plan.low[i]+rise)
  solid=[under[i] and (plan.buried[i] or plan.wet[i] or bool(plan.over[i]) or bool(plan.above[i])) for i in range(n)]
@@ -628,7 +676,8 @@ def cover(plan,ends=(None,None)):
  edge=np.asarray(plan.edge);ridge=[float(edge[int(np.searchsorted(along,along[i]-12,'left')):int(np.searchsorted(along,along[i]+12,'right'))].max()) for i in range(n)]
  line=natural(plan,ends,[False]*n);open_=[under[i] and not solid[i] and low[i]-line[i]<OPEN_MAX for i in range(n)];floor=[False]*n
  for a,b in runs(open_):
-  if along[b]-along[a]<OPEN_RUN and not (a>0 and not under[a-1]) and not (b<n-1 and not under[b+1]):
+  # (a street stretch beside it is the road's landing, not a stretch at grade the cut leads up to)
+  if along[b]-along[a]<OPEN_RUN and not (a>0 and not under[a-1] and not plan.street[a-1]) and not (b<n-1 and not under[b+1] and not plan.street[b+1]):
    for i in range(a,b+1):open_[i]=False
    continue
   # Only the cut's floor anchors the line: its ends lie on the slopes the survey rounds the cut's walls into.
@@ -650,7 +699,8 @@ def cover(plan,ends=(None,None)):
  for e in (0,1):
   k=0 if e==0 else n-1
   if plan.landing[e] and k in plan.fixed:
-   for i in range(n):reach[i]=max(reach[i],plan.fixed[k]-plan.grade*.9*abs(float(along[i]-along[k])))
+   level=plan.reach[e] if plan.street[k] else 0.   # (a street stretch is level with its street: the descent begins beyond it)
+   for i in range(n):reach[i]=max(reach[i],plan.fixed[k]-plan.grade*.9*max(0.,abs(float(along[i]-along[k]))-level))
  target=[math.inf]*n
  for i in range(n):
   if not under[i] or open_[i]:continue
@@ -1190,6 +1240,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None):
     # (and so is a deck that runs on the ground where the ramp meets it, as the Harvard Bridge's approach does at Storrow Drive)
     r,j=kind[1][k];plan.fixed[i]=round(heights[k],4)
     plan.on_deck[e]=bool(r.get('elevations')) and not ((j==0 and r.get('startLevel')==0) or (j==len(r['points'])-1 and r.get('endLevel')==0)) and heights[k]-ground(*r['points'][j])>.5
+    if 'landing' in plan.spec and not plan.on_deck[e]:street_stretch(plan,e)
  leads=defaultdict(list)
  def solve_ramp(plan):
   plan.fixed={};land(plan)
@@ -1247,7 +1298,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None):
  lidded=lids(plans,surface,surface_lines,city['elevation'],graded,buildings);ground=I.Terrain(city['elevation'],lidded)
  def read():
   for plan in plans:
-   x=cross_sections(plan,.5);g=np.array([[ground(float(a),float(b)) for a,b in row] for row in x]);plan.edge=g.max(1).tolist();plan.high=g[:,1:6].max(1).tolist();plan.low=g.min(1).tolist()
+   x=cross_sections(plan,.5);g=np.array([[ground(float(a),float(b)) for a,b in row] for row in x]);plan.edge=g.max(1).tolist();plan.high=g[:,1:6].max(1).tolist();plan.low=g.min(1).tolist();plan.mid=np.median(g[:,1:6],axis=1).tolist()
    plan.forced=[False]*len(plan.points);classify_ground(plan)
  read()
  # and the holes the lids leave between them over a tunnel
@@ -1287,7 +1338,8 @@ def classify_ground(plan):
  - a station at or below source level 0 with ground WALLED over the road at either edge of its pavement: the
    cut's wall stands in the 6 m grid's reach of the roadway, so the runtime cuts the ground at the pavement edge
    instead of the grid being graded around a deck.
- A deck shorter than GAP between two such stretches stays part of them. A street landing is never part of a deep stretch.
+ A deck shorter than GAP between two such stretches stays part of them. A street landing is never part of a deep stretch;
+ a street stretch (street_stretch) is the first part of the tunnel record its road goes down into.
  Every other station is a deck (plan.in_cut: one whose ground stands at its surface)."""
  n=len(plan.points);roof=plan.clearance+ROOF;below=[plan.y[i]<plan.high[i]+SUNK for i in range(n)];plan.tunnel=[False]*n
  for e in (0,1):
@@ -1326,6 +1378,17 @@ def classify_ground(plan):
    lo,hi=(b,k) if b<k else (k,a)
    if a<=k<=b or plan.along[hi]-plan.along[lo]>=SHORT:continue
    for i in range(lo,hi+1):plan.tunnel[i]=True
+ # A street stretch (street_stretch) belongs to the tunnel record its road goes down into, which lands on the street with
+ # `surfaceLandings`: so do the stations between the two, the top of the same cut, where they span less than GAP.
+ for e in (0,1):
+  k=0 if e==0 else n-1;step=1 if e==0 else -1
+  if not plan.street[k] or plan.tunnel[k]:continue
+  i=k
+  while 0<=i<n and plan.street[i]:i+=step
+  j=i
+  while 0<=j<n and not plan.tunnel[j]:j+=step
+  if 0<=j<n and abs(float(plan.along[j]-plan.along[i-step]))<GAP and all(plan.level[q]<=0 for q in range(min(k,j),max(k,j)+1)):
+   for q in range(min(k,j),max(k,j)+1):plan.tunnel[q]=True
  plan.covered=[plan.tunnel[i] and (plan.fits[i] or (plan.deep[i] and plan.y[i]+roof<=plan.low[i]-.05)) for i in range(n)]
  plan.in_cut=[(not plan.tunnel[i]) and below[i] for i in range(n)]
 
@@ -1386,16 +1449,25 @@ def record(plan,a,b,id,levels,name):
 
 
 def landing_interval(plan,rec,a,b,e,streets):
- """The stretch of a tunnel record's street landing that lies over the street's pavement: [start, end] distances along the record."""
- line=LineString(rec['points']);total=line.length;extent=0.
- for r,_ in streets:
-  other=LineString(r['points']);radius=(r['width']+rec['width'])/2+.4;part=line.intersection(other.buffer(radius))
-  for g in getattr(part,'geoms',[part]):
-   if g.geom_type!='LineString' or g.is_empty:continue
-   lo,hi=sorted([line.project(Point(g.coords[0])),line.project(Point(g.coords[-1]))]);start,end=(lo,hi) if e==0 else (total-hi,total-lo)
-   if start<=.5:extent=max(extent,end)
- extent=min(max(extent,6.0),total)
- return [0,round(extent,3)] if e==0 else [round(total-extent,3),round(total,3)]
+ """The stretch of a tunnel record's street landing that lies on the street: [start, end] distances along the record
+ (stations a..b of the plan, landing at its end `e`). It reaches as far as the road runs over the street's roadway (the
+ reviewed `landing` of its spec, or pavement_reach) and no further than the ground stays within LANDING_LIP over it
+ (plan.mid, the median across the lanes): the runtime keeps the ground whole over a landing and builds no wall beside
+ it, so a landing that ran on over a road already below the ground left the ground standing over the road. Such a
+ landing ends where the ground first stood LANDING_STEP over the road."""
+ line=LineString(rec['points']);total=line.length
+ extent=min(float(plan.spec['landing']),total) if 'landing' in plan.spec else pavement_reach(line,rec['width'],e,streets)
+ if not plan.on_deck[e]:
+  end=float(plan.along[a if e==0 else b]);track=[]
+  for i in (range(a,b+1) if e==0 else range(b,a-1,-1)):
+   d=abs(float(plan.along[i])-end);over=plan.mid[i]-plan.y[i]
+   if d>extent:break
+   track.append((d,over))
+   if over<=LANDING_LIP or len(track)<2:continue
+   # back to the last station the road was level with the ground at, and on to where the ground passes the step
+   k=max(j for j,(_,o) in enumerate(track) if o<=LANDING_STEP) if track[0][1]<=LANDING_STEP else 0
+   (d0,o0),(d1,o1)=track[k],track[k+1];extent=max(.5,d0+(d1-d0)*((LANDING_STEP-o0)/(o1-o0) if o0<LANDING_STEP<o1 else 0.));break
+ extent=float(extent);return [0,round(extent,3)] if e==0 else [round(total-extent,3),round(total,3)]
 
 
 def records(plans,neighborhoods):
@@ -1653,6 +1725,15 @@ def validate(data_dir,city,record,ground):
   if r.get('tunnel'):
    total=stations(r['points'])[-1];assert r.get('highway') in ('i90','route1a','storrow') and 'bridge' not in r and r['tunnel']['clearance'] in (CLEARANCE,STORROW_CLEARANCE),f"{r['id']} tunnel record"
    assert all(0<=a<b<=total+.01 for a,b in r['tunnel']['covered']+r['tunnel'].get('surfaceLandings',[])),f"{r['id']} covered intervals"
+   # A landing on the ground (a record end at level 0) lies on its street: the runtime keeps the ground whole over it.
+   along=stations(r['points']);t=I.tangents(r['points']);w=r['deckWidths']
+   for a,b in r['tunnel'].get('surfaceLandings',[]):
+    if not ((a<.01 and r['startLevel']==0) or (b>total-.01 and r['endLevel']==0)):continue
+    for d in [*np.arange(a,b,1.0).tolist(),b]:
+     i=min(len(along)-2,max(0,int(np.searchsorted(along,d,'right'))-1));x,z=(float(np.interp(d,along,[q[k] for q in r['points']])) for k in (0,1))
+     y=float(np.interp(d,along,r['elevations']));half=float(np.interp(d,along,w))/3   # (the lanes: the middle two thirds of the pavement)
+     over=float(np.median([ground(x-t[i][1]*o,z+t[i][0]*o) for o in np.linspace(-half,half,5).tolist()]))-y
+     assert over<=LANDING_LIP+.05,f"the ground stands {over:.2f} m over {r['id']} inside its street landing, {d:.1f} m along it"
   else:assert r['bridge']['kind']==KIND and r['bridge']['id'] in ('i90','route1a','storrow'),f"{r['id']} bridge kind"
  assert all(r['bridge']['kind']==APPROACH for r in city['roads'] if stage_owned(r) and not r['id'].startswith(PREFIXES)),'a street deck the stage owns must be an overpass approach'
  closed=sorted((r['id'],r['closed']) for r in roads if r.get('closed'));ends=sorted((c['road'],c['end']) for c in record['closed'])

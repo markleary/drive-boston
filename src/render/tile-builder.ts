@@ -35,6 +35,8 @@ import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
 import { createI93ExitSign } from './i93-exit-signs';
 import { planI93ExitSigns } from '../simulation/i93-exit-signs';
+import { createEntranceSign } from './entrance-signs';
+import { planEntranceSigns, entranceSignStands } from '../simulation/entrance-signs';
 import { createWarningSign } from './highway-signs';
 import { planHighwaySigns } from '../simulation/highway-signs';
 import { highwayMasts, mastHead, MAST_ARM, MAST_HEIGHT, MAST_LIGHT, type LampLight } from '../simulation/highway-lighting';
@@ -124,7 +126,7 @@ export function createTileBuilder(ctx: TileContext) {
   const foundation = new THREE.MeshStandardMaterial({ color: '#827c6d', roughness: .95, side: THREE.DoubleSide });
   const chelseaLiftSteel = new THREE.MeshStandardMaterial({ color: '#9ea7a3', roughness: .72, metalness: .3 });
   const signSteel = new THREE.MeshStandardMaterial({ color: '#a9b4b6', roughness: .68, metalness: .25 });
-  const exitSigns = planI93ExitSigns(city.roads), warningSigns = planHighwaySigns(city);
+  const exitSigns = planI93ExitSigns(city.roads), warningSigns = planHighwaySigns(city), entranceSigns = planEntranceSigns(city.roads);
   // Painted while the game loads (the arena's finishes, the northern towns' house walls and roofs: about 40 ms of
   // canvas work each); a phone, which may never see either, paints them with the first tile that needs them.
   if (!ctx.mobile) { prepareTdGardenFinishes(); materials.houses(); }
@@ -257,6 +259,14 @@ export function createTileBuilder(ctx: TileContext) {
       const exit = createI93ExitSign(sign, height, signSteel);
       group.add(exit.group);
       owned.push(exit.material);
+    }
+    // The gantry over a highway entrance's mouth (none where a bridge stands in its panel or a building on a post's place).
+    for (const sign of entranceSigns) {
+      if (!insideTile(sign.approach.x, sign.approach.z) || !entranceSignStands(city, sign)) continue;
+      if (due(pace)) yield 'structures';
+      const entrance = createEntranceSign(sign, height, signSteel);
+      group.add(entrance.group);
+      owned.push(entrance.material);
     }
     // Storrow Drive's CARS ONLY and LOW CLEARANCE warnings (their yellow faces are shared by every tile, so none is this tile's to dispose).
     for (const place of warningSigns) if (insideTile(place.approach.x, place.approach.z)) group.add(createWarningSign(place, height, signSteel));
