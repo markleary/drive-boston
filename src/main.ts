@@ -22,7 +22,7 @@ import { addStreetscape } from './render/streetscape';
 import { createGraphics, type QualityMode } from './render/graphics';
 import { releaseSceneContext } from './render/context-resources';
 import { createContextGate } from './render/context-gate';
-import {applyChaseViewOffset,groundChaseFraming,portraitChaseInset,vehicleScreenBounds} from './render/chase-framing';
+import {applyChaseViewOffset,boomCeiling,groundChaseFraming,portraitChaseInset,vehicleScreenBounds} from './render/chase-framing';
 import { sceneAttributeBytes } from './render/scene-memory';
 import { createSessionJournal } from './simulation/session-journal';
 import { addFacadeDetails } from './render/facade-details';
@@ -344,6 +344,8 @@ async function boot(){
         run:keys.has('ShiftLeft')||keys.has('ShiftRight')||touch.lift<0||gamepadInput.run,jump:keys.has('Space')||touch.lift>0||gamepadInput.jump};
     }
     const target=new THREE.Vector3(),desired=new THREE.Vector3(),look=new THREE.Vector3(),cameraDirection=new THREE.Vector3();
+    // A chase boom keeps under a tunnel roof lower than it reaches (Storrow Drive's): `vehicle` is the tunnel record the vehicle or the walker is in.
+    const underRoof=(vehicle:ReturnType<typeof tunnelAt>)=>{const limit=boomCeiling(tunnelAt(city,desired.x,desired.z,target.y),vehicle);if(limit!==undefined)desired.y=Math.min(desired.y,limit);};
     const cameraRay=new Ray(target,cameraDirection);
     let warmNightPasses=false;
     let previous=performance.now(),accumulator=0,elapsed=0,saveTimer=0,frameCount=0,fpsTimer=0,fps=0,distance=0,frameMs=0,averageFrameMs=0;
@@ -437,11 +439,11 @@ async function boot(){
         const follow=(3.4+Math.min(1.4,state.speed*.24))*zoom;
         desired.set(state.x-Math.sin(yaw)*Math.cos(orbitPitch)*follow,state.y+1.75+Math.sin(orbitPitch)*follow,state.z-Math.cos(yaw)*Math.cos(orbitPitch)*follow);
         // Aim at the head, so the whole walker stands just below the middle of the view with the street open ahead.
-        look.set(state.x,state.y+1.65,state.z);camera.fov=58;
+        look.set(state.x,state.y+1.65,state.z);camera.fov=58;underRoof(interior);
       }else{
         const framing=groundChaseFraming(riding,state.speed,zoom,viewOffset,portraitInset>0);
         const lookYaw=portraitInset>0?yaw:heading;
-        desired.set(state.x-Math.sin(yaw)*framing.follow,state.y+framing.height,state.z-Math.cos(yaw)*framing.follow);look.set(state.x+Math.sin(lookYaw)*framing.ahead,state.y+framing.lookHeight,state.z+Math.cos(lookYaw)*framing.ahead);camera.fov=55+Math.min(5,Math.abs(state.speed)*.13);
+        desired.set(state.x-Math.sin(yaw)*framing.follow,state.y+framing.height,state.z-Math.cos(yaw)*framing.follow);look.set(state.x+Math.sin(lookYaw)*framing.ahead,state.y+framing.lookHeight,state.z+Math.cos(lookYaw)*framing.ahead);camera.fov=55+Math.min(5,Math.abs(state.speed)*.13);underRoof(interior);
       }
       // First person is attached to the rider. Chase smoothing would leave the
       // camera meters behind the bike as speed increases.

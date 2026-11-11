@@ -1,9 +1,11 @@
 import './helpers/npc-fleet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as THREE from 'three';
 import {loadMetroCity} from './helpers/metro-city.mjs';
+import {addTunnels,highwayLegend} from '../src/render/tunnels.ts';
 import {isHighwayDeck,isMotorway,openStretches,stations} from '../src/simulation/motorway.ts';
-import {tunnelCoveredAt,tunnelGeometry,tunnelStations} from '../src/simulation/tunnels.ts';
+import {tunnelCoveredAt,tunnelGeometry,tunnelPointAt,tunnelStations} from '../src/simulation/tunnels.ts';
 import {deckUndersideAt,roadProjection,roadWidthAt,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 import {planI93ExitSigns} from '../src/simulation/i93-exit-signs.ts';
 import {planHighwaySigns,warningLegend} from '../src/simulation/highway-signs.ts';
@@ -115,6 +117,34 @@ test('exit signs and lighting masts stand on the installed carriageways in the o
     assert.ok(list.every(m=>Number.isFinite(m.x+m.y+m.z)));if(!/^i90-(eb|wb)-\d+$/.test(road.id))assert.equal(list.length,0,`${road.id} carries no masts`);
   }
   assert.ok(masts>350&&lit>60,`the Turnpike is lit along its length (${masts} masts on ${lit} records)`);
+});
+
+test('the tunnels sign every installed exit by its number or by none, the two of a fork side by side, and no panel among the cars',()=>{
+  for(const road of highway){
+    const legend=highwayLegend(road);
+    if(/· Exit /.test(road.name))assert.match(legend[0],/^EXIT(?: \d+[A-Z]?)?  ↗$/,`${road.id}: ${road.name}`);
+    assert.ok(legend.every(line=>line&&!/^(to|the) /.test(line)),`${road.id}: ${legend.join(' / ')}`);
+  }
+  const view=addTunnels(new THREE.Scene(),city);
+  try{
+    const panels=[];view.group.traverse(o=>{if(o.userData.tunnelSignFace&&o.userData.roadId)panels.push(o);});
+    assert.ok(panels.some(o=>o.name==='EXIT  ↗ / Beacon Street / Arlington Street'),'Storrow Drive\'s exit inside its tunnel carries no number');
+    assert.ok(!panels.some(o=>/^EXIT [a-z]/.test(o.name)));
+    // Different legends on one road never share a place: where a ramp tunnel forks, its two exits hang side by side.
+    let forks=0;
+    for(let i=0;i<panels.length;i++)for(let j=i+1;j<panels.length;j++){
+      const a=panels[i],b=panels[j];if(a.userData.roadId!==b.userData.roadId||a.name===b.name)continue;
+      const apart=a.position.distanceTo(b.position),room=(a.geometry.parameters.width+b.geometry.parameters.width)/2;
+      assert.ok(apart>=room,`${a.name} and ${b.name} on ${a.userData.roadId} hang ${apart.toFixed(2)} m apart`);
+      if(a.userData.station===b.userData.station){forks++;assert.ok(/↖/.test(a.name)!==/↖/.test(b.name),`${a.name} and ${b.name} point apart`);}
+    }
+    assert.ok(forks>=3,`the Turnpike's ramp tunnels fork (${forks} gantries with two legends)`);
+    for(const panel of panels){
+      const road=byId.get(panel.userData.roadId)??city.roads.find(r=>r.id===panel.userData.roadId),floor=tunnelPointAt(road,panel.userData.station).y,bottom=panel.position.y-panel.geometry.parameters.height/2-floor;
+      assert.ok(bottom>=2.25-1e-6,`${panel.name} on ${road.id} hangs ${bottom.toFixed(2)} m over the road`);
+      assert.ok(panel.position.y+panel.geometry.parameters.height/2-floor<road.tunnel.clearance,`${panel.name} on ${road.id} hangs under its roof`);
+    }
+  }finally{view.group.traverse(o=>{o.geometry?.dispose();for(const m of Array.isArray(o.material)?o.material:o.material?[o.material]:[])m.dispose();});}
 });
 
 test('a street bridge over the cut spans it: Tremont Street, the walls beneath every bridge and the masts',()=>{

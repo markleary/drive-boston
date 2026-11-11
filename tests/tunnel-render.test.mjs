@@ -105,6 +105,10 @@ test('solid edge paint opens at a shared merge but remains on independent stacke
   }finally{dispose(merged.group);dispose(stacked.group);}
 });
 
+// Tunnel records shaped like the generated highways' (scripts/build-boston-highways.py), 6 m down and roofed throughout.
+const highwayRecord=(id,name,points,extra={})=>({id,name,kind:'motorway_link',highway:'i90',points,elevations:points.map(()=>-6),width:7,oneway:1,lanes:1,tunnel:{clearance:4.2,covered:[[0,1e4]]},...extra});
+const signFaces=(view,road)=>{const found=[];view.group.traverse(o=>{if(o.userData.tunnelSignFace&&o.userData.roadId===road.id)found.push(o);});return found;};
+
 test('a generated highway exit is signed by its number, or by none where its name gives none',()=>{
   const legend=name=>highwayLegend({name}).join(' / ');
   assert.equal(legend('I-90 East · Exit 133 Prudential Center / Copley Square'),'EXIT 133  ↗ / Prudential Center / Copley Square');
@@ -116,4 +120,38 @@ test('a generated highway exit is signed by its number, or by none where its nam
   assert.equal(legend('I-90 · Entrance to I-93 North'),'I-93  NORTH / Zakim Bridge  ↑');
   assert.equal(legend('Storrow Drive East · Back Bay'),'Storrow Drive  EAST / Government Center  ↑');
   assert.equal(legend('I-90 West'),'I-90  WEST / Back Bay · Worcester  ↑');
+});
+
+test('two ramps that part at one place share a gantry, each legend over the side its ramp leaves by',()=>{
+  // Both parents run south (+z), so east (+x) is on their left. One forks into two exits, the other lets a single ramp go.
+  const parent=highwayRecord('i90-eb-exit-135','I-90 East · Exit 135 South Boston',[[0,0],[0,100],[0,200]]);
+  const left=highwayRecord('i90-eb-exit-135-congress','I-90 East · Exit 135 to Congress Street',[[0,200],[6,230],[20,260]]);
+  const right=highwayRecord('i90-eb-exit-135-haul-road','I-90 East · Exit 135 to the South Boston Haul Road',[[0,200],[-6,230],[-20,260]]);
+  const lone=highwayRecord('i90-eb-exit-137','I-90 East · Exit 137 Logan Airport',[[100,0],[100,100],[100,200]]),only=highwayRecord('i90-eb-exit-137-hotel','I-90 East · Exit 137 to Hotel Drive',[[100,200],[106,230],[120,260]]);
+  const view=addTunnels(new THREE.Scene(),{...city,roads:[parent,left,right,lone,only]});
+  try{
+    const on=(road,name)=>{const found=signFaces(view,road).filter(o=>o.name===name);assert.equal(found.length,1,`${name} on ${road.id}`);return found[0];};
+    const a=on(parent,'EXIT 135  ↖ / Congress Street'),b=on(parent,'EXIT 135  ↗ / South Boston Haul Road'),whole=on(lone,'EXIT 137  ↖ / Hotel Drive');
+    assert.equal(a.userData.station,160);assert.equal(b.userData.station,160,'both are signed 40 m before the fork');
+    assert.ok(a.position.x>0&&b.position.x<0,'the left exit hangs over the left of the road, the right exit over the right');
+    const wide=whole.geometry.parameters.width,half=a.geometry.parameters.width;
+    assert.equal(wide,6,'a ramp that leaves alone keeps the whole gantry');assert.equal(whole.position.x,100);
+    assert.equal(b.geometry.parameters.width,half);assert.ok(half<wide/2&&half>wide/2-.2);
+    assert.ok(a.position.x-b.position.x>=half,'the two panels do not overlap');assert.ok(a.position.x+half/2<=wide/2+1e-9&&b.position.x-half/2>=-wide/2-1e-9,'and stay within the gantry');
+    assert.equal(a.position.y,b.position.y);assert.equal(a.geometry.parameters.height,whole.geometry.parameters.height,'a half panel keeps its height, and so its letter size');
+  }finally{dispose(view.group);}
+});
+
+test('an overhead panel shrinks under a low roof instead of hanging among the cars',()=>{
+  const low=highwayRecord('storrow-eb-20','Storrow Drive East · Back Bay',[[0,0],[0,100],[0,160]],{kind:'motorway',highway:'storrow',lanes:2,width:6.65,tunnel:{clearance:3.2,covered:[[0,1e4]]}});
+  const high=highwayRecord('i90-eb-40','I-90 East · Downtown',[[50,0],[50,100],[50,160]],{kind:'motorway',lanes:3,width:15.2});
+  const view=addTunnels(new THREE.Scene(),{...city,roads:[low,high]});
+  try{
+    const measure=road=>{const faces=signFaces(view,road);assert.ok(faces.length>=1,`${road.id} is signed`);const {width,height}=faces[0].geometry.parameters;return {width,height,bottom:faces[0].position.y-height/2+6,top:faces[0].position.y+height/2+6};};
+    const under=measure(low),turnpike=measure(high);
+    assert.ok(Math.abs(turnpike.width-6.6)<1e-9&&Math.abs(turnpike.height-1.65)<1e-9,'a 4.2 m roof leaves room for the whole panel');
+    assert.ok(under.bottom>=2.25-1e-9,`the panel hangs ${under.bottom.toFixed(2)} m over the road under a 3.2 m roof`);assert.ok(turnpike.bottom>=2.25-1e-9);
+    assert.ok(under.top<3.2&&turnpike.top<4.2,'and under the roof');
+    assert.ok(Math.abs(under.width/under.height-4)<1e-9&&under.width<3,'it keeps its proportions, so its legend is not squeezed');
+  }finally{dispose(view.group);}
 });

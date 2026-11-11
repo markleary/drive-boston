@@ -14,6 +14,18 @@ export function groundChaseFraming(riding:boolean,speed:number,zoom:number,lookO
   return{follow:distance*1.55*portraitZoom,height:(riding?3.3:4.6)*portraitZoom,ahead:(riding?2:6)*Math.max(0,Math.cos(lookOffset)),lookHeight:riding?.65:1};
 }
 
+/** Room kept between a third-person camera and a tunnel roof (metres): more than the near plane reaches, so the view never opens the ceiling. */
+export const ROOF_ROOM=.45;
+type Overhead={ceiling:number;covered:boolean};
+/** The height a third-person camera may not pass in a tunnel, `undefined` in the open. A roof lower than the boom reaches (Storrow Drive's
+ * tunnel is 3.2 m high) must not be left to the obstruction ray: it stops the camera 0.4 m short along a ray that meets the roof at a shallow
+ * angle, a few centimetres under the ceiling. `over` is the tunnel record under the boom's end, `vehicle` the one the vehicle is in: the camera
+ * keeps under the roof at its own place while that place or the vehicle's is roofed (it enters after the vehicle and leaves after it). */
+export function boomCeiling(over:Overhead|undefined,vehicle:Overhead|undefined){
+  const roof=over&&(over.covered||vehicle?.covered)?over:vehicle?.covered?vehicle:undefined;
+  return roof&&roof.ceiling-ROOF_ROOM;
+}
+
 /** Shift the optical centre into the road area without cropping the canvas.
  * The same projection is used for rendering, culling and screen-space checks. */
 export function applyChaseViewOffset(camera:PerspectiveCamera,width:number,height:number,bottomInset:number){

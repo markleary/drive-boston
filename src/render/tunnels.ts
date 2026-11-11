@@ -52,15 +52,16 @@ function wallParts(data:MeshData,road:Road):[MeshData,MeshData]{
   return[{vertices:data.vertices,indices:new Uint32Array(tiled)},{vertices:data.vertices,indices:new Uint32Array(open)}];
 }
 
-/** A printed highway sign face: green, or a warning's amber on charcoal. */
-export function signMaterial(lines:string[],warning=false,mobile=false){
+/** A printed highway sign face: green, or a warning's amber on charcoal. `half` paints a panel half as wide
+ * with letters of the same size: one of two legends side by side on a gantry. */
+export function signMaterial(lines:string[],warning=false,mobile=false,half=false){
   // Headless geometry tests do not need a canvas; the game always has one.
   if(typeof document==='undefined')return new THREE.MeshBasicMaterial({color:warning?'#d5a94f':'#17634e'});
-  const scale=mobile ? .5 : 1;
-  const canvas=document.createElement('canvas');canvas.width=1024*scale;canvas.height=256*scale;const ctx=canvas.getContext('2d')!;ctx.scale(scale,scale);
-  ctx.fillStyle=warning?'#242823':'#12563f';ctx.fillRect(0,0,1024,256);ctx.strokeStyle=warning?'#f2ba4a':'#e1e9d9';ctx.lineWidth=7;ctx.strokeRect(12,12,1000,232);
+  const scale=mobile ? .5 : 1,wide=half?512:1024;
+  const canvas=document.createElement('canvas');canvas.width=wide*scale;canvas.height=256*scale;const ctx=canvas.getContext('2d')!;ctx.scale(scale,scale);
+  ctx.fillStyle=warning?'#242823':'#12563f';ctx.fillRect(0,0,wide,256);ctx.strokeStyle=warning?'#f2ba4a':'#e1e9d9';ctx.lineWidth=7;ctx.strokeRect(12,12,wide-24,232);
   ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=warning?'#ffcf69':'#f2f4e6';
-  for(let i=0;i<lines.length;i++){ctx.font=`600 ${lines.length>2?43:i===0?56:48}px Arial, sans-serif`;ctx.fillText(lines[i],512,lines.length===1?128:62+i*(140/(lines.length-1)),966);}
+  for(let i=0;i<lines.length;i++){ctx.font=`600 ${lines.length>2?43:i===0?56:48}px Arial, sans-serif`;ctx.fillText(lines[i],wide/2,lines.length===1?128:62+i*(140/(lines.length-1)),wide-58);}
   const map=new THREE.CanvasTexture(canvas);map.colorSpace=THREE.SRGBColorSpace;
   return new THREE.MeshBasicMaterial({map,toneMapped:false});
 }
@@ -93,10 +94,15 @@ const numberedExits = new Map([
   ['central-artery-purchase-west-south-off', '16A'],
 ]);
 
+/** Exit signs within this distance along one road stand for ramps that part at one place (metres). */
+const FORK=1;
+/** The lowest an overhead panel hangs over the road (metres): under a low roof (Storrow Drive's 3.2 m) the panel shrinks instead of hanging among the cars. */
+const SIGN_HEADROOM=2.25;
+
 /** Match each mapped exit to its bore or parent exit ramp at the start. Height is
  * essential: north/south bores sometimes overlap in plan at different levels. */
 export function tunnelExitSigns(city:CityData){
-  const parents=city.roads.filter(r=>r.tunnel&&(r.tunnel.capStart||r.tunnel.capEnd||/exit/i.test(r.name)||(!!r.highway&&r.kind==='motorway'))),signs:{road:Road;station:number;lines:string[];rampId:string}[]=[];
+  const parents=city.roads.filter(r=>r.tunnel&&(r.tunnel.capStart||r.tunnel.capEnd||/exit/i.test(r.name)||(!!r.highway&&r.kind==='motorway'))),signs:{road:Road;station:number;lines:string[];rampId:string;right:number}[]=[];
   for(const ramp of city.roads){
     if(!ramp.tunnel||!ramp.elevations||!/exit/i.test(ramp.name))continue;
     const start=tunnelPointAt(ramp,0);let best:{road:Road;station:number;score:number}|undefined;
@@ -112,7 +118,7 @@ export function tunnelExitSigns(city:CityData){
     const number=numberedExits.get(ramp.id),target=ramp.name.split('·')[0].trim();
     const parts=number==='17'?['Government Center','North End']:target.split('/').map(s=>s.trim()).slice(0,2);
     const lines=ramp.highway?highwayLegend(ramp).map((line,i)=>i===0&&right<0?line.replace('↗','↖'):line):[`EXIT${number?' '+number:''} ${right>=0?'↗':'↖'}`,...parts];
-    signs.push({road:best.road,station:best.station-40,lines,rampId:ramp.id});
+    signs.push({road:best.road,station:best.station-40,lines,rampId:ramp.id,right});
   }
   return signs;
 }
@@ -140,21 +146,23 @@ export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false,headl
   const place=(material:THREE.Material,w:number,h:number,d:number,p:{x:number;y:number;z:number;yaw:number},rise=0,across=0,slope=0)=>{
     matrix.makeRotationFromEuler(new THREE.Euler(-slope,p.yaw,0,'YXZ'));matrix.setPosition(p.x+Math.cos(p.yaw)*across,p.y+rise,p.z-Math.sin(p.yaw)*across);batches.part(box(w,h,d),material,matrix);
   };
-  const signPanel=(width:number,height:number,lines:string[],warning=false)=>{
+  const signPanel=(width:number,height:number,lines:string[],warning=false,half=false)=>{
     // Highway signs have one printed face. A solid metal panel hides that
     // texture from drivers approaching the rear, including wrong-way travel.
-    const face=new THREE.Mesh(new THREE.PlaneGeometry(width,height),signMaterial(lines,warning,mobile));
+    const face=new THREE.Mesh(new THREE.PlaneGeometry(width,height),signMaterial(lines,warning,mobile,half));
     face.userData.tunnelSignFace=true;
     const back=new THREE.Mesh(new THREE.BoxGeometry(width,height,.08),darkMetal);
     back.name='Tunnel sign backing';back.position.z=-.055;face.add(back);
     return face;
   };
-  const sign=(road:Road,s:number,lines:string[],warning=false,backwards=false)=>{
-    const p=tunnelPointAt(road,s),width=Math.min(road.width-1,6.6),height=width/4;
-    const object=signPanel(width,height,lines,warning);object.name=lines.join(' / ');
+  // `half` hangs a half panel over the left (1) or the right (-1) of the road: one of two legends on a shared gantry.
+  const sign=(road:Road,s:number,lines:string[],warning=false,backwards=false,half=0)=>{
+    const p=tunnelPointAt(road,s),span=Math.min(road.width-1,6.6,4*(road.tunnel!.clearance-.28-SIGN_HEADROOM)),height=span/4,width=half?span/2-.08:span,across=half*span/4;
+    const object=signPanel(width,height,lines,warning,half!==0);object.name=lines.join(' / ');
     object.userData.roadId=road.id;object.userData.station=s;object.userData.backwards=backwards;
-    object.position.set(p.x,p.y+road.tunnel!.clearance-height/2-.28,p.z);object.rotation.y=p.yaw+(backwards?0:Math.PI);group.add(object);signs++;
-    place(darkMetal,tunnelCoveredAt(road,s)?width+.15:p.width+.9,.08,.12,p,road.tunnel!.clearance-.2);
+    object.position.set(p.x+Math.cos(p.yaw)*across,p.y+road.tunnel!.clearance-height/2-.28,p.z-Math.sin(p.yaw)*across);object.rotation.y=p.yaw+(backwards?0:Math.PI);group.add(object);signs++;
+    if(half>0)return; // its twin on the right hangs the gantry
+    place(darkMetal,tunnelCoveredAt(road,s)?span+.15:p.width+.9,.08,.12,p,road.tunnel!.clearance-.2);
     if(!tunnelCoveredAt(road,s))for(const side of [-1,1])place(darkMetal,.14,road.tunnel!.clearance,.14,p,road.tunnel!.clearance/2,side*(p.width/2+.35));
   };
   const paint=(a:{x:number;y:number;z:number},b:{x:number;y:number;z:number},width:number)=>{
@@ -212,7 +220,13 @@ export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false,headl
       group.add(tunnelContinuation(road,atStart,{walls,ceiling,asphalt}));
     }
   }
-  const exits=tunnelExitSigns(city);for(const exit of exits)sign(exit.road,exit.station,exit.lines);
+  // Ramps that part at one place (a ramp tunnel that forks) are signed 40 m before it at the same station:
+  // the two legends share the gantry, each over the side its ramp leaves by, instead of one panel hiding the other.
+  const exits=tunnelExitSigns(city);
+  for(const exit of exits){
+    const row=exits.filter(other=>other.road===exit.road&&Math.abs(other.station-exit.station)<FORK).sort((a,b)=>a.right-b.right);
+    sign(exit.road,exit.station,exit.lines,false,false,row.length<2?0:row[0]===exit?1:-1);
+  }
   const fixtureCells=batches.meshes(),ahead=new THREE.Vector3();
   for(const object of fixtureCells){object.name='Tunnel fixtures and markings';object.castShadow=false;object.receiveShadow=true;group.add(object);}
   const fill=new THREE.PointLight('#fff1d3',0,52,1.4);fill.name='Nearby tunnel light';group.add(fill);

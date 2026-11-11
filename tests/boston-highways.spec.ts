@@ -107,8 +107,13 @@ test('the Turnpike and Storrow Drive: the car rides their decks, cuts and tunnel
  const [from,to]=tunnel.tunnel!.covered.find(([a,b])=>b-a>100)!;
  for(const share of [.15,.5,.8]){
   const inside=await place(tunnel,from+(to-from)*share);
-  await drive(22,inside);await rides(family('storrow-eb'),'in the Storrow Drive tunnel');
+  await drive(22,inside);const s=await rides(family('storrow-eb'),'in the Storrow Drive tunnel');
+  // The chase camera's boom reaches higher than this roof: it keeps under the ceiling instead of opening it.
+  const eye=nearest(family('storrow-eb'),s.cameraPosition.x,s.cameraPosition.z);
+  expect(eye.y+tunnel.tunnel!.clearance-s.cameraPosition.y,'the camera rides under the low roof').toBeGreaterThan(.3);
  }
+ // Its exit inside the tunnel is unnumbered: the overhead panel reads EXIT, not the 'to' of the record's name.
+ expect(await page.evaluate(()=>{let unnumbered=0,wrong=0;(window as any).__backbay.scene.traverse((o:any)=>{if(o.name==='EXIT  ↗ / Beacon Street / Arlington Street')unnumbered++;if(/^EXIT [a-z]/.test(o.name))wrong++;});return [unnumbered>0,wrong];})).toEqual([true,0]);
  await page.screenshot({path:testInfo.outputPath('storrow-tunnel.png')});
  expect(errors).toEqual([]);
 });
