@@ -420,11 +420,15 @@ export function tunnelGeometry(city:CityData,road:Road){
   if(!road.tunnel||!road.elevations)return{walls:walls.result(),roof:roof.result(),barriers:barriers.result(),caps:caps.result()};
   const clearance=road.tunnel.clearance,stations=tunnelStations(road),total=stations.at(-1)!;
   const surfaceTerminal=(s:number)=>{const p=tunnelPointAt(road,s);return !tunnelCoveredAt(road,s)&&Math.abs(p.y-sampleElevation(city,p.x,p.z))<.6;};
-  // A highway's walled cut meets a deck with its own barrier at each end, not a street: its walls keep their height there
-  // (a street landing of one is a surfaceLandings stretch, which has no wall at all).
-  const openStart=!road.highway&&!road.tunnel.capStart&&surfaceTerminal(0),openEnd=!road.highway&&!road.tunnel.capEnd&&surfaceTerminal(total);
+  // A highway's walled cut meets a deck with its own barrier at each end, not a street: its walls keep their height there.
+  // Where it lands on a street instead (a surfaceLandings stretch at an end on the ground, which has no wall at all), its
+  // walls rise from the street's surface beyond the landing as an artery ramp's do from its end: a sloped nose where the
+  // slot opens, not a full wall end beside the lanes that pass it.
+  const landings=road.tunnel.surfaceLandings??[],landedStart=road.startLevel===0?landings.find(([a])=>a<.01)?.[1]:undefined,landedEnd=road.endLevel===0?landings.find(([,b])=>b>total-.01)?.[0]:undefined;
+  const openStart=!road.tunnel.capStart&&(road.highway?landedStart!==undefined:surfaceTerminal(0)),openEnd=!road.tunnel.capEnd&&(road.highway?landedEnd!==undefined:surfaceTerminal(total));
+  const from=road.highway?landedStart??0:0,to=road.highway?landedEnd??total:total;
   const profiles=new Map([-1,1].map(side=>[side,openWallProfiles(city,road,side,s=>{
-    const p=tunnelEdgeAt(road,s,side,-.08),ground=sampleElevation(city,p.x,p.z),terminal=Math.min(openStart?s:Infinity,openEnd?total-s:Infinity);
+    const p=tunnelEdgeAt(road,s,side,-.08),ground=sampleElevation(city,p.x,p.z),terminal=Math.min(openStart?s-from:Infinity,openEnd?to-s:Infinity);
     const outside=tunnelEdgeAt(road,s,side,-.7);
     // Preserve the curb-height street junction where intact ground is beside
     // the road. The upper envelope never lowers the guard over an excavation.

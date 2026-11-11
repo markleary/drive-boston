@@ -127,3 +127,44 @@ test('the Turnpike and Storrow Drive: the car rides their decks, cuts and tunnel
  await page.screenshot({path:testInfo.outputPath('storrow-tunnel.png')});
  expect(errors).toEqual([]);
 });
+
+test('a car on Dartmouth Street drives down the open ramp into the Turnpike, and one on the Haul Road down its entrance',async({page,request},testInfo)=>{
+ test.setTimeout(600000);await page.setViewportSize({width:1600,height:900});
+ const city=await(await request.get('/data/city.json')).json(),sidecar=await(await request.get('/data/boston-highways.json')).json();
+ const highway:Road[]=[...(city.roads as Road[]).filter(r=>/^(i90|storrow|route1a)-/.test(r.id)),...sidecar.roads];
+ const errors:string[]=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error|THREE\.WebGLProgram/i.test(m.text()))errors.push(m.text());});
+ await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
+ for(const [id,shot] of [['i90-wb-entrance-copley','dartmouth-street-entrance'],['i90-eb-entrance-135','haul-road-entrance']] as const){
+  const ramp=highway.find(r=>r.id===id)!,total=length(ramp),roof=Math.min(...ramp.tunnel!.covered.map(c=>c[0])),landing=(ramp.tunnel as any).surfaceLandings[0][1] as number;
+  expect(roof,`${id} goes down in the open before its roof`).toBeGreaterThan(landing+60);
+  // (the Haul Road entrance's first record ends 26 m under its roof)
+  const goal=Math.min(total-8,roof+25);expect(goal,`${id}: the run ends under the roof`).toBeGreaterThan(roof+12);
+  // On the street, 12 m before the ramp's first vertex and facing along it: no record is named, so the car stands on the ground.
+  const first=along(ramp,0),back=12,from={x:first.x-Math.sin(first.yaw)*back,z:first.z-Math.cos(first.yaw)*back};
+  await page.evaluate(([x,z,yaw])=>(window as any).__backbay.travelTo(x,z,yaw),[from.x,from.z,first.yaw] as const);await streamed(page);
+  const street=(await snapshot(page)).state;expect(Math.abs(street.y-.66-first.y),`${id}: the car starts on the street the ramp leaves`).toBeLessThan(.5);
+  await page.screenshot({path:testInfo.outputPath(`${shot}.png`)});
+  // Steered along the ramp at a town pace: it must stay on the roadway all the way under the roof, never left up on the ground over it.
+  const keys=new Set<string>(),set=async(k:string,on:boolean)=>{if(on&&!keys.has(k)){await page.keyboard.down(k);keys.add(k);}else if(!on&&keys.has(k)){await page.keyboard.up(k);keys.delete(k);}};
+  let worst=0,reached=0,drop=0,last:number|undefined;
+  try{
+   for(let t=0;t<900;t++){
+    const s=(await snapshot(page)).state,on=nearest([ramp],s.x,s.z),ahead=along(ramp,Math.min(total,on.at+7));
+    let turn=Math.atan2(ahead.x-s.x,ahead.z-s.z)-s.yaw;while(turn>Math.PI)turn-=2*Math.PI;while(turn<-Math.PI)turn+=2*Math.PI;
+    if(on.at>1&&on.at<total-1){worst=Math.max(worst,Math.abs(s.y-.66-on.y),on.distance/4);if(last!==undefined)drop=Math.max(drop,last-s.y);last=s.y;}
+    reached=Math.max(reached,on.at);
+    if(on.at>=goal)break;
+    await set('w',s.speed<9);await set('a',turn>.06);await set('d',turn<-.06);
+    await page.waitForTimeout(100);
+   }
+  }finally{for(const k of [...keys])await page.keyboard.up(k);}
+  expect(reached,`${id}: the car reaches the roofed stretch`).toBeGreaterThanOrEqual(goal);
+  expect(worst,`${id}: on the ramp's roadway all the way down (height off by, or a quarter of the distance from its centre line)`).toBeLessThan(.6);
+  expect(drop,`${id}: no fall into the cut`).toBeLessThan(.45);
+  await page.screenshot({path:testInfo.outputPath(`${shot}-under-the-roof.png`)});
+ }
+ expect((await snapshot(page)).tiles.failed).toBe(0);
+ expect(errors).toEqual([]);
+});

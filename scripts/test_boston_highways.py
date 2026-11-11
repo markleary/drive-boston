@@ -173,6 +173,37 @@ class CutTest(unittest.TestCase):
   self.assertEqual(H.street_pavements(({},set()),[deck],[street],lines,STRtree(lines),grid),set())
 
 
+class LandingTest(unittest.TestCase):
+ def ramp(self,spec=None):
+  p=plan(line(30),[7.0]*30,main=False,lanes=1);p.mid=[0.0]*30;p.spec={'bridge':'i90',**(spec or {})}
+  # crossed at its first vertex: the street's roadway reaches (12+7)/2+0.4 = 9.9 m along the ramp
+  return p,{'points':p.points,'width':7.0},[({'id':'s','name':'Cross Street','points':[[0,-40],[0,40]],'width':12},1)]
+ def test_a_landing_reaches_over_the_street_and_ends_where_the_ground_stands_over_the_road(self):
+  p,rec,streets=self.ramp();self.assertEqual(H.landing_interval(p,rec,0,29,0,streets),[0,9.9],'on the ground: as far as the street reaches')
+  # level for 6 m, then down at 6%: 0.18 m under the ground at 9 m, past the lip inside the street's reach
+  p.y=[-max(0,3*i-6)*.06 for i in range(30)];self.assertEqual(H.landing_interval(p,rec,0,29,0,streets),[0,round(6+3*H.LANDING_STEP/.18,3)],'back to where the ground first stood a step over it')
+  p.on_deck=[True,False];self.assertEqual(H.landing_interval(p,rec,0,29,0,streets),[0,9.9],'a ramp that starts on a bridge is not measured against the ground beneath it')
+  p.on_deck=[False,False];p.y=[-.1]*30;self.assertEqual(H.landing_interval(p,rec,0,29,0,streets),[0,9.9],'within the lip the two share the ground')
+  # at the other end of a route the interval is counted back from the record's end
+  q,rec,_=self.ramp();q.y=[-max(0,81-3*i)*.06 for i in range(30)];end=[({'id':'s','name':'Cross Street','points':[[87,-40],[87,40]],'width':12},1)]
+  self.assertEqual(H.landing_interval(q,rec,0,29,1,end),[round(87-(6+3*H.LANDING_STEP/.18),3),87.0])
+ def test_a_reviewed_landing_is_held_on_its_street_and_begins_the_tunnel_record(self):
+  p,rec,streets=self.ramp({'landing':12});p.level=[-1]*30;p.mid=[.2]*30;p.terrain=[-4.0]*30;p.fixed={0:.21};p.allowance=[min(1,3*i/15) for i in range(30)]
+  H.street_stretch(p,0);on=[i for i in range(30) if p.street[i]];self.assertEqual(on,[0,1,2,3,4],'the stations of its first 12 m')
+  self.assertEqual([p.fixed.get(i) for i in range(6)],[.21,.2,.2,.2,.2,None],'held on the street (its vertex keeps the height it was landed at)');self.assertEqual(p.reach,[12.0,0.])
+  self.assertEqual([p.terrain[i] for i in (4,5)],[.2,-4.0]);self.assertEqual([p.allowance[i] for i in (4,5)],[0.,1.0])
+  # the natural line starts from the street, not from under it
+  nat=H.natural(p,(None,-6.0),[False]*30);self.assertEqual(nat[:5],[.2]*5);self.assertAlmostEqual(nat[-1],-6.0);self.assertLess(nat[6],.2)
+  # solved: on the street for 12 m, in its slot from 18 m on. The record is one tunnel record from its first station, landing for 12 m.
+  p.y=[.2 if i<5 else .2-(3*i-12)*.04 for i in range(30)];p.high=[.2]*30;p.low=[.2]*30;p.edge=[.2]*30;p.landing=[True,False];p.ends=[('street',streets[0][0]),None]
+  H.classify_ground(p);self.assertEqual(p.tunnel,[True]*30,'the street stretch and the first shallow metres belong to the record that goes down');self.assertFalse(any(p.covered),'3 m down at its end: no room for a roof yet')
+  self.assertEqual(H.landing_interval(p,rec,0,29,0,streets),[0,12.0])
+  free=plan(line(30),[7.0]*30,main=False,lanes=1);self.assertFalse(any(free.street),'no route is held without a reviewed landing')
+ def test_the_two_reviewed_landings(self):
+  held={r['id']:r['landing'] for r in H.ROUTES if 'landing' in r};self.assertEqual(held,{'i90-wb-entrance-copley':12,'i90-eb-entrance-135':24})
+  self.assertEqual({r['id']:r['width'] for r in H.ROUTES if 'width' in r},{'i90-wb-entrance-copley':6.0},"the survey's slot between Huntington Avenue's carriageways")
+
+
 class SignTest(unittest.TestCase):
  def test_storrow_posts_cars_only_at_its_entrances_and_the_height_ahead_of_each_structure(self):
   p=plan(line(120),main=True,clearance=H.STORROW_CLEARANCE);p.id='storrow-eb';p.spec={'bridge':'storrow'};p.landing=[True,False]
