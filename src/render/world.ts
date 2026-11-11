@@ -11,7 +11,7 @@ import { createStreetTrees, createTreeField } from './foliage';
 import { createStreetSign } from './signs';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { sampleElevation, terrainRange } from '../simulation/terrain';
-import { drapedRibbon, terrainTiles, foundationGeometry, backBayPaving } from './terrain-ground';
+import { drapedRibbon, terrainTiles, foundationGeometry, backBayPaving, clipPortalSurface } from './terrain-ground';
 import { mergeSpatialGeometries, spatialInstances } from './spatial-batches';
 import { createTrafficSignals, updateTrafficSignals } from './traffic-signals';
 import { createGrassMaterial } from './ground-cover';
@@ -109,7 +109,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const ribbon=(points:Point2[],width:number,y:number)=>drapedRibbon(city,points,width,y);
   const buildingChunks:THREE.Mesh[]=[];
   for(const geometry of terrainTiles(city)){const ground=new THREE.Mesh(geometry,groundMaterial);ground.position.y=-.04;ground.receiveShadow=true;ground.renderOrder=-3;scene.add(ground);}
-  const oldDistrictPaving=new THREE.Mesh(backBayPaving(city),materials.sidewalk);oldDistrictPaving.receiveShadow=true;oldDistrictPaving.renderOrder=-2;scene.add(oldDistrictPaving);
+  const oldDistrictPaving=new THREE.Mesh(clipPortalSurface(city,backBayPaving(city)),materials.sidewalk);oldDistrictPaving.receiveShadow=true;oldDistrictPaving.renderOrder=-2;scene.add(oldDistrictPaving);
   const streets:THREE.BufferGeometry[]=[],sidewalks:THREE.BufferGeometry[]=[],lines:THREE.BufferGeometry[]=[],yellow:THREE.BufferGeometry[]=[];
   const crossingKeys=new Set<string>();
   for(const road of city.roads){

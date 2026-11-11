@@ -5,6 +5,7 @@ import {tunnelGeometry,tunnelStations,tunnelCoveredAt,tunnelAt,tunnelPointAt} fr
 import {PartBatches,box} from './geometry-writer.ts';
 import {createTunnelCeilingMaterial,tiledTunnelCeiling} from './tunnel-ceiling.ts';
 import {tunnelContinuation,TUNNEL_CONTINUATION_LENGTH} from './tunnel-continuation.ts';
+import {LANE_WIDTH} from '../simulation/motorway.ts';
 
 /** Procedural wall tilework is shared by every bore. Metre UVs keep the tile
  * joints and the green guidance band aligned to the local, sloping floor. */
@@ -39,6 +40,17 @@ function tiledWall(data:MeshData,road:Road,city:CityData){
   geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));return geometry;
 }
 
+/** The wall triangles of a record's roofed stretches and of its open ones (by the station of each triangle's centre). */
+function wallParts(data:MeshData,road:Road):[MeshData,MeshData]{
+  const stations=tunnelStations(road),tiled:number[]=[],open:number[]=[];
+  for(let i=0;i<data.indices.length;i+=3){
+    let x=0,z=0;for(let j=0;j<3;j++){const k=data.indices[i+j]*3;x+=data.vertices[k]/3;z+=data.vertices[k+2]/3;}
+    const hit=roadProjection(road,x,z),s=stations[hit.index]+((stations[hit.index+1]??stations[hit.index])-stations[hit.index])*hit.t;
+    (tunnelCoveredAt(road,s)?tiled:open).push(data.indices[i],data.indices[i+1],data.indices[i+2]);
+  }
+  return[{vertices:data.vertices,indices:new Uint32Array(tiled)},{vertices:data.vertices,indices:new Uint32Array(open)}];
+}
+
 /** A printed highway sign face: green, or a warning's amber on charcoal. */
 export function signMaterial(lines:string[],warning=false){
   // Headless geometry tests do not need a canvas; the game always has one.
@@ -50,7 +62,18 @@ export function signMaterial(lines:string[],warning=false){
   const map=new THREE.CanvasTexture(canvas);map.colorSpace=THREE.SRGBColorSpace;
   return new THREE.MeshBasicMaterial({map,toneMapped:false});
 }
+/** What lies ahead on each generated highway, for the overhead signs in its tunnels. */
+const AHEAD:Record<string,string>={'I-90 East':'Logan Airport','I-90 West':'Back Bay · Worcester','Storrow Drive East':'Government Center','Storrow Drive West':'Kenmore Square','Route 1A North':'Revere','Route 1A South':'Boston'};
+/** The legend of a generated highway record (`Road.highway`), named 'I-90 East · Exit 133 Prudential Center / Copley Square'. */
+export function highwayLegend(road:Road){
+  const [route,rest='']=road.name.split('·').map(s=>s.trim()),exit=/^Exit\s+(\S+)\s+(?:to\s+)?(.*)$/.exec(rest),onward=/to (I-\d+) (\w+)$/.exec(rest);
+  if(exit)return [`EXIT ${exit[1]}  ↗`,...exit[2].split('/').map(s=>s.trim()).slice(0,2)];
+  if(onward)return [`${onward[1]}  ${onward[2].toUpperCase()}`,onward[2]==='North'?'Zakim Bridge  ↑':'South Station  ↑'];
+  const shield=route.replace(/\s+(East|West|North|South)$/,(_,d:string)=>`  ${d.toUpperCase()}`);
+  return [shield,`${AHEAD[route]??rest}  ↑`];
+}
 function destination(road:Road){
+  if(road.highway)return highwayLegend(road);
   const north=/north/i.test(road.name),south=/south/i.test(road.name);
   if(road.tunnel?.capStart||road.tunnel?.capEnd)return north?['I-93  NORTH','Zakim Bridge  ↑']:['I-93  SOUTH','South Station  ↑'];
   if(/entrance/i.test(road.name))return [`I-93  ${south?'SOUTH':'NORTH'}`,north?'Zakim Bridge  ↑':'South Station  ↑'];
@@ -69,12 +92,12 @@ const numberedExits = new Map([
 /** Match each mapped exit to its bore or parent exit ramp at the start. Height is
  * essential: north/south bores sometimes overlap in plan at different levels. */
 export function tunnelExitSigns(city:CityData){
-  const parents=city.roads.filter(r=>r.tunnel&&(r.tunnel.capStart||r.tunnel.capEnd||/exit/i.test(r.name))),signs:{road:Road;station:number;lines:string[];rampId:string}[]=[];
+  const parents=city.roads.filter(r=>r.tunnel&&(r.tunnel.capStart||r.tunnel.capEnd||/exit/i.test(r.name)||(!!r.highway&&r.kind==='motorway'))),signs:{road:Road;station:number;lines:string[];rampId:string}[]=[];
   for(const ramp of city.roads){
     if(!ramp.tunnel||!ramp.elevations||!/exit/i.test(ramp.name))continue;
     const start=tunnelPointAt(ramp,0);let best:{road:Road;station:number;score:number}|undefined;
     for(const road of parents){
-      if(road===ramp)continue;const projection=roadProjection(road,start.x,start.z),stations=tunnelStations(road),station=stations[projection.index]+(stations[projection.index+1]-stations[projection.index])*projection.t;
+      if(road===ramp||(!!ramp.highway&&road.name===ramp.name))continue;const projection=roadProjection(road,start.x,start.z),stations=tunnelStations(road),station=stations[projection.index]+(stations[projection.index+1]-stations[projection.index])*projection.t;
       const p=tunnelPointAt(road,station),height=Math.abs(p.y-start.y);
       if(projection.distance>p.width/2+ramp.width/2+.5||height>.8||station<45)continue;
       const score=projection.distance+height*4;if(!best||score<best.score)best={road,station,score};
@@ -84,7 +107,8 @@ export function tunnelExitSigns(city:CityData){
     const right=-(branch.x-p.x)*Math.cos(p.yaw)+(branch.z-p.z)*Math.sin(p.yaw);
     const number=numberedExits.get(ramp.id),target=ramp.name.split('·')[0].trim();
     const parts=number==='17'?['Government Center','North End']:target.split('/').map(s=>s.trim()).slice(0,2);
-    signs.push({road:best.road,station:best.station-40,lines:[`EXIT${number?' '+number:''} ${right>=0?'↗':'↖'}`,...parts],rampId:ramp.id});
+    const lines=ramp.highway?highwayLegend(ramp).map((line,i)=>i===0&&right<0?line.replace('↗','↖'):line):[`EXIT${number?' '+number:''} ${right>=0?'↗':'↖'}`,...parts];
+    signs.push({road:best.road,station:best.station-40,lines,rampId:ramp.id});
   }
   return signs;
 }
@@ -99,6 +123,7 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
   const asphalt=new THREE.MeshStandardMaterial({map:paving,emissiveMap:paving,emissive:'#ffffff',emissiveIntensity:.2,roughness:.95});
   const ceiling=createTunnelCeilingMaterial();
   const concrete=new THREE.MeshStandardMaterial({color:'#b1b2a7',emissive:'#999c91',emissiveIntensity:.13,roughness:.96});
+  const cutConcrete=new THREE.MeshStandardMaterial({color:'#a9aaa1',roughness:.96});
   const white=new THREE.MeshStandardMaterial({color:'#ede9ca',emissive:'#e9e6c9',emissiveIntensity:.25,roughness:.88});
   const amber=new THREE.MeshBasicMaterial({color:'#e7b74b'}),darkMetal=new THREE.MeshStandardMaterial({color:'#394342',roughness:.8,metalness:.3});
   const lightMaterial=new THREE.MeshBasicMaterial({color:'#fff1c9',toneMapped:false}),batches=new PartBatches(180),matrix=new THREE.Matrix4();
@@ -140,9 +165,14 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
   for(const road of roads){
     const length=tunnelStations(road).at(-1)??0;metres+=length;
     const geometry=tunnelGeometry(city,road),deck=roadDeckGeometry(city,road,road.width,.018),floor=buffer(deck);floor.setAttribute('uv',new THREE.BufferAttribute(deck.uv,2));mesh(floor,asphalt,`${road.name} roadway`);
-    mesh(tiledWall(geometry.walls,road,city),walls,`${road.name} tile walls`);mesh(tiledTunnelCeiling(geometry.roof,road),ceiling,`${road.name} ceiling`);
+    // A highway's open cut is walled in plain concrete: only its roofed stretches are a tiled tunnel.
+    const [tiled,cut]=road.highway?wallParts(geometry.walls,road):[geometry.walls,undefined];
+    if(!cut||tiled.indices.length)mesh(tiledWall(tiled,road,city),walls,`${road.name} tile walls`);
+    mesh(tiledTunnelCeiling(geometry.roof,road),ceiling,`${road.name} ceiling`);
+    if(cut?.indices.length)mesh(buffer(cut),cutConcrete,`${road.name} cut walls`);
     mesh(buffer(geometry.barriers),concrete,`${road.name} concrete closure`);
-    const lanes=Math.max(1,Math.round((road.width-1.4)/3.5));
+    // A generated highway record carries its lane count: 3.65 m lanes centred on the centre line, as its traffic runs.
+    const lanes=road.lanes??Math.max(1,Math.round((road.width-1.4)/3.5));
     // An edge inside a joined carriageway is no longer a road border. Retain
     // exterior lines and independent stacked roads, but leave merges open.
     for(const edge of bridgeEdgeSections(tunnelRoads,road,.7,.7,.15)){
@@ -150,7 +180,7 @@ export function addTunnels(scene:THREE.Object3D,city:CityData){
       paint(endpoint(edge.a),endpoint(edge.b),.13);
     }
     for(let s=2;s<length-2;s+=6){
-      if(Math.floor(s/6)%2===0)for(let lane=1;lane<lanes;lane++)stripe(road,s,Math.min(length,s+3),.14,width=>-width/2+lane*width/lanes);
+      if(Math.floor(s/6)%2===0)for(let lane=1;lane<lanes;lane++)stripe(road,s,Math.min(length,s+3),.14,width=>road.lanes?(lane-lanes/2)*Math.min(LANE_WIDTH,(width-2.4)/Math.max(1,lanes-1)):-width/2+lane*width/lanes);
     }
     for(let s=8;s<length-5;s+=14){
       if(!tunnelCoveredAt(road,s))continue;const p=tunnelPointAt(road,s),clearance=road.tunnel!.clearance;

@@ -10,12 +10,13 @@ import tileformat
 from building_clearance import RoadClearanceIndex
 from building_collision_policy import exact_far_collision
 from building_passages import PASSAGES,apply_building_passages,apply_passage_identity
+from building_outline import rings,roof_outline
 
 
 def _order_generated_fields(entry):
  # Recomputing metadata must neither reorder JSON on successive runs nor put
  # generated fields after tile dimensions only in the packaged-data path.
- fields=('collision','roadOverlaps','buildingPassage','v','f','r','scale')
+ fields=('collision','roadOverlaps','highwayOverlaps','buildingPassage','v','f','r','scale')
  values={key:entry.pop(key) for key in fields if key in entry}
  entry.update(values)
 
@@ -40,17 +41,38 @@ def prepare_buildings(buildings, geometry, roads):
  return {**summary,'correctedPassages':corrected}
 
 
+def highway_buildings(data_dir):
+ """What build-boston-highways.py recorded for the buildings over its roads: ({building id: its record ids} for the
+ buildings whose convex proxy would stand in a roadway, {building id: the passages to carve under it})."""
+ path=data_dir/'provenance.json';over=(json.loads(path.read_text()).get('bostonHighways') or {}).get('buildings',{}) if path.exists() else {}
+ passages={}
+ for q in over.get('passages',[]):passages.setdefault(q['building'],[]).append({k:q[k] for k in ('road','start','end','left','right','ceiling','ceilingEnd')})
+ return {m['id']:m['roads'] for m in over.get('mesh',[])},passages
+
+
+def mark_highway_overlaps(buildings,mesh):
+ """Exact collision for the buildings a highway record passes under or beside within their convex footprint (the
+ highway decks and tunnel roads are not the surface streets RoadClearanceIndex looks at). A rerun drops the flag it set."""
+ for b in buildings:
+  if 'highwayOverlaps' in b:
+   b.pop('highwayOverlaps')
+   if b.get('collision')=='mesh' and 'roadOverlaps' not in b and not b.get('buildingPassage'):b.pop('collision')
+  if b['id'] in mesh:b['collision']='mesh';b['highwayOverlaps']=mesh[b['id']]
+
+
 def prepare_package(data_dir):
  city_path=data_dir/'city.json';city=json.loads(city_path.read_text())
- index=RoadClearanceIndex(city['roads']);by_tile={};changed=[];marked=0;corrected=[];metadata_by_id={}
+ index=RoadClearanceIndex(city['roads']);by_tile={};changed=[];marked=0;corrected=[];metadata_by_id={};mesh,generated=highway_buildings(data_dir)
  for key in city['tiles']['keys']:
   path=data_dir/city['tiles']['directory']/f't_{key}.bin';header,entries=tileformat.read_tile(path)
-  before=json.dumps(header,separators=(',',':'));index.mark(header['buildings']);records=[];geometry_changed=False
+  before=json.dumps(header,separators=(',',':'));index.mark(header['buildings']);mark_highway_overlaps(header['buildings'],mesh);records=[];geometry_changed=False
   for entry,b in zip(header['buildings'],entries):
    apply_passage_identity(entry)
    scale=entry.get('scale',tileformat.SCALE)
    metadata=None
-   if entry['id'] in PASSAGES:vertices,faces,metadata=apply_building_passages(entry,b['positions'],np.concatenate([b['facade'],b['roof']]))
+   if entry['id'] in PASSAGES or entry['id'] in generated:
+    kept=rings(roof_outline(b['positions'],b['roof'])) if entry['id'] in generated and not entry.get('buildingPassage') else None
+    vertices,faces,metadata=apply_building_passages(entry,b['positions'],np.concatenate([b['facade'],b['roof']]),generated.get(entry['id'],()),kept)
    if metadata is not None:
     entry['buildingPassage']=metadata;entry['collision']='mesh';geometry_changed=True;corrected.append(entry['id'])
     record=tileformat.mesh_record(vertices,faces,entry['anchor'],entry['baseElevation'])

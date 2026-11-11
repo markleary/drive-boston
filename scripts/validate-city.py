@@ -31,6 +31,7 @@ from water_crossings import level_water_crossings,water_inputs
 from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids,levelled_water_ids
 import north_overpasses
 import i93_north
+import boston_highways
 from harvard_terrain import repair_memorial_terrain
 from road_generation_audit import validate_surfaces
 from roadway_buildings import roadway_buildings
@@ -184,7 +185,8 @@ for key in keys:
   assert top<=base+b['height']+step/2+.012,f"{b['id']} height double-translated or misreported"
   if b.get('partOf'):supported.append(b)
   elif b['norm']['policy']=='legacy-backbay-feet':assert west<=x<=east and north<=z<=south,'original Back Bay normalization applied outside core'
-  elif b['source']!='osm-extrusion':assert abs(bottom-base)<=step/2+.002,f"floating primary building {b['id']}: {bottom-base:.3f} m gap";grounded+=1
+  # (a shell carved for a highway passage may have lost its lowest faces to the corridor: Parcel 12 over the Turnpike's Massachusetts Avenue ramp)
+  elif b['source']!='osm-extrusion':assert abs(bottom-base)<=step/2+.002 or ((b.get('buildingPassage') or {}).get('highway') and bottom>base),f"floating primary building {b['id']}: {bottom-base:.3f} m gap";grounded+=1
   footprints_by_tile[(tx,tz)].append((b['id'],b['footprint'],min(v[0] for v in b['footprint']),max(v[0] for v in b['footprint']),min(v[1] for v in b['footprint']),max(v[1] for v in b['footprint'])))
 assert len(buildings)==far_total
 roadway_conflicts=roadway_buildings(city,surface_headers)
@@ -236,20 +238,32 @@ museum_source=data_dir/'museum-approaches-source.json'
 validate_approaches(city,json.loads(museum_source.read_text()),heights)
 assert provenance['museumRoadConnections']['sourceSHA256']==hashlib.sha256(museum_source.read_bytes()).hexdigest(),'Museum approach provenance differs from the retained source'
 validate_bridge_clearance(city['roads'],elevation)
+# The Massachusetts Turnpike and Storrow Drive (build-boston-highways.py) are the last road stage: replay it and check
+# its records, then check every stage before it on the roads and grid as that stage found them (before_stage).
+highways=provenance.get('bostonHighways');base_roads,base_heights,base_grid=city['roads'],heights,north_overpasses.load_grid(data_dir/grid['file'])
+assert bool(highways)==any(boston_highways.stage_owned(r) for r in city['roads']),'provenance must describe the Turnpike and Storrow Drive stage; run build-boston-highways.py'
+if highways:
+ highways_path=data_dir/boston_highways.SOURCE_NAME;assert highways['source']['sha256']==hashlib.sha256(highways_path.read_bytes()).hexdigest(),'the highway source sidecar changed without regeneration'
+ highway_counts=boston_highways.validate(data_dir,city,highways,elevation)
+ assert boston_highways.replay(data_dir,city,highways,json.loads(highways_path.read_text())),'Turnpike or Storrow Drive roads, tunnel sidecar, terrain or building records differ from a replay of build-boston-highways.py'
+ base_roads,base_heights=boston_highways.before_stage(city['roads'],heights,highways,grid.get('scale',.01));base_grid=i93_north.staged_heights(base_grid,highways)
+ print(f"Validated the Turnpike and Storrow Drive: {highway_counts['decks']} deck and {highway_counts['tunnels']} tunnel records of {highway_counts['routes']} routes ({highway_counts['streetLandings']} street landings, {highway_counts['signs']} warning signs; {highway_counts['meshBuildings']} buildings with exact collision, {highway_counts['passages']} passages, {highway_counts['removedBuildings']} structures removed) match a replay of build-boston-highways.py.")
+base_city={**city,'roads':base_roads}
+def base_elevation(x,z):return elevation(x,z,base_heights)
 # Interstate 93 (build-i93-north.py) runs after the stages replayed below: replay it and check its
 # records, then check those stages on the roads and grid as they left them (before_stage).
-i93=provenance.get('i93North');pre_roads,pre_heights=city['roads'],heights
-assert bool(i93)==any(i93_north.stage_owned(r) for r in city['roads']),'provenance must describe the I-93 stage; run build-i93-north.py'
+i93=provenance.get('i93North');pre_roads,pre_heights=base_roads,base_heights
+assert bool(i93)==any(i93_north.stage_owned(r) for r in base_roads),'provenance must describe the I-93 stage; run build-i93-north.py'
 if i93:
  i93_path=data_dir/i93_north.SOURCE_NAME;assert i93['source']['sha256']==hashlib.sha256(i93_path.read_bytes()).hexdigest(),'the I-93 source sidecar changed without regeneration'
- i93_counts=i93_north.validate(city,i93,i93_north.tunnel_joins(data_dir,city),elevation)
- assert i93_north.replay(data_dir,city,i93,json.loads(i93_path.read_text()),north_overpasses.tile_footprints(data_dir,city)),'I-93 roads, terrain cuts or survey cut differ from a replay of build-i93-north.py'
- pre_roads,pre_heights=i93_north.before_stage(city['roads'],heights,i93,grid.get('scale',.01))
+ i93_counts=i93_north.validate(base_city,i93,i93_north.tunnel_joins(data_dir,city),base_elevation)
+ assert i93_north.replay(data_dir,base_city,i93,json.loads(i93_path.read_text()),north_overpasses.tile_footprints(data_dir,city),base_grid),'I-93 roads, terrain cuts or survey cut differ from a replay of build-i93-north.py'
+ pre_roads,pre_heights=i93_north.before_stage(base_roads,base_heights,i93,grid.get('scale',.01))
  print(f"Validated I-93: {i93_counts['carriageways']} carriageway pieces, {i93_counts['ramps']} ramps ({i93_counts['streetLandings']} street landings) and {i93_counts['traces']} survey traces match a replay of build-i93-north.py.")
 def pre_elevation(x,z):return elevation(x,z,pre_heights)
 if north_overpasses.applies(pre_roads):
  recorded=provenance.get('northOverpasses');assert recorded,'provenance must describe the northern overpass repairs; run level-north-overpasses.py'
- staged=i93_north.staged_heights(north_overpasses.load_grid(data_dir/grid['file']),i93) if i93 else None
+ staged=i93_north.staged_heights(base_grid,i93) if i93 else None
  assert north_overpasses.replay(data_dir,{**city,'roads':pre_roads},recorded,staged),'northern overpass streets, decks or terrain differ from a replay of their recorded sources; run level-north-overpasses.py'
 water_polygons,water_level=water_inputs(city);decks=level_water_crossings(pre_roads,water_polygons,pre_elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
@@ -328,8 +342,8 @@ for r in city['roads']:
    for j in range(int(min(a[1],b[1])//250),int(max(a[1],b[1])//250)+1):cells[(i,j)].append((r,a,b))
 assert any(r['name']=='Newbury Street' for r in city['roads']) and any(r['name']=='Massachusetts Avenue' for r in city['roads'])
 # Boston centerlines drop every limited-access name; the OSM towns keep surface trunks such as Concord Turnpike (Route 2) but never motorways.
-# Interstate 93 north of the tunnel is its own stage (build-i93-north.py, validated above): its decks are the only interstate records.
-assert not any(not i93_north.stage_owned(r) and (r['name'].startswith(('Interstate ','I-')) or 'Expressway' in r['name'] or 'Massachusetts Turnpike' in r['name'] or ('Turnpike' in r['name'] and not r['id'].startswith('osm-'))) for r in city['roads']),'highway or tunnel flattened into street network'
+# Interstate 93 north of the tunnel and the Turnpike are their own stages (build-i93-north.py and build-boston-highways.py, validated above): their decks are the only interstate records.
+assert not any(not i93_north.stage_owned(r) and not boston_highways.stage_owned(r) and (r['name'].startswith(('Interstate ','I-')) or 'Expressway' in r['name'] or 'Massachusetts Turnpike' in r['name'] or ('Turnpike' in r['name'] and not r['id'].startswith('osm-'))) for r in city['roads']),'highway or tunnel flattened into street network'
 # Tunnels remain separately profiled instead of entering the terrain-grading
 # street graph. Validate their shipped sidecar and retained source provenance.
 if city.get('tunnels'):

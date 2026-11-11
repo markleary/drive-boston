@@ -8,6 +8,7 @@ import { DrivingPhysics } from '../src/physics/vehicle.ts';
 import { createTraffic } from '../src/simulation/traffic.ts';
 import { createStreetLife } from '../src/render/street-life.ts';
 import { pointInside } from '../src/simulation/roads.ts';
+import { tunnelCoveredAt } from '../src/simulation/tunnels.ts';
 
 import {loadCentralCity} from './helpers/metro-city.mjs';
 const STEP = 1 / 60;
@@ -174,7 +175,8 @@ test('ambient traffic stops before a parked player and stays within imported roa
           const a = road.points[i - 1], b = road.points[i];
           const dx = b[0] - a[0], dz = b[1] - a[1];
           const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1)));
-          outside = Math.min(outside, Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t) - road.width / 2);
+          // (lanes are laid out on the measured roadway where there is one: State Street's is twice its class width)
+          outside = Math.min(outside, Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t) - Math.max(road.width, road.pavedWidth ?? 0) / 2);
         }
         assert.ok(outside < 0.25, `traffic center left the road by ${outside} m`);
       }
@@ -229,16 +231,18 @@ test('street life stays on clear sidewalks and parked cars react to impacts', as
   try {
     assert.ok(life.count >= 72 && life.count <= 112, 'the city should keep a bounded crowd with enough walkers for busy neighborhoods');
     assert.ok(life.parkedCount >= 6 && life.parkedCount <= 8, 'only verified curb spaces should receive parked cars');
-    const roadSegments = city.roads.flatMap(road => road.points.slice(1).map((b, i) => ({ a: road.points[i], b, width: road.width })));
+    const roadSegments = city.roads.flatMap(road => { let start = 0; return road.points.slice(1).map((b, i) => { const a = road.points[i], segment = { a, b, width: road.deckWidths ? Math.max(road.deckWidths[i], road.deckWidths[i + 1]) : road.width, road, start }; start += Math.hypot(b[0] - a[0], b[1] - a[1]); return segment; }); });
     for (let time = 0; time <= 160; time += 2) {
       life.update(2, time);
       for (const pedestrian of life.pedestrians) {
         const point = [pedestrian.position.x, pedestrian.position.z];
         assert.ok(point.every(Number.isFinite));
         assert.ok(!city.buildings.some(building => pointInside(point, building.footprint)), 'walkers must stay outside surveyed buildings');
-        for (const { a, b, width } of roadSegments) {
+        for (const { a, b, width, road, start } of roadSegments) {
           const dx = b[0] - a[0], dz = b[1] - a[1];
           const t = Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dz) / (dx * dx + dz * dz || 1)));
+          // A sidewalk over a roofed stretch of a tunnel (the Turnpike under the Back Bay) is clear of the road beneath it.
+          if (road.tunnel && tunnelCoveredAt(road, start + t * Math.hypot(dx, dz))) continue;
           assert.ok(Math.hypot(point[0] - a[0] - dx * t, point[1] - a[1] - dz * t) > width / 2 + .35,
             'walkers must leave room between their centers and the road edge, including at turns');
         }

@@ -1,4 +1,4 @@
-import type { Building, CityData, Point2 } from '../types';
+import type { Building, CityData, HighwaySign, Point2 } from '../types';
 import { decodeElevation, gunzip, parseTile, tileFile, tileKey, tileOf, type CityTile, type TileBuilding } from './tile-format.ts';
 import { parseFar, type FarBuilding, type FarCity } from './far-format.ts';
 import {prepareBuildingTunnelPassage} from './tunnel-passages.ts';
@@ -47,15 +47,16 @@ export async function resolveCity(city: CityData, read: Reader): Promise<CityDat
   const [heights, far, tunnels] = await Promise.all([
     elevation?.file ? read(elevation.file).then(gunzip).then(buffer => decodeElevation(buffer, elevation.scale ?? .01)) : undefined,
     tiles ? read(tiles.far).then(gunzip).then(parseFar) : undefined,
-    city.tunnels ? read(city.tunnels.file).then(buffer=>JSON.parse(new TextDecoder().decode(buffer)) as Pick<CityData,'roads'|'landmarks'|'sources'>) : undefined,
+    city.tunnels ? Promise.all((city.tunnels.files??[city.tunnels.file]).map(file=>read(file).then(buffer=>JSON.parse(new TextDecoder().decode(buffer)) as Pick<CityData,'roads'|'landmarks'|'sources'>&{signs?:HighwaySign[]}))) : undefined,
   ]);
   if (elevation && heights) elevation.heights = heights;
   if (city.water) city.water = city.water.map(refineFrogPond);
-  if(tunnels){
-    const roadIds=new Set(tunnels.roads.map(r=>r.id)),landmarkIds=new Set(tunnels.landmarks.map(l=>l.id));
-    city.roads=[...city.roads.filter(r=>!roadIds.has(r.id)),...tunnels.roads];
-    city.landmarks=[...city.landmarks.filter(l=>!landmarkIds.has(l.id)),...tunnels.landmarks];
-    city.sources=[...city.sources,...tunnels.sources.filter(s=>!city.sources.some(existing=>existing.url===s.url))];
+  for(const sidecar of tunnels??[]){
+    const roadIds=new Set(sidecar.roads.map(r=>r.id)),landmarkIds=new Set(sidecar.landmarks.map(l=>l.id));
+    city.roads=[...city.roads.filter(r=>!roadIds.has(r.id)),...sidecar.roads];
+    city.landmarks=[...city.landmarks.filter(l=>!landmarkIds.has(l.id)),...sidecar.landmarks];
+    city.sources=[...city.sources,...sidecar.sources.filter(s=>!city.sources.some(existing=>existing.url===s.url))];
+    if(sidecar.signs?.length)city.highwaySigns=[...(city.highwaySigns??[]),...sidecar.signs];
   }
   // A survey-deck trace is a graph edge over a mesh that draws and collides by
   // itself: keep it out of every road consumer except traffic, GPS and labels.

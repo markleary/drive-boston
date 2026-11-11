@@ -11,7 +11,7 @@ import {drawsFarMassing} from '../simulation/far-format.ts';
 import {buildingPlans,type BuildingPlan} from '../simulation/building-plans.ts';
 import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
-import {isMotorway} from '../simulation/motorway.ts';
+import {isMotorway,openStretches} from '../simulation/motorway.ts';
 import {HELICOPTER} from '../simulation/helicopter';
 import {WALKER} from '../simulation/walker';
 import {createMinimapLabeler} from './minimap-labels';
@@ -202,7 +202,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   },{passive:false});
   const neighborhoods=indexAreas(city.neighborhoods??[]);
   // Draw order: tunnels beneath the streets, motorway decks above them.
-  const mapRoads=mapRoadList.map(road=>({road,highway:isMotorway(road)&&!road.tunnel,rank:road.tunnel?0:isMotorway(road)?2:1,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
+  // A highway's walled cut is a tunnel record too: its open stretches draw as the highway they are, over the dashed line of its roofed parts.
+  const mapRoads=mapRoadList.flatMap(road=>[road,...(road.highway?openStretches(road).map(points=>({...road,points,tunnel:undefined})):[])]).map(road=>({road,highway:isMotorway(road)&&!road.tunnel||(!!road.highway&&!road.tunnel),rank:road.tunnel?0:isMotorway(road)||road.highway?2:1,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
   const boxed=<T extends {rings:Point2[][]}>(areas:T[])=>areas.filter(a=>a.rings[0]?.length).map(area=>{const ring=area.rings[0];let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of ring){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}return{area,minX,maxX,minZ,maxZ};});
   const mapParks=boxed(city.parks??[]),mapWater=boxed(city.water??[]);
   const metro=isMetroCity(city)?city:undefined;

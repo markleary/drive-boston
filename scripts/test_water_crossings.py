@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 from shapely.geometry import box
 
-from i93_north import before_stage
+from boston_highways import before_road_stages
 from water_crossings import DECK,LANDING_SHARE,TERRAIN_RISE,chain_grades,grid_sampler,level_water_crossings,lifted,water_inputs
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
@@ -110,8 +110,8 @@ class WaterCrossingsTest(unittest.TestCase):
  def test_shipped_fort_point_bridges_are_level(self):
   city=json.loads((ROOT/'public/data/city.json').read_text());grid=city['elevation']
   heights=np.frombuffer(gzip.decompress((ROOT/'public/data'/grid['file']).read_bytes()),dtype='<i2')*grid.get('scale',.01)
-  # The stages after this one (Interstate 93) are taken back out, as validate-city.py does.
-  city['roads'],heights=before_stage(city['roads'],heights,json.loads((ROOT/'public/data/provenance.json').read_text()).get('i93North'),grid.get('scale',.01))
+  # The stages after this one (Interstate 93, then the Turnpike and Storrow Drive) are taken back out, as validate-city.py does.
+  city['roads'],heights=before_road_stages(city['roads'],heights,json.loads((ROOT/'public/data/provenance.json').read_text()),grid.get('scale',.01))
   roads={r['id']:r for r in city['roads']};ground=grid_sampler(grid,heights)
   polygons,water_level=water_inputs(city);report=level_water_crossings(city['roads'],polygons,ground,water_level,apply=False)
   self.assertEqual(report['changedRoads'],[],'the installed package must already be levelled')

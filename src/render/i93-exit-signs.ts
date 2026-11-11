@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { I93ExitSign } from '../simulation/i93-exit-signs';
 
-const PANEL_WIDTH = 7.5;
-const PANEL_HEIGHT = PANEL_WIDTH * 320 / 768;
-const TAB_WIDTH = PANEL_WIDTH * 238 / 768;
-const TAB_HEIGHT = PANEL_HEIGHT * 64 / 320;
+const PANEL_FULL_WIDTH = 7.5;
+const PANEL_FULL_HEIGHT = PANEL_FULL_WIDTH * 320 / 768;
+const TAB_FULL_WIDTH = PANEL_FULL_WIDTH * 238 / 768;
+const TAB_FULL_HEIGHT = PANEL_FULL_HEIGHT * 64 / 320;
 const CLEARANCE = 5.4;
 
 function exitFace(sign: I93ExitSign) {
@@ -31,10 +31,9 @@ function exitFace(sign: I93ExitSign) {
     ctx.fillText(value, x, y, width);
   };
 
-  panel(530, 0, 238, 69, 5);
+  if (sign.number) panel(530, 0, 238, 69, 5);
   panel(0, 64, 768, 256, 16);
-  text('EXIT', 594, 34, 31, 95);
-  text(sign.number, 699, 35, 43, 82);
+  if (sign.number) { text('EXIT', 594, 34, 31, 95); text(sign.number, 699, 35, 43, 82); }
   if (sign.routes?.length) {
     // Massachusetts uses a square white state-route marker with black numerals.
     const routeRowWidth = sign.routes.length * 73 + (sign.direction ? 111 : 0);
@@ -79,17 +78,19 @@ function exitFace(sign: I93ExitSign) {
 export function createI93ExitSign(sign: I93ExitSign, groundAt: (x: number, z: number) => number, steel: THREE.Material) {
   const { x, y, z, yaw, width } = sign.approach;
   const group = new THREE.Group();
-  group.name = `I-93 advance sign: ${sign.rampId}`;
+  group.name = `${sign.rampId.startsWith('i93-') ? 'I-93 advance' : 'Advance exit'} sign: ${sign.rampId}`;
   group.position.set(x, y, z);
   group.rotation.y = yaw + Math.PI;
 
-  const center = width / 2 - 4.8;
+  // A smaller panel (Storrow Drive) hangs over the right lane of a narrower road.
+  const scale = sign.scale ?? 1, PANEL_WIDTH = PANEL_FULL_WIDTH * scale, PANEL_HEIGHT = PANEL_FULL_HEIGHT * scale, TAB_WIDTH = TAB_FULL_WIDTH * scale, TAB_HEIGHT = TAB_FULL_HEIGHT * scale;
+  const center = Math.max(width / 2 - 4.8, width / 2 + .3 - PANEL_WIDTH / 2 - .35);
   const shoulder = width / 2 + .85;
   const ground = Math.min(-.12, groundAt(x - Math.cos(yaw) * shoulder, z + Math.sin(yaw) * shoulder) - y);
   const mid = CLEARANCE + PANEL_HEIGHT / 2;
   const material = exitFace(sign);
   const face = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_WIDTH, PANEL_HEIGHT), material);
-  face.name = `Exit ${sign.number} · ${sign.lines.join(' / ')}`;
+  face.name = `${sign.number ? `Exit ${sign.number}` : 'Exit'} · ${sign.lines.join(' / ')}`;
   face.position.set(center, mid, .05);
   group.add(face);
 
@@ -98,7 +99,7 @@ export function createI93ExitSign(sign: I93ExitSign, groundAt: (x: number, z: nu
   const beamY = mid - .25, beamHeight = .82, poleTop = beamY + beamHeight / 2 + .17;
   const hardware = [
     new THREE.BoxGeometry(PANEL_WIDTH, PANEL_HEIGHT - TAB_HEIGHT, .08).translate(center, mid - TAB_HEIGHT / 2, 0),
-    new THREE.BoxGeometry(TAB_WIDTH, TAB_HEIGHT, .08).translate(center + (PANEL_WIDTH - TAB_WIDTH) / 2, mid + (PANEL_HEIGHT - TAB_HEIGHT) / 2, 0),
+    ...(sign.number ? [new THREE.BoxGeometry(TAB_WIDTH, TAB_HEIGHT, .08).translate(center + (PANEL_WIDTH - TAB_WIDTH) / 2, mid + (PANEL_HEIGHT - TAB_HEIGHT) / 2, 0)] : []),
     new THREE.CylinderGeometry(.22, .27, poleTop - ground, 10).translate(shoulder, (ground + poleTop) / 2, -.36),
     new THREE.CylinderGeometry(.33, .33, .22, 10).translate(shoulder, ground + .11, -.36),
     new THREE.BoxGeometry(railLength, .13, .24).translate(railCenter, beamY + beamHeight / 2, -.16),

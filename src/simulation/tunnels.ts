@@ -1,5 +1,5 @@
 import type {CityData,Point2,Road} from '../types';
-import {deckEdge,deckEdgeElevation,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
+import {deckEdge,deckEdgeElevation,deckUndersideAt,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
 import {sampleElevation,terrainGrid} from './terrain.ts';
 
 export interface TunnelMesh {vertices:Float32Array;indices:Uint32Array;}
@@ -369,6 +369,8 @@ function unionWalls(city:CityData,road:Road,mesh:TunnelMesh):TunnelMesh{
   return output.result();
 }
 
+/** A road deck this far over a highway's roadway is a bridge over it, not the deck it continues as. */
+const BRIDGE_HEADROOM=2.5;
 type WallTop={station:number;top:number};
 /** A retaining parapet uses straight grades above the terrain, rather than
  * tracing every depression left by street grading between neighboring ramps.
@@ -418,7 +420,9 @@ export function tunnelGeometry(city:CityData,road:Road){
   if(!road.tunnel||!road.elevations)return{walls:walls.result(),roof:roof.result(),barriers:barriers.result(),caps:caps.result()};
   const clearance=road.tunnel.clearance,stations=tunnelStations(road),total=stations.at(-1)!;
   const surfaceTerminal=(s:number)=>{const p=tunnelPointAt(road,s);return !tunnelCoveredAt(road,s)&&Math.abs(p.y-sampleElevation(city,p.x,p.z))<.6;};
-  const openStart=!road.tunnel.capStart&&surfaceTerminal(0),openEnd=!road.tunnel.capEnd&&surfaceTerminal(total);
+  // A highway's walled cut meets a deck with its own barrier at each end, not a street: its walls keep their height there
+  // (a street landing of one is a surfaceLandings stretch, which has no wall at all).
+  const openStart=!road.highway&&!road.tunnel.capStart&&surfaceTerminal(0),openEnd=!road.highway&&!road.tunnel.capEnd&&surfaceTerminal(total);
   const profiles=new Map([-1,1].map(side=>[side,openWallProfiles(city,road,side,s=>{
     const p=tunnelEdgeAt(road,s,side,-.08),ground=sampleElevation(city,p.x,p.z),terminal=Math.min(openStart?s:Infinity,openEnd?total-s:Infinity);
     const outside=tunnelEdgeAt(road,s,side,-.7);
@@ -427,9 +431,19 @@ export function tunnelGeometry(city:CityData,road:Road){
     if(terminal<12&&Math.abs(p.y-ground)<.4&&!inTunnelPortal(city,outside.x,outside.z))return p.y+.08+.72*Math.min(1,terminal/12);
     return Math.max(p.y,ground)+.8;
   })]));
+  // A street bridge over a highway's walled cut: the wall stops under the bridge's slab instead of standing across the street
+  // (its top is the ground beside the cut plus a parapet, which is where a level bridge's deck lies).
+  const slab=road.highway?(x:number,z:number,y:number)=>deckUndersideAt(city,x,z,y+BRIDGE_HEADROOM):undefined;
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
     const start=deckEdge(road,i-1,side,-.08),end=deckEdge(road,i,side,-.08),ya=deckEdgeElevation(road,i-1,side),yb=deckEdgeElevation(road,i,side),lo=stations[i-1],hi=stations[i];
     const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...new Set([...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(s=>s>lo&&s<hi),...profiles.get(side)!.flat().map(p=>p.station).filter(s=>s>lo&&s<hi)])].sort((a,b)=>a-b);
+    const under=(s:number)=>{const t=(s-lo)/(hi-lo);return slab!(start[0]+(end[0]-start[0])*t,start[1]+(end[1]-start[1])*t,ya+(yb-ya)*t);};
+    // Split where the wall line passes under a deck's edge, so the wall steps down there and not a few metres either side.
+    if(slab)for(let j=breaks.length-1;j>0;j--){
+      let a=breaks[j-1],b=breaks[j];const inside=under(a)<Infinity;if(inside===under(b)<Infinity)continue;
+      for(let k=0;k<10;k++){const m=(a+b)/2;if(under(m)<Infinity===inside)a=m;else b=m;}
+      breaks.splice(j,0,(a+b)/2);
+    }
     for(let j=1;j<breaks.length;j++){
       if(tunnelSurfaceLandingAt(road,(breaks[j-1]+breaks[j])/2))continue;
       const midpoint=(breaks[j-1]+breaks[j])/2,covered=tunnelCoveredAt(road,midpoint),profile=profiles.get(side)!.find(p=>midpoint>=p[0].station&&midpoint<=p.at(-1)!.station),at=(s:number)=>{
@@ -438,7 +452,12 @@ export function tunnelGeometry(city:CityData,road:Road){
         if(profile){let k=1;while(k<profile.length-1&&profile[k].station<s)k++;const a=profile[k-1],b=profile[k];top=a.top+(b.top-a.top)*(s-a.station)/(b.station-a.station);}
         return{x,z,y,top};
       };
-      const a=at(breaks[j-1]),b=at(breaks[j]);if(breaks[j]-breaks[j-1]>.001)box(walls,[a.x,a.z],[b.x,b.z],a.y-.3,b.y-.3,a.top,b.top,.4);
+      const a=at(breaks[j-1]),b=at(breaks[j]);
+      if(slab&&!covered){
+        const span=breaks[j]-breaks[j-1],m=under(midpoint);
+        if(m<Infinity){const la=under(breaks[j-1]+span*.02),lb=under(breaks[j]-span*.02);a.top=Math.min(a.top,la<Infinity?la:m);b.top=Math.min(b.top,lb<Infinity?lb:m);if(a.top<=a.y+.05&&b.top<=b.y+.05)continue;}
+      }
+      if(breaks[j]-breaks[j-1]>.001)box(walls,[a.x,a.z],[b.x,b.z],a.y-.3,b.y-.3,a.top,b.top,.4);
     }
   }
   for(const [lo,hi]of road.tunnel.covered??[[0,total]]){
@@ -450,7 +469,7 @@ export function tunnelGeometry(city:CityData,road:Road){
     for(const s of [a,b]){
       if(s<.01||s>total-.01)continue;
       const slice=sliceRoad(road,s,Math.min(total,s+.01)),left=deckEdge(slice,0,-1,-.3),right=deckEdge(slice,0,1,-.3),yl=deckEdgeElevation(slice,0,-1)+clearance,yr=deckEdgeElevation(slice,0,1)+clearance;
-      const topL=sampleElevation(city,...left)+.8,topR=sampleElevation(city,...right)+.8;
+      const topL=Math.min(sampleElevation(city,...left)+.8,slab?.(...left,yl-clearance)??Infinity),topR=Math.min(sampleElevation(city,...right)+.8,slab?.(...right,yr-clearance)??Infinity);
       if(topL>yl+.1&&topR>yr+.1)box(headers,left,right,yl,yr,topL,topR,.65);
     }
   }

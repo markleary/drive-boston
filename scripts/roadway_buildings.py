@@ -71,7 +71,16 @@ def prune_package(data_dir, city, headers, provenance):
     excluded = roadway_buildings(city, headers)
     if not excluded:
         return []
+    removed = remove_buildings(data_dir, city, excluded, provenance, headers)
+    exclusions = provenance.setdefault('roadwayBuildingExclusions', {})
+    exclusions.update({entry['id']: entry['roads'] for entry in removed})
+    return removed
 
+
+def remove_buildings(data_dir, city, excluded, provenance, headers=None):
+    """Drop the buildings `excluded` lists ({tile key: {ordinal: {'id', ...}}}) from
+    their tiles and from the far index, and keep the manifest counts in step
+    (`headers`, when given, are checked against the far index's counts)."""
     far_path = data_dir / city['tiles']['far']
     far, records = read_far(gzip.decompress(far_path.read_bytes()))
     packed = {}
@@ -85,7 +94,8 @@ def prune_package(data_dir, city, headers, provenance):
                 ordinal += 1
             if ordinal not in skip:
                 retained.append(record)
-        assert ordinal + 1 == len(headers[key]['buildings']), f'{key}: DBT2 and DBF2 counts differ'
+        if headers is not None:
+            assert ordinal + 1 == len(headers[key]['buildings']), f'{key}: DBT2 and DBF2 counts differ'
         if retained:
             packed[key] = len(retained), b''.join(retained)
     raw = pack_far(far['size'], packed)
@@ -114,6 +124,4 @@ def prune_package(data_dir, city, headers, provenance):
     tileformat.write_gzip(far_path, raw)
     city['tiles']['buildingCount'] -= len(removed)
     provenance['farLodBytes'] = len(raw)
-    exclusions = provenance.setdefault('roadwayBuildingExclusions', {})
-    exclusions.update({entry['id']: entry['roads'] for entry in removed})
     return removed

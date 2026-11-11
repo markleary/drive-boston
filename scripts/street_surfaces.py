@@ -826,7 +826,10 @@ def install(data_dir,source_dir,xy,log=print):
   for tx,tz in tiles_touching(line,size):
    tile=headers.get(tile_key(tx,tz))
    if tile is not None and r['id'] not in tile['roads'] and line.intersects(box(tx*size,tz*size,(tx+1)*size,(tz+1)*size)):tile['roads'].append(r['id']);relisted+=1
- edges=cast_edges(surface,curb_lines,tree=curb_tree);forced=mask_park_edges(edges,surface,city['parks']);masked=sum(int(m.sum()) for m in forced.values());log('Cast',len(edges),'roads; stations still inside curbed park edges paved beyond the curb',masked,'; roads listed in a further tile',relisted,flush=True)
+ # The Turnpike and Storrow Drive (build-boston-highways.py) bound the streets beside them like a curb: the survey has no curb line there.
+ from boston_highways import roadway_edges
+ highway=roadway_edges(data_dir,city);log('Highway pavement edges measured to like curbs',len(highway),flush=True)
+ edges=cast_edges(surface,curb_lines+highway,tree=STRtree(curb_lines+highway)) if highway else cast_edges(surface,curb_lines,tree=curb_tree);forced=mask_park_edges(edges,surface,city['parks']);masked=sum(int(m.sum()) for m in forced.values());log('Cast',len(edges),'roads; stations still inside curbed park edges paved beyond the curb',masked,'; roads listed in a further tile',relisted,flush=True)
  records=pavement_records(surface,edges,walks_tree,forced);log('Pavement records',len(records),flush=True)
  from street_meshes import weld_records
  welded=weld_records(surface,records,road_key);log('Welded aligned street ends',welded,flush=True)

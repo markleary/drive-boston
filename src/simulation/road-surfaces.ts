@@ -3,7 +3,7 @@ import {isHarvardBridgeRoad} from './harvard-bridge.ts';
 import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
 import {inTransitClearance} from './transit-corridors.ts';
 import {inTunnelPortal,tunnelAt} from './tunnels.ts';
-import {CLOSURE_SETBACK,LANE_WIDTH,motorwayLanes,pointAtDistance,speedClass,stations} from './motorway.ts';
+import {CLOSURE_SETBACK,LANE_WIDTH,isHighwayDeck,motorwayLanes,pointAtDistance,speedClass,stations} from './motorway.ts';
 
 /** Bounding boxes of 16-segment runs of a long polyline (a highway deck has
  * hundreds of points and is projected for every car on it every step). */
@@ -127,6 +127,17 @@ export function sampleVehicleSurface(city:CityData,x:number,z:number,yReference=
     if(h>best.height&&h<=yReference+.4)best={height:h,normal:roadNormal(city,road,x,z),road};
   }
   return best;
+}
+
+/** The slab underside of the lowest road deck standing over a point with its surface above `above` (a street bridge
+ * over a highway's cut), parapets included; Infinity where none does. Walls, masts and signs beneath stop under it. */
+export function deckUndersideAt(city:CityData,x:number,z:number,above:number){
+  let under=Infinity;
+  for(const road of elevatedNear(city,x,z)){
+    if(!road.elevations||road.tunnel||roadProjection(road,x,z).distance>roadWidthAt(road,x,z)/2+.45)continue;
+    const h=sampleRoadElevation(city,road,x,z);if(h>above)under=Math.min(under,h-(road.bridge?.thickness??.75));
+  }
+  return under;
 }
 
 /** Optional per-section widths taper shore ramps without a step in the deck edge. */
@@ -358,7 +369,7 @@ export function junctionMouths(city:CityData,road:Road){
  * whatever lies beyond the cross street. */
 export function bridgeBarriers(city:CityData,road:Road){
   if(isHarvardBridgeRoad(road))return[]; // Outer sidewalk parapets are built in harvard-bridge.ts.
-  const interstate=road.bridge?.id==='i93'&&speedClass(road)>0;
+  const interstate=isHighwayDeck(road);
   const mouths=interstate
     ? [road.startLevel===0?road.points[0]:undefined,road.endLevel===0?road.points.at(-1):undefined].filter(p=>p!==undefined)
     : junctionMouths(city,road);

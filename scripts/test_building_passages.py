@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 import numpy as np
-from building_passages import PASSAGES, apply_building_passages
+from building_passages import PASSAGES, apply_building_passages, passage_digest
 from mesh_winding import orient_shells
 
 
@@ -68,6 +68,31 @@ class BuildingPassagesTest(unittest.TestCase):
   v, f, metadata = apply_building_passages({'id': 'unverified-overlap'}, vertices, faces)
   np.testing.assert_array_equal(v, vertices);np.testing.assert_array_equal(f, faces)
   self.assertIsNone(metadata)
+
+ def test_a_generated_passage_follows_a_ramp_down_and_ends_where_its_ceiling_meets_the_base(self):
+  # A ramp diving under the building along z: 9 m of headroom at its mouth, the ceiling under the base 30 m in.
+  vertices, faces = box();ramp = {'road': 'ramp', 'start': [0., -22.], 'end': [0., 22.], 'left': -4., 'right': 4., 'ceiling': 9., 'ceilingEnd': -3.}
+  kept = [[[[-10., -20.], [10., -20.], [10., 20.], [-10., 20.], [-10., -20.]]]]
+  v, f, metadata = apply_building_passages({'id': 'over-a-ramp', 'baseElevation': 0}, vertices, faces, [ramp], kept)
+  self.assertEqual(metadata['roads'], ['ramp']);self.assertEqual(metadata['outline'], kept, 'the plan the uncut shell covered is kept for the stage that asked for the passage')
+  cut = metadata['highway'][0];self.assertGreater(cut['cutSourceTriangles'], 0);self.assertEqual(metadata['digest'], passage_digest([ramp]))
+  along = sorted({round(float(p[1]), 3) for p in cut['polygon']});self.assertAlmostEqual(along[-1], -22+44*(9-.05)/12, places=2, msg='the corridor stops where the ceiling comes down to the base')
+  self.assertAlmostEqual(cut['soffitArea'], 8*(along[-1]+20), delta=.5)
+  # Over the ramp the shell is open up to the falling ceiling, then closed by its soffit; beyond the passage and beside it the walls stand.
+  for z in (-15., -5., 5.):
+   ceiling = 9-12*(z+22)/44;up = hits(v, f, [0, .05, z], [0, 1, 0])
+   self.assertAlmostEqual(up[0], ceiling-.05, places=3, msg='a ray up from the ramp meets the soffit at the ceiling')
+  inside = hits(v, f, [0, 1, -30], [0, 0, 1]);beside = hits(v, f, [7, 1, -30], [0, 0, 1])
+  self.assertAlmostEqual(inside[0], 8+44*(9-1)/12, places=3, msg='the mouth is open: a ray into it first meets the falling soffit')
+  self.assertAlmostEqual(beside[0], 10, places=3, msg='beside the passage the front wall stands');self.assertEqual(len(beside), 2)
+  again = apply_building_passages({'id': 'over-a-ramp', 'baseElevation': 0, 'buildingPassage': metadata}, v, f, [ramp])
+  self.assertIsNone(again[2], 'a shell carved for these passages is left as it is')
+  with self.assertRaises(ValueError):apply_building_passages({'id': 'over-a-ramp', 'baseElevation': 0, 'buildingPassage': metadata}, v, f, [{**ramp, 'ceiling': 8.}])
+
+ def test_a_generated_passage_that_meets_no_solid_is_no_passage(self):
+  vertices, faces = box()
+  v, f, metadata = apply_building_passages({'id': 'beside-a-ramp', 'baseElevation': 0}, vertices, faces, [{'road': 'ramp', 'start': [40., -22.], 'end': [40., 22.], 'left': -4., 'right': 4., 'ceiling': 9., 'ceilingEnd': 6.}])
+  self.assertIsNone(metadata);np.testing.assert_array_equal(v, vertices);np.testing.assert_array_equal(f, faces)
 
 
 if __name__ == '__main__':unittest.main()

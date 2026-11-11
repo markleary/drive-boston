@@ -1311,10 +1311,11 @@ def install(city,source,heights,footprints,mesh=None,joins=None):
  return record,roads+recs,result
 
 
-def replay(data_dir,city,record,source,footprints):
- """Rerun the stage from the recorded originals; True when it rewrites the installed package exactly."""
+def replay(data_dir,city,record,source,footprints,installed=None):
+ """Rerun the stage from the recorded originals; True when it rewrites the installed package exactly.
+ `installed` is the int16 graded grid this stage left, where a later stage (the Turnpike) has changed the shipped one."""
  from north_overpasses import load_grid
- grid=city['elevation'];roads=copy.deepcopy(city['roads']);installed=load_grid(data_dir/grid['file']);heights=installed.copy();restore(roads,heights,record)
+ grid=city['elevation'];roads=copy.deepcopy(city['roads']);installed=load_grid(data_dir/grid['file']) if installed is None else installed;heights=installed.copy();restore(roads,heights,record)
  again,out,result=install({**city,'roads':roads},source,heights,footprints,SurveyMesh(data_dir,city),tunnel_joins(data_dir,city))
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']}
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
