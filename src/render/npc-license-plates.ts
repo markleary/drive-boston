@@ -16,8 +16,8 @@ function registration(random:()=>number){
 
 /** One small texture atlas per fleet, with one immutable cell per actor. Both
  * end plates share that cell; paint colors never tint the registration batch. */
-export function createNPCPlateAtlas(capacity:number,random=Math.random){
-  const columns=Math.min(8,capacity),rows=Math.ceil(capacity/columns),cellW=256,cellH=128,pad=2;
+export function createNPCPlateAtlas(capacity:number,random=Math.random,mobile=false){
+  const columns=Math.min(8,capacity),rows=Math.ceil(capacity/columns),cellW=mobile?128:256,cellH=cellW/2,pad=2;
   const canvas=typeof document==='undefined'?undefined:document.createElement('canvas');
   if(canvas){canvas.width=columns*cellW;canvas.height=rows*cellH;}
   const context=canvas?.getContext('2d'),texture=canvas?new THREE.CanvasTexture(canvas):null;

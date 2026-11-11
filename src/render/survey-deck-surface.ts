@@ -6,6 +6,7 @@ import type {DeckParapet} from '../simulation/survey-deck-parapets.ts';
 import {deckEdge,sampleRoadElevation} from '../simulation/road-surfaces.ts';
 import {PartBatches,TriangleWriter,box} from './geometry-writer.ts';
 import {drain} from './pacing.ts';
+import {inheritRoadHeadlights} from './road-headlights.ts';
 
 const LINE=.15,DASH=3,GAP=9,MIN_LANE_WIDTH=3.4,PROFILE=5;
 // A sourced road deck paves the survey where it runs from 1.5 cm under it (its
@@ -16,7 +17,7 @@ const UNDER=.015,OVER=1.5;
 // camera keeps it, and the paint above it, from flickering with the deck at range.
 const decked=new WeakMap<THREE.Material,THREE.Material>();
 const biased=(material:THREE.Material,units:number)=>{
-  let out=decked.get(material);if(!out){out=material.clone();out.polygonOffset=true;out.polygonOffsetFactor=-1;out.polygonOffsetUnits=units;decked.set(material,out);}
+  let out=decked.get(material);if(!out){out=material.clone();inheritRoadHeadlights(material,out);out.polygonOffset=true;out.polygonOffsetFactor=-1;out.polygonOffsetUnits=units;decked.set(material,out);}
   return out;
 };
 

@@ -339,11 +339,16 @@ export function addTdGardenDetails(scene:THREE.Scene,city:CityData,mobile=false)
   ]);
   const billboard=slideshow(768,440,[
     c=>{
-      fill(c,'#f2e9d5',768,440);
+      const orange='#ff671f',pink='#da1884',coffee='#5a3024';
+      fill(c,'#fff8f1',768,440);
       c.fillStyle='#6b4a2f';c.beginPath();c.moveTo(92,150);c.lineTo(268,150);c.lineTo(244,392);c.lineTo(116,392);c.fill();
       c.fillStyle='rgba(255,255,255,.75)';for(const [x,y,s] of [[124,176,44],[186,200,40],[150,250,46],[206,268,36],[136,322,40]])c.fillRect(x,y,s,s);
-      c.fillStyle='#fdfaf2';c.fillRect(80,128,200,26);c.strokeStyle='#1b7f86';c.lineWidth=14;c.beginPath();c.moveTo(214,152);c.lineTo(246,40);c.stroke();
-      write(c,'ICED',524,112,128,'#5a3a22');write(c,'COFFEE',524,226,104,'#5a3a22','900',430);write(c,'YES, IN JANUARY.',524,338,46,'#1b7f86','700');
+      c.strokeStyle=pink;c.lineWidth=14;c.beginPath();c.moveTo(214,144);c.lineTo(246,40);c.stroke();
+      c.fillStyle=orange;c.fillRect(80,128,200,26);
+      write(c,'Dunks',518,91,132,orange);
+      write(c,'Iced coffee.',518,198,80,pink,'900',440);
+      write(c,'Wicked good,',518,303,58,coffee,'700',440);
+      write(c,'all year round.',518,370,58,coffee,'700',440);
     },
     c=>{fill(c,'#14335c',768,440);write(c,'HONK IF YOU',384,118,92,'#ffd23f');write(c,'LOVE BOSTON',384,230,104,'#ffffff','900',700);write(c,'(PRESS F. THEY CAN TAKE IT.)',384,350,40,'#a9c8ee','700');},
   ]);

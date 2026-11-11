@@ -6,11 +6,12 @@ import {mergeSpatialGeometries} from './spatial-batches.ts';
 import {TriangleWriter} from './geometry-writer.ts';
 import {signMaterial} from './tunnels.ts';
 import {drain,due,type Pace} from './pacing.ts';
+import {inheritRoadHeadlights} from './road-headlights.ts';
 
-/** Materials of the highway closures and lane paint, shared by every tile. */
-let shared:{yellow:THREE.Material;barrier:THREE.Material;amber:THREE.Material;metal:THREE.Material;sign:THREE.Material}|undefined;
+/** Materials of the highway closures, shared by every tile. */
+let shared:{barrier:THREE.Material;amber:THREE.Material;metal:THREE.Material;sign:THREE.Material}|undefined;
 const closureMaterials=()=>shared??={
-  yellow:new THREE.MeshStandardMaterial({color:'#d9b443',roughness:.87}),barrier:new THREE.MeshStandardMaterial({color:'#b4b2a6',roughness:.93}),
+  barrier:new THREE.MeshStandardMaterial({color:'#b4b2a6',roughness:.93}),
   amber:new THREE.MeshBasicMaterial({color:'#f0b23c'}),metal:new THREE.MeshStandardMaterial({color:'#394342',roughness:.8,metalness:.3}),sign:signMaterial(['ROAD CLOSED','DO NOT ENTER'],true),
 };
 /** A 15 cm line along `points`, 4 cm over the deck, its corners on the deck. */
@@ -92,7 +93,10 @@ export function* roadStructureSteps(scene:THREE.Object3D,city:CityData,asphalt?:
       piers.push(new THREE.BoxGeometry(p.width-.5,.55,2.8).rotateY(p.yaw).translate(p.x,p.top-.28,p.z));
     }
   }
-  const lanePaint=yellow.length?closureMaterials().yellow:paint,{barrier,amber}=closures?closureMaterials():{barrier:concrete,amber:paint};
+  const lanePaint=yellow.length?new THREE.MeshStandardMaterial({color:'#d9b443',roughness:.87}):paint;
+  inheritRoadHeadlights(asphalt,paint);
+  if(lanePaint!==paint)inheritRoadHeadlights(asphalt,lanePaint);
+  const {barrier,amber}=closures?closureMaterials():{barrier:concrete,amber:paint};
   for(const [geometries,material]of [[decks,asphalt],[slabs,steel],[markings,paint],[yellow,lanePaint],[rails,concrete],[piers,concrete],[jerseys,barrier],[glints,amber]]as const){
     for(const mesh of mergeSpatialGeometries(geometries,material)){mesh.castShadow=geometries!==markings&&geometries!==yellow&&geometries!==glints;mesh.receiveShadow=true;group.add(mesh);}
   }
