@@ -2,6 +2,7 @@ import type {CityData,ParkPath,Point2,Road} from '../types';
 import {sampleElevation} from './terrain.ts';
 import {pointInside} from './roads.ts';
 import {FOOTBRIDGE_SLAB,roadProjection,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
+import {tunnelCoveredAt} from './tunnels.ts';
 export {FOOTBRIDGE_SLAB};
 
 /** One profile for the visible slab and wheel/aircraft collision. A path with
@@ -66,8 +67,8 @@ export function footbridgeSupports(city:CityData,road:Road,path:ParkPath):Footbr
   const blocked=(x:number,z:number,top:number)=>waters.some(w=>pointInside([x,z],w.rings[0])&&!w.rings.slice(1).some(ring=>pointInside([x,z],ring)))||near.some(({r,stations})=>{
     const hit=roadProjection(r,x,z);if(hit.distance>=roadWidthAt(r,x,z)/2+CLEAR+FOOTBRIDGE_COLUMN/2)return false;
     if(sampleRoadElevation(city,r,x,z)>top-1)return false; // a street the ramp lands beside, at the deck's own height
-    // On a roofed stretch of a tunnel record the column stands on the roof.
-    const at=stations[hit.index]+(stations[hit.index+1]-stations[hit.index])*hit.t;return !r.tunnel?.covered?.some(([a,b])=>at>=a&&at<=b);
+    // On a roofed stretch of a tunnel record the column stands on the roof (a record that lists no `covered` intervals is roofed all along).
+    return !tunnelCoveredAt(r,stations[hit.index]+(stations[hit.index+1]-stations[hit.index])*hit.t);
   });
   const samples:{x:number;z:number;top:number;along:number;yaw:number;needs:boolean;clear:boolean}[]=[];let along=0;
   for(let i=1;i<p.length;i++){

@@ -146,7 +146,11 @@ def room(road):
  return H.CLEAR_UNDER if road.get('highway') or H.stage_owned(road) or road.get('lanes') else STREET_UNDER
 
 
-def covered(road,along):return any(a-1e-6<=along<=b+1e-6 for a,b in (road.get('tunnel') or {}).get('covered',[]))
+def covered(road,along):
+ """Whether a road is roofed at a station. A tunnel record that lists no `covered` intervals is roofed all along (Road.tunnel in src/types.ts, tunnelCoveredAt in src/simulation/tunnels.ts); one that lists none of its length is an open cut."""
+ tunnel=road.get('tunnel')
+ if tunnel is None:return False
+ spans=tunnel.get('covered');return spans is None or any(a-1e-6<=along<=b+1e-6 for a,b in spans)
 
 
 def package_roads(data_dir,city):

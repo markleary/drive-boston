@@ -6,12 +6,13 @@ import {footbridgeRoad,footbridgeSupports,footbridgeTreads,FOOTBRIDGE_SLAB,FOOTB
 import {highwayMasts} from '../src/simulation/highway-lighting.ts';
 import {deckUndersideAt,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
+import {tunnelCoveredAt} from '../src/simulation/tunnels.ts';
 import {loadMetroCity,windowCity,readJson} from './helpers/metro-city.mjs';
 
 // The footbridges over the Turnpike and Storrow Drive (scripts/footbridges.py): each is one park path with stored heights.
 const record=readJson('provenance.json').footbridges,stations=p=>p.reduce((s,q,i)=>(s.push(i?s[i-1]+Math.hypot(q[0]-p[i-1][0],q[1]-p[i-1][1]):0),s),[]);
 const roomFor=r=>r.highway==='storrow'||r.bridge?.id==='storrow'?3.2:r.highway||r.lanes?3.4:4.25;
-const covered=(r,x,z)=>{const hit=roadProjection(r,x,z),s=stations(r.points),at=s[hit.index]+(s[hit.index+1]-s[hit.index])*hit.t;return !!r.tunnel?.covered?.some(([a,b])=>at>=a&&at<=b);};
+const covered=(r,x,z)=>{const hit=roadProjection(r,x,z),s=stations(r.points);return tunnelCoveredAt(r,s[hit.index]+(s[hit.index+1]-s[hit.index])*hit.t);};
 async function bridge(id){
  const b=record.bridges.find(b=>b.id===id),key=b.tiles[0],[tx,tz]=key.split('_').map(Number),metro=await loadMetroCity({tiles:[key]});
  const path=metro.parkPaths.find(p=>p.id===`footbridge-${id}-${key}_0`);assert.ok(path,`${id} is a park path of tile ${key}`);
@@ -43,6 +44,15 @@ test('columns stand at the edges of a roadway and along the ramps, never in the 
  assert.ok(supports.every(s=>s.top-s.bottom>1.2&&Math.abs(s.top-(Math.min(4,s.x*.5)+.05-FOOTBRIDGE_SLAB))<1e-9&&s.width===2.4),'each reaches the slab');
  assert.ok(supports.every((s,i)=>!i||s.x-supports[i-1].x<=Math.max(9,8+2*(.8+FOOTBRIDGE_COLUMN/2)+2)+1e-9),'no gap longer than the spacing, or a roadway with its shoulders');
  assert.ok(!supports.some(s=>s.x<2.4),'none where the ramp is still at the ground');assert.equal(supports[0].x,3,'the first where the ramp has risen 1.2 m');
+});
+
+test('a tunnel record that lists no roofed stretches is roofed all along: columns stand on it as on one roofed from end to end, and keep out of an open cut',()=>{
+ const points=[],elevations=[];for(let x=0;x<=50;x+=2){points.push([x,0]);elevations.push(Math.min(4,x*.5)+.05);}
+ const path={id:'p',width:2.4,bridge:true,points,elevations},bore=tunnel=>({id:'bore',name:'',width:8,oneway:1,points:[[30,-30],[30,30]],elevations:[-6,-6],tunnel});
+ const columns=tunnel=>{const city={elevation:undefined,roads:[bore(tunnel)],water:[]};return footbridgeSupports(city,footbridgeRoad(city,path),path);};
+ const listed=columns({clearance:4,covered:[[0,60]]}),omitted=columns({clearance:4}),open=columns({clearance:4,covered:[]}),inRoadway=s=>Math.abs(s.x-30)<4+.8+FOOTBRIDGE_COLUMN/2-1e-9;
+ assert.ok(listed.some(inRoadway),'a column stands on the roof');assert.deepEqual(omitted,listed,'no list is a roof from end to end (Road.tunnel in src/types.ts)');
+ assert.ok(open.length>=4&&!open.some(inRoadway),'an empty list is an open cut: none in its roadway or within its shoulder');
 });
 
 for(const b of record.bridges)test(`${b.id}: the installed bridge is whole, lands on the ground and leaves the roads beneath their room`,async()=>{

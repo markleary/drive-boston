@@ -70,6 +70,10 @@ class ProfileTest(unittest.TestCase):
   roofed=road('tunnel',20,-6,tunnel={'clearance':3.2,'covered':[[0,100]]},highway='storrow')
   self.assertEqual(self.planned([road('storrow-x',31,-.5,bridge={'id':'storrow','kind':H.KIND}),roofed])['crossings'][0]['road'],'storrow-x')
   self.assertEqual(len(self.planned([road('storrow-x',31,-.5,bridge={'id':'storrow','kind':H.KIND}),{**roofed,'tunnel':{'clearance':3.2,'covered':[]}}])['crossings']),2,'an open cut is a road beneath')
+  # a tunnel record that lists no roofed stretches is roofed all along (Road.tunnel in src/types.ts), so it asks for no room either
+  bore=self.planned([road('storrow-x',31,-.5,bridge={'id':'storrow','kind':H.KIND}),{**roofed,'tunnel':{'clearance':3.2}}])
+  self.assertEqual([c['road'] for c in bore['crossings']],['storrow-x']);self.assertEqual(bore['deck'],round(-.5+H.STORROW_UNDER+F.SLAB+F.MARGIN,4))
+  self.assertTrue(F.covered({'tunnel':{'clearance':3.2}},5));self.assertFalse(F.covered({'tunnel':{'clearance':3.2,'covered':[]}},5));self.assertFalse(F.covered({'bridge':{'id':'x'}},5))
 
  def test_a_ramp_is_held_over_ground_that_rises_faster_and_steps_are_marked(self):
   def hump(x,z):return 1.5 if z==0 and 8<=x<=12 else -1.0
