@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CityArea, CityData, Point2 } from '../types';
 import { pointInside } from '../simulation/roads';
 import { sampleElevation } from '../simulation/terrain';
-import {footbridgeRoad} from '../simulation/footbridges.ts';
+import {footbridgeRoad,footbridgeSupports,footbridgeTreads,FOOTBRIDGE_COLUMN,FOOTBRIDGE_HEAD,FOOTBRIDGE_HEAD_LENGTH} from '../simulation/footbridges.ts';
 import {roadSlabGeometry,deckEdge} from '../simulation/road-surfaces.ts';
 import {canopyHitsDeck,PARK_CANOPY} from '../simulation/deck-canopy.ts';
 import { canvasTexture, seeded } from './materials';
@@ -174,7 +174,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     const merged=mergeGeometries(waterSheets,false);waterSheets.forEach(g=>g.dispose());
     if(merged){yield* boundingSphereSteps(merged,pace);const mesh=new THREE.Mesh(merged,waterMaterial);mesh.name='Water';mesh.receiveShadow=true;mesh.userData.noAO=true;group.add(mesh);}
   }
-  let bridges=0,benches=0,lamps=0;
+  let bridges=0,benches=0,lamps=0,piers=0;
   // The Mall's walks are its own (commonwealth-mall.ts): the surveyed polygon where there is one, concrete where not.
   const onMall=mallPathTest(parks);
   for(const path of paths){
@@ -187,15 +187,24 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       const slab=roadSlabGeometry(city,road),deck=new THREE.BufferGeometry();
       deck.setAttribute('position',new THREE.BufferAttribute(slab.vertices,3));deck.setIndex(new THREE.BufferAttribute(slab.indices,1));deck.computeVertexNormals();
       batches.at(stone,path.points[0][0],path.points[0][1]).append(deck);deck.dispose();
+      // A stored line has stations a few decimetres apart round its turns: a post every 1.3 m of rail there, not one a station.
+      const stored=path.elevations?.length===path.points.length,since=[Infinity,Infinity];
       for(let i=1;i<road.points.length;i++){
         const y0=road.elevations![i-1],y1=road.elevations![i];
         for(const side of [-1,1]){
-          const a=deckEdge(road,i-1,side,.12),b=deckEdge(road,i,side,.12),dx=b[0]-a[0],dz=b[1]-a[1],seg=Math.hypot(dx,dz),x=(a[0]+b[0])/2,z=(a[1]+b[1])/2;
-          part(box(.065,1.05,.065),iron,x,(y0+y1)/2+.5,z);
+          const a=deckEdge(road,i-1,side,.12),b=deckEdge(road,i,side,.12),dx=b[0]-a[0],dz=b[1]-a[1],seg=Math.hypot(dx,dz),x=(a[0]+b[0])/2,z=(a[1]+b[1])/2,k=side<0?0:1;
+          if(stored&&seg<.04)continue; // the inside of a turn back, where the edge all but stands still
+          if(!stored||(since[k]+=seg)>=1.3){part(box(.065,1.05,.065),iron,x,(y0+y1)/2+.5,z);since[k]=0;}
           const rail=new THREE.BoxGeometry(.085,.075,Math.hypot(seg,y1-y0)+.05);rail.rotateX(-Math.atan2(y1-y0,seg));
           part(rail,iron,x,(y0+y1)/2+1.04,z,Math.atan2(dx,dz));
         }
       }
+      // A deck over a road stands on columns, and its mapped steps are steps.
+      for(const s of footbridgeSupports(city,road,path)){
+        part(box(FOOTBRIDGE_COLUMN,s.top-FOOTBRIDGE_HEAD-s.bottom,FOOTBRIDGE_COLUMN),stone,s.x,(s.top-FOOTBRIDGE_HEAD+s.bottom)/2,s.z,s.yaw);
+        part(box(s.width-.3,FOOTBRIDGE_HEAD,FOOTBRIDGE_HEAD_LENGTH),stone,s.x,s.top-FOOTBRIDGE_HEAD/2,s.z,s.yaw);piers++;
+      }
+      for(const t of footbridgeTreads(road,path))part(box(t.width,t.height,t.depth),stone,t.x,t.y,t.z,t.yaw);
     }else{
       for(const points of outsideGreenwayPath(path.points)){const p=points[0];drapedRibbonInto(batches.at(pathMaterial,p[0],p[1]),city,points,path.width,.052);}
     }
@@ -315,7 +324,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   if(christianSciencePlaza){
     yield* christianSciencePlazaSteps(city,group,options);
   }
-  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
+  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,footbridgePiers:piers,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
   (options.target??scene).add(group);return group;
 }
 

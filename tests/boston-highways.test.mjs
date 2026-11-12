@@ -230,6 +230,99 @@ test('a street bridge over the cut spans it: Tremont Street, the walls beneath e
   assert.ok(clear.length<all.length&&clear.length>all.length*.9,`masts under a bridge are left out (${all.length-clear.length} of ${all.length})`);
 });
 
+test('a bridge with a landing down in the cut is level between its banks: Beacon Street, Cambridge Street and Arlington Street',()=>{
+  const piece=id=>{const r=city.roads.find(r=>r.id===id);assert.ok(r?.elevations,`${id} is a deck piece`);return r;};
+  // The sharpest change of grade along a chain of pieces, a joint between two pieces included, and its steepest grade.
+  const shape=ids=>{
+    const pieces=ids.map(piece),grades=[];
+    for(let k=0;k<pieces.length;k++){
+      const r=pieces[k],along=stations(r.points);
+      if(k){assert.deepEqual(pieces[k-1].points.at(-1),r.points[0],`${ids[k-1]} runs on into ${ids[k]}`);assert.ok(Math.abs(pieces[k-1].elevations.at(-1)-r.elevations[0])<1e-3,'at one height');}
+      for(let i=1;i<along.length;i++)if(along[i]-along[i-1]>.7)grades.push((r.elevations[i]-r.elevations[i-1])/(along[i]-along[i-1]));
+    }
+    return{pieces,steepest:Math.max(...grades.map(Math.abs)),sharpest:Math.max(...grades.slice(1).map((g,i)=>Math.abs(g-grades[i]))),top:Math.max(...pieces.flatMap(r=>r.elevations))};
+  };
+  const room=(pieces,prefix)=>{
+    const under=family(prefix).filter(r=>pieces.some(b=>b.points.some(p=>roadProjection(r,...p).distance<roadWidthAt(r,...p)/2)));assert.ok(under.length,`${prefix} passes under the bridge`);let least=Infinity;
+    for(const r of under)for(const b of pieces)b.points.forEach((p,i)=>{if(roadProjection(r,...p).distance<=roadWidthAt(r,...p)/2)least=Math.min(least,b.elevations[i]-.75-sampleRoadElevation(city,r,...p));});
+    return least;
+  };
+  // Beacon Street by Fenway Park: the Blandford Street Steps come up to the westbound bridge from beside the Turnpike. Their landing
+  // down there kept the whole chain on build-metro.py's lifted nodes: 8.5 to 10 m with a 1.5 m dip at the node the steps reach,
+  // 4 m over the eastbound bridge beside it.
+  const west=shape(['9354-0-0','9353-0-0','15629-0-0']),east=shape(['15627-0-0','8898-0-0','8875-0-0']);
+  assert.ok(west.sharpest<.04,`no break on the westbound bridge (${(west.sharpest*100).toFixed(1)}%)`);assert.ok(west.steepest<.05,`nor a ramp (${(west.steepest*100).toFixed(1)}%)`);
+  assert.ok(Math.abs(west.top-east.top)<.75,`the two carriageways are one bridge (${west.top.toFixed(2)} and ${east.top.toFixed(2)} m)`);
+  for(const prefix of ['i90-eb','i90-wb'])assert.ok(room(west.pieces,prefix)>=3.4,`room under the westbound slab over ${prefix}`);
+  const steps=shape(['7661-0-0']),landing=steps.pieces[0];assert.ok(Math.abs(landing.elevations[0]-sampleElevation(city,...landing.points[0]))<.05,'the steps still start on the ground beside the Turnpike');
+  assert.ok(Math.abs(landing.elevations.at(-1)-west.pieces[0].elevations.at(-1))<1e-3,'and reach the deck at its height');assert.ok(steps.steepest<.18,`climbing the bank at ${(steps.steepest*100).toFixed(1)}%, not copying its steps`);
+  // Cambridge Street over the Allston ramps: one carriageway's western landing lies 1.4 m over the ramps, a hair under what counted as a bank.
+  const north=shape(['11810-0-0','7281-0-0','7280-0-0']),south=shape(['8714-0-0','8648-0-0','10285-0-0']);
+  assert.ok(Math.abs(north.top-south.top)<.5,`Cambridge Street's carriageways are one bridge (${north.top.toFixed(2)} and ${south.top.toFixed(2)} m)`);assert.ok(north.sharpest<.06&&north.steepest<.1);
+  // Arlington Street: the Turnpike's entrance leaves the street at the bridge's northern landing and counted as a road beneath it there.
+  // (the deck falls 3.5% from the northern bank to the southern one, 2 m lower: its crest at the northern node is the 4% that is left of a 19% peak)
+  const arlington=shape(['16349-0-0','16350-0-0','16351-0-0']);assert.ok(arlington.sharpest<.06,`no peak on the Arlington Street bridge (${(arlington.sharpest*100).toFixed(1)}%)`);assert.ok(arlington.steepest<.06);
+  for(const prefix of ['i90-eb','i90-wb'])assert.ok(room(arlington.pieces,prefix)>=3.4,`room under the Arlington Street slab over ${prefix}`);
+});
+
+test('Brookline\'s two bridges over the Turnpike: Carlton Street is level between its banks, Saint Mary\'s Street is one bridge, and the road keeps its floor beneath both',()=>{
+  const piece=id=>city.roads.find(r=>r.id===id),grade=r=>{const along=stations(r.points);let g=0;for(let i=1;i<along.length;i++)if(along[i]-along[i-1]>.7)g=Math.max(g,Math.abs(r.elevations[i]-r.elevations[i-1])/(along[i]-along[i-1]));return g;};
+  // Carlton Street: OpenStreetMap maps the span and the two legs it parts into at its southern end as three bridge ways, and each was
+  // profiled between the survey's ground at its own ends. Their common node lies over the bank of the cut: the deck fell 3 m to it
+  // from the legs (26% and 21%) and climbed out again, and the Turnpike was taken 3.4 m under that low point, 3.3 m below its own cut.
+  const span=piece('osm-1388687878-0'),leg=piece('osm-1388687881-0'),arm=piece('osm-1388687882-0'),north=piece('osm-429053400-0-deck'),street=piece('osm-429053400-0');
+  assert.ok([span,leg,arm,north].every(r=>r?.elevations&&r.bridge?.kind==='elevated'),'the span, its two legs and the piece that carries it on to the bank are decks');assert.ok(street&&!street.elevations,'the street keeps the rest');
+  assert.deepEqual([span.startLevel,span.endLevel,leg.startLevel,arm.endLevel,north.startLevel,north.endLevel],[1,1,1,1,1,0],'the node of the three ways is a node of the bridge');
+  const node=span.elevations[0];assert.deepEqual(leg.points[0],span.points[0]);assert.deepEqual(arm.points.at(-1),span.points[0]);assert.ok(Math.abs(leg.elevations[0]-node)<1e-3&&Math.abs(arm.elevations.at(-1)-node)<1e-3,'the three ways meet at one height');
+  assert.ok(Math.abs(north.elevations[0]-span.elevations.at(-1))<1e-3&&north.points[0][0]===span.points.at(-1)[0]);
+  assert.ok(Math.max(...span.elevations)-Math.min(...span.elevations)<.5&&Math.min(...span.elevations)>1.5,`the span is level (${Math.min(...span.elevations).toFixed(2)} to ${Math.max(...span.elevations).toFixed(2)} m)`);
+  for(const [r,i] of [[leg,leg.points.length-1],[arm,0],[north,north.points.length-1]])assert.ok(Math.abs(r.elevations[i]-sampleElevation(city,...r.points[i]))<.05,`${r.id} lands on the ground`);
+  assert.ok(grade(span)<.03&&grade(north)<.03&&grade(arm)<.08&&grade(leg)<.14,`no fall to the node (${[span,north,arm,leg].map(r=>(grade(r)*100).toFixed(1)).join(', ')}%)`);
+  // Saint Mary's Street is the line between Boston and Brookline, and both sources carried its bridge: Brookline's copy ran down the bank
+  // to the bridge's first node, crossed the cut as a second deck from its floor up and ended in a stub. Only Boston's levelled bridge is left.
+  for(const id of ['osm-48917525-0','osm-43100845-0','osm-93120171-0'])assert.ok(!piece(id),`${id}, a copy of the bridge, has left the package`);
+  const boston=['9794-0-0','9790-0-0','9792-0-0','9793-0-0'].map(piece);assert.ok(boston.every(r=>r?.elevations));
+  const over=city.roads.filter(r=>r.elevations&&!r.tunnel&&!isMotorway(r)&&roadProjection(r,-2636.7,147.5).distance<12);assert.deepEqual(over.map(r=>r.id).sort(),['9790-0-0','9792-0-0'],'one deck over the cut on the street\'s line');
+  for(const p of [[-2626.388,88.33],[-2642.013,184.151]])assert.ok(city.roads.filter(r=>!r.elevations&&r.points.some(q=>Math.hypot(q[0]-p[0],q[1]-p[1])<.05)).length>=1,'the streets beyond each landing still meet the bridge');
+  // The road beneath: 3.4 m under each slab, and no dip under either bridge (it lay at -5.7 m under Carlton Street and -4.8 m under Saint Mary's Street).
+  for(const [name,pieces,x,z] of [['Carlton Street',[span],-2844,55],["Saint Mary's Street",boston,-2637,148]])for(const prefix of ['i90-eb','i90-wb']){
+    const records=family(prefix),points=records.flatMap(r=>r.points.map((q,i)=>({q,y:r.elevations[i],r}))),at=points.reduce((best,c)=>Math.hypot(c.q[0]-x,c.q[1]-z)<Math.hypot(best.q[0]-x,best.q[1]-z)?c:best);
+    const beside=points.filter(c=>{const d=Math.hypot(c.q[0]-at.q[0],c.q[1]-at.q[1]);return d>60&&d<110;});assert.ok(beside.length>10&&Math.hypot(at.q[0]-x,at.q[1]-z)<25);
+    assert.ok(at.y>=Math.min(...beside.map(c=>c.y))-.6,`${prefix} does not dip under ${name}: ${at.y.toFixed(2)} m against ${Math.min(...beside.map(c=>c.y)).toFixed(2)} m beside it`);
+    assert.ok(Math.abs(at.y-.35-sampleElevation(city,...at.q))<1.2||at.r.tunnel,`${prefix} rides on its ground under ${name}`);
+    for(const b of pieces)b.points.forEach((q,i)=>{for(const r of records)if(roadProjection(r,...q).distance<=roadWidthAt(r,...q)/2)assert.ok(b.elevations[i]-.75-sampleRoadElevation(city,r,...q)>=3.4,`room under ${b.id} over ${r.id}`);});
+  }
+});
+
+test('a bridge\'s landing in a hollow of the ground is raised to the deck: Carlton Street\'s two legs are one surface, and Cambridge Street no longer dips to its bridge in Allston',()=>{
+  const piece=id=>{const r=city.roads.find(r=>r.id===id);assert.ok(r,id);return r;};
+  // The ground every 2 m along a street from one of its ends.
+  const beyond=(id,reversed,length=40)=>{
+    const points=reversed?[...piece(id).points].reverse():piece(id).points,out=[];let done=0,next=0;
+    for(let i=1;i<points.length&&next<=length;i++){const a=points[i-1],b=points[i],d=Math.hypot(b[0]-a[0],b[1]-a[1]);for(;next<=done+d&&next<=length;next+=2){const t=d?(next-done)/d:0;out.push(sampleElevation(city,a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t));}done+=d;}
+    return out;
+  };
+  // Carlton Street. OpenStreetMap ends the bridge's two legs on the slope the survey shows under it (0.8 and 1.1 m), and the junction of Carlton
+  // and Mountfort Streets was graded down to them: the level deck fell 0.9 and 0.6 m to landings 11 m apart, and the legs, each drawn at its full
+  // width, overlapped with the northbound slab half a metre over the southbound one, a ledge across the southbound lane.
+  const span=piece('osm-1388687878-0'),leg=piece('osm-1388687881-0'),arm=piece('osm-1388687882-0'),node=span.elevations[0],low=[leg.elevations.at(-1),arm.elevations[0]];
+  assert.ok(low.every(y=>node-y<.1&&node-y>-.02),`the junction south of the bridge is level with it (landings at ${low.map(y=>y.toFixed(2)).join(' and ')} m under a deck at ${node.toFixed(2)} m)`);
+  let overlap=0;
+  for(const [a,b] of [[leg,arm],[arm,leg]])a.points.forEach((q,i)=>{if(roadProjection(b,...q).distance<=b.width/2){overlap++;assert.ok(Math.abs(a.elevations[i]-sampleRoadElevation(city,b,...q))<.06,`${a.id} and ${b.id} lie at one height where they overlap, at ${q}`);}});
+  assert.ok(overlap>=6,'the two legs do overlap');
+  for(const [id,reversed,landing] of [['osm-43100841-0',false,low[0]],['osm-1388687883-0',true,low[1]],['osm-8814750-0',true,low[1]]]){
+    const ground=beyond(id,reversed);assert.ok(Math.min(...ground)>=landing-.05&&ground.every((y,i)=>!i||y>=ground[i-1]-.05),`${id} leaves the junction without a dip (${ground.slice(0,8).map(y=>y.toFixed(2)).join(' ')})`);
+  }
+  // Cambridge Street west of the Allston ramps: its two carriageways landed 2.7 and 1.6 m under their deck, the street back at the deck's
+  // height 20 m on after a climb of 16%.
+  for(const [id,end,street,reversed] of [['11810-0-0',0,'11811-0-0',true],['10285-0-0',-1,'10845-0-0',false]]){
+    const ramp=piece(id),landing=ramp.elevations.at(end),top=ramp.elevations.at(end?0:-1),ground=beyond(street,reversed,30);   // (30 m: the street tops its plateau beyond)
+    assert.ok(Math.abs(landing-sampleElevation(city,...ramp.points.at(end)))<.05,`${id} lands on the ground`);assert.ok(top-landing>-.02&&top-landing<.35,`${id} comes down ${(top-landing).toFixed(2)} m to its landing`);   // (the landing takes the grid's centimetres)
+    assert.ok(Math.abs(ground[0]-landing)<.05&&ground.every((y,i)=>!i||y>=ground[i-1]-.05),`${street} does not dip to the bridge (${ground.slice(0,10).map(y=>y.toFixed(2)).join(' ')})`);
+    assert.ok(Math.max(...ground.slice(1).map((y,i)=>(y-ground[i])/2))<.13,`and climbs on to its plateau gently`);
+  }
+});
+
 test('streets that start or end on Storrow Drive join it in the traffic graph',()=>{
   const {nodes,edges}=roadGraph(city);
   for(const [street,leaves] of [['25498-0-0',true],['12137-0-0',false]]){

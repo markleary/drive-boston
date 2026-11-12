@@ -5,7 +5,7 @@ Both bearings and one-way flow must agree, and the missing corridor must lie
 on the original, unclipped OSM way. A nearby crossing or parallel carriageway
 is never enough evidence to join roads.
 """
-import math
+import copy,math,re
 from collections import Counter,defaultdict
 from shapely.geometry import LineString,Point
 from shapely.ops import substring,unary_union
@@ -14,6 +14,103 @@ from shapely.strtree import STRtree
 
 MAX_GAP=50
 ALIGNMENT=.95
+
+
+# ---- one street carried by both sources
+COPY_REACH=3.0    # two sources' lines of one street lie this close all along (half a carriageway); two roadways never do
+COPY_ALIGNED=.9   # ...and run the same way there (cosine): a street crossing another lies within reach of it too
+COPY_STEP=2.0     # stations at which that is checked
+COPY_MIN=2*COPY_REACH/math.sqrt(1-COPY_ALIGNED**2)   # a shorter piece can cross a line at a slant and pass both tests (13.8 m)
+
+
+def boston_segment(road):
+ """A Boston GIS street segment (build-metro.py: `<OBJECTID>-<path>-<piece>`), not a town's OpenStreetMap way or a road a later stage built."""
+ return re.fullmatch(r'\d+-\d+-\d+',road['id']) is not None
+
+
+def source_copies(roads):
+ """Records of a street that both sources carry, and the road list without them.
+
+ build-metro.py clips each town's OpenStreetMap ways to the town outline less a 4 m strip of Boston, so that a
+ boundary street is drawn once. Where the two outlines disagree by more than the strip the street arrives twice:
+ Saint Mary's Street, the line between Boston and Brookline, was Boston's segments and six pieces of Brookline's
+ ways on one roadway on both sides of the Turnpike bridge: two records for traffic, lane paint, street names and
+ GPS, and the town's 12.2 m curb outline drawn round Boston's surveyed 8 m roadway.
+ A surface record that lies within COPY_REACH of the other source's surface lines all along its own length, runs
+ their way there (COPY_ALIGNED, at stations COPY_STEP apart) and is at least COPY_MIN long (a shorter piece can
+ cross them at a slant inside the reach) is the copy:
+ - first the town records that lie along Boston segments (where both lie along each other all along, Boston's
+   record stays: the survey curbs are its street's);
+ - then the Boston segments that lie along the town records still there (the stub of a town street that the
+   segments carry into the town: Thornton Road, Saint Paul's Avenue), but for the segments a town record was
+   found to copy.
+ A copy leaves only when every road that meets it still meets a record it copies: a vertex another road shares must
+ be a vertex of one of those records. Otherwise it is held back and reported, and both records stay (the package
+ has none; such a street first needs its junction moved onto the record that stays).
+ Records with heights or in a tunnel are neither copies nor references here: a second source's copy of a bridge
+ belongs to the stage that levels the bridge (boston_highways.bridge_copies).
+ Returns (the roads without the copies, [{index, road, of}] with each copy's place in `roads`, [{road, of,
+ vertices}] held back)."""
+ surface=[k for k,r in enumerate(roads) if not (r.get('elevations') or r.get('tunnel')) and len(r['points'])>=2]
+ lines={k:LineString(r.get('sourcePoints') or r['points']) for k,r in ((k,roads[k]) for k in surface)}
+ key=lambda p:(round(p[0],2),round(p[1],2));at=defaultdict(set);copies={};held=[]
+ for k,r in enumerate(roads):
+  for p in r['points']:at[key(p)].add(k)
+ def heading(line,d):
+  # (the chord over the reach each way: a way's end was snapped up to 10 m onto the segment's end, which kinks its last metre)
+  a=line.interpolate(max(0,d-COPY_REACH));b=line.interpolate(min(line.length,d+COPY_REACH));length=math.hypot(b.x-a.x,b.y-a.y) or 1;return (b.x-a.x)/length,(b.y-a.y)/length
+ def along(k,others,tree):
+  """The records of `others` that road k lies along all along (the nearest one running its way at each station), or None."""
+  own=lines[k]
+  if own.length<COPY_MIN:return None
+  near=[j for j in sorted({others[int(i)] for i in tree.query(own.buffer(COPY_REACH))}) if lines[j].distance(own)<=COPY_REACH]
+  if not near or not unary_union([lines[j] for j in near]).buffer(COPY_REACH).covers(own):return None
+  nearest=[];n=max(1,math.ceil(own.length/COPY_STEP))
+  for s in range(n+1):
+   d=own.length*s/n;p=own.interpolate(d);t=heading(own,d);gaps={}
+   for j in near:
+    gap=lines[j].distance(p)
+    if gap>COPY_REACH:continue
+    w=heading(lines[j],lines[j].project(p))
+    if abs(t[0]*w[0]+t[1]*w[1])>=COPY_ALIGNED:gaps[j]=gap
+   if not gaps:return None
+   nearest.append({j for j,gap in gaps.items() if gap<=min(gaps.values())+.01})
+  # At a node two records are equally near: the one the road lies along elsewhere is the one it copies there.
+  used={j for tied in nearest if len(tied)==1 for j in tied}
+  for tied in nearest:
+   if not tied&used:used.add(min(tied))
+  return sorted(used)
+ def take(group,others):
+  """Take the copies among `group` out; returns the records of `others` that one of them, taken or held, lies along."""
+  if not group or not others:return set()
+  tree=STRtree([lines[j] for j in others]);found={}
+  for k in group:
+   ref=along(k,others,tree)
+   if ref is not None:found[k]=ref
+  copied={j for ref in found.values() for j in ref}
+  # A copy another road would be left hanging from stays, and then counts as a road meeting its neighbours.
+  while True:
+   loose={}
+   for k,ref in found.items():
+    stays={key(p) for j in ref for p in roads[j]['points']}
+    hanging=[list(p) for p in roads[k]['points'] if key(p) not in stays and at[key(p)]-set(found)-set(copies)-{k}]
+    if hanging:loose[k]=hanging
+   if not loose:break
+   for k in sorted(loose):held.append({'road':roads[k]['id'],'of':sorted(roads[j]['id'] for j in found.pop(k)),'vertices':loose[k]})
+  for k in sorted(found):copies[k]={'index':k,'road':copy.deepcopy(roads[k]),'of':sorted(roads[j]['id'] for j in found[k])}
+  return copied
+ town=[k for k in surface if roads[k]['id'].startswith('osm-')];boston=[k for k in surface if boston_segment(roads[k])]
+ copied=take(town,boston)
+ take([k for k in boston if k not in copied],[k for k in town if k not in copies])
+ return [r for k,r in enumerate(roads) if k not in copies],[copies[k] for k in sorted(copies)],held
+
+
+def restore_source_copies(roads,record):
+ """Put the copies an earlier run took out (`record`, provenance.sourceCopies) back at their places in `roads`,
+ in place, so a rerun starts from the same list. Returns their ids."""
+ removed=(record or {}).get('removed',[])
+ for item in removed:roads.insert(item['index'],copy.deepcopy(item['road']))   # (in rising order, each back at its own place)
+ return [item['road']['id'] for item in removed]
 
 
 def seam_candidates(roads,sources):

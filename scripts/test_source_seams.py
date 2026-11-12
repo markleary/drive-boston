@@ -1,7 +1,7 @@
 import copy,unittest
 from shapely.geometry import LineString,box
 from shapely.ops import unary_union
-from source_seams import clipped_spans,connect_source_seams,edge_bridge_stubs,restore_clipped_spans,town_bridge_joints,town_seams,unrestore_clipped_spans,unrestore_town_seams
+from source_seams import COPY_REACH,clipped_spans,connect_source_seams,edge_bridge_stubs,restore_clipped_spans,restore_source_copies,source_copies,town_bridge_joints,town_seams,unrestore_clipped_spans,unrestore_town_seams
 from water_crossings import level_water_crossings
 
 
@@ -158,5 +158,84 @@ class EdgeBridges(unittest.TestCase):
   self.assertEqual(edge_bridge_stubs(roads,self.DISTRICTS),[],'a deck that does not drop at the edge')
   self.assertEqual(edge_bridge_stubs(self.bridge()+[road('osm-4-0',[[0,0],[0,50]])],self.DISTRICTS),[],'a street meets the edge end')
   self.assertEqual(edge_bridge_stubs(self.bridge(),box(-50,-100,200,100)),[],'an end inside the map')
+
+
+class SourceCopies(unittest.TestCase):
+ """A street on the town line that both sources carry: Boston's segments between their nodes, the town's way on the same roadway."""
+ def street(self):
+  # Boston's two segments meet at a node (100, 0); the town's way runs 1 m beside them and takes their ends, as build-metro.py snaps it.
+  return [road('101-0-0',[[0,0],[100,0]]),road('102-0-0',[[100,0],[200,0]]),road('osm-7-0',[[0,0],[50,1],[100,0]]),road('osm-7-1',[[100,0],[150,-1.8],[200,0]]),road('osm-8-0',[[100,0],[100,-80]])]
+
+ def test_a_town_way_lying_along_boston_segments_leaves_and_goes_back_where_it_was(self):
+  roads=self.street();before=copy.deepcopy(roads)
+  kept,copies,held=source_copies(roads)
+  self.assertEqual([r['id'] for r in kept],['101-0-0','102-0-0','osm-8-0'],'the segments and the side street stay');self.assertEqual(held,[])
+  self.assertEqual([(c['index'],c['road']['id'],c['of']) for c in copies],[(2,'osm-7-0',['101-0-0']),(3,'osm-7-1',['102-0-0'])])
+  self.assertEqual(roads,before,'the input list is not changed');self.assertEqual(source_copies(kept)[1:],([],[]),'nothing is left to take')
+  self.assertEqual(restore_source_copies(kept,{'removed':copies}),['osm-7-0','osm-7-1']);self.assertEqual(kept,before)
+  self.assertEqual(restore_source_copies(kept,None),[])
+
+ def test_one_way_lying_along_a_chain_of_segments_is_one_copy(self):
+  roads=self.street()[:2]+[road('osm-7-0',[[0,0],[50,1],[150,-1.8],[200,0]])]
+  self.assertEqual([(c['road']['id'],c['of']) for c in source_copies(roads)[1]],[('osm-7-0',['101-0-0','102-0-0'])])
+
+ def test_a_boston_stub_of_a_town_street_leaves_and_the_town_street_stays_whole(self):
+  # The town's street runs on past the segment's dead end, so it is no copy; the segment lies along it all along.
+  roads=[road('201-0-0',[[0,0],[40,2],[80,2.5]]),road('osm-9-0',[[0,0],[40,0],[80,0],[260,0]]),road('202-0-0',[[0,0],[0,90]])]
+  kept,copies,held=source_copies(roads)
+  self.assertEqual([(c['index'],c['road']['id'],c['of']) for c in copies],[(0,'201-0-0',['osm-9-0'])]);self.assertEqual([r['id'] for r in kept],['osm-9-0','202-0-0']);self.assertEqual(held,[])
+
+ def test_crossing_parallel_and_short_roads_are_no_copies(self):
+  boston=road('101-0-0',[[0,0],[200,0]])
+  for other,why in [(road('osm-1-0',[[100,-40],[100,40]]),'a street crossing the segment'),(road('osm-1-0',[[99,-2],[101,2]]),'a piece no longer than the reach is wide'),
+    (road('osm-1-0',[[0,COPY_REACH+2],[200,COPY_REACH+2]]),'the other carriageway'),(road('osm-1-0',[[100,-2.5],[104,0],[108,2.5]]),'a short way crossing at a slant, within reach all along'),
+    (road('osm-1-0',[[0,0],[100,0],[170,30]]),'a street that leaves the segment')]:
+   self.assertEqual(source_copies([boston,other])[1:],([],[]),why)
+
+ def test_roads_with_heights_or_in_a_tunnel_are_neither_copies_nor_references(self):
+  for field,value in (('elevations',[5,5,5]),('tunnel',{'clearance':5})):
+   roads=self.street()[:1]+[{**road('osm-7-0',[[0,0],[50,1],[100,0]]),field:value}];self.assertEqual(source_copies(roads)[1:],([],[]),f'a town deck over the segment ({field})')
+   roads=[{**road('101-0-0',[[0,0],[50,0],[100,0]]),field:value},road('osm-7-0',[[0,0],[50,1],[100,0]])];self.assertEqual(source_copies(roads)[1:],([],[]),f'a town street along a Boston deck ({field})')
+
+ def test_a_copy_that_a_street_meets_off_the_segment_is_held_back(self):
+  # The side street ends on the town way's own vertex (50, 1), which the segment does not have: taking the way out would leave it hanging.
+  roads=self.street()[:3]+[road('osm-8-0',[[50,1],[50,80]])]
+  kept,copies,held=source_copies(roads)
+  self.assertEqual(copies,[]);self.assertEqual(kept,roads);self.assertEqual(held,[{'road':'osm-7-0','of':['101-0-0'],'vertices':[[50,1]]}])
+  # A way that ends on the held copy's end, where a segment has its node, still leaves.
+  kept,copies,held=source_copies(roads+[road('osm-7-1',[[100,0],[150,-1.8],[200,0]])])
+  self.assertEqual([c['road']['id'] for c in copies],['osm-7-1']);self.assertEqual([h['road'] for h in held],['osm-7-0'])
+
+ def test_the_line_a_park_edge_move_changed_is_read_at_its_source(self):
+  # street_surfaces.py moves a centerline out of a curbed park edge and keeps the source line; the copy is the street as mapped.
+  roads=self.street()[:1]+[road('osm-7-0',[[0,0],[50,1],[100,0]])];roads[0]['points']=[[0,0],[50,9],[100,0]];roads[0]['sourcePoints']=[[0,0],[100,0]]
+  self.assertEqual([c['road']['id'] for c in source_copies(roads)[1]],['osm-7-0'])
+
+
+class ShippedPackage(unittest.TestCase):
+ def test_no_street_of_the_installed_package_is_carried_by_both_sources(self):
+  import json,pathlib,re
+  from shapely.strtree import STRtree
+  data=pathlib.Path(__file__).resolve().parents[1]/'public/data';roads=json.loads((data/'city.json').read_text())['roads'];record=json.loads((data/'provenance.json').read_text())['sourceCopies']
+  kept,copies,held=source_copies(roads);self.assertEqual((copies,held,record['held']),([],[],[]),'a record lies along the other source\'s line of its street; run connect-source-seams.py')
+  # The check itself, without the rule's alignment test: no surface town road within the reach of surface Boston segments all along.
+  surface=[r for r in roads if not (r.get('elevations') or r.get('tunnel'))];boston=[LineString(r.get('sourcePoints') or r['points']) for r in surface if re.fullmatch(r'\d+-\d+-\d+',r['id'])];tree=STRtree(boston)
+  for r in surface:
+   line=LineString(r.get('sourcePoints') or r['points'])
+   if not r['id'].startswith('osm-') or line.length<=2*COPY_REACH:continue
+   near=[boston[int(i)] for i in tree.query(line.buffer(COPY_REACH))]
+   self.assertFalse(near and unary_union(near).buffer(COPY_REACH).covers(line),f"{r['id']} {r['name']} lies on Boston's line all along")
+  # The records that left: Brookline's pieces of Saint Mary's Street on both sides of the Turnpike bridge among them, each still a copy of what stayed.
+  gone=[c['road'] for c in record['removed']];ids={r['id'] for r in gone};self.assertFalse(ids&{r['id'] for r in roads},'a record that left is still in the package')
+  self.assertTrue({'osm-8814884-0','osm-327270827-0','osm-927685720-0','osm-927685720-1','osm-8814508-0','osm-8814266-0','osm-9429379-0'}<=ids)
+  again=source_copies(roads+copy.deepcopy(gone));self.assertEqual(([c['road'] for c in again[1]],[c['of'] for c in again[1]],again[2]),(gone,[c['of'] for c in record['removed']],[]))
+  # Every street that met a copy still meets a record that stayed: a road alone at a copy's vertex is the record the copy lay along.
+  at={}
+  for r in roads:
+   for p in r['points']:at.setdefault((round(p[0],2),round(p[1],2)),set()).add(r['id'])
+  for c in record['removed']:
+   for p in c['road']['points']:
+    met=at.get((round(p[0],2),round(p[1],2)),set())
+    self.assertFalse(len(met)==1 and not met<=set(c['of']),f"{sorted(met)} met {c['road']['id']} at {p} and now meets nothing")
 
 if __name__=='__main__':unittest.main()

@@ -32,6 +32,7 @@ from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,wat
 import north_overpasses
 import i93_north
 import boston_highways
+import footbridges
 from harvard_terrain import repair_memorial_terrain
 from road_generation_audit import validate_surfaces
 from roadway_buildings import roadway_buildings
@@ -248,6 +249,13 @@ if highways:
  assert boston_highways.replay(data_dir,city,highways,json.loads(highways_path.read_text())),'Turnpike or Storrow Drive roads, tunnel sidecar, terrain or building records differ from a replay of build-boston-highways.py'
  base_roads,base_heights=boston_highways.before_stage(city['roads'],heights,highways,grid.get('scale',.01));base_grid=i93_north.staged_heights(base_grid,highways)
  print(f"Validated the Turnpike and Storrow Drive: {highway_counts['decks']} deck and {highway_counts['tunnels']} tunnel records of {highway_counts['routes']} routes ({highway_counts['streetLandings']} street landings, {highway_counts['signs']} warning signs; {highway_counts['meshBuildings']} buildings with exact collision, {highway_counts['passages']} passages, {highway_counts['removedBuildings']} structures removed) match a replay of build-boston-highways.py.")
+# The footbridges over those roads (build-footbridges.py): a replay writes the same park paths, and every deck leaves the roads beneath it their room.
+footbridge_record=provenance.get('footbridges');footbridge_path=data_dir/footbridges.SOURCE_NAME
+assert bool(footbridge_record)==footbridge_path.exists(),'provenance must describe the footbridge stage; run build-footbridges.py'
+if footbridge_record:
+ assert footbridge_record['source']['sha256']==hashlib.sha256(footbridge_path.read_bytes()).hexdigest(),'the footbridge source sidecar changed without regeneration'
+ footbridge_counts=footbridges.validate(data_dir,city,footbridge_record,json.loads(footbridge_path.read_text()))
+ print(f"Validated {footbridge_counts['bridges']} footbridges over the Turnpike and Storrow Drive: {footbridge_counts['meters']} m in {footbridge_counts['paths']} park paths, steepest {footbridge_counts['steepest']*100:.1f}%")
 base_city={**city,'roads':base_roads}
 def base_elevation(x,z):return elevation(x,z,base_heights)
 # Interstate 93 (build-i93-north.py) runs after the stages replayed below: replay it and check its
@@ -289,6 +297,15 @@ for road in city['roads']:
   parent=roads_map[id];indices=[i for i in (0,-1) if parent['points'][i]==road['points'][end]]
   assert indices,f"{road['id']} does not reach its source parent {id}"
   if road.get('elevations'):assert abs(road['elevations'][end]-parent['elevations'][indices[0]])<.0002,f"{road['id']} has a height step at {id}"
+# A street both sources carried (connect-source-seams.py source_copies) has one record: none lies along the other source's line all along,
+# and the records that left are again the copies when they are put back among the roads that stayed (before the highway stages).
+from source_seams import source_copies
+copy_record=provenance.get('sourceCopies');assert copy_record is not None and not copy_record['held'],'provenance must describe the streets both sources carried, none held back; run connect-source-seams.py'
+_,doubled,held_back=source_copies(city['roads'])
+assert not doubled and not held_back,f"{len(doubled)+len(held_back)} records lie along the other source's line of the same street ({', '.join([c['road']['id'] for c in doubled]+[h['road'] for h in held_back][:6])}); run connect-source-seams.py"
+replayed=source_copies(pre_roads+[copy.deepcopy(c['road']) for c in copy_record['removed']])
+assert not replayed[2] and [(c['road'],c['of']) for c in replayed[1]]==[(c['road'],c['of']) for c in copy_record['removed']],'the recorded source copies are not the copies of the roads that stayed; run connect-source-seams.py'
+print(f"Validated {len(copy_record['removed'])} records taken out as a second source's copy of a street ({sum(c['road']['id'].startswith('osm-') for c in copy_record['removed'])} town, {sum(not c['road']['id'].startswith('osm-') for c in copy_record['removed'])} Boston): none left, and a replay takes the same ones.")
 # Streets split at a town line (connect-source-seams.py town seams): each recorded join still meets the street it was carried to.
 seam_joins=provenance.get('townSeams',{}).get('joins',[]);at_vertex=defaultdict(list)
 assert {j['road'] for j in seam_joins}<={r['id'] for r in city['roads'] if r.get('townSeam')},'provenance must list the town seams; run connect-source-seams.py'

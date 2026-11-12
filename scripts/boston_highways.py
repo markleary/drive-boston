@@ -128,6 +128,9 @@ BESIDE=(40,100)      # a ramp keeps its source line this close to its gore, and 
 WALL=.8              # room between the two pavements there
 REMNANT=60           # under a bridge the road follows the lowest ground within this distance: the survey keeps a part of many bridges as a bump
 CUT=1.5              # a street bridge whose landings stand this far over the road beneath crosses a cut: it is levelled between them
+MEETS=1.0            # a route ending this close to where its line meets a bridge's lands on the bridge there: it does not pass beneath
+TWIN=1.5             # a road lying this close to a bridge's line all along is a second source's copy of that bridge
+HOLLOW=.5            # a levelled bridge whose deck stands this far over a ramp's landing, with every street leaving the landing back at that height within SEAM_MAX, lands in a hollow of the ground: the ground is raised
 REFINE=.1            # room kept over the solved road's height when a bridge is levelled a second time
 RAMP_START=.08       # a bridge's ramp piece may rise this steeply from its landing to clear a road crossing beneath it there
 CLEAR_UNDER=I.CLEAR_UNDER  # under a levelled bridge's slab: the bridge rises just enough for it, the road beneath keeps its grade
@@ -903,6 +906,38 @@ def constrain_roads(plan,ground,existing,lines,tree,water,report):
  span_floors(plan)
 
 
+def bridge_copies(roads,plans):
+ """A second source's copies of a bridge over the road. Saint Mary's Street is the line between Boston and Brookline, and
+ both sources carry it: Boston's segments, whose bridge is a chain with lifted nodes that level_overpasses levels, and
+ Brookline's OpenStreetMap ways on the same line between the same vertices, which build-metro.py profiles between the
+ survey's ground at each way's own ends: a street running down the bank of the cut to the bridge's first node, a second
+ deck from the cut's floor up, and a stub. The road beneath was solved CLEAR_UNDER under that second deck, 3 m below its
+ own cut. A road that lies within TWIN of the line of a chain of elevated pieces crossing one of the stage's roads at
+ source level 0 or below, all along its own length, and is no piece of that chain, is such a copy: it leaves the package
+ (restore puts it back). Of two chains on one line the longer is the bridge, and a chain with a dedicated builder
+ loses no piece. Returns (the road list without the copies, [{index, road, of}] with each copy's place in `roads`)."""
+ plan_lines=[p.line for p in plans];plan_tree=STRtree(plan_lines);lines=[LineString(r['points']) for r in roads];tree=STRtree(lines);place={id(r):k for k,r in enumerate(roads)};copies={}
+ def crosses(chain):
+  for road in chain:
+   line=lines[place[id(road)]]
+   for j in plan_tree.query(line,predicate='intersects').tolist():
+    plan=plans[j]
+    for q in crossing_points(line.intersection(plan_lines[j])):
+     at=plan.line.project(q);k=int(np.argmin(np.abs(plan.along-at)))
+     if plan.level[k]<=0 and not plan.wet_at(k) and min(at,plan.line.length-at)>=MEETS:return True
+  return False
+ every=W.water_chains(roads);chains=[c for c in every if not any(W.owned(r) or stage_owned(r) for r in c)]
+ built={place[id(r)] for c in every if any(W.owned(r) for r in c) for r in c}   # (a chain with a dedicated builder loses no piece)
+ for chain in sorted(chains,key=lambda c:(-sum(lines[place[id(r)]].length for r in c),min(r['id'] for r in c))):
+  if any(place[id(r)] in copies for r in chain) or not crosses(chain):continue
+  own={place[id(r)] for r in chain};zone=shapely.ops.unary_union([lines[k] for k in own]).buffer(TWIN)
+  for k in sorted(tree.query(zone,predicate='covers').tolist()):
+   r=roads[k]
+   if k in own or k in copies or k in built or r.get('tunnel') or stage_owned(r) or lines[k].length<=2*TWIN:continue   # (a piece no longer than the zone is wide may only cross it)
+   copies[k]={'index':k,'road':copy.deepcopy(r),'of':sorted(roads[j]['id'] for j in own)}
+ return [r for k,r in enumerate(roads) if k not in copies],[copies[k] for k in sorted(copies)]
+
+
 def bridge_seams(roads,plans,ground):
  """Streets that are the missing ramp of a bridge over the road. Boston's segments end a bridge at the node where
  it crosses a road beneath and give each segment end its own level.
@@ -918,6 +953,12 @@ def bridge_seams(roads,plans,ground):
    SEAM_MAX, is no landing: the piece becomes deck and the street, up to where it has made CREST of that climb
    (or its next junction), the bridge's ramp (`<street id>-deck`, the street keeping the rest). Only a side street
    narrower than MINOR may lose its junction with such a landing (Cahners Place).
+ - Carlton Street's bridge is three OpenStreetMap bridge ways, the span and the two legs it parts into at its southern
+   end, and build-metro.py profiles each between the survey's ground at its own ends: their common node lies over the
+   bank of the cut, 3 m under the legs' landings, and the deck fell to it from both sides. A node where only bridge
+   pieces meet, none of them lifted there, within SEAM_NEAR of the pavement of one of the stage's roads and less than
+   CUT over that road's ground, with a piece whose other end stands CUT over it, is a node of the bridge: every piece
+   is lifted at it, as at the nodes Boston's segments mark.
  level_overpasses then levels each bridge with its new ramp. Returns (the road list with the ramps, the original
  records of the changed roads, notes, the ids of the pieces added)."""
  from road_connections import resample
@@ -942,14 +983,45 @@ def bridge_seams(roads,plans,ground):
   line=points;points=resample(line);points[0]=list(line[0]);points[-1]=list(line[-1]);id=id or r['id']
   return {**{f:copy.deepcopy(v) for f,v in r.items() if f!='pavedWidth'},'id':id,'points':points,'elevations':[round(ground(*q),4) for q in points],'startLevel':int(e==0),'endLevel':int(e==-1),
    'bridge':{'id':f"structure-{id}",'thickness':THICKNESS,'clearanceEstimated':True,'kind':'elevated'}}
- changed={};originals=[];notes=[];added=[]
+ changed={};originals=[];notes=[];added=[];recorded=set()
+ def original(r):
+  # a road's record as the stage found it, kept once: a piece one rule lifts at a node may be changed again by the next
+  if r['id'] not in recorded:recorded.add(r['id']);originals.append(copy.deepcopy(r))
+ # nodes of a bridge over the cut that the source left on the ground
+ def floor(p):
+  # the ground of the stage's road beside the point, where it passes at source level 0 or below within SEAM_NEAR of its pavement
+  q=Point(p);found=[]
+  for plan in plans:
+   d=plan.line.distance(q)
+   if d<=max(plan.widths)/2+SEAM_NEAR:
+    i=plan.nearest(p)
+    if plan.level[i]<=0 and d<=plan.widths[i]/2+SEAM_NEAR:found.append(plan.terrain[i])
+  return max(found) if found else None
+ meeting=defaultdict(list);built={id(r) for chain in W.water_chains(roads) if any(W.owned(r) for r in chain) for r in chain}   # (pieces of a chain with a dedicated builder)
+ for k,r in enumerate(roads):
+  if not r.get('tunnel'):
+   for e in (0,-1):meeting[W.node_key(r['points'][e])].append((k,e))
+ for key in sorted(meeting):
+  pieces=meeting[key]
+  if len(pieces)<2 or any(not roads[k].get('elevations') or id(roads[k]) in built or stage_owned(roads[k]) or W.lifted(roads[k],e) for k,e in pieces):continue
+  k,e=pieces[0];low=floor(roads[k]['points'][e])
+  if low is None or roads[k]['elevations'][e]-low>=CUT or not any(roads[j]['elevations'][-1 if f==0 else 0]-low>=CUT for j,f in pieces):continue
+  for j,f in pieces:
+   if j not in changed:original(roads[j])
+   changed[j]=[{**changed.get(j,[roads[j]])[0],('startLevel' if f==0 else 'endLevel'):1}]
+ if changed:
+  roads=[x for k,r in enumerate(roads) for x in changed.get(k,[r])];changed={}
+  for r in roads:
+   if r.get('elevations') and not r.get('tunnel') and not W.owned(r):
+    for e in (0,-1):
+     if W.lifted(r,e):lifted.setdefault(W.node_key(r['points'][e]),r['elevations'][e])
  for k,r in enumerate(roads):
   if r.get('elevations') or r.get('tunnel') or stage_owned(r):continue
   ends=[e for e in (0,-1) if W.node_key(r['points'][e]) in lifted and beneath(r['points'][e])]
   if not ends:continue
   line=r['points'];length=stations(line)[-1]
   if len(ends)==2 or length>SEAM_MAX:notes.append({'road':r['id'],'name':r['name'],'reason':'starts on a bridge node over the road at both ends' if len(ends)==2 else f'starts on a bridge node over the road and runs {length:.0f} m'});continue
-  e=ends[0];piece=ramp(r,line,e);piece['elevations'][e]=lifted[W.node_key(line[e])];changed[k]=[piece];originals.append(copy.deepcopy(r))
+  e=ends[0];piece=ramp(r,line,e);piece['elevations'][e]=lifted[W.node_key(line[e])];changed[k]=[piece];original(r)
  # landings on the slope of the cut
  ends=defaultdict(list)
  for k,r in enumerate(roads):
@@ -985,27 +1057,35 @@ def bridge_seams(roads,plans,ground):
    else:
     head,tail=split_line(pts,stop);piece=ramp(street,head if f==0 else head[::-1],0 if f==0 else -1,f"{street['id']}-deck");rest={**copy.deepcopy(street),'points':tail if f==0 else tail[::-1]}
     parts=[piece,rest] if f==0 else [rest,piece];added.append(piece['id'])
-   changed[j]=parts;changed[k]=[{**r,('startLevel' if e==0 else 'endLevel'):1}];originals+=[copy.deepcopy(street),copy.deepcopy(r)]
+   changed[j]=parts;changed[k]=[{**r,('startLevel' if e==0 else 'endLevel'):1}];original(street);original(r)
    break
  return [x for k,r in enumerate(roads) for x in changed.get(k,[r])],originals,notes,added
 
 
-def level_overpasses(roads,plans,ground,solved=None):
+def level_overpasses(roads,plans,ground,solved=None,raised=()):
  """Level the street bridges over the road's cut. build-metro.py lifts every bridge node 6.4 m over the survey
  at that node, so a bridge over the Turnpike's cut climbs from each bank to a node over the cut's floor and
  drops again (Columbus Avenue rose 5.7 m in 37 m). As level-water-crossings.py does over water, every chain of
  elevated pieces joined through lifted nodes that crosses one of the stage's roads in its cut (a station at
- source level 0, or in a reviewed underpass, lying CUT under the chain's lowest landing) gets one deck surface:
- the inverse-distance blend of its own at-grade landing heights along the chain, where each lower bound raises
- a landing's effective height until the surface meets it (a deck piece's bound the nearest landing, a ramp
- piece's its own): the slab THICKNESS and CLEAR_UNDER over the
+ source level 0, or in a reviewed underpass, lying CUT under a landing of the chain) gets one deck surface:
+ the inverse-distance blend of the heights of its banks (the at-grade landings standing CUT over the road)
+ along the chain, where each lower bound raises a bank's effective height until the surface meets it (a deck
+ piece's bound the nearest bank, a ramp piece's its own). A landing down in the cut is no bank and takes no
+ part in the surface: its piece rises from it to the deck, pulled taut over the bank it climbs (the Blandford
+ Street Steps beside the Turnpike: counted as a bank, they kept Beacon Street's westbound bridge on its lifted
+ nodes, 4 m over the eastbound one and dipping 1.5 m at the node between two pieces). A route that starts or ends on the bridge's line
+ (within MEETS: the Arlington Street entrance) joins the street there and is no road beneath. The bounds: the slab THICKNESS and CLEAR_UNDER over the
  road beneath, 0.3 m over the graded terrain under the deck pieces, BENEATH over any other road crossing
  beneath. Ramp pieces keep the ground landing the grader pinned and smoothstep to the deck, held over the
  terrain. Chains with a dedicated builder are left alone. The road's height under a bridge is first an estimate
  from its ground; `solved` ({plan id: (stations, heights)} of a first solve) corrects it where the road turned
  out lower (held down by the lids beside the bridge, as under Columbus Avenue, whose estimate lifted one landing
- 3.5 m and left a ramp of 60%): a bridge is then no higher than the solved road needs. Returns (the road list
- with the levelled copies, the original records of the changed roads, a report)."""
+ 3.5 m and left a ramp of 60%): a bridge is then no higher than the solved road needs. A ramp whose landing
+ raise_hollows has raised to the bridge (`raised`, the landings' node keys) lies on level ground made for it and
+ keeps only W.RAMP_RISE over that, so it comes down to its landing by centimetres, not by the 0.2 m the terrain
+ margin would ask a cell from the landing. Returns (the road list with the levelled copies, the original records
+ of the changed roads, a report)."""
+ from land_approaches import taut
  roads=list(roads);others=[r for r in roads if not r.get('tunnel')];lines=[LineString(r['points']) for r in others];tree=STRtree(lines)
  plan_lines=[p.line for p in plans];plan_tree=STRtree(plan_lines);originals=[];report=[]
  def reference(plan,k):
@@ -1035,23 +1115,30 @@ def level_overpasses(roads,plans,ground,solved=None):
    # (Columbus Avenue's landing stands at the edge of the cut), and dividing by it lifted the whole bridge by metres.
    if required-low<=RAMP_START*abs(d-along[landing]):local[id(road)].append((d,required));return (top,required,own)
    return (top,low+(required-low)/share,own)
-  beneath=[];crossed=[];local=defaultdict(list)
+  crossings=[];local=defaultdict(list)
   for road in chain:
    line=LineString(road['points'])
    for j in plan_tree.query(line,predicate='intersects').tolist():
     plan=plans[j]
     for q in crossing_points(line.intersection(plan_lines[j])):
-     k=int(np.argmin(np.abs(plan.along-plan.line.project(q))))
+     at=plan.line.project(q);k=int(np.argmin(np.abs(plan.along-at)))
      if plan.level[k]>0 or plan.wet_at(k):continue
-     ref=reference(plan,k);crossed.append(ref);b=bound(road,line.project(q),ref+THICKNESS+CLEAR_UNDER)
-     if b:beneath.append(b)
-  if not crossed or min(landings.values())-max(crossed)<CUT:continue
-  bounds=list(beneath)
+     crossings.append((road,line.project(q),reference(plan,k),min(at,plan.line.length-at)<MEETS))
+  # A route that starts or ends on the bridge (the Arlington Street entrance leaves the street at the bridge's landing) joins it there: it is no road beneath.
+  crossed=[ref for _,_,ref,joins in crossings if not joins]
+  if not crossed:continue
+  # The banks of the cut are the landings standing CUT over the road. A landing down in the cut (the Blandford Street Steps, which come up to the
+  # Beacon Street bridge from beside the Turnpike) is none: the deck spans from bank to bank and that landing's piece rises to it.
+  banks={key:h for key,h in landings.items() if h-max(crossed)>=CUT}
+  if not banks:continue
+  distances={key:distances[key] for key in banks}
+  bounds=[b for b in (bound(road,d,ref+THICKNESS+CLEAR_UNDER) for road,d,ref,_ in crossings) if b]
   for road in chain:
    along=alongs[id(road)];points=road['points'];ends=ends_of(road);line=LineString(points)
    if all(ends):bounds.extend((point_distances(road,d),ground(*p)+W.TERRAIN_RISE,None) for d,p in zip(along,points))
    elif any(ends):
-    landing,low,shares,taper=W.ramp(road);bounds.append((point_distances(road,along[len(points)-1 if ends[1] else 0]),max(ground(*p)+W.TERRAIN_RISE*t for i,(p,t) in enumerate(zip(points,taper)) if i!=landing),W.node_key(points[landing])))
+    landing,low,shares,taper=W.ramp(road);margin=W.RAMP_RISE if W.node_key(points[landing]) in raised else W.TERRAIN_RISE
+    bounds.append((point_distances(road,along[len(points)-1 if ends[1] else 0]),max(ground(*p)+margin*t for i,(p,t) in enumerate(zip(points,taper)) if i!=landing),W.node_key(points[landing])))
    for j in tree.query(line,predicate='intersects').tolist():
     other=others[j]
     if other['id'] in ids:continue
@@ -1062,9 +1149,9 @@ def level_overpasses(roads,plans,ground,solved=None):
      if below>=road_height(road,p,ground):continue
      b=bound(road,line.project(q),below+BENEATH)
      if b:bounds.append(b)
-  lifts={key:0.0 for key in landings}
+  lifts={key:0.0 for key in banks}
   def height(dist):
-   weights=[(landings[start]+lifts[start],1/max(d,.01)) for start,d in dist.items()];total=sum(w for _,w in weights);return sum(h*w for h,w in weights)/total
+   weights=[(banks[start]+lifts[start],1/max(d,.01)) for start,d in dist.items()];total=sum(w for _,w in weights);return sum(h*w for h,w in weights)/total
   for _ in range(60):
    raise_by={}
    for dist,required,own in bounds:
@@ -1085,12 +1172,99 @@ def level_overpasses(roads,plans,ground,solved=None):
     for d,required in local[id(road)]:new=[v if i==landing else max(v,min(top,required)-RAMP_START*abs(float(along[i])-d)) for i,v in enumerate(new)]
     if top>=max(new):
      for i in (range(1,len(new)) if landing==0 else range(len(new)-2,-1,-1)):new[i]=max(new[i],new[i-1 if landing==0 else i+1])
+    # A piece that comes up out of the cut climbs its bank, whose every step the terrain floor would copy into it (the Blandford Street Steps
+    # reached 22%): it is pulled taut over the bank instead, as level-land-approaches.py pulls a sunk approach.
+    if W.node_key(road['points'][landing]) not in banks:new=taut(along,new)
    else:continue
    new=[round(v,4) for v in new]
    if any(abs(a-b)>.0001 for a,b in zip(old,new)):
     k=next(i for i,r in enumerate(roads) if r is road);originals.append(copy.deepcopy(road));roads[k]={**road,'elevations':new};changed.append(road['id'])
-  if changed:report.append({'names':sorted({r['name'] for r in chain}),'roads':sorted(ids),'deck':[round(min(heights),3),round(max(heights),3)],'landings':sorted(round(v,3) for v in landings.values()),'lifts':sorted(round(v,3) for v in lifts.values()),'changed':sorted(changed)})
+  if changed:report.append({'names':sorted({r['name'] for r in chain}),'roads':sorted(ids),'deck':[round(min(heights),3),round(max(heights),3)],'landings':sorted(round(v,3) for v in banks.values()),'lifts':sorted(round(v,3) for v in lifts.values()),'changed':sorted(changed),
+   **({'inCut':sorted(round(v,3) for key,v in landings.items() if key not in banks)} if len(banks)<len(landings) else {})})
  return roads,originals,report
+
+
+def raise_hollows(roads,levelled,report,plans,grid,heights):
+ """The ground at a levelled bridge's landing where it lies in a hollow. OpenStreetMap ends Carlton Street's bridge on
+ the slope the survey shows under it, 0.8 and 1.1 m up a bank that tops out at 4.9 m, and the grader brought the
+ junction of Carlton and Mountfort Streets down to those two landings: the level deck then fell 0.9 m to one of them
+ and 0.6 m to the other, 11 m apart, and its two legs, each drawn at its full width, overlapped with a ledge of half a
+ metre between their slabs. Cambridge Street lands the same way west of the Allston ramps, 2.7 and 1.6 m under its
+ deck, with the street back at the deck's height 20 m on. A ramp piece of a levelled bridge whose deck end stands
+ HOLLOW over its landing, where every street leaving that landing is back at the deck's height within SEAM_MAX along
+ it, lands in such a hollow (a bridge standing over its streets has ramps that come down to them: those streets do
+ not climb back). The ground is raised to the deck's height there: every vertex of the cells that the corridors
+ of those street stretches pass over, as far along each as its ground lay lower, and each landing in it takes the
+ new ground (level_overpasses then lets such a ramp lie on it, so sibling ramps are one surface). The bank of the cut the bridge crosses stays as
+ it is: a vertex HOLLOW under the street's ground at the station beside it is none of the street's, nor is one on
+ the bridge's side of the landing and beyond the corridor's reach from it (in a cell the corridor only touches),
+ unless it is a corner of the cell the landing stands in. The stage's own roads keep their ground too.
+ Returns (the grid with the hollows raised, `roads` with those landings for level_overpasses to level once more,
+ the records of the changed roads as they were, [{road, name, landing, from, to, streets, vertices, maxFillMeters}])."""
+ from north_overpasses import Window,box,covered,half_width
+ scale=grid.get('scale',.01);cell=grid['cellSize'];width=grid['width'];ground=I.Terrain(grid,heights);filled=heights.copy()
+ ids={i for o in report for i in o['roads']};streets=[r for r in levelled if not r.get('elevations') and not r.get('tunnel') and not stage_owned(r)];at=defaultdict(list)
+ for r in streets:
+  for i,q in enumerate(r['points']):at[W.node_key(q)].append((r,i))
+ def sample(x,z):
+  # (the triangle rule of water_crossings.grid_sampler, on the grid being filled)
+  fx=(x-grid['originX'])/cell;fz=(z-grid['originZ'])/cell;i=int(fx);j=int(fz);tx=fx-i;tz=fz-j;a,b,c,d=[float(filled[k])*scale for k in (j*width+i,j*width+i+1,(j+1)*width+i,(j+1)*width+i+1)]
+  return a+(b-a)*tx+(c-a)*tz if tx+tz<=1 else d+(c-d)*(1-tx)+(b-d)*(1-tz)
+ def basin(L,level):
+  # the street stretches from the landing along which the ground lies under `level`; None when one is still under it SEAM_MAX on
+  found=[];walked=set();queue=[(W.node_key(L),0.0)]
+  while queue:
+   key,done=queue.pop(0)
+   for r,i in at.get(key,[]):
+    for step in (1,-1):
+     j=i+step;line=[list(r['points'][i])];d=done;back=False
+     while 0<=j<len(r['points']) and not back and (id(r),min(j-step,j)) not in walked:
+      walked.add((id(r),min(j-step,j)));a,b=r['points'][j-step],r['points'][j];length=math.dist(a,b);n=max(1,math.ceil(length))
+      for k in range(1,n+1):
+       q=[a[0]+(b[0]-a[0])*k/n,a[1]+(b[1]-a[1])*k/n];d+=length/n
+       if ground(*q)>=level:line.append(q);back=True;break
+       if d>SEAM_MAX:return None
+      else:line.append(list(b));queue.append((W.node_key(b),d));j+=step
+     if len(line)>1:found.append({'id':r['id'],'points':line,'width':r['width']})
+  return found
+ notes=[]
+ for chain in W.water_chains(levelled):
+  if any(W.owned(r) for r in chain) or not any(r['id'] in ids for r in chain):continue
+  for r in chain:
+   ends=[W.lifted(r,0),W.lifted(r,-1)]
+   if all(ends) or not any(ends):continue
+   landing,low,_,_=W.ramp(r);top=r['elevations'][-1 if landing==0 else 0];level=top;L=r['points'][landing]
+   if top-low<HOLLOW:continue
+   stretches=basin(L,level)
+   if not stretches:continue
+   win=Window(grid,box([q for s in stretches for q in s['points']],max(half_width(s) for s in stretches)+2*cell));index=win.index[covered(grid,win,stretches)]
+   pts=shapely.points(grid['originX']+(index%width)*cell,grid['originZ']+(index//width)*cell);keep=np.ones(len(index),dtype=bool)
+   for plan in plans:keep&=shapely.distance(plan.line,pts)>np.interp(shapely.line_locate_point(plan.line,pts),plan.along,plan.widths)/2+I.SHELF+cell
+   # (the street's own ground: not the bank beside its last cells, HOLLOW under the street at the station beside the vertex)
+   # (the street's own ground: not the bank HOLLOW under the street at the station beside the vertex, nor what lies behind the landing but for its own cell)
+   lines=[LineString(s['points']) for s in stretches];reach=[half_width(s) for s in stretches];beside=[min(range(len(lines)),key=lambda k:lines[k].distance(q)) for q in pts.tolist()]
+   i=int((L[0]-grid['originX'])//cell);j=int((L[1]-grid['originZ'])//cell);own={(j+b)*width+i+a for a in (0,1) for b in (0,1)}
+   def behind(q,k):
+    # on the bridge's side of the landing's cross-section (of a stretch that starts on the landing) and beyond the corridor's reach from the landing: there only for its cell
+    a=lines[k].coords[0];b=next((c for c in lines[k].coords[1:] if math.dist(a,c)>.01),a);n=math.dist(a,b)
+    return math.dist(a,L)<.05 and n>0 and ((q.x-a[0])*(b[0]-a[0])+(q.y-a[1])*(b[1]-a[1]))/n<-.5 and math.dist((q.x,q.y),L)>reach[k]
+   keep&=np.asarray([v in own or (float(heights[v])*scale>=ground(*lines[k].interpolate(lines[k].project(q)).coords[0])-HOLLOW and not behind(q,k)) for v,q,k in zip(index.tolist(),pts.tolist(),beside)],dtype=bool)
+   index=index[keep];target=int(round(level/scale));index=index[filled[index]<target];rise=(target-filled[index].astype(np.int64))*scale;filled[index]=target
+   notes.append({'road':r['id'],'name':r['name'],'landing':[round(L[0],3),round(L[1],3)],'from':round(low,3),'to':round(level,3),'streets':sorted({s['id'] for s in stretches}),'vertices':int(len(index)),'maxFillMeters':round(float(rise.max()),3) if len(index) else 0})
+ if not notes:return heights,roads,[],[]
+ # Every landing the raised ground now stands over takes it: a piece of a bridge this stage levels is levelled again, any other must not be there.
+ out=list(roads);before=[]
+ for k,r in enumerate(levelled):
+  if not r.get('elevations') or r.get('tunnel') or stage_owned(r):continue
+  for e in (0,-1):
+   if W.lifted(r,e):continue
+   L=r['points'][e];new=round(sample(*L),4)
+   if new-ground(*L)<.0005:continue
+   assert r['id'] in ids and not W.owned(r),f"the ground raised at a bridge's landing lifts the landing of {r['id']}, which this stage does not level"
+   if out[k] is roads[k]:before.append(copy.deepcopy(roads[k]));out[k]={**roads[k],'elevations':list(roads[k]['elevations'])}
+   out[k]['elevations'][e]=new
+ for note in notes:note['to']=round(sample(*note['landing']),3)
+ return filled,out,before,notes
 
 
 def classify(p,plan,plans,fixed,streets):
@@ -1618,6 +1792,7 @@ def restore(roads,heights,record):
  if not record:return
  changes=record.get('roads',{});added=set(changes.get('added',[]));sources={r['id']:r for r in changes.get('sources',[])}
  if added or sources:roads[:]=[copy.deepcopy(sources[r['id']]) if r['id'] in sources else r for r in roads if r['id'] not in added]
+ for item in changes.get('removed',[]):roads.insert(item['index'],copy.deepcopy(item['road']))   # (in rising order, each back at its own place)
  terrain=record.get('terrain')
  if heights is not None and terrain and terrain['vertices']:heights[np.asarray(terrain['vertices'],dtype=np.int64)]=np.asarray(terrain['heights'],dtype=heights.dtype)
 
@@ -1643,17 +1818,25 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  pre=plans_of(source,city,ROUTES if routes is None else routes)
  for plan in pre:plan.ground=ground;measure_ground(plan,ground,raw);plan.water_polygons=[poly for poly in water[0] if poly.intersects(plan.line)]
  # (a street the segments start at level 0 on a bridge node over the road is that bridge's ramp)
- seamed,seams,seam_notes,seam_pieces=bridge_seams(source_roads,pre,ground)
+ # (a second source's copy of a bridge over the road leaves the package first: the road is not solved under it)
+ kept,copies=bridge_copies(source_roads,pre)
+ seamed,seams,seam_notes,seam_pieces=bridge_seams(kept,pre,ground)
  levelled,flattened,overpasses=level_overpasses(seamed,pre,ground)
  # then again from a first solve: where the road lies lower than its ground suggested, the bridge comes down to what it needs
  first,*_=build({**city,'roads':levelled},source,heights,ungraded,water,buildings.without(r['id'] for r in removed),tunnels,routes)
- levelled,flattened,overpasses=level_overpasses(seamed,pre,ground,{p.id:(np.asarray(p.along,float),np.asarray(p.y,float)) for p in first});city={**city,'roads':levelled}
+ solved={p.id:(np.asarray(p.along,float),np.asarray(p.y,float)) for p in first};levelled,flattened,overpasses=level_overpasses(seamed,pre,ground,solved)
+ # A landing of a levelled bridge in a hollow of the ground: the ground is raised to the bridge, which is then levelled once more on it.
+ work,raised,lowered,hollows=raise_hollows(seamed,levelled,overpasses,pre,grid,heights)
+ if hollows:
+  found={r['id']:r for r in lowered};levelled,again,overpasses=level_overpasses(raised,pre,I.Terrain(grid,work),solved,{W.node_key(h['landing']) for h in hollows})
+  flattened=flattened+[found.get(f['id'],f) for f in again if f['id'] not in {x['id'] for x in flattened}]
+ city={**city,'roads':levelled}
  flattened=seams+[f for f in flattened if f['id'] not in {s['id'] for s in seams} and f['id'] not in seam_pieces]
  paved=[r for r in city['roads'] if not r.get('elevations') and not r.get('tunnel') and not stage_owned(r)];paved_lines=[LineString(r['points']) for r in paved];paved_tree=STRtree(paved_lines)
  # A structure the stage removes takes no part in the solve, so the build is redone without it (and a rerun, whose tiles no longer hold it, builds the same).
  for _ in range(4):
   standing_buildings=buildings.without(r['id'] for r in removed)
-  plans,fixed,report,lidded=build(city,source,heights,ungraded,water,standing_buildings,tunnels,routes)
+  plans,fixed,report,lidded=build(city,source,work,ungraded,water,standing_buildings,tunnels,routes)
   # A ramp pinned at both ends between the roads it joins may pass its grade a little; more than GRADE_SLACK is a broken profile.
   grades={p.id:max(abs(p.y[i+1]-p.y[i])/max(.5,float(p.along[i+1]-p.along[i])) for i in range(len(p.y)-1)) for p in plans}
   bad={p.id:round(grades[p.id],3) for p in plans if grades[p.id]>p.grade+GRADE_SLACK};assert not bad,f'highway profiles exceed their grade: {bad}'
@@ -1688,9 +1871,9 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  record_={'method':METHOD,'routes':summary,'closed':[{'road':r['id'],'end':r['closed'],'point':r['points'][-1 if r['closed']=='end' else 0]} for r in decks+tunnel_records if r.get('closed')],
   'crossings':report['crossings'],'newCrossings':report['newCrossings'],'atGrade':report['atGrade'],'unresolved':report['unresolved'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'steep':steep,'movedBeside':report['movedBeside'],'narrowed':report['narrowed'],'junctions':report['junctions'],
-  'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'buildings':over,'signs':signs,
+  'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'buildings':over,'signs':signs,
   'deckMeters':length(decks),'tunnelMeters':length(tunnel_records),
-  'roads':{'added':[r['id'] for r in decks]+seam_pieces+[p['id'] for p in pieces if p['id'] not in replaced],'tunnels':[r['id'] for r in tunnel_records],'sources':flattened+[copy.deepcopy(r) for r in source_roads if r['id'] in replaced and r['id'] not in {f['id'] for f in flattened}]},
+  'roads':{'added':[r['id'] for r in decks]+seam_pieces+[p['id'] for p in pieces if p['id'] not in replaced],'tunnels':[r['id'] for r in tunnel_records],'sources':flattened+[copy.deepcopy(r) for r in source_roads if r['id'] in replaced and r['id'] not in {f['id'] for f in flattened}],'removed':copies},
   'terrain':{'vertices':[int(v) for v in vertices],'heights':[int(h) for h in originals],'maxCutMeters':round(float(-delta.min()),3) if len(vertices) else 0,'maxFillMeters':round(float(delta.max()),3) if len(vertices) else 0,
    'cutCubicMeters':round(float(-delta[delta<0].sum())*grid['cellSize']**2),'fillCubicMeters':round(float(delta[delta>0].sum())*grid['cellSize']**2)}}
  return record_,roads+decks,tunnel_records,result,plans
@@ -1704,7 +1887,7 @@ def replay(data_dir,city,record,source,installed=None):
  again,out,tunnel_records,result,_=install({**city,'roads':roads},source,heights,load_grid(data_dir/grid['source']),tile_buildings(data_dir,city),central_artery(data_dir,city),removed=record['buildings']['removed'])
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']};sidecar=json.loads((data_dir/SIDECAR).read_text())
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
- return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','overpasses','bridgeSeams'))
+ return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','overpasses','bridgeSeams','hollows'))
 
 
 def validate(data_dir,city,record,ground):

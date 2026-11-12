@@ -534,6 +534,14 @@ export function createTileBuilder(ctx: TileContext) {
           const k = `${x},${z}`, list = segmentCells.get(k) ?? []; list.push(segment); segmentCells.set(k, list);
         }
       }
+      // A footbridge's line is no street, but nothing is planted or posted in its deck either (a ramp comes down along the edge of a street's roadway).
+      for (const deck of city.footbridges ?? []) for (let i = 1; i < deck.points.length; i++) {
+        const a = deck.points[i - 1], b = deck.points[i], radius = deck.width / 2 + .8, segment = { a, b, radius };
+        if (Math.max(a[0], b[0]) < x0 - 64 || Math.min(a[0], b[0]) > x1 + 64 || Math.max(a[1], b[1]) < z0 - 64 || Math.min(a[1], b[1]) > z1 + 64) continue;
+        for (let x = Math.floor((Math.min(a[0], b[0]) - radius) / 64); x <= Math.floor((Math.max(a[0], b[0]) + radius) / 64); x++) for (let z = Math.floor((Math.min(a[1], b[1]) - radius) / 64); z <= Math.floor((Math.max(a[1], b[1]) + radius) / 64); z++) {
+          const k = `${x},${z}`, list = segmentCells.get(k) ?? []; list.push(segment); segmentCells.set(k, list);
+        }
+      }
       const inRoad = (x: number, z: number) => (segmentCells.get(`${Math.floor(x / 64)},${Math.floor(z / 64)}`) ?? []).some(({ a, b, radius }) => {
         const dx = b[0] - a[0], dz = b[1] - a[1], t = THREE.MathUtils.clamp(((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
         return Math.hypot(x - a[0] - t * dx, z - a[1] - t * dz) < radius;

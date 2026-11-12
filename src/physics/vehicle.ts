@@ -5,7 +5,7 @@ import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
 import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, sampleVehicleSurface, registerDriveSurface, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
-import {footbridgeRoad} from '../simulation/footbridges.ts';
+import {footbridgeRoad,footbridgeSupports,FOOTBRIDGE_COLUMN} from '../simulation/footbridges.ts';
 import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
 import {tireSlipIntensity,type TireContact} from '../simulation/tire-tracks.ts';
 
@@ -195,7 +195,13 @@ export class DrivingPhysics {
     const road=footbridgeRoad(city,path);if(!road)return[];
     const slab=roadSlabGeometry(city,road),collider=this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(slab.vertices,slab.indices,RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
     this.surfaceCleanup.set(collider.handle,registerDriveSurface(this.city,road));
-    return[collider];
+    const colliders=[collider];
+    // The columns under a deck over a road, as drawn.
+    for(const s of footbridgeSupports(city,road,path)){
+      const half=FOOTBRIDGE_COLUMN/2;
+      colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(half,(s.top-s.bottom)/2,half).setTranslation(s.x,(s.top+s.bottom)/2,s.z).setRotation({x:0,y:Math.sin(s.yaw/2),z:0,w:Math.cos(s.yaw/2)}).setFriction(.5)));
+    }
+    return colliders;
   }
 
   /** Upper decks are closed solids, separate from the original terrain. Wheel

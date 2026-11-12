@@ -129,13 +129,30 @@ export function sampleVehicleSurface(city:CityData,x:number,z:number,yReference=
   return best;
 }
 
-/** The slab underside of the lowest road deck standing over a point with its surface above `above` (a street bridge
- * over a highway's cut), parapets included; Infinity where none does. Walls, masts and signs beneath stop under it. */
+/** The slab under a footbridge's deck (footbridges.py reckons the room under it with the same number). */
+export const FOOTBRIDGE_SLAB=.22;
+const footbridgeDecks=new WeakMap<object,{points:Point2[];elevations:number[];width:number;minX:number;maxX:number;minZ:number;maxZ:number}[]>();
+/** The slab underside of the lowest deck standing over a point with its surface above `above` (a street bridge
+ * over a highway's cut, parapets included, or a footbridge the city lists); Infinity where none does. Walls,
+ * masts and signs beneath stop under it. */
 export function deckUndersideAt(city:CityData,x:number,z:number,above:number){
   let under=Infinity;
   for(const road of elevatedNear(city,x,z)){
     if(!road.elevations||road.tunnel||roadProjection(road,x,z).distance>roadWidthAt(road,x,z)/2+.45)continue;
     const h=sampleRoadElevation(city,road,x,z);if(h>above)under=Math.min(under,h-(road.bridge?.thickness??.75));
+  }
+  if(city.footbridges?.length){
+    let decks=footbridgeDecks.get(city.footbridges);
+    if(!decks)footbridgeDecks.set(city.footbridges,decks=city.footbridges.map(d=>({...d,minX:Math.min(...d.points.map(p=>p[0])),maxX:Math.max(...d.points.map(p=>p[0])),minZ:Math.min(...d.points.map(p=>p[1])),maxZ:Math.max(...d.points.map(p=>p[1]))})));
+    for(const deck of decks){
+      const reach=deck.width/2+.45;if(x<deck.minX-reach||x>deck.maxX+reach||z<deck.minZ-reach||z>deck.maxZ+reach)continue;
+      // A ramp that turns back passes over itself: every stretch over the point counts, not only the nearest.
+      for(let i=1;i<deck.points.length;i++){
+        const a=deck.points[i-1],b=deck.points[i],dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));
+        if(Math.hypot(x-a[0]-dx*t,z-a[1]-dz*t)>reach)continue;
+        const h=deck.elevations[i-1]+(deck.elevations[i]-deck.elevations[i-1])*t;if(h>above)under=Math.min(under,h-FOOTBRIDGE_SLAB);
+      }
+    }
   }
   return under;
 }

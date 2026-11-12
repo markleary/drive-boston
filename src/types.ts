@@ -9,7 +9,10 @@ export interface Building { id: string; name: string; center: Point2; height: nu
 export interface Landmark { id: string; name: string; position: Point2; description: string; driveStart?: {x:number;z:number;yaw:number;roadId?:string}; }
 export interface WaterSurface { source:string; name:string; rings:Point2[][]; level:number; }
 export interface CityArea { id: string; name: string; rings: Point2[][]; kind?: string; /** Constant-height source basins/reaches inside a merged hydro outline. */ surfaces?:WaterSurface[]; }
-export interface ParkPath { id: string; points: Point2[]; width: number; bridge?: boolean; /** Complete pre-tile-clipped bridge centerline; fragments share its height profile. */ bridgePoints?:Point2[]; }
+export interface ParkPath { id: string; points: Point2[]; width: number; bridge?: boolean; /** Complete pre-tile-clipped bridge centerline; fragments share its height profile. */ bridgePoints?:Point2[];
+  name?: string; kind?: string;
+  /** A bridge over a road (build-footbridges.py): the deck's height at each point, in place of the arch between two banks. */ elevations?: number[];
+  /** Ranges of point indices mapped as steps on such a bridge. */ steps?: [number,number][]; }
 export interface CityData {
   origin: { xFeet: number; yFeet: number; longitude: number; latitude: number };
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
@@ -25,6 +28,8 @@ export interface CityData {
   parks?: CityArea[];
   water?: CityArea[];
   parkPaths?: ParkPath[];
+  /** Every footbridge deck with stored heights (build-footbridges.py), whichever tile holds its path: what stands under one is left out before that tile loads (deckUndersideAt). */
+  footbridges?: {id:string;width:number;points:Point2[];elevations:number[]}[];
   /** Present on metro builds: buildings stream from 1 km tiles (see simulation/city-tiles.ts). */
   tiles?: { size:number; directory:string; keys:string[]; far:string; buildingCount:number };
   landmarkBuildings?: Building[];

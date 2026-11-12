@@ -148,6 +148,156 @@ class SeamTest(unittest.TestCase):
   self.assertEqual([r['points'][0] for r in decks],[[0.0,0.0],[60.0,0.0]],'split where the street meets it within JOIN of its height, not under the one 2 m below')
 
 
+class BankTest(unittest.TestCase):
+ """A bridge over the cut with a landing down in it, as build-metro.py leaves it: every lifted node 6.4 m over its ground."""
+ def ground(self,x,z):
+  if 50<x<70:return -3.3                                   # the cut's floor under the bridge
+  return 2.0 if z>=-10 else -2.5 if z<=-30 else 2.0-(-10-z)*.225   # the bank the steps climb
+ def bridge(self):
+  deck=lambda id,points,a,b,name='Bridge Street':{'id':id,'name':name,'points':points,'width':12,'oneway':1,'elevations':[self.ground(*p)+6.4*(a if i==0 else b if i==len(points)-1 else .5) for i,p in enumerate(points)],'startLevel':a,'endLevel':b,'bridge':{'id':f'structure-{id}','thickness':.75,'clearanceEstimated':True,'kind':'elevated'}}
+  return [deck('a',[[0,0],[20,0],[40,0]],0,1),deck('d',[[40,0],[60,0],[80,0]],1,1),deck('c',[[80,0],[100,0],[120,0]],1,0),deck('steps',[[40,-40],[40,-35],[40,-30],[40,-25],[40,-20],[40,-15],[40,-10],[40,-5],[40,0]],0,1,'Bridge Street Steps')]
+ def beneath(self):
+  road=plan([[60,-30],[60,-15],[60,0],[60,15],[60,30]]);road.terrain=[-3.0]*5;road.water_polygons=[];return road
+
+ def test_a_landing_down_in_the_cut_is_no_bank_and_its_piece_rises_to_the_deck(self):
+  roads=self.bridge();self.assertEqual(roads[1]['elevations'],[8.4,-3.3+3.2,8.4]);levelled,sources,report=H.level_overpasses(roads,[self.beneath()],self.ground)
+  self.assertEqual(len(report),1);r=report[0];self.assertEqual(r['changed'],['a','c','d','steps']);self.assertEqual(r['landings'],[2.0,2.0],'the two banks');self.assertEqual(r['inCut'],[-2.5])
+  # (the deck's own nodes stand on the banks' ground, which it keeps 0.3 m under it)
+  a,d,c,steps=levelled;self.assertEqual({round(y,3) for y in d['elevations']},{2.3},'the deck is level between its banks');self.assertEqual((a['elevations'][0],c['elevations'][-1]),(2.0,2.0))
+  self.assertTrue(all(2.0-1e-6<=y<=2.3+1e-6 for r in (a,c) for y in r['elevations']));self.assertEqual(sorted(o['id'] for o in sources),['a','c','d','steps']);self.assertEqual(r['lifts'],[.3,.3])
+  ys=steps['elevations'];self.assertEqual((ys[0],ys[-1]),(-2.5,2.3),'from its landing in the cut to the deck');self.assertTrue(all(b>=a for a,b in zip(ys,ys[1:])))
+  grades=[(b-a)/5 for a,b in zip(ys,ys[1:])];self.assertTrue(all(g2<=g1+1e-3 for g1,g2 in zip(grades,grades[1:])),'pulled taut over the bank: it never steepens again');self.assertLess(max(grades),.2)
+  self.assertTrue(all(y>=self.ground(*p)-1e-9 for p,y in zip(steps['points'],ys)),'and never under it')
+  # the room the road asks for lifts the banks' surface, not the landing in the cut
+  deep=self.beneath();deep.terrain=[-.5]*5;lifted=H.level_overpasses(self.bridge(),[deep],self.ground)[2][0];top=-.5+I.TERRAIN_RISE+H.THICKNESS+H.CLEAR_UNDER
+  self.assertEqual(lifted['inCut'],[-2.5]);self.assertTrue(lifted['deck'][0]<=top+1e-3<=lifted['deck'][1]+2e-3,'the surface between the banks meets the room over the road');self.assertEqual(len(lifted['lifts']),2);self.assertGreater(max(lifted['lifts']),1.5)
+
+ def test_a_bridge_whose_landings_all_stand_near_the_road_is_left_on_its_nodes(self):
+  shallow=self.beneath();shallow.terrain=[1.0]*5;roads=self.bridge();levelled,sources,report=H.level_overpasses(roads,[shallow],self.ground)
+  self.assertEqual(report,[]);self.assertEqual(sources,[]);self.assertEqual([r['elevations'] for r in levelled],[r['elevations'] for r in roads],'an overpass over a road at grade keeps its climb')
+
+ def test_a_route_that_starts_on_the_bridge_joins_it_and_is_no_road_beneath(self):
+  # An entrance ramp leaves the street at the bridge's landing: its ground there is the street's, not a cut's floor.
+  entrance=plan([[0,0],[0,15],[0,30]],main=False);entrance.terrain=[2.0,1.9,1.8];entrance.water_polygons=[];roads=self.bridge()[:3]
+  levelled,sources,report=H.level_overpasses(roads,[self.beneath(),entrance],self.ground)
+  self.assertEqual(len(report),1,'the bridge is levelled over the road in the cut');self.assertEqual(report[0]['landings'],[2.0,2.0]);self.assertNotIn('inCut',report[0])
+  crossing=plan([[20,-30],[20,0],[20,30]],main=False);crossing.terrain=[1.8]*3;crossing.water_polygons=[]
+  self.assertEqual(H.level_overpasses(self.bridge()[:3],[self.beneath(),crossing],self.ground)[2],[],'a road at the banks\' height passing under the bridge is one: nothing stands CUT over it')
+
+
+class CopyTest(unittest.TestCase):
+ """A street both sources carry, as Saint Mary's Street on the line between Boston and Brookline."""
+ def roads(self):
+  deck=lambda id,points,a,b:{'id':id,'name':'Line Street','points':points,'width':7,'oneway':1,'elevations':[2.0+6.4*(a if i==0 else b if i==len(points)-1 else .5) for i in range(len(points))],'startLevel':a,'endLevel':b,'bridge':{'id':f'structure-{id}','thickness':.75,'clearanceEstimated':True,'kind':'elevated'}}
+  street=lambda id,points,**extra:{'id':id,'name':'Line Street','points':points,'width':12.2,'oneway':1,**extra}
+  return [street('north',[[-40,0],[0,0]]),deck('a',[[0,0],[20,0],[40,0]],0,1),deck('d',[[40,0],[60,0],[80,0]],1,1),deck('c',[[80,0],[100,0],[120,0]],1,0),street('south',[[120,0],[160,0]]),
+   # the second source: a street down the bank to the bridge's first node, a deck from the cut's floor up, a stub, and its own copies of the streets beyond
+   street('osm-north',[[-40,0],[0,0]],pavedWidth=8.2),street('osm-a',[[0,0],[40,0]],pavedWidth=10.3),
+   {**deck('osm-d',[[40,.3],[60,.3],[80,.3],[105,.2]],0,0),'elevations':[-2.5,-1.0,.5,1.6],'width':12.2},street('osm-s',[[105,.2],[120,0]]),street('osm-south',[[120,0],[160,0]]),
+   street('cross',[[120,0],[120,40]]),deck('twin',[[0,10],[60,10],[120,10]],0,0),street('stub',[[20,-1.2],[20,1.2]])]
+ def beneath(self,x=60):
+  road=plan([[x,-30],[x,-15],[x,0],[x,15],[x,30]]);road.terrain=[-3.0]*5;road.water_polygons=[];return road
+
+ def test_the_second_source_s_copies_of_a_bridge_over_the_road_leave_the_package_and_come_back(self):
+  roads=self.roads();kept,copies=H.bridge_copies(roads,[self.beneath()])
+  self.assertEqual([c['road']['id'] for c in copies],['osm-a','osm-d','osm-s']);self.assertEqual([c['index'] for c in copies],[6,7,8]);self.assertTrue(all(c['of']==['a','c','d'] for c in copies))
+  self.assertEqual([r['id'] for r in kept],['north','a','d','c','south','osm-north','osm-south','cross','twin','stub'],'the streets beyond the bridge, the cross street, the carriageway beside it and a stub across its line stay')
+  self.assertEqual(copies[1]['road'],roads[7]);self.assertIsNot(copies[1]['road'],roads[7])
+  # restore puts each back at its own place
+  back=list(kept);H.restore(back,None,{'roads':{'added':[],'sources':[],'removed':copies}});self.assertEqual(back,roads)
+  # of two chains on one line the longer is the bridge: the single copied deck never takes the bridge's own pieces
+  self.assertTrue(all(r in kept for r in roads[1:4]))
+
+ def test_a_bridge_that_crosses_none_of_the_stage_s_roads_keeps_what_lies_on_it(self):
+  roads=self.roads();self.assertEqual(H.bridge_copies(roads,[self.beneath(300)]),(roads,[]))
+  raised=self.beneath();raised.level=[1]*5;self.assertEqual(H.bridge_copies(roads,[raised])[1],[],'nor one the road passes over')
+  owned=self.roads();owned[2]={**owned[2],'bridge':{**owned[2]['bridge'],'kind':'harvard'}};self.assertEqual(H.bridge_copies(owned,[self.beneath()])[1],[],'nor a bridge with a dedicated builder')
+
+
+class NodeTest(unittest.TestCase):
+ """Carlton Street: the span and the two legs it parts into are three bridge ways that meet over the bank of the cut."""
+ def ground(self,x,z):return 2.0 if x>=95 else 1.8 if x<=26 else -2.5
+ def roads(self):
+  piece=lambda id,points:{'id':id,'name':'Fork Street','points':points,'width':12,'oneway':0,'elevations':[round(self.ground(*points[0])+(self.ground(*points[-1])-self.ground(*points[0]))*i/(len(points)-1),4) for i in range(len(points))],'startLevel':0,'endLevel':0,'bridge':{'id':f'structure-{id}','thickness':.75,'clearanceEstimated':True,'kind':'elevated'}}
+  return [piece('span',[[40,0],[50,0],[60,0],[70,0],[80,0],[90,0],[100,0]]),piece('leg',[[40,0],[35,3],[30,6],[25,9]]),piece('arm',[[25,-9],[30,-6],[35,-3],[40,0]]),
+   {'id':'north','name':'Fork Street','points':[[100,0],[140,0]],'width':12,'oneway':0},{'id':'west','name':'West Street','points':[[25,9],[0,20]],'width':12,'oneway':0},{'id':'east','name':'East Street','points':[[25,-9],[0,-20]],'width':12,'oneway':0}]
+ def beneath(self):
+  road=plan([[60,-30],[60,-15],[60,0],[60,15],[60,30]]);road.terrain=[-3.0]*5;road.water_polygons=[];return road
+
+ def test_a_node_where_only_bridge_pieces_meet_over_the_cut_is_lifted_and_the_bridge_levelled(self):
+  roads=self.roads();self.assertEqual(roads[0]['elevations'][0],-2.5);out,originals,notes,added=H.bridge_seams(roads,[self.beneath()],self.ground)
+  self.assertEqual((added,notes),([],[]));self.assertEqual(sorted(o['id'] for o in originals),['arm','leg','span']);self.assertEqual([r['id'] for r in out],[r['id'] for r in roads])
+  span,leg,arm=out[:3];self.assertEqual([(r['startLevel'],r['endLevel']) for r in (span,leg,arm)],[(1,0),(1,0),(0,1)],'each piece is lifted at the node and lands at its other end')
+  self.assertEqual(originals[0]['startLevel'],0);self.assertIs(out[3],roads[3])
+  levelled,sources,report=H.level_overpasses(out,[self.beneath()],self.ground);self.assertEqual(len(report),1);self.assertEqual(report[0]['landings'],[1.8,1.8,2.0])
+  span,leg,arm=levelled[:3];node=span['elevations'][0];self.assertEqual((leg['elevations'][0],arm['elevations'][-1]),(node,node),'the three pieces meet at one height')
+  self.assertTrue(1.5<=node<=2.4,node);self.assertEqual((span['elevations'][-1],leg['elevations'][-1],arm['elevations'][0]),(2.0,1.8,1.8))
+  self.assertTrue(all(y>=1.5 for y in span['elevations']),'no fall to the node any more');self.assertGreaterEqual(span['elevations'][2]-H.THICKNESS-(-3.0+I.TERRAIN_RISE),H.CLEAR_UNDER-1e-6)
+
+ def test_a_piece_two_rules_change_is_recorded_once_as_the_stage_found_it(self):
+  # A second carriageway passes close under the span's far landing, which stands on the slope of the cut: the street beyond climbs out, so that
+  # landing moves along the street (the second rule) after the node was lifted (the first). restore must find the span as it was before both.
+  climbing=lambda x,z:2.0+min(1.2,max(0,x-100)*.05) if x>=95 else 1.8 if x<=26 else -2.5;roads=self.roads()
+  near=plan([[88,-30],[88,-15],[88,0],[88,15],[88,30]]);near.terrain=[-3.0]*5;near.water_polygons=[]
+  out,originals,notes,added=H.bridge_seams(roads,[self.beneath(),near],climbing)
+  self.assertEqual(added,['north-deck']);self.assertEqual(sorted(o['id'] for o in originals),['arm','leg','north','span'],'each road once');span=next(o for o in originals if o['id']=='span')
+  self.assertEqual((span['startLevel'],span['endLevel']),(0,0),'as the stage found it, not as the first rule left it');self.assertEqual(span,roads[0])
+  self.assertEqual([(r['id'],r.get('startLevel'),r.get('endLevel')) for r in out[:5]],[('span',1,1),('leg',1,0),('arm',0,1),('north-deck',1,0),('north',None,None)])
+  back=list(out);H.restore(back,None,{'roads':{'added':added,'sources':originals}});self.assertEqual(back,roads,'and restore gives the stage its roads back')
+
+ def test_a_junction_on_the_ground_or_on_a_bank_or_with_a_builder_of_its_own_stays(self):
+  road=self.beneath()
+  street=self.roads()+[{'id':'side','name':'Side Street','points':[[40,0],[40,-40]],'width':8,'oneway':0}];self.assertEqual(H.bridge_seams(street,[road],self.ground)[1],[],'a street ends at the node: it is a junction')
+  bank=lambda x,z:2.0 if x>=95 else 1.8 if x<=26 else 0.5;high=self.roads()
+  for r in high[:3]:r['elevations']=[.5 if p==[40,0] else y for p,y in zip(r['points'],r['elevations'])]
+  self.assertEqual(H.bridge_seams(high,[road],bank)[1],[],'a node standing CUT over the road is on a bank')
+  built=self.roads();built[1]={**built[1],'bridge':{**built[1]['bridge'],'kind':'harvard'}};self.assertEqual(H.bridge_seams(built,[road],self.ground)[1],[],'a chain with a dedicated builder is left alone')
+  far=plan([[160,-30],[160,0],[160,30]]);far.terrain=[-3.0]*3;far.water_polygons=[];self.assertEqual(H.bridge_seams(self.roads(),[far],self.ground)[1],[],'and so is a node far from the road')
+  low=self.roads()
+  for r in low[:3]:r['elevations']=[y if p==[40,0] else -2.4 for p,y in zip(r['points'],r['elevations'])]
+  self.assertEqual(H.bridge_seams(low,[road],lambda x,z:-2.5)[1],[],'pieces with no end on a bank are no bridge over the cut')
+
+
+class HollowTest(unittest.TestCase):
+ """A bridge over the cut whose western landing stands in a hollow: the source ended the bridge on the slope the survey shows
+ under it, and the street beyond was graded down to that landing."""
+ GRID={'width':41,'height':21,'cellSize':6,'originX':-60,'originZ':-60,'scale':.01}
+ def height(self,x,z,hollow):
+  if 30<x<90:return -2.5                                           # the cut the bridge crosses
+  if x>=90:return 2.0                                              # the east bank, level with its street
+  return min(2.0,.2+max(0,24-x)*.075) if hollow else .2          # the west street climbs 1.8 m out of the hollow in 24 m, or lies low all along
+ def heights(self,hollow=True):
+  g=self.GRID;return np.asarray([round(self.height(g['originX']+i*g['cellSize'],g['originZ']+j*g['cellSize'],hollow)*100) for j in range(g['height']) for i in range(g['width'])],dtype='<i2')
+ def roads(self,ground):
+  deck=lambda id,points,a,b:{'id':id,'name':'Bridge Street','points':points,'width':12,'oneway':0,'elevations':[round(ground(*q)+6.4*(a if i==0 else b if i==len(points)-1 else .5),4) for i,q in enumerate(points)],'startLevel':a,'endLevel':b,'bridge':{'id':f'structure-{id}','thickness':.75,'clearanceEstimated':True,'kind':'elevated'}}
+  street=lambda id,points:{'id':id,'name':'Bridge Street','points':points,'width':12,'oneway':0}
+  return [deck('west-ramp',[[24,0],[30,0],[36,0],[42,0]],0,1),deck('deck',[[42,0],[60,0],[78,0]],1,1),deck('east-ramp',[[78,0],[84,0],[90,0],[96,0]],1,0),street('west',[[24,0],[0,0],[-48,0]]),street('east',[[96,0],[150,0]]),street('side',[[0,0],[0,40]])]
+ def beneath(self):
+  road=plan([[60,-30],[60,-15],[60,0],[60,15],[60,30]]);road.terrain=[-3.0]*5;road.water_polygons=[];return road
+
+ def test_the_ground_at_a_landing_in_a_hollow_is_raised_to_the_bridge_and_the_bank_stays(self):
+  g=self.GRID;heights=self.heights();ground=I.Terrain(g,heights);roads=self.roads(ground);road=self.beneath();levelled,sources,report=H.level_overpasses(roads,[road],ground)
+  ramp=levelled[0];top=ramp['elevations'][-1];self.assertEqual(ramp['elevations'][0],.2);self.assertGreaterEqual(top-.2,H.HOLLOW,'the level deck falls to its landing in the hollow')
+  filled,again,before,notes=H.raise_hollows(roads,levelled,report,[road],g,heights);level=round(top,2)
+  self.assertEqual([(n['road'],n['landing'],n['from'],n['streets']) for n in notes],[('west-ramp',[24,0],.2,['west'])],'the east landing stands on its bank and is no hollow')
+  self.assertAlmostEqual(notes[0]['to'],level,2,msg='to the height of the deck at the node the ramp climbs to');self.assertEqual(notes[0]['maxFillMeters'],round(level-.2,3))
+  changed=np.flatnonzero(filled!=heights);xs=g['originX']+(changed%g['width'])*6;zs=g['originZ']+(changed//g['width'])*6;self.assertEqual(notes[0]['vertices'],len(changed))
+  self.assertTrue(np.all(filled[changed]==round(level*100)) and np.all(filled>=heights),'raised to one level, nothing lowered');self.assertTrue(np.all(np.abs(zs)<=12) and np.all(xs<=30),'the cells of the street corridor')
+  self.assertEqual(sorted(zip(xs[xs==30].tolist(),zs[xs==30].tolist())),[(30,-6),(30,0),(30,6)],'behind the landing only what lies within the corridor\'s reach of it')
+  self.assertTrue(np.all(filled[(np.arange(len(filled))%g['width']>=16)&(np.arange(len(filled))%g['width']<=24)]==heights[(np.arange(len(heights))%g['width']>=16)&(np.arange(len(heights))%g['width']<=24)]),'the cut the bridge crosses keeps its ground')
+  after=I.Terrain(g,filled);self.assertTrue(all(after(x,0)>=level-1e-9 for x in (24,20,16,12,8,4,0,-10)),'the street no longer dips to the bridge');self.assertAlmostEqual(after(-10,0),2.0)
+  # the landing takes the new ground, the record as it was is kept for restore, and the bridge levelled once more comes down to it gently
+  # (its west end rides up a little with its bank, which no road beneath holds down here: what is left is under HOLLOW)
+  self.assertEqual([r['id'] for r in before],['west-ramp']);self.assertEqual(before[0],roads[0]);self.assertEqual(again[0]['elevations'][0],round(level,4));self.assertEqual(again[0]['elevations'][1:],roads[0]['elevations'][1:]);self.assertTrue(all(a is b for a,b in zip(again[1:],roads[1:])))
+  once_more,_,second=H.level_overpasses(again,[road],after,raised={(24.0,0.0)});ys=once_more[0]['elevations'];self.assertEqual(ys[0],round(level,4));self.assertTrue(0<=ys[-1]-ys[0]<min(H.HOLLOW,(top-.2)/2),ys);self.assertEqual(second[0]['landings'],[round(level,3),2.0])
+  self.assertEqual(H.raise_hollows(again,once_more,second,[road],g,filled)[3],[],'and a second look finds no hollow')
+
+ def test_a_bridge_standing_over_its_streets_keeps_its_ramp_and_its_ground(self):
+  g=self.GRID;heights=self.heights(hollow=False);ground=I.Terrain(g,heights);roads=self.roads(ground);road=self.beneath();levelled,sources,report=H.level_overpasses(roads,[road],ground)
+  self.assertGreaterEqual(levelled[0]['elevations'][-1]-levelled[0]['elevations'][0],H.HOLLOW);filled,again,before,notes=H.raise_hollows(roads,levelled,report,[road],g,heights)
+  self.assertEqual((notes,before),([],[]));self.assertIs(filled,heights);self.assertIs(again,roads)
+
+
 class LidTest(unittest.TestCase):
  def test_a_short_hole_between_two_roofed_stretches_is_closed_whole_or_left(self):
   grid={'width':40,'height':20,'cellSize':6.0,'originX':-30.0,'originZ':-60.0,'scale':.01};heights=np.full(40*20,300,dtype=np.int16)
