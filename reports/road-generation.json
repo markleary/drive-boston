@@ -1,9 +1,9 @@
 {
-  "roads": 24778,
+  "roads": 25058,
   "tiles": 265,
-  "polygonParts": 15300,
+  "polygonParts": 15396,
   "tileSeams": 480,
-  "profileSamples": 309370,
+  "profileSamples": 638535,
   "remainingProfiles": [
     {
       "road": "8803-0-0",
@@ -246,46 +246,6 @@
         "point": [
           -1741.856,
           -3061.796
-        ]
-      },
-      "unpavedTerrainIntrusion": {
-        "depth": 0
-      },
-      "dedicatedBuilder": false
-    },
-    {
-      "road": "osm-1388687881-0",
-      "name": "Unnamed trunk ramp",
-      "maxGrade": 0.2639,
-      "gradePoint": [
-        -2846.696,
-        87.273
-      ],
-      "terrainAboveDeck": {
-        "depth": 1.588,
-        "point": [
-          -2835.228,
-          83.645
-        ]
-      },
-      "unpavedTerrainIntrusion": {
-        "depth": 0
-      },
-      "dedicatedBuilder": false
-    },
-    {
-      "road": "osm-1388687882-0",
-      "name": "Carlton Street",
-      "maxGrade": 0.2057,
-      "gradePoint": [
-        -2840.932,
-        83.844
-      ],
-      "terrainAboveDeck": {
-        "depth": 2.153,
-        "point": [
-          -2849.435,
-          81.556
         ]
       },
       "unpavedTerrainIntrusion": {

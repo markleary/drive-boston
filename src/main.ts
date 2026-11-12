@@ -482,7 +482,7 @@ async function boot(){
       /** Browser specs: the GPS destination, route and turn-by-turn HUD (see `gps` in ui/interface.ts). */
       gps:ui.gps,
       /** Browser specs: stream the tiles around a point and stand the player on foot there (walk mode). */
-      walkTo:(x:number,z:number,yaw=0)=>travelTo(x,z,()=>walker!.place(x,sampleVehicleSurface(city,x,z).height,z,yaw)),
+      walkTo:(x:number,z:number,yaw=0,y?:number)=>travelTo(x,z,()=>walker!.place(x,y??sampleVehicleSurface(city,x,z).height,z,yaw)),
       // What the resident tiles have drawn of the Commonwealth Avenue Mall (commonwealth-mall.ts), summed over their park
       // groups; `tiles` lists each one's Mall benches beside the benches and lamps it set along its other parks' paths.
       commonwealthMall:()=>{

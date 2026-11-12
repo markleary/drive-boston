@@ -132,6 +132,26 @@ test('Edwin H. Land Boulevard crosswalks span the carriageway another tile owns 
   assert.ok(whole[1]-whole[0]>alone[1]-alone[0]+5,`the crosswalk at the far end grows across the southbound carriageway only with the border record (${alone} -> ${whole})`);
 });
 
+test('Saint Mary\'s Street, which Boston and Brookline both mapped, is one street between one pair of curbs',{skip:!hasMetroData()},async()=>{
+  const city=await loadMetroCity({tiles:['-3_0']}),curbs=city.loadedTiles.get('-3_0').curbs.filter(c=>c.length>=2),street=city.roads.filter(r=>r.name==="Saint Mary's Street"&&!r.elevations);
+  assert.ok(street.length>=9&&street.every(r=>!r.id.startsWith('osm-')),'Brookline\'s pieces on Boston\'s segments left the package (connect-source-seams.py)');
+  // The curb lines a 9.5 m ray to each side of the centerline meets, as distances from it (the town's 12.2 m outline stood 6.2 m out, a mitred chunk of an older build 26 cm beyond it).
+  const cross=(p,q,a,b)=>{const rx=q[0]-p[0],rz=q[1]-p[1],sx=b[0]-a[0],sz=b[1]-a[1],d=rx*sz-rz*sx;if(Math.abs(d)<1e-12)return;const t=((a[0]-p[0])*sz-(a[1]-p[1])*sx)/d,u=((a[0]-p[0])*rz-(a[1]-p[1])*rx)/d;return t>=0&&t<=1&&u>=0&&u<=1?t*9.5:undefined;};
+  const sides=(road,share)=>{const {at,tx,tz}=stationAlong(road.points,polylineLength(road.points)*share);return [1,-1].map(sign=>{
+    const end=[at[0]-tz*9.5*sign,at[1]+tx*9.5*sign],hits=[];
+    for(const c of curbs)for(let i=1;i<c.length;i++){const d=cross(at,end,c[i-1],c[i]);if(d!==undefined&&!hits.some(h=>Math.abs(h-d)<.02))hits.push(d);}
+    return hits.sort((a,b)=>a-b);});};
+  // North of the Turnpike bridge, the four surveyed blocks south of it, and the block beyond Monmouth Street that Boston's survey does not reach (the town's curbs stay there).
+  for(const [id,share,surveyed] of [['9791-0-0',.5,true],['14695-0-0',.25,true],['14695-0-0',.6,true],['14696-0-0',.3,true],['14696-0-0',.7,true],['14675-0-0',.5,true],['14676-0-0',.5,true],['14712-0-0',.3,true],['14712-0-0',.7,true],['13450-0-0',.5,false]]){
+    const road=city.roads.find(r=>r.id===id),[left,right]=sides(road,share),where=`${id} at ${share}`;
+    assert.equal(left.length,1,`${where}: one curb line on the left, found ${left.map(d=>d.toFixed(2))}`);assert.equal(right.length,1,`${where}: one curb line on the right, found ${right.map(d=>d.toFixed(2))}`);
+    if(surveyed){assert.ok(left[0]+right[0]>7.5&&left[0]+right[0]<8.5,`${where}: the surveyed roadway, ${(left[0]+right[0]).toFixed(2)} m between its curbs`);assert.ok(road.pavedWidth>7.8&&road.pavedWidth<8.4,`${where}: measured ${road.pavedWidth} m wide`);}
+  }
+  // The bridge itself: Brookline's copy drew a town curb along both sides of the approach and across the deck's line.
+  const bridge=city.roads.find(r=>r.id==='9794-0-0'),near=([x,z])=>{const {at}=stationAlong(bridge.points,polylineLength(bridge.points)*.5);return Math.hypot(x-at[0],z-at[1]);};
+  assert.ok(bridge?.elevations&&!curbs.some(c=>c.some((p,i)=>i>0&&near(p)>5.5&&near(p)<7.5&&near(c[i-1])>5.5&&near(c[i-1])<7.5)),'no town curb stands beside the bridge deck');
+});
+
 test('the shipped package carries curb-bounded roadways, inventory sidewalks, islands and driveways',{skip:!hasMetroData()},async()=>{
   const city=await loadMetroCity({bounds:{minX:-2500,maxX:-1500,minZ:600,maxZ:1500}}),roadsById=new Map();
   for(const road of city.roads)roadsById.set(road.id,[...roadsById.get(road.id)??[],road]);
@@ -166,7 +186,8 @@ test('the shipped package carries curb-bounded roadways, inventory sidewalks, is
       for(const p of rings[0])assert.ok(p[0]>=x0-.01&&p[0]<=x0+tile.size+.01&&p[1]>=z0-.01&&p[1]<=z0+tile.size+.01,`${key}: driveway part stays inside its tile`);
     }
   }
-  assert.ok(records>500&&sidewalks>500&&bricks>0&&islands>5&&driveways>5&&borders>0,`Fenway window: ${records} roadways, ${sidewalks} sidewalks (${bricks} brick), ${islands} islands, ${driveways} driveways, ${borders} border records`);
+  // (four islands: the eight more that tile -3_0 once counted were slivers 26 cm wide between a town curb and a leftover mitred copy of it)
+  assert.ok(records>500&&sidewalks>500&&bricks>0&&islands>3&&driveways>5&&borders>0,`Fenway window: ${records} roadways, ${sidewalks} sidewalks (${bricks} brick), ${islands} islands, ${driveways} driveways, ${borders} border records`);
   assert.ok(mfa,'the MFA Fenway pull-off is paved');
   const ratios=city.roads.filter(r=>r.name==='Riverway'&&r.pavedWidth).map(r=>r.pavedWidth/r.width).sort((a,b)=>a-b);
   assert.ok(ratios.length>10&&ratios[ratios.length>>1]>1.3,'the Riverway parkway is much wider than its class guess');

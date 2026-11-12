@@ -52,13 +52,21 @@ class Frame:
 
 
 def street_frame(center,segments,tree,roads,records,road_key):
- """Nearest street segment to the house: the frame there and the pavement edge offset on the house side."""
+ """Nearest street segment to the house: the frame there and the pavement edge offset on the house side.
+
+ Where the nearest point is a vertex two segments share, both are exactly as near (711 of the 36,014 houses with a
+ street in reach, 666 of them at a bend of one road). The tree's order must not choose between them: it shifts with
+ every road added or removed anywhere in the metro, and taking two streets out of Brookline turned the frames of ten
+ houses from Medford to Melrose. Of equally near segments the one with the lowest centre z is taken, then the lowest
+ centre x (the sums of the end coordinates), then the earlier in the list."""
  c=Point(center);best=None
  for i in tree.query(c.buffer(REACH)):
-  d=segments[i][0].distance(c)
-  if d<=REACH and (best is None or d<best[0]):best=(d,i)
+  line=segments[i][0];d=line.distance(c)
+  if d>REACH:continue
+  (ax,az),(bx,bz)=line.coords;key=(d,az+bz,ax+bx,int(i))
+  if best is None or key<best:best=key
  if best is None:return None
- line,ri=segments[best[1]];(ax,az),(bx,bz)=line.coords;t=np.array([bx-ax,bz-az]);length=np.linalg.norm(t)
+ line,ri=segments[best[3]];(ax,az),(bx,bz)=line.coords;t=np.array([bx-ax,bz-az]);length=np.linalg.norm(t)
  if length<.5:return None
  t/=length;s=max(0,min(length,(center[0]-ax)*t[0]+(center[1]-az)*t[1]));q=np.array([ax,az])+t*s;n=np.array([-t[1],t[0]])
  if (center[0]-q[0])*n[0]+(center[1]-q[1])*n[1]<0:n=-n

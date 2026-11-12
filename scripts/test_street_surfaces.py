@@ -3,9 +3,9 @@ fillets and an idempotent install into a small synthetic package.
 
   PYTHONPATH=scripts .venv-data/bin/python -m unittest scripts/test_street_surfaces.py
 """
-import gzip,importlib.util,json,math,pathlib,tempfile,types,unittest
+import gzip,importlib.util,json,math,pathlib,random,tempfile,types,unittest
 import numpy as np
-from shapely.geometry import LineString,Polygon
+from shapely.geometry import LineString,Polygon,box
 from shapely.ops import unary_union
 import street_surfaces as ss
 from tileformat import write_tile
@@ -77,6 +77,20 @@ class TownCurbTest(unittest.TestCase):
   self.assertEqual(kept,[survey,beside],'only curbs off the regenerated fillets stay, however close')
   self.assertEqual(ss.survey_curbs([survey,*cut],set(),town,[]),[survey,*cut],'without fillets nothing is taken for a town curb')
 
+ def test_a_mitred_chunk_of_an_earlier_build_is_caught_on_the_towns_outline(self):
+  from shapely.prepared import prep
+  # A town street 2 m inside the town line: its mitred outline (0.35 m lip) runs 2.35 m outside the town, where the middle-vertex test finds no town.
+  towns={'Town':Polygon([[0,0],[100,0],[100,100],[0,100]])};town=prep(towns['Town']);streets=[road('osm-1-0',[[-50,2],[50,2],[150,2]],8)]
+  outlines=ss.STRtree([l for boundary in ss.mitred_town_outlines(streets,towns) for l in ss.line_parts(boundary)])
+  # Chunks as an earlier build cut them (not this run's JSON): along the outline, round its corner, and a piece of two points clipped at a tile line.
+  along=[[-50,-2.35],[150,-2.35]];corner=[[150,3],[150,-2.35],[20,-2.35]];clipped=[[0,-2.35],[60,-2.35]]
+  # Surveyed curbs beside it: one bends 5 cm off the outline at its middle vertex, one of two points runs 10 cm off it.
+  bent=[[-40,-2.35],[60,-2.4],[140,-2.35]];beside=[[0,-2.45],[60,-2.45]]
+  for chunk in (along,corner,clipped):self.assertTrue(ss.on_mitred_outline(chunk,outlines),chunk)
+  for curb in (bent,beside,[[0,-30],[100,-30]]):self.assertFalse(ss.on_mitred_outline(curb,outlines),curb)
+  self.assertEqual(ss.survey_curbs([along,bent,corner,beside,clipped],set(),town,[],outlines=outlines),[bent,beside])
+  self.assertEqual(ss.survey_curbs([along,bent],set(),town,[]),[along,bent],'without the outlines only the exact match counts')
+
  def test_a_street_changing_width_at_a_town_line_tapers(self):
   towns={'West':Polygon([[-100,-100],[0,-100],[0,100],[-100,100]]),'East':Polygon([[0,-100],[100,-100],[100,100],[0,100]])}
   face=lambda roads:max(ss.polygonize(unary_union([LineString(c) for c in ss.town_curbs(roads,towns)])),key=lambda f:f.area)
@@ -88,6 +102,69 @@ class TownCurbTest(unittest.TestCase):
   # Another street meeting it end to end only steps (a 3 m fillet in the corner).
   f=face([road('osm-1-0',[[-60,0],[0,0]],16,'Main Street'),road('osm-2-0',[[0,0],[60,0]],8,'Pleasant Street')])
   self.assertFalse(f.contains(ss.Point(1,7.9)));self.assertTrue(f.contains(ss.Point(16,4.0)));self.assertFalse(f.contains(ss.Point(16,4.3)))
+
+
+class MappedStreetTest(unittest.TestCase):
+ def test_town_curbs_are_drawn_from_the_streets_as_mapped_whatever_the_turnpike_stage_changed(self):
+  before=[road('osm-a',[[0,0],[50,0]]),road('osm-b',[[50,0],[100,0]]),road('osm-copy',[[0,30],[40,30]]),road('1-0-0',[[0,60],[50,60]])]
+  # the stage carries 20 m of osm-b on a bridge's ramp and takes osm-copy out of the package as a second source's copy of a bridge
+  deck={**road('osm-b-deck',[[50,0],[60,0],[70,0]]),'elevations':[.2,.9,1.6],'startLevel':0,'endLevel':1,'bridge':{'id':'structure-osm-b-deck','thickness':.75}}
+  after=[before[0],deck,{**before[1],'points':[[70,0],[100,0]]},before[3]];record={'roads':{'added':['osm-b-deck'],'sources':[before[1]],'removed':[{'index':2,'road':before[2],'of':['1-0-0']}]}}
+  self.assertEqual(ss.mapped_streets(after,record),before,'the street whole again and the copy back at its place');self.assertEqual(after[2]['points'],[[70,0],[100,0]],'the package roads are not touched')
+  self.assertEqual(ss.mapped_streets(after,None),[after[0],after[2],after[3]],'without the stage, the surface streets as they are')
+  towns={'Town':Polygon([(-20,-20),(120,-20),(120,80),(-20,80)])};curbs=ss.town_curbs(ss.mapped_streets(after,record),towns)
+  self.assertEqual(curbs,ss.town_curbs(before,towns),'the same union, the same curbs');self.assertNotEqual(curbs,ss.town_curbs([r for r in after if not r.get('elevations')],towns))
+
+ def test_a_second_sources_copy_keeps_its_place_in_the_union(self):
+  # connect-source-seams.py took osm-copy out as the town's copy of Boston's 1-0-0; a park-edge move and a measured width it carried are not the source's.
+  streets=[road('osm-a',[[0,0],[50,0]]),road('1-0-0',[[0,30],[40,30]])];gone={**road('osm-copy',[[0,31],[40,31]],12),'pavedWidth':8.1,'points':[[0,33],[40,33]],'sourcePoints':[[0,31],[40,31]]}
+  mapped=ss.mapped_streets(streets,None,[gone])
+  self.assertEqual(mapped,[*streets,road('osm-copy',[[0,31],[40,31]],12)],'after the streets, as its source mapped it');self.assertIn('sourcePoints',gone,'the record is not touched')
+  towns={'Town':Polygon([(-20,-20),(120,-20),(120,80),(-20,80)])}
+  self.assertEqual(ss.town_curbs(mapped,towns),ss.town_curbs([mapped[2],mapped[0],mapped[1]],towns),'the union does not depend on where the copy sits in the list')
+
+
+class CopyCurbTest(unittest.TestCase):
+ """A street on the town line that the town's record gave up to Boston's: surveyed 8 m wide inside the 12 m of the town's class."""
+ def setUp(self):
+  self.copy=road('osm-5-0',[[0,0],[100,0]],12);self.left=LineString([[0,4],[100,4]]);self.right=LineString([[0,-4],[40,-4]])
+  self.reach=6+ss.LIP+ss.FILLET
+
+ def test_the_town_curb_is_cut_on_the_sides_the_survey_has(self):
+  cut,kept=ss.copy_curb_regions([self.copy],[self.left,self.right])
+  # The left side is surveyed all along, the right for 40 of its 100 m only: its town curb stays.
+  self.assertTrue(cut.covers(LineString([[1,self.reach],[99,self.reach]])));self.assertFalse(cut.intersects(LineString([[1,-1],[99,-1]])))
+  self.assertAlmostEqual(kept.area,100*2*self.reach,places=6,msg='the surveyed curbs are kept on both sides of the line')
+  outline=[[0,6.09],[100,6.09]];far=[[0,-6.09],[100,-6.09]];cross=[[50,40],[50,5]];pieces,gone=ss.cut_copy_curbs([outline,far,cross],cut)
+  self.assertEqual(pieces[0],far);self.assertEqual(len(pieces),2,'the outline is gone, the far side whole');self.assertAlmostEqual(gone,100+self.reach+.1-5,places=6)
+  self.assertEqual(pieces[1],[[50,40],[50,round(self.reach+.1,3)]],'a cross street\'s curb stops where its fillet into the outline began')
+  self.assertEqual(ss.cut_copy_curbs([[[0,30],[100,30]]],cut),([[[0,30],[100,30]]],0.0))
+
+ def test_both_sides_surveyed_takes_the_outline_and_its_end_caps(self):
+  cut,_=ss.copy_curb_regions([self.copy],[self.left,LineString([[0,-4],[100,-4]])])
+  ring=[[0,-6.09],[0,6.09],[100,6.09],[100,-6.09],[0,-6.09]];self.assertEqual(ss.cut_copy_curbs([ring],cut),([],sum(LineString(ring).length for _ in [0])))
+
+ def test_a_town_record_that_lay_on_a_boston_bridge_loses_its_whole_outline(self):
+  # The Turnpike stage took it out as a copy of the bridge over its roads: no ground street is there, whatever the survey has.
+  cut,kept=ss.copy_curb_regions([],[],bridges=[self.copy]);self.assertIsNone(kept)
+  ring=[[0,-6.09],[0,6.09],[100,6.09],[100,-6.09],[0,-6.09]];self.assertEqual(ss.cut_copy_curbs([ring,[[0,30],[100,30]]],cut)[0],[[[0,30],[100,30]]])
+  self.assertEqual(ss.copy_curb_regions([],[self.left],bridges=[{**self.copy,'elevations':[5,5]}]),(None,None),'the deck piece of the copy drew no outline')
+  both,kept=ss.copy_curb_regions([road('osm-6-0',[[200,0],[300,0]],12)],[LineString([[200,4],[300,4]])],bridges=[self.copy])
+  self.assertTrue(both.covers(LineString([[1,-6],[99,-6]])) and both.covers(LineString([[201,6],[299,6]])) and not both.intersects(LineString([[201,-6],[299,-6]])));self.assertAlmostEqual(kept.area,100*2*self.reach,places=6)
+
+ def test_no_survey_no_region_and_other_records_do_not_count(self):
+  self.assertEqual(ss.copy_curb_regions([self.copy],[LineString([[0,40],[100,40]])]),(None,None),'a curb beyond the pavement\'s reach is another street\'s')
+  self.assertEqual(ss.copy_curb_regions([self.copy],[]),(None,None));self.assertEqual(ss.copy_curb_regions([],[self.left]),(None,None))
+  self.assertEqual(ss.copy_curb_regions([road('15112-0-0',[[0,0],[100,0]])],[self.left,self.right]),(None,None),'a Boston stub that left for the town\'s street drew no town curb')
+  self.assertEqual(ss.copy_curb_regions([{**self.copy,'elevations':[5,5]}],[self.left,self.right]),(None,None))
+
+ def test_surveyed_curbs_on_the_town_side_are_put_back(self):
+  from shapely.prepared import prep
+  # The town lies z < 2: the left curb is Boston's side (kept by survey_curbs), the right one inside the town (dropped by it).
+  town=prep(Polygon([[-50,-200],[250,-200],[250,2],[-50,2]]));right=LineString([[0,-4],[100,-4]]);side=LineString([[50,-5],[50,-90]]);survey=[self.left,right,side]
+  _,kept=ss.copy_curb_regions([self.copy],survey);tree=ss.STRtree(survey)
+  self.assertEqual(ss.town_side_survey(survey,tree,kept,ss.box(-1000,-1000,1000,1000),town),[[[0,-4],[100,-4]]],'not the Boston side, nor a curb that only starts at the street')
+  self.assertEqual(ss.town_side_survey(survey,tree,kept,ss.box(60,-1000,1000,1000),town),[[[60,-4],[100,-4]]],'clipped to the tile')
 
 
 class IslandTest(unittest.TestCase):
@@ -137,6 +214,51 @@ class IslandTest(unittest.TestCase):
   lines,widths,lots=ss.driveway_features(elements,lambda x,y:(x*10,y*10))
   self.assertEqual([round(l.length,3) for l in lines],[round(10*2**.5,3),10],'surface service ways only');self.assertEqual([round(w,4) for w in widths],[5.5,round(12*.3048,4)]);self.assertEqual([a.area for a in lots],[400],'surface lots only, closed ways only')
   self.assertEqual(ss.osm_width({'width':'30'},4),12);self.assertEqual(ss.osm_width({'width':'narrow'},4),4);self.assertEqual(ss.osm_width({'width':'3 m'},4),3)
+
+
+class DrivewayDissolveTest(unittest.TestCase):
+ COVERAGE=box(-100,-100,4200,4200)
+
+ def lanes(self):
+  """House lanes scattered over 4 km, every eleventh with a pad across it: shapes that stand alone, and pairs."""
+  rng=random.Random(1);out=[]
+  for k in range(330):
+   x,z=rng.uniform(0,4000),rng.uniform(0,4000);w,h=rng.uniform(2.6,3.2),rng.uniform(8,20);out.append(Polygon([(x,z),(x+w,z+.3),(x+w-.2,z+h),(x-.1,z+h-.4)]))
+   if k%11==0:out.append(Polygon([(x+1,z+5),(x+9,z+5),(x+9,z+9),(x+1,z+9)]))
+  return out
+
+ def written(self,shapes):return [s.wkb for s in ss.driveway_surfaces([],[],shapes,[],self.COVERAGE)]
+
+ def rewritten(self,found,expected):
+  """How many surfaces are not written as expected (every one when their number differs)."""
+  return sum(a!=b for a,b in zip(found,expected)) if len(found)==len(expected) else max(len(found),len(expected))
+
+ def test_shapes_that_touch_form_groups_in_list_order(self):
+  shapes=[box(0,0,2,2),box(10,0,12,2),box(1,1,3,3),box(12,0,14,2),box(30,30,31,31),box(3,3,5,5)]
+  self.assertEqual(ss.connected_groups(shapes),[[0,2,5],[1,3],[4]],'an overlap, a shared corner and a shared edge join; the groups come in the order of their first shapes')
+  self.assertEqual(ss.connected_groups([]),[])
+
+ def test_the_groups_cover_what_one_union_covers(self):
+  lanes=self.lanes();groups=ss.connected_groups(lanes);drives=ss.driveway_surfaces([],[],lanes,[],self.COVERAGE)
+  self.assertGreaterEqual(sum(len(g)==2 for g in groups),30);self.assertEqual(len(drives),len(groups),'one surface a group')
+  self.assertLess(unary_union(drives).symmetric_difference(unary_union(lanes)).area,1e-6)
+  # Outside the coverage nothing is paved, and a lot across its edge is cut there.
+  edge=ss.driveway_surfaces([],[],[box(4190,0,4210,10),box(4300,0,4310,10)],[],self.COVERAGE)
+  self.assertEqual([round(d.area,6) for d in edge],[100])
+
+ def test_a_lane_gained_or_lost_far_away_leaves_every_other_surface_as_it_was(self):
+  # One union over all the shapes begins the rings of untouched polygons elsewhere once their number changes (74 of 299
+  # in a field like this one, with two left out), and the simplification that follows starts at that vertex.
+  lanes=self.lanes();groups=ss.connected_groups(lanes);whole=self.written(lanes);self.assertEqual(len(whole),len(groups))
+  alone=[g[0] for g in groups if len(g)==1];gone={alone[3],alone[40]}
+  self.assertEqual(self.rewritten(self.written([l for i,l in enumerate(lanes) if i not in gone]),[w for w,g in zip(whole,groups) if g[0] not in gone]),0,'two lanes fewer: the others as they were, in their order')
+  new=Polygon([(2000.5,-50),(2003.5,-50),(2003.5,-38),(2000.5,-38)])
+  self.assertEqual(self.rewritten(self.written(lanes+[new])[:-1],whole),0,'one more at the end of the list')
+  self.assertEqual(self.rewritten([w for w in self.written(lanes[:100]+[new]+lanes[100:]) if w!=new.wkb],whole),0,'one more in the middle of it')
+
+ def test_a_strip_whose_edges_cross_comes_out_valid(self):
+  drives=ss.driveway_surfaces([],[],[Polygon([(0,0),(10,0),(0,6),(10,6)])],[],self.COVERAGE)
+  self.assertTrue(drives);self.assertTrue(all(d.is_valid for d in drives))
 
 
 class SidewalkTest(unittest.TestCase):
@@ -266,6 +388,33 @@ class InstallTest(unittest.TestCase):
    self.assertEqual(first['townCurbs'],len(town['curbs'])+len([c for c in header['curbs'] if min(x for x,z in c)>=940]),'the west end of the second carriageway puts its fillets in the Boston tile');self.assertGreater(len(town['curbs']),0)
    self.assertEqual(first['surveyCurbs']+first['townCurbs'],len(header['curbs'])+len(town['curbs']),'the two counts partition the curbs in the tiles')
    provenance=json.loads((data/'provenance.json').read_text());self.assertEqual(provenance['streetSurfaces']['measuredRoads'],5,'the two Boston streets and the three town streets')
+
+ def test_a_street_the_town_record_gave_up_to_bostons_gets_the_surveyed_curbs(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   data=pathlib.Path(temporary);source=data/'source';source.mkdir();(data/'tiles').mkdir()
+   # Line Street runs 4 m inside the town along the town line, surveyed 7.8 m wide; the town's own 12 m record of it left the package as a copy (connect-source-seams.py) and Side Street ends on Boston's.
+   roads=[road('300-0-0',[[1004,100],[1004,300],[1004,500]],7,'Line Street'),road('osm-6-0',[[1004,300],[1200,300]],8,'Side Street')];gone=road('osm-5-0',[[1004,100],[1004,500]],12,'Line Street')
+   city={'roads':roads,'neighborhoods':[{'name':'Boston','rings':[[[0,0],[1000,0],[1000,1000],[0,1000]]],'town':False},{'name':'Town','rings':[[[1000,0],[2000,0],[2000,1000],[1000,1000]]],'town':True}],'coverage':[[[0,0],[2000,0],[2000,1000],[0,1000]]],'parks':[],'sources':[],'tiles':{'size':1000,'directory':'tiles','keys':['0_0','1_0']}}
+   city['elevation']={'width':3,'height':2,'cellSize':1000,'originX':0,'originZ':0,'file':'elevation.bin','scale':.01}
+   (data/'elevation.bin').write_bytes(gzip.compress(np.zeros(6,dtype='<i2').tobytes(),mtime=0))
+   (data/'city.json').write_text(json.dumps(city));(data/'provenance.json').write_text(json.dumps({'sourceCopies':{'removed':[{'index':1,'road':gone,'of':['300-0-0']}]}}))
+   # Boston surveyed both curbs, inside the town: the west one whole, the east one open at Side Street's mouth.
+   west=[[1000.2,100],[1000.2,500]];east=[[[1008,100],[1008,294]],[[1008,306],[1008,500]]];survey=[west,*east]
+   write_tile(data/'tiles/t_0_0.bin',{'tx':0,'tz':0,'size':1000,'buildings':[],'curbs':[],'parkPaths':[],'roads':[]},[])
+   write_tile(data/'tiles/t_1_0.bin',{'tx':1,'tz':0,'size':1000,'buildings':[],'curbs':survey,'parkPaths':[],'roads':['300-0-0','osm-6-0']},[])
+   (source/'layer-0.json').write_text(json.dumps({'features':[]}));(source/'layer-6.json').write_text(json.dumps({'features':[{'attributes':{'TYPE':'CURB'},'geometry':{'paths':survey}}]}))
+   first=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None);snapshot={p.name:p.read_bytes() for p in data.rglob('*') if p.is_file()}
+   second=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None)
+   self.assertEqual({p.name:p.read_bytes() for p in data.rglob('*') if p.is_file()},snapshot,'a rerun rewrites identical bytes');self.assertEqual({**first,'changedTiles':0},second)
+   town=ss.unpack(data/'tiles/t_1_0.bin')[0];boston=ss.unpack(data/'tiles/t_0_0.bin')[0];reach=6+ss.LIP+ss.FILLET
+   self.assertEqual(town['curbs'][:3],survey,'the surveyed curbs stand, though they lie inside the town');self.assertEqual(first['townSideSurveyCurbs'],3);self.assertEqual(first['surveyCurbs'],3)
+   self.assertEqual(boston['curbs'],[],'the west side of the town\'s outline lay across the line in the Boston tile');self.assertGreater(len(town['curbs']),3,'Side Street keeps its curbs')
+   self.assertGreaterEqual(min(x for c in town['curbs'][3:] for x,z in c),1004+reach,'no town curb within the copy\'s pavement and its fillets');self.assertAlmostEqual(min(x for c in town['curbs'][3:] for x,z in c),1004+reach+.1,places=2,msg='Side Street\'s curbs start where its fillets into the outline began')
+   self.assertGreater(first['copyCurbMetres'],2*400+2*reach,'both sides of the outline, its two ends and the fillets')
+   installed=json.loads((data/'city.json').read_text());self.assertEqual(installed['roads'][0]['pavedWidth'],7.8,'Boston\'s record is measured between its surveyed curbs')
+   record=next(p for p in town['pavements'] if p['road']=='300-0-0');edges=np.array(record['edges']).reshape(-1,4)/100;np.testing.assert_allclose(sorted({*edges[:,0],*edges[:,2]}),[.2,8],atol=.011)
+   # Without the record of the copy the town's street is simply not there: no outline, and the surveyed curbs are dropped as town curbs.
+   (data/'provenance.json').write_text('{}');third=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None);self.assertEqual((third['townSideSurveyCurbs'],third['copyCurbMetres'],third['surveyCurbs']),(0,0,0))
 
 
 if __name__=='__main__':unittest.main()

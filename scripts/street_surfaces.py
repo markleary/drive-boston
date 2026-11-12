@@ -56,6 +56,8 @@ LIP=.09
 TAPER=8.0
 # A node this close to an edge two town outlines share is on the town line.
 TAPER_ZONE=25.0
+# A side of a street that a town record gave up to a Boston one is the survey's when this share of its stations finds a surveyed curb there.
+COPY_SURVEYED=.5
 """Town curbs sit this far outside the nominal pavement edge."""
 WALK_FALLBACK=2.9
 """Sidewalk band drawn on sides without an inventory polygon (road-grading WALK)."""
@@ -289,13 +291,37 @@ def chunked(boundary,simplify):
  return out
 
 
+def mitred_town_outlines(roads,towns):
+ """The outlines build-metro.py's synthetic curbs follow (synthetic_curbs): per town, the boundary of the union of its streets' pavements with that builder's 0.35 m lip."""
+ out=[]
+ for area in towns.values():
+  pavements=town_pavements(roads,area,.35)
+  if pavements:out.append(unary_union(pavements).boundary)
+ return out
+
+
 def legacy_town_curbs(roads,towns):
  """The mitred curbs build-metro.py synthesises (synthetic_curbs), for exact removal."""
  out=[]
- for area in towns.values():
-  pavements=[p for p in town_pavements(roads,area,.35) if True]
-  if pavements:out+=chunked(unary_union(pavements).boundary,.15)
+ for boundary in mitred_town_outlines(roads,towns):out+=chunked(boundary,.15)
  return out
+
+
+def on_mitred_outline(curb,outlines,slack=.16,vertex=.003,tight=.03):
+ """Whether a curb polyline is a piece of build-metro.py's mitred town curb that the exact match missed. The
+ builder cut each town's outline into 40-segment chunks from wherever GEOS started the ring and simplified it by
+ 0.15 m; drawn again from streets that have changed since (a seam joined, a bridge carried on, a copy taken out),
+ the chunks start elsewhere, so a chunk of an earlier build is not among them, and where its middle lies outside
+ the town (the Boston side of a street on the town line) nothing else took it for a town curb: 3.3 km in seven
+ tiles stood 26 cm outside the filleted curb, the east side of Saint Mary's Street among them. Such a piece has
+ every vertex between its ends on the exact outline (`outlines`, an STRtree of mitred_town_outlines' lines; within
+ `vertex`) and lies within the builder's simplification of it (`slack`); a piece of two points, which has no such
+ vertex, must lie on the outline itself (`tight`). A surveyed curb does not follow the outline vertex for vertex."""
+ line=LineString(curb);near=outlines.query(line.buffer(slack))
+ if not len(near):return False
+ outline=unary_union([outlines.geometries[i] for i in near])
+ if not outline.buffer(slack).covers(line):return False
+ inner=curb[1:-1];return all(outline.distance(Point(p))<=vertex for p in inner) and (bool(inner) or outline.buffer(tight).covers(line))
 
 
 def width_tapers(roads,towns,lip):
@@ -337,18 +363,21 @@ def width_tapers(roads,towns,lip):
  return out
 
 
-def survey_curbs(curbs,legacy,towns,fillets,tolerance=.02):
+def survey_curbs(curbs,legacy,towns,fillets,tolerance=.02,outlines=None):
  """A tile's survey curbs: without the legacy mitred chunks, any curb whose
  middle vertex lies inside a town (`towns`, prepared), or an earlier run's town
  curb. Those are this run's `fillets` again, whole (their JSON in `legacy`) or cut
  at house driveway mouths, and a cut piece in a sliver between town outlines or
- beyond the coverage edge is caught only by lying on a regenerated fillet."""
+ beyond the coverage edge is caught only by lying on a regenerated fillet. A
+ mitred chunk of an earlier build that is not among this run's (`legacy`) is
+ caught on the towns' exact mitred outlines (`outlines`, on_mitred_outline)."""
  lines=[LineString(c) for c in fillets];tree=STRtree(lines) if lines else None;out=[]
  for c in curbs:
   if len(c)<2 or json.dumps(c) in legacy or towns.contains(Point(c[len(c)//2])):continue
   if tree is not None:
    line=LineString(c);near=tree.query(line.buffer(tolerance))
    if len(near) and unary_union([lines[i] for i in near]).buffer(tolerance).covers(line):continue
+  if outlines is not None and on_mitred_outline(c,outlines):continue
   out.append(c)
  return out
 
@@ -361,6 +390,57 @@ def town_curbs(roads,towns,fillet=FILLET,lip=LIP):
  width at the line tapers (width_tapers)."""
  pavements=town_pavements(roads,unary_union(list(towns.values())),lip)+width_tapers(roads,towns,lip)
  return chunked(unary_union(pavements).buffer(fillet,join_style=1).buffer(-fillet,join_style=1).boundary,.03) if pavements else []
+
+
+def copy_curb_regions(copies,survey,tree=None,bridges=(),fillet=FILLET,lip=LIP):
+ """Where Boston's survey draws the curbs of a street that a town record gave up to a Boston one (`copies`, the
+ roads connect-source-seams.py took out as a second source's copy; `survey`, the raw curb survey's LineStrings).
+ The town curb union still draws such a record's pavement (mapped_streets), so the cross streets' curbs end at it
+ with their fillets and no curb moves anywhere else. But the street is Boston's, and where the survey has its curbs
+ the town's outline is a second curb line: Saint Mary's Street is surveyed 8 m wide inside the 12.2 m of its class,
+ which put the outline in both sidewalks, while survey_curbs dropped the survey's own curb on the Brookline side as
+ a town curb and left the outline the only one there. On each side of the record's line where the survey has a curb
+ at COPY_SURVEYED of its stations or more, within the record's pavement grown by the fillet radius, the town curb is
+ cut away inside that reach (the outline and the fillets that turned into it) and the survey's curbs there are kept
+ though they lie inside the town. A side without a surveyed curb keeps the town's (Crescent Street, where the survey
+ has none). A town record that lay on a Boston bridge (`bridges`, the surface roads the Turnpike stage took out as
+ copies of a bridge over its roads) drew its outline on the ground beside and under the deck: that is cut on both
+ sides whatever the survey has. Returns (the region town curbs are cut in, the region whose surveyed curbs are
+ kept), each None when there is none."""
+ plain=lambda r:r['id'].startswith('osm-') and not (r.get('elevations') or r.get('tunnel')) and len(r['points'])>=2
+ roads=[r for r in copies if plain(r)] if len(survey) else [];cut=[];kept=[]
+ edges=cast_edges(roads,survey,cap_extra=lip+fillet,tree=tree) if roads else {}
+ for r in roads:
+  line=LineString(r['points']);reach=r['width']/2+lip+fillet;sides=[bool((~np.isnan(d)).mean()>=COPY_SURVEYED) for d in edges[road_key(r)][3:5]]
+  # (side 0 is the left of the line, as cast_edges and a positive single-sided buffer both have it)
+  cut+=[line.buffer(sign*reach,single_sided=True,join_style=2) for side,sign in zip(sides,(1,-1)) if side]
+  if any(sides):kept.append(line.buffer(reach,cap_style=2,join_style=2))
+ cut+=[LineString(r['points']).buffer(sign*(r['width']/2+lip+fillet),single_sided=True,join_style=2) for r in bridges if plain(r) for sign in (1,-1)]
+ return unary_union(cut).buffer(.1) if cut else None,unary_union(kept) if kept else None
+
+
+def cut_copy_curbs(curbs,region):
+ """Curb polylines without their parts inside `region`, in their order; a remnant under half a metre goes with them. Returns (curbs, metres cut)."""
+ inside=prep(region);out=[];gone=0.0
+ for c in curbs:
+  line=LineString(c)
+  if not inside.intersects(line):out.append(c);continue
+  rest=line.difference(region);gone+=line.length-rest.length
+  out+=[[rounded(p) for p in part.coords] for part in line_parts(rest) if part.length>=.5]
+ return out,gone
+
+
+def town_side_survey(survey,tree,region,area,towns):
+ """The surveyed curbs in a tile (`area`, its box) that survey_curbs drops as town curbs, their middle vertex
+ lying inside a town (`towns`, prepared), though they bound a street of Boston's: the pieces, clipped as
+ build-metro.py installs them, that lie mostly inside `region` (copy_curb_regions). They come from the raw survey,
+ not from the tile, whose earlier runs dropped them."""
+ out=[]
+ for i in sorted(tree.query(region,predicate='intersects').tolist()):
+  for c in clip_line(survey[i].coords,area):
+   line=LineString(c)
+   if towns.contains(Point(c[len(c)//2])) and line.intersection(region).length>=.5*line.length:out.append(c)
+ return out
 
 
 def osm_width(tags,fallback):
@@ -421,21 +501,51 @@ def driveway_edges(lines,widths,curb_lines,reach=DRIVEWAY_REACH,floor=DRIVEWAY_F
  return out
 
 
+def connected_groups(shapes):
+ """Indices of the shapes in groups that touch or overlap one another, directly or through others: each group in
+ list order, the groups in the order of their first members."""
+ parent=list(range(len(shapes)))
+ def find(i):
+  while parent[i]!=i:parent[i]=parent[parent[i]];i=parent[i]
+  return i
+ if shapes:
+  for i,j in zip(*STRtree(shapes).query(shapes,predicate='intersects').tolist()):
+   a,b=find(i),find(j)
+   if a!=b:parent[max(a,b)]=min(a,b)
+ groups={}
+ for i in range(len(shapes)):groups.setdefault(find(i),[]).append(i)
+ return list(groups.values())
+
+
 def driveway_surfaces(lines,widths,lots,faces,coverage,walks_tree=None,curb_lines=None):
  """Dissolve the service-road strips (between the surveyed curbs where there
  are any, else ribbons of the class width), the lots and the paved curb faces
- into one asphalt set inside the coverage, cut around inventory sidewalks (a
- driveway apron keeps its concrete). Returns polygon parts."""
+ into asphalt inside the coverage, cut around inventory sidewalks (a
+ driveway apron keeps its concrete). Returns polygon parts.
+
+ The shapes are dissolved one connected group at a time (connected_groups), never in one union over the metro. GEOS
+ pairs the inputs of a union by their place in a tree of all of them and begins each ring it hands back where that
+ history left it, the untouched polygons' too: two house lanes fewer in the northern towns returned about 9,450
+ unchanged polygons from Mattapan to Melrose with their rings begun at another vertex, the simplification below, which
+ starts at that vertex, moved a few hundred of them by centimetres, and 195 tiles changed for a change in 17. A
+ group's surfaces follow from its own shapes alone (about 34,000 groups for 53,000 shapes, 19 in 20 inside one tile),
+ a shape that meets no other is not touched at all, and the sidewalks cut from a part are joined in list order, not
+ in their tree's. A strip whose measured edges cross is repaired on its own (three of them), as the one union did
+ for it in passing."""
  ribbons=[]
  for (l,w),edge in zip(zip(lines,widths),driveway_edges(lines,widths,curb_lines or [])):
   if edge is None:ribbons.append(l.buffer(w/2,cap_style=2,join_style=1))
   else:left,right=edge;ribbons+=polygon_parts(Polygon(np.vstack([left,right[::-1]])).buffer(0))
- merged=unary_union(ribbons+list(lots)+list(faces)).intersection(coverage);out=[]
- for part in polygon_parts(merged):
-  if walks_tree is not None:
-   hit=walks_tree.query(part,predicate='intersects')
-   if len(hit):part=part.difference(unary_union([walks_tree.geometries[i] for i in hit]))
-  out+=[p for p in polygon_parts(part.simplify(.03)) if p.area>=.5]
+ shapes=ribbons+list(lots)+list(faces);inside=prep(coverage);out=[]
+ for group in connected_groups(shapes):
+  merged=shapes[group[0]] if len(group)==1 else unary_union([shapes[i] for i in group])
+  if not merged.is_valid:merged=merged.buffer(0)
+  if not inside.contains(merged):merged=merged.intersection(coverage)
+  for part in polygon_parts(merged):
+   if walks_tree is not None:
+    hit=walks_tree.query(part,predicate='intersects')
+    if len(hit):part=part.difference(unary_union([walks_tree.geometries[i] for i in sorted(hit)]))
+   out+=[p for p in polygon_parts(part.simplify(.03)) if p.area>=.5]
  return out
 
 
@@ -757,6 +867,30 @@ def sidewalk_polygons(features,xy,coverage,parks=(),stats=None,stale=None):
 def tile_key(tx,tz):return f'{tx}_{tz}'
 
 
+def mapped_streets(roads,record,copies=()):
+ """The surface streets as their sources mapped them, for the towns' curbs: the roads with what the Turnpike stage
+ changed or took out (`record`, provenance.bostonHighways) put back. One union draws every town's curbs (town_curbs),
+ and GEOS notes it anew whenever its input changes: carrying 12 m of Carlton Street on its bridge's ramp and taking
+ Brookline's copies of the Saint Mary's Street bridge out of the package moved curb vertices, and the stations measured
+ on them, in 68 tiles from Brookline to Melrose. A street that stage changes therefore keeps its place in the union, and
+ its curbs stay on the ground where the town's streets drew them, as Boston's surveyed curbs do.
+ So do the records connect-source-seams.py took out as a second source's copies (`copies`, the roads of
+ provenance.sourceCopies): without the seven town records among them the union writes 862 of its 7,235 chunks differently. They follow
+ the other streets, as their sources mapped them (the union does not depend on the order of its input: the copies
+ at the end of the list, or the whole list reversed, give the same chunks); copy_curb_regions then cuts their
+ outline where Boston's survey has the street's curbs."""
+ import copy
+ mapped=roads
+ if record:
+  from boston_highways import restore
+  mapped=copy.deepcopy(roads);restore(mapped,None,record)
+ back=copy.deepcopy(list(copies))
+ for r in back:
+  if 'sourcePoints' in r:r['points']=r.pop('sourcePoints')
+  r.pop('pavedWidth',None)
+ return [r for r in [*mapped,*back] if not r.get('elevations') and not r.get('tunnel')]
+
+
 def tiles_touching(geometry,size):
  minx,minz,maxx,maxz=geometry.bounds
  for tx in range(math.floor(minx/size),math.floor(maxx/size)+1):
@@ -786,21 +920,31 @@ def install(data_dir,source_dir,xy,log=print):
  # Survey curbs stay; every town curb (the mitred legacy chunks, an earlier run
  # of this script, cut at driveways or not, or any curb inside a town) is regenerated
  # with fillets from the same street pavements, so a rerun appends the same chunks in the same order.
- fillets={}
- for curb in town_curbs(surface,towns):
+ # (from the streets as their sources mapped them: mapped_streets)
+ earlier=json.loads((data_dir/'provenance.json').read_text());copies=[c['road'] for c in earlier.get('sourceCopies',{}).get('removed',[])]
+ fillets={};mapped=mapped_streets(city['roads'],earlier.get('bostonHighways'),copies)
+ for curb in town_curbs(mapped,towns):
   for tx,tz in tiles_touching(LineString(curb),size):
    if tile_key(tx,tz) in headers:fillets.setdefault(tile_key(tx,tz),[]).extend(clip_line(curb,box(tx*size,tz*size,(tx+1)*size,(tz+1)*size)))
- legacy={json.dumps(c) for c in legacy_town_curbs(surface,towns)}|{json.dumps(c) for parts in fillets.values() for c in parts}
- survey=added=0
+ legacy={json.dumps(c) for c in legacy_town_curbs(mapped,towns)}|{json.dumps(c) for parts in fillets.values() for c in parts}
+ mitred=[l for boundary in mitred_town_outlines(mapped,towns) for l in line_parts(boundary)];mitred_tree=STRtree(mitred) if mitred else None
+ # A street that a town record gave up to a Boston one has Boston's surveyed curbs: the town's outline is cut along them and the surveyed curbs on its town side are kept (copy_curb_regions).
+ raw_survey=survey_lines(json.loads((source_dir/'layer-6.json').read_text())['features'],xy,coverage);survey_tree=STRtree(raw_survey)
+ cut_region,survey_region=copy_curb_regions(copies,raw_survey,survey_tree,[c['road'] for c in ((earlier.get('bostonHighways') or {}).get('roads') or {}).get('removed',[])])
+ survey=added=0;copy_cut=0.0;copy_survey=0
  for key,tile in headers.items():
-  kept=survey_curbs(tile['curbs'],legacy,town_prep,fillets.get(key,[]));survey+=len(kept);added+=len(fillets.get(key,[]))
+  # (an earlier run's town curbs are recognized by this run's whole fillets, before the cut)
+  kept=survey_curbs(tile['curbs'],legacy,town_prep,fillets.get(key,[]),outlines=mitred_tree);area=box(tile['tx']*size,tile['tz']*size,(tile['tx']+1)*size,(tile['tz']+1)*size)
+  if survey_region is not None and survey_region.intersects(area):back=town_side_survey(raw_survey,survey_tree,survey_region,area,town_prep);kept+=back;copy_survey+=len(back)
+  if cut_region is not None and key in fillets:fillets[key],gone=cut_copy_curbs(fillets[key],cut_region);copy_cut+=gone
+  survey+=len(kept);added+=len(fillets.get(key,[]))
   tile['curbs']=kept+fillets.get(key,[])
  # The core and northern extracts overlap along their shared edge; an element counts once.
  elements={(e['type'],e['id']):e for name in ('osm-metro-driveways.json','osm-north-driveways.json') if (source_dir/name).exists() for e in json.loads((source_dir/name).read_text())['elements']}
  lines,widths,lots=driveway_features([elements[k] for k in sorted(elements)],xy);log('Driveway features: service roads',len(lines),'parking lots',len(lots),flush=True)
  explained=explained_region(city['roads'],lines,lots);park_tree=STRtree(polygon_parts(unary_union([Polygon(p['rings'][0],p['rings'][1:]).buffer(0) for p in city['parks']]).buffer(3))) if city['parks'] else None
  # Stale stretches are found on the raw survey clipped per tile as build-metro.py installs it (the installed curbs no longer carry them after the first run), then cut from each tile's survey prefix; the fillets after it stay.
- survey_tree=STRtree(survey_lines(json.loads((source_dir/'layer-6.json').read_text())['features'],xy,coverage));boston_side=lambda piece:not town_prep.contains(Point(piece[len(piece)//2]))
+ boston_side=lambda piece:not town_prep.contains(Point(piece[len(piece)//2]))
  stale=[]
  for key,tile in headers.items():
   tx,tz=tile['tx'],tile['tz'];area=box(tx*size,tz*size,(tx+1)*size,(tz+1)*size)
@@ -813,7 +957,7 @@ def install(data_dir,source_dir,xy,log=print):
   pruned,count=cut_stale_curbs(tile['curbs'][:n],stale_tree,boston_side)
   if count:tile['curbs']=pruned+tile['curbs'][n:];cut+=count
  survey=sum(len(tile['curbs'])-len(fillets.get(key,[])) for key,tile in headers.items());stale_length=sum(l.length for l in stale)
- log('Curbs: survey',survey,'town fillets',added,'stale stretches',len(stale),f'({stale_length:.0f} m), polylines cut this run',cut,flush=True)
+ log('Curbs: survey',survey,'town fillets',added,'stale stretches',len(stale),f'({stale_length:.0f} m), polylines cut this run',cut,f'; along streets a town record gave up to Boston: {copy_cut:.0f} m of town curb cut, {copy_survey} surveyed curbs kept on the town side',flush=True)
  curb_lines=[LineString(c) for t in headers.values() for c in t['curbs'] if len(c)>=2]
  walk_stats={};walks=sidewalk_polygons(json.loads((source_dir/'layer-0.json').read_text())['features'],xy,coverage,city['parks'],walk_stats,(explained,park_tree,stale_tree) if len(stale) else None);walks_tree=STRtree([w for w,_ in walks])
  log('Sidewalk inventory polygons',len(walks),'island outlines reduced to strips',walk_stats['outlines'],'removed-roadway parts cut',walk_stats['stale'],flush=True)
@@ -890,9 +1034,9 @@ def install(data_dir,source_dir,xy,log=print):
  pp=data_dir/'provenance.json';provenance=json.loads(pp.read_text())
  removed=prune_package(data_dir,city,headers,provenance)
  city_path.write_text(json.dumps(city,separators=(',',':'))+'\n')
- summary={'surveyCurbs':survey,'townCurbs':added,'staleCurbs':len(stale),'staleCurbMetres':round(stale_length),'movedCenterlines':moved_roads,'movedStations':moved,'parkEdgeStations':masked,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'staleSidewalks':walk_stats['stale'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'borderPavements':borders,'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'houseDriveways':len(lanes),'curbCuts':len(cuts),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'faces':stats}
+ summary={'surveyCurbs':survey,'townCurbs':added,'copyCurbMetres':round(copy_cut),'townSideSurveyCurbs':copy_survey,'staleCurbs':len(stale),'staleCurbMetres':round(stale_length),'movedCenterlines':moved_roads,'movedStations':moved,'parkEdgeStations':masked,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'staleSidewalks':walk_stats['stale'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'borderPavements':borders,'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'houseDriveways':len(lanes),'curbCuts':len(cuts),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'faces':stats}
  provenance['streetMeshes']={'version':1,**mesh_stats}
  import house_driveways
- provenance['streetSurfaces']={**summary,'source':source['url'],'method':f'Roadway edges measured every {STEP:g} m from each surface centerline to the nearest curb within half the nominal width plus {CAP_EXTRA:g} m, driveway tongues under 7 m suppressed, gaps to 40 m interpolated, unmeasured stretches ramped to the nominal width; sidewalk inventory polygons grown {SIDEWALK_TUCK} m and clipped to tiles, a polygon mostly in parkland that holds a disc {OUTLINE_DIAMETER:g} m across (wider than four declared widths) reduced to its declared width ({WALK_FALLBACK} m when blank) along the boundary; OpenStreetMap service roads measured to the surveyed curbs within half their tagged or class width ({SERVICE_WIDTH:g} m default) plus {DRIVEWAY_REACH:g} m, an unmeasured side completed to the median curb-to-curb width of that line, with surface parking lots and the closed curb faces a service road enters or a lot covers (up to {DRIVEWAY_AREA:g} m2), dissolved and cut around inventory sidewalks; other closed curb faces without a centerline or building filled with concrete when outside parks and inventory sidewalks and under {ISLAND_AREA:g} m2 or {ISLAND_WIDTH} m wide; town curbs regenerated from one pavement union across the towns with {FILLET:g} m fillets; in Everett, Medford, Malden and Melrose a driveway lane laid out from the assessor parcel of each generated house (house_driveways.py: the wider side yard, {house_driveways.NARROWEST:g} to {house_driveways.WIDEST:g} m wide, {house_driveways.GAP:g} m off the wall, from behind the {house_driveways.WALK:g} m sidewalk band to the garage door or the back corner of the house, on the parcel and clear of other buildings, none where an OpenStreetMap service road reaches the parcel) joins the driveway fills, the town curb cut across its mouth; Boston curb stretches of {STALE_LENGTH:g} m or more lying in parkland (parks grown 3 m) beyond the measuring reach of every street, service road (8 m) and lot (4 m) dropped as remnants of removed roadways, with the inventory sidewalk parts beyond that reach, in parkland and mostly within {STALE_WALK:g} m of such a stretch; a centerline running inside a park with a curb within {PARK_EDGE:g} m on the park boundary moved onto the roadway {PARK_EDGE_LANE:g} m beyond that curb (or to the middle of a narrower roadway ending at the next curb), tapering over {PARK_EDGE_RAMP:g} m with its endpoints fixed, before measuring, where that leaves fewer such stations (the source line kept as sourcePoints); a station such a move cannot take out of the park paved between that curb and the next curb beyond it on the same side (the nominal width past the curb without one), never interpolated from or floored by its neighbours; records of other tiles sharing the roadway at a crosswalk station ({CROSSWALK_STATION:g} m along the line from each end of a road tile-builder.ts stripes, {CROSSWALK_ROAD:g} m or longer, {CROSSWALK_WIDTH:g} m wide, not an alley: an edge crossing the station\'s across line within {BORDER_REACH:g} m, running within cosine {SHARED_ALIGNMENT:g} of the road) copied into that tile as border records.'}
+ provenance['streetSurfaces']={**summary,'source':source['url'],'method':f'Roadway edges measured every {STEP:g} m from each surface centerline to the nearest curb within half the nominal width plus {CAP_EXTRA:g} m, driveway tongues under 7 m suppressed, gaps to 40 m interpolated, unmeasured stretches ramped to the nominal width; sidewalk inventory polygons grown {SIDEWALK_TUCK} m and clipped to tiles, a polygon mostly in parkland that holds a disc {OUTLINE_DIAMETER:g} m across (wider than four declared widths) reduced to its declared width ({WALK_FALLBACK} m when blank) along the boundary; OpenStreetMap service roads measured to the surveyed curbs within half their tagged or class width ({SERVICE_WIDTH:g} m default) plus {DRIVEWAY_REACH:g} m, an unmeasured side completed to the median curb-to-curb width of that line, with surface parking lots and the closed curb faces a service road enters or a lot covers (up to {DRIVEWAY_AREA:g} m2), dissolved and cut around inventory sidewalks; other closed curb faces without a centerline or building filled with concrete when outside parks and inventory sidewalks and under {ISLAND_AREA:g} m2 or {ISLAND_WIDTH} m wide; town curbs regenerated from one pavement union across the towns with {FILLET:g} m fillets, and cut along a street that a town record gave up to a Boston one (provenance.sourceCopies) on each side where Boston\'s survey has a curb at {COPY_SURVEYED:.0%} or more of the record\'s stations within its pavement grown by the fillet radius, the surveyed curbs there kept though they lie inside the town; in Everett, Medford, Malden and Melrose a driveway lane laid out from the assessor parcel of each generated house (house_driveways.py: the wider side yard, {house_driveways.NARROWEST:g} to {house_driveways.WIDEST:g} m wide, {house_driveways.GAP:g} m off the wall, from behind the {house_driveways.WALK:g} m sidewalk band to the garage door or the back corner of the house, on the parcel and clear of other buildings, none where an OpenStreetMap service road reaches the parcel) joins the driveway fills, the town curb cut across its mouth; Boston curb stretches of {STALE_LENGTH:g} m or more lying in parkland (parks grown 3 m) beyond the measuring reach of every street, service road (8 m) and lot (4 m) dropped as remnants of removed roadways, with the inventory sidewalk parts beyond that reach, in parkland and mostly within {STALE_WALK:g} m of such a stretch; a centerline running inside a park with a curb within {PARK_EDGE:g} m on the park boundary moved onto the roadway {PARK_EDGE_LANE:g} m beyond that curb (or to the middle of a narrower roadway ending at the next curb), tapering over {PARK_EDGE_RAMP:g} m with its endpoints fixed, before measuring, where that leaves fewer such stations (the source line kept as sourcePoints); a station such a move cannot take out of the park paved between that curb and the next curb beyond it on the same side (the nominal width past the curb without one), never interpolated from or floored by its neighbours; records of other tiles sharing the roadway at a crosswalk station ({CROSSWALK_STATION:g} m along the line from each end of a road tile-builder.ts stripes, {CROSSWALK_ROAD:g} m or longer, {CROSSWALK_WIDTH:g} m wide, not an alley: an edge crossing the station\'s across line within {BORDER_REACH:g} m, running within cosine {SHARED_ALIGNMENT:g} of the road) copied into that tile as border records.'}
  pp.write_text(json.dumps(provenance,separators=(',',':'))+'\n')
  return {**summary,'changedTiles':len(changed),'removedRoadwayBuildings':removed}
