@@ -2,7 +2,7 @@ import type {CityData,Point2,Road} from '../types';
 import {isHarvardBridgeRoad} from './harvard-bridge.ts';
 import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
 import {inTransitClearance} from './transit-corridors.ts';
-import {inTunnelPortal,tunnelAt} from './tunnels.ts';
+import {inTunnelPortal,openCutFloorAt,tunnelAt,tunnelsNear} from './tunnels.ts';
 import {CLOSURE_SETBACK,LANE_WIDTH,isHighwayDeck,motorwayLanes,pointAtDistance,speedClass,stations} from './motorway.ts';
 
 /** Bounding boxes of 16-segment runs of a long polyline (a highway deck has
@@ -161,6 +161,19 @@ export function deckUndersideAt(city:CityData,x:number,z:number,above:number){
 export function roadWidthAt(road:Road,x:number,z:number){
   if(!road.deckWidths)return road.width;
   const hit=roadProjection(road,x,z),a=road.deckWidths?.[hit.index]??road.width,b=road.deckWidths?.[hit.index+1]??road.width;return a+(b-a)*hit.t;
+}
+/** The surface of the generated highway deck whose pavement, or `margin` beyond its edge (a wall's thickness: a gap that narrow is
+ * no drop, the cut's curb fills it), holds a point within `reach` of height `y`: beside the deck, not beyond its end. A cut that
+ * runs beside such a deck has that pavement for its ground (`bareStretches` in tunnels.ts). */
+export function highwayDeckAt(city:CityData,x:number,z:number,y:number,margin=.4,reach=1.5){
+  let best:number|undefined;
+  for(const road of elevatedNear(city,x,z)){
+    if(!isHighwayDeck(road))continue;
+    const hit=roadProjection(road,x,z),a=road.deckWidths?.[hit.index]??road.width,b=road.deckWidths?.[hit.index+1]??road.width;
+    if(hit.distance>(a+(b-a)*hit.t)/2+margin||(hit.index===0&&hit.t<=0)||(hit.index>=road.points.length-2&&hit.t>=1))continue;
+    const h=sampleRoadElevation(city,road,x,z);if(Math.abs(h-y)<=reach&&(best===undefined||Math.abs(h-y)<Math.abs(best-y)))best=h;
+  }
+  return best;
 }
 function deckDirection(road:Road,i:number){
   const override=i===0?road.deckTangents?.start:i===road.points.length-1?road.deckTangents?.end:undefined;
@@ -349,9 +362,10 @@ export const RAIL_RUN=12,RAIL_GAP=.6;
  * the rail and 1.5 m further out, along the unit outward normal (ox, oz), lies
  * within `RAIL_LIP` of it, and, away from a junction mouth, the terrain 4 and
  * 7 m out has not fallen away by more than `SHELF_DROP`. The rule for the
- * barriers and for the tests that sweep them. */
-export function deckEdgeGrounded(city:CityData,x:number,z:number,y:number,ox:number,oz:number,mouth=false){
-  return y-sampleElevation(city,x+ox*.3,z+oz*.3)<RAIL_LIP&&y-sampleElevation(city,x+ox*1.5,z+oz*1.5)<RAIL_LIP&&(mouth||SHELF_REACH.every(reach=>y-sampleElevation(city,x+ox*reach,z+oz*reach)<SHELF_DROP));
+ * barriers and for the tests that sweep them. `ground` is the surface probed:
+ * the terrain, unless the caller knows of another one there. */
+export function deckEdgeGrounded(city:CityData,x:number,z:number,y:number,ox:number,oz:number,mouth=false,ground=(x:number,z:number)=>sampleElevation(city,x,z)){
+  return y-ground(x+ox*.3,z+oz*.3)<RAIL_LIP&&y-ground(x+ox*1.5,z+oz*1.5)<RAIL_LIP&&(mouth||SHELF_REACH.every(reach=>y-ground(x+ox*reach,z+oz*reach)<SHELF_DROP));
 }
 
 const roadEnds=new WeakMap<CityData,Map<string,Road[]>>();
@@ -395,13 +409,28 @@ export function bridgeBarriers(city:CityData,road:Road){
   // The outside probe preserves protection on the union's exposed perimeter,
   // including where two source road ribbons share the same outer edge.
   const along=road.roadway?stations(road.points):undefined;
+  // A break in the surveyed roadway shorter than a rail's run, with roadway on both sides of it: its stretches are seams too (see below).
+  const breaks=new Set<number>();
+  if(road.roadway&&along)for(let i=1;i<road.roadway.length-1;i++){
+    if(road.roadway[i])continue;let j=i;while(j+1<road.roadway.length&&!road.roadway[j+1])j++;
+    if(road.roadway[i-1]&&j<road.roadway.length-1&&along[j+1]-along[i-1]<RAIL_RUN)for(let k=i+1;k<=j;k++)breaks.add(k);
+    i=j;
+  }
   const rails=bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb,side,index})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),ox=-dz/(distance||1)*side,oz=dx/(distance||1)*side;
     // A highway deck on the ground with a surveyed roadway (`Road.roadway`: Storrow Drive, a ramp between its curbs) is a street's pavement there, not a railed carriageway.
-    const paved=!!(road.roadway?.[index-1]&&road.roadway?.[index]);
+    // Where that roadway begins or ends (a `seam`: one station of the two has none, the deck carries on as a walled cut there or goes under a bridge)
+    // the edge is judged by its ground as well, the shelf beyond it included: a cut's side with nothing to retain has no wall (`bareStretches`
+    // in tunnels.ts), and a rail's length would stand alone at every such joint.
+    const surveyed=[!!road.roadway?.[index-1],!!road.roadway?.[index]],paved=surveyed[0]&&surveyed[1],seam=surveyed[0]!==surveyed[1]||breaks.has(index);
+    // (beside such a roadway a probe in an open cut's excavation finds the higher of the terrain and the cut's floor: the cut's own wall rises to that
+    // terrain where its floor lies lower, and a ramp that merges with the deck at its level is the same pavement, whatever the terrain between the two)
+    const reach=SHELF_REACH[SHELF_REACH.length-1]+1,cuts=(paved||seam)&&tunnelsNear(city,Math.min(a[0],b[0])-reach,Math.max(a[0],b[0])+reach,Math.min(a[1],b[1])-reach,Math.max(a[1],b[1])+reach);
+    const beside=cuts?(x:number,z:number)=>Math.max(sampleElevation(city,x,z),openCutFloorAt(city,x,z)??-Infinity):(x:number,z:number)=>sampleElevation(city,x,z);
     const grounded=(t:number)=>{
       const x=a[0]+dx*t,z=a[1]+dz*t,mouth=mouths.some(m=>Math.hypot(m[0]-x,m[1]-z)<MOUTH_REACH);
-      return (!interstate||mouth||paved)&&deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouth||paved);
+      // (on the terrain first: the cut's floor only ever stands in for lower ground, and most of a roadway lies on its own)
+      return (!interstate||mouth||paved||seam)&&(deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouth||paved)||cuts&&deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouth||paved,beside));
     };
     const clear=(t:number)=>grounded(t)||inTransitClearance(city,a[0]+dx*t,a[1]+dz*t,ya+dy*t),steps=Math.max(1,Math.ceil(distance/.4));
     const exposed:[number,number][]=[],boundary=(low:number,high:number,state:boolean)=>{
@@ -414,17 +443,35 @@ export function bridgeBarriers(city:CityData,road:Road){
     }
     if(!previous)exposed.push([start,1]);
     const from=along?.[index-1]??0,span=along?along[index]-from:0;
+    // (`drop`: how far the deck stands over the ground just outside along a rail at a seam)
+    const drop=(lo:number,hi:number)=>Math.max(...[lo,(lo+hi)/2,hi].flatMap(t=>[.3,1.5].map(d=>ya+dy*t-beside(a[0]+dx*t+ox*d,a[1]+dz*t+oz*d))));
     return exposed.filter(([lo,hi])=>(hi-lo)*distance>.12).map(([lo,hi])=>{
-      const center=(lo+hi)/2;return{x:a[0]+dx*center,y:ya+dy*center+.38,z:a[1]+dz*center,length:Math.hypot(distance,dy)*(hi-lo)+.008,yaw:Math.atan2(dx,dz),slope:Math.atan2(dy,distance),side,paved,from:from+lo*span,to:from+hi*span};
+      const center=(lo+hi)/2;return{x:a[0]+dx*center,y:ya+dy*center+.38,z:a[1]+dz*center,length:Math.hypot(distance,dy)*(hi-lo)+.008,yaw:Math.atan2(dx,dz),slope:Math.atan2(dy,distance),side,paved,seam,drop:seam?drop(lo,hi):0,from:from+lo*span,to:from+hi*span};
     });
   });
   if(!along)return rails;
   // Beside a paved roadway the ground comes and goes within RAIL_LIP of the deck (a twin carriageway a step lower, a verge the grid could not
   // bring up): a rail there stands only as a run of RAIL_RUN or more, or as part of one that goes on along a stretch with no roadway. No stubs.
-  const kept=new Set<number>();
+  // A run with a rail at a seam is the end of what stands beyond the roadway: it stays where it guards a rail's height (`SHELF_DROP`), or makes
+  // a run with what it carries on beyond the record's end (the wall of the cut the deck becomes): the same edge taken straight on at its end
+  // grade, for as far as it still stands off its ground, as `bareStretches` measures the cut's wall at the same joint.
+  const kept=new Set<number>(),total=along[along.length-1];
+  const beyond=(side:number,atStart:boolean)=>{
+    const i=atStart?0:road.points.length-1,j=atStart?1:i-1,e=deckEdge(road,i,side,.18),inner=deckEdge(road,j,side,.18),length=Math.hypot(e[0]-inner[0],e[1]-inner[1])||1,ux=(e[0]-inner[0])/length,uz=(e[1]-inner[1])/length;
+    const y=deckEdgeElevation(road,i,side),grade=(y-deckEdgeElevation(road,j,side))/length,forward=atStart?-1:1,ox=-uz*forward*side,oz=ux*forward*side;
+    let d=0;while(d<RAIL_RUN&&!deckEdgeGrounded(city,e[0]+ux*(d+1),e[1]+uz*(d+1),y+grade*(d+1),ox,oz,true))d++;
+    return d;
+  };
   for(const side of new Set(rails.map(r=>r.side))){
     const mine=rails.map((r,i)=>({r,i})).filter(e=>e.r.side===side).sort((p,q)=>p.r.from-q.r.from);let run:typeof mine=[];
-    const close=()=>{if(run.length&&(run.at(-1)!.r.to-run[0].r.from>=RAIL_RUN||run.some(e=>!e.r.paved)))for(const e of run)kept.add(e.i);run=[];};
+    const close=()=>{
+      if(run.length){
+        const first=run[0].r,last=run.at(-1)!.r,span=last.to-first.from;
+        const joined=()=>span+(first.from<RAIL_GAP?beyond(side,true):0)+(last.to>total-RAIL_GAP?beyond(side,false):0)>=RAIL_RUN;
+        if(span>=RAIL_RUN||run.some(e=>!e.r.paved&&!e.r.seam)||run.some(e=>e.r.seam)&&(run.some(e=>e.r.drop>=SHELF_DROP)||joined()))for(const e of run)kept.add(e.i);
+      }
+      run=[];
+    };
     for(const e of mine){if(run.length&&e.r.from-run.at(-1)!.r.to>RAIL_GAP)close();run.push(e);}
     close();
   }

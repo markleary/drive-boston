@@ -1,6 +1,7 @@
 import type {CityData,Point2,Road} from '../types';
 import {deckEdge,deckEdgeElevation,deckUndersideAt,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
 import {sampleElevation,terrainGrid} from './terrain.ts';
+import {RAIL_LIP,RAIL_RUN,SHELF_DROP,highwayDeckAt} from './road-surfaces.ts';
 
 export interface TunnelMesh {vertices:Float32Array;indices:Uint32Array;}
 type Vertex=[number,number,number];
@@ -375,44 +376,180 @@ function unionWalls(city:CityData,road:Road,mesh:TunnelMesh):TunnelMesh{
 /** A road deck this far over a highway's roadway is a bridge over it, not the deck it continues as. */
 const BRIDGE_HEADROOM=2.5;
 type WallTop={station:number;top:number};
+/** The stretches of a tunnel record that stand walled in the open: between its roofed spans and its surface landings. */
+function openWalled(road:Road){
+  const total=tunnelStations(road).at(-1)!,out:[number,number][]=[];
+  const cuts=[...new Set([0,total,...(road.tunnel!.covered??[[0,total]]).flat(),...(road.tunnel!.surfaceLandings??[]).flat()].map(s=>Math.max(0,Math.min(total,s))))].sort((a,b)=>a-b);
+  for(let i=1;i<cuts.length;i++){const lo=cuts[i-1],hi=cuts[i],mid=(lo+hi)/2;if(hi-lo>=.001&&!tunnelCoveredAt(road,mid)&&!tunnelSurfaceLandingAt(road,mid))out.push([lo,hi]);}
+  return out;
+}
+/** Where a highway's cut lands on a street (a `surfaceLandings` stretch at an end on the ground, which has no wall at all): the
+ * stations its walls rise from beyond the landing, over `NOSE` metres, at its start and at its end. */
+function streetLandings(road:Road){
+  const total=tunnelStations(road).at(-1)!,landings=road.tunnel!.surfaceLandings??[];
+  return{start:road.startLevel===0?landings.find(([a])=>a<.01)?.[1]:undefined,end:road.endLevel===0?landings.find(([,b])=>b>total-.01)?.[0]:undefined};
+}
+/** The length over which a wall rises from the street's surface beyond a landing on the ground: its sloped nose. */
+const NOSE=12;
+/** The road and the ground beside it are level while they stay within this of each other: a curb's height, nothing for a wall to retain or to guard. */
+export const WALL_LEVEL=.25;
+/** An opening shorter than this between two walls of one side is closed. */
+export const WALL_GAP=6;
+/** What stands along a cut's side that has no wall: the curb that closes the slot between the pavement and the ground it was cut out of. */
+export const WALL_CURB=.08;
+const openDecks=new WeakMap<Road[],Set<string>>();
+/** Whether the decks of a cut's own road lie open on the ground: the decks of its highway and kind (carriageway or ramp) carry a
+ * surveyed roadway (`Road.roadway`), beside which `bridgeBarriers` stands no rail where the deck lies on its ground. Storrow Drive's
+ * and the ramps' do. The Turnpike's carriageways are railed along the ground as well, and their cuts' walls carry that rail on. */
+function decksLieOpen(city:CityData,road:Road){
+  let open=openDecks.get(city.roads);
+  if(!open){open=new Set();for(const r of city.roads)if(r.bridge&&!r.tunnel&&r.roadway?.some(Boolean))open.add(`${r.bridge.id} ${r.kind}`);openDecks.set(city.roads,open);}
+  return !!road.highway&&open.has(`${road.highway} ${road.kind}`);
+}
+const tunnelCells=new WeakMap<Road[],Map<string,Road[]>>();
+/** The tunnel records by the cells their pavement touches, a metre beyond it. Unlike `index` this costs next to nothing to build,
+ * so a tile's own road view may ask it (`bridgeBarriers` runs on one) without clipping every portal against the terrain again. */
+function tunnelsByCell(city:TunnelCity){
+  const source=city.roads??emptyRoads;let cells=tunnelCells.get(source);
+  if(!cells){
+    cells=new Map();
+    for(const road of source){
+      if(!road.tunnel||!road.elevations)continue;
+      for(let i=1;i<road.points.length;i++){
+        const a=road.points[i-1],b=road.points[i],margin=Math.max(road.width,road.deckWidths?.[i-1]??0,road.deckWidths?.[i]??0)/2+1;
+        for(let x=Math.floor((Math.min(a[0],b[0])-margin)/CELL);x<=Math.floor((Math.max(a[0],b[0])+margin)/CELL);x++)for(let z=Math.floor((Math.min(a[1],b[1])-margin)/CELL);z<=Math.floor((Math.max(a[1],b[1])+margin)/CELL);z++){
+          const k=`${x},${z}`,list=cells.get(k);if(!list)cells.set(k,[road]);else if(list[list.length-1]!==road&&!list.includes(road))list.push(road);
+        }
+      }
+    }
+    tunnelCells.set(source,cells);
+  }
+  return cells;
+}
+/** Whether any tunnel record comes near a box: where none does, no excavation lies beside what stands in it. */
+export function tunnelsNear(city:TunnelCity,minX:number,maxX:number,minZ:number,maxZ:number){
+  const cells=tunnelsByCell(city);if(!cells.size)return false;
+  for(let x=Math.floor(minX/CELL);x<=Math.floor(maxX/CELL);x++)for(let z=Math.floor(minZ/CELL);z<=Math.floor(maxZ/CELL);z++)if(cells.has(`${x},${z}`))return true;
+  return false;
+}
+/** The floor of the open excavation of a tunnel record (other than `except`) that a point lies in: its pavement and the 0.3 m
+ * beyond it that the terrain is cut back, beside that record and not beyond its end; the highest of several. Two cuts side by
+ * side have no ground between their pavements, only each other's floor. Undefined where the point lies in no excavation. */
+export function openCutFloorAt(city:CityData,x:number,z:number,except?:Road){
+  let floor:number|undefined;
+  for(const other of tunnelsByCell(city).get(key(x,z))??[]){
+    if(other===except)continue;
+    const hit=roadProjection(other,x,z),a=other.deckWidths?.[hit.index]??other.width,b=other.deckWidths?.[hit.index+1]??other.width;
+    if(hit.distance>(a+(b-a)*hit.t)/2+.3||(hit.index===0&&hit.t<=0)||(hit.index>=other.points.length-2&&hit.t>=1))continue;
+    const stations=tunnelStations(other),s=stations[hit.index]+(stations[hit.index+1]-stations[hit.index])*hit.t;
+    if(!tunnelCoveredAt(other,s)&&!tunnelSurfaceLandingAt(other,s))floor=Math.max(floor??-Infinity,sampleRoadElevation(city,other,x,z));
+  }
+  return floor;
+}
+/** (the shell is built twice, for the drawing and for Rapier: each side is decided once) */
+const bareSides=new WeakMap<Road,{roads:Road[];elevation:CityData['elevation'];sides:Map<number,[number,number][]>}>();
+/** The stretches of one side of a highway's open cut (station intervals) along which a wall would retain nothing and guard
+ * nothing, on a road whose decks lie open on the ground (`decksLieOpen`): there the side keeps a curb, as the deck it carries
+ * on from has no rail, instead of 0.8 m of concrete on level ground. A wall has something to do where the ground beside the
+ * pavement stands over the road (to retain, and a drop into the cut to guard) or the road over the ground just beyond its
+ * edge (the probes of `deckEdgeGrounded`), by more than `RAIL_LIP`; it runs on while they differ by more than `WALL_LEVEL`.
+ * Where another highway pavement lies beside it, that is the ground: another cut's floor in its excavation (`openCutFloorAt`),
+ * a deck's pavement (`highwayDeckAt`); two pavements at one level have nothing between them. Decided in runs, so that nothing
+ * comes and goes: an opening under `WALL_GAP` between two walls is closed, and a wall under `RAIL_RUN` stands only where it
+ * holds a rail's height (`SHELF_DROP`) or more; one that begins within `NOSE` of a street landing keeps its sloped nose down
+ * to it. A run that reaches an end of the record is measured with what it carries on as beyond it (the rail of the deck the
+ * cut becomes, the next cut's wall): the same edge taken straight on at its end grade, as `bridgeBarriers` measures a deck's
+ * rail at the same joint. */
+export function bareStretches(city:CityData,road:Road,side:number){
+  const known=bareSides.get(road);
+  if(known&&known.roads===city.roads&&known.elevation===city.elevation){const sides=known.sides.get(side);if(sides)return sides;}
+  else bareSides.set(road,{roads:city.roads,elevation:city.elevation,sides:new Map()});
+  const out:[number,number][]=[];bareSides.get(road)!.sides.set(side,out);if(!road.tunnel||!decksLieOpen(city,road))return out;
+  const total=tunnelStations(road).at(-1)!,landed=streetLandings(road);
+  // What a wall holds at a point of the pavement's edge, (ox, oz) the unit vector outwards: the ground over the road at its own line, or the road over the ground just beyond.
+  const holds=(x:number,z:number,y:number,ox:number,oz:number,ground=(x:number,z:number)=>sampleElevation(city,x,z))=>Math.max(ground(x+ox*.08,z+oz*.08)-y,y-ground(x+ox*.3,z+oz*.3),y-ground(x+ox*1.5,z+oz*1.5));
+  // (the surface that is really there beside the pavement at height y: another cut's floor, a highway deck's pavement, else the terrain)
+  const surface=(y:number)=>(x:number,z:number)=>openCutFloorAt(city,x,z,road)??highwayDeckAt(city,x,z,y)??sampleElevation(city,x,z);
+  for(const [lo,hi]of openWalled(road)){
+    const count=Math.max(1,Math.ceil(hi-lo)),step=(hi-lo)/count,held:number[]=[];
+    for(let j=0;j<=count;j++){
+      const e=tunnelEdgeAt(road,lo+step*j,side),far=tunnelEdgeAt(road,lo+step*j,side,-1),ox=far.x-e.x,oz=far.z-e.z;
+      held.push(holds(e.x,e.z,e.y,ox,oz,surface(e.y)));
+    }
+    const beyond=(atStart:boolean)=>{
+      const s=atStart?0:total,e=tunnelEdgeAt(road,s,side),far=tunnelEdgeAt(road,s,side,-1),inner=tunnelEdgeAt(road,atStart?Math.min(1,total):Math.max(0,total-1),side);
+      const length=Math.hypot(e.x-inner.x,e.z-inner.z)||1,ux=(e.x-inner.x)/length,uz=(e.z-inner.z)/length,grade=(e.y-inner.y)/length;
+      return Array.from({length:Math.ceil(RAIL_RUN/step)},(_,k)=>holds(e.x+ux*step*(k+1),e.z+uz*step*(k+1),e.y+grade*step*(k+1),far.x-e.x,far.z-e.z));
+    };
+    const before=lo<.001?beyond(true).reverse():[],all=[...before,...held,...(hi>total-.001?beyond(false):[])],first=before.length,last=first+count,n=all.length;
+    const wall=all.map(h=>h>RAIL_LIP);
+    for(let j=1;j<n;j++)wall[j]||=wall[j-1]&&all[j]>WALL_LEVEL;
+    for(let j=n-2;j>=0;j--)wall[j]||=wall[j+1]&&all[j]>WALL_LEVEL;
+    const runs=()=>{const list:[number,number][]=[];for(let j=0;j<n;j++){if(j&&wall[j]===wall[j-1])list.at(-1)![1]=j;else list.push([j,j]);}return list;};
+    for(const [a,b]of runs())if(!wall[a]&&a>0&&b<n-1&&(b-a+1)*step<WALL_GAP)wall.fill(true,a,b+1);
+    // (a wall begins on the record itself: what lies beyond its end only lengthens one)
+    for(const [a,b]of runs())if(wall[a]&&((b-a+1)*step<RAIL_RUN&&Math.max(...all.slice(a,b+1))<SHELF_DROP||!all.slice(Math.max(a,first),Math.min(b,last)+1).some(h=>h>RAIL_LIP)))wall.fill(false,a,b+1);
+    // A wall that stands within a nose's length of a street landing runs down to it as its sloped nose (see `tunnelGeometry`); one further off does not: a nose that leads into nothing is a wedge on level ground.
+    // (the wall may be the next record's, where this one ends within that length: what stands just beyond its end tells)
+    const reach=Math.round(NOSE/step),stands=(j:number)=>j>=first&&j<=last?wall[j]:j>=0&&j<n&&all[j]>RAIL_LIP;let f=first;
+    if(landed.start!==undefined&&Math.abs(lo-landed.start)<.001){while(f<=first+reach&&f<=last+1&&!stands(f))f++;if(f<=first+reach&&stands(f))wall.fill(true,first,Math.min(f,last+1));}
+    if(landed.end!==undefined&&Math.abs(hi-landed.end)<.001){f=last;while(f>=last-reach&&f>=first-1&&!stands(f))f--;if(f>=last-reach&&stands(f))wall.fill(true,Math.max(f,first),last+1);}
+    for(const [a,b]of runs()){const from=Math.max(a,first),to=Math.min(b,last);if(!wall[a]&&from<=to)out.push([Math.max(lo,lo+step*(from-first-.5)),Math.min(hi,lo+step*(to-first+.5))]);}
+  }
+  return out;
+}
+/** The points a profile's straight lines need: one within a centimetre of the chord between those kept around it is left out. */
+function thinned(profile:WallTop[]){
+  if(profile.length<3)return profile;
+  const out=[profile[0]];let anchor=0;
+  for(let j=2;j<profile.length;j++){
+    const a=profile[anchor],b=profile[j];let fits=true;
+    for(let k=anchor+1;k<j&&fits;k++)fits=Math.abs(a.top+(b.top-a.top)*(profile[k].station-a.station)/(b.station-a.station)-profile[k].top)<=.01;
+    if(!fits){out.push(profile[j-1]);anchor=j-1;}
+  }
+  out.push(profile.at(-1)!);return out;
+}
 /** A retaining parapet uses straight grades above the terrain, rather than
  * tracing every depression left by street grading between neighboring ramps.
  * The upper hull keeps the lowest such envelope: its grades only decrease,
  * so there are no repeated humps/dips, and no averaging below the safety lip.
- * Each covered span or surface landing ends the profile independently. */
-function openWallProfiles(city:CityData,road:Road,side:number,required:(station:number)=>number){
-  const total=tunnelStations(road).at(-1)!,grid=terrainGrid(city);
-  const cuts=[...new Set([0,total,...(road.tunnel!.covered??[[0,total]]).flat(),...(road.tunnel!.surfaceLandings??[]).flat()].map(s=>Math.max(0,Math.min(total,s))))].sort((a,b)=>a-b);
+ * Each covered span or surface landing ends the profile independently, and so
+ * does each `bare` stretch, whose curb follows the pavement and the ground point
+ * by point: a straight grade over a sag of the road would be a wall again. */
+function openWallProfiles(city:CityData,road:Road,side:number,required:(station:number,bare:boolean)=>number,bare:[number,number][]=[]){
+  const grid=terrainGrid(city);
   const profiles:WallTop[][]=[];
-  for(let i=1;i<cuts.length;i++){
-    const lo=cuts[i-1],hi=cuts[i],mid=(lo+hi)/2;
-    if(hi-lo<.001||tunnelCoveredAt(road,mid)||tunnelSurfaceLandingAt(road,mid))continue;
-    const count=Math.ceil(hi-lo),vertices=sliceStations(road,lo,hi),samples=[...vertices,...Array.from({length:count+1},(_,j)=>lo+(hi-lo)*j/count)];
-    // Terrain is linear between grid lines and the x+z cell diagonals. Include
-    // their exact crossings so a crest between metre probes cannot pierce the lip.
-    if(grid)for(let j=1;j<vertices.length;j++){
-      const a=tunnelEdgeAt(road,vertices[j-1],side,-.08),b=tunnelEdgeAt(road,vertices[j],side,-.08);
-      for(const [start,end,origin]of [[a.x,b.x,grid.originX],[a.z,b.z,grid.originZ],[a.x+a.z,b.x+b.z,grid.originX+grid.originZ]]){
-        if(Math.abs(end-start)<1e-8)continue;
-        for(let k=Math.ceil((Math.min(start,end)-origin)/grid.cellSize);k<=Math.floor((Math.max(start,end)-origin)/grid.cellSize);k++){
-          const t=(origin+k*grid.cellSize-start)/(end-start);
-          if(t>1e-8&&t<1-1e-8)samples.push(vertices[j-1]+(vertices[j]-vertices[j-1])*t);
+  for(const [from,to]of openWalled(road)){
+    const cuts=[from,...bare.flat().filter(s=>s>from+.001&&s<to-.001),to];
+    for(let i=1;i<cuts.length;i++){
+      const lo=cuts[i-1],hi=cuts[i],mid=(lo+hi)/2,curb=bare.some(([a,b])=>mid>a&&mid<b);
+      const count=Math.ceil(hi-lo),vertices=sliceStations(road,lo,hi),samples=[...vertices,...Array.from({length:count+1},(_,j)=>lo+(hi-lo)*j/count)];
+      // Terrain is linear between grid lines and the x+z cell diagonals. Include
+      // their exact crossings so a crest between metre probes cannot pierce the lip.
+      if(grid)for(let j=1;j<vertices.length;j++){
+        const a=tunnelEdgeAt(road,vertices[j-1],side,-.08),b=tunnelEdgeAt(road,vertices[j],side,-.08);
+        for(const [start,end,origin]of [[a.x,b.x,grid.originX],[a.z,b.z,grid.originZ],[a.x+a.z,b.x+b.z,grid.originX+grid.originZ]]){
+          if(Math.abs(end-start)<1e-8)continue;
+          for(let k=Math.ceil((Math.min(start,end)-origin)/grid.cellSize);k<=Math.floor((Math.max(start,end)-origin)/grid.cellSize);k++){
+            const t=(origin+k*grid.cellSize-start)/(end-start);
+            if(t>1e-8&&t<1-1e-8)samples.push(vertices[j-1]+(vertices[j]-vertices[j-1])*t);
+          }
         }
       }
-    }
-    samples.sort((a,b)=>a-b);
-    const hull:WallTop[]=[];
-    for(const station of samples){
-      if(hull.length&&station-hull.at(-1)!.station<1e-7)continue;
-      const next={station,top:required(station)};
-      while(hull.length>1){
-        const a=hull[hull.length-2],b=hull[hull.length-1];
-        if((b.top-a.top)*(next.station-b.station)>(next.top-b.top)*(b.station-a.station)+1e-9)break;
-        hull.pop();
+      samples.sort((a,b)=>a-b);
+      const hull:WallTop[]=[];
+      for(const station of samples){
+        if(hull.length&&station-hull.at(-1)!.station<1e-7)continue;
+        const next={station,top:required(station,curb)};
+        if(!curb)while(hull.length>1){
+          const a=hull[hull.length-2],b=hull[hull.length-1];
+          if((b.top-a.top)*(next.station-b.station)>(next.top-b.top)*(b.station-a.station)+1e-9)break;
+          hull.pop();
+        }
+        hull.push(next);
       }
-      hull.push(next);
+      profiles.push(curb?thinned(hull):hull);
     }
-    profiles.push(hull);
   }
   return profiles;
 }
@@ -427,17 +564,19 @@ export function tunnelGeometry(city:CityData,road:Road){
   // Where it lands on a street instead (a surfaceLandings stretch at an end on the ground, which has no wall at all), its
   // walls rise from the street's surface beyond the landing as an artery ramp's do from its end: a sloped nose where the
   // slot opens, not a full wall end beside the lanes that pass it.
-  const landings=road.tunnel.surfaceLandings??[],landedStart=road.startLevel===0?landings.find(([a])=>a<.01)?.[1]:undefined,landedEnd=road.endLevel===0?landings.find(([,b])=>b>total-.01)?.[0]:undefined;
+  const {start:landedStart,end:landedEnd}=streetLandings(road);
   const openStart=!road.tunnel.capStart&&(road.highway?landedStart!==undefined:surfaceTerminal(0)),openEnd=!road.tunnel.capEnd&&(road.highway?landedEnd!==undefined:surfaceTerminal(total));
   const from=road.highway?landedStart??0:0,to=road.highway?landedEnd??total:total;
-  const profiles=new Map([-1,1].map(side=>[side,openWallProfiles(city,road,side,s=>{
+  // A side with nothing to retain and nothing to guard keeps a curb where the decks of its road lie open on the ground (`bareStretches`).
+  const profiles=new Map([-1,1].map(side=>[side,openWallProfiles(city,road,side,(s,bare)=>{
     const p=tunnelEdgeAt(road,s,side,-.08),ground=sampleElevation(city,p.x,p.z),terminal=Math.min(openStart?s-from:Infinity,openEnd?to-s:Infinity);
+    if(bare)return Math.max(p.y,openCutFloorAt(city,p.x,p.z,road)??highwayDeckAt(city,p.x,p.z,p.y)??ground)+WALL_CURB;
     const outside=tunnelEdgeAt(road,s,side,-.7);
     // Preserve the curb-height street junction where intact ground is beside
     // the road. The upper envelope never lowers the guard over an excavation.
-    if(terminal<12&&Math.abs(p.y-ground)<.4&&!inTunnelPortal(city,outside.x,outside.z))return p.y+.08+.72*Math.min(1,terminal/12);
+    if(terminal<NOSE&&Math.abs(p.y-ground)<.4&&!inTunnelPortal(city,outside.x,outside.z))return p.y+.08+.72*Math.min(1,terminal/NOSE);
     return Math.max(p.y,ground)+.8;
-  })]));
+  },bareStretches(city,road,side))]));
   // A street bridge over a highway's walled cut: the wall stops under the bridge's slab instead of standing across the street
   // (its top is the ground beside the cut plus a parapet, which is where a level bridge's deck lies).
   const slab=road.highway?(x:number,z:number,y:number)=>deckUndersideAt(city,x,z,y+BRIDGE_HEADROOM):undefined;
