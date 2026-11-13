@@ -19,9 +19,12 @@ import { KNOCK_SPEED, startKnock, stepKnock, struckBy, type KnockedDown, type Kn
 import { isCommonwealthMall, mallGroundTest, mallPathTest } from '../simulation/commonwealth-mall.ts';
 import { laneTolerance, mallWalkLanes, offsetLine, pathLaneOffsets, straightRuns, type WalkStretch } from '../simulation/park-walks.ts';
 import { outsideGreenwayPath } from '../simulation/greenway.ts';
+import { drawnStreets, STALL_REACH, type StreetTile } from '../simulation/drawn-streets.ts';
+import { roadwayEdge } from '../simulation/street-furniture.ts';
+import { tileKey } from '../simulation/tile-format.ts';
 
 interface Segment { road: Road; a: Point2; b: Point2; length: number; tx: number; tz: number; index: number; }
-interface WalkRoute { road: string; start: Point2; end: Point2; length: number; yaw: number; /** A stretch of a park path, not of a street's sidewalk. */ park?: boolean; }
+interface WalkRoute { road: string; start: Point2; end: Point2; length: number; yaw: number; /** A stretch of a park path, not of a street's sidewalk. */ park?: boolean; /** A stretch outside the city, where a walker of the pool stands until a neighbourhood calls it. */ waiting?: boolean; }
 const PEDESTRIAN_CAPACITY = 112;
 /** A park's walks draw walkers as if this many metres nearer than a sidewalk: with one walker a stretch and a
  * sidewalk either side of every street, the pool otherwise leaves a park's paths thinly walked. */
@@ -75,7 +78,8 @@ export interface StreetLifeOptions {
   /** False where no other camera draws the walkers (a phone has no reflection captures): those out of view are not posed either. */ poseHidden?: boolean;
   /** A metro's streamed tiles: the park paths of the resident ones are walked too (a whole-city package lists its paths itself). */ tiles?: StreetLifeTiles;
 }
-export interface StreetLifeTiles { readonly loaded: ReadonlyMap<string, { tile: { parkPaths: ParkPath[] } }>; }
+/** `posts`: where the tile's street trees, lamps and name signs stand (tile-builder.ts). */
+export interface StreetLifeTiles { readonly loaded: ReadonlyMap<string, { tile: StreetTile & { parkPaths: ParkPath[] }; posts?: readonly Point2[] }>; }
 // A walker's reach into the view: the body, thrown clear of the ground at worst, and its shadow under a low sun.
 const WALKER_REACH = 10;
 /** Ambient walkers follow verified sidewalk stretches; they do not enter traffic. */
@@ -105,8 +109,10 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   };
   // Reserve the tree and lamp bands used by world.ts. Including potential
   // tree sites that were randomly omitted keeps these walking routes robust.
+  // (With streamed tiles the walks keep clear of what each tile planted, `posts`, and none of this is asked.)
+  const tiled = metro && options.tiles ? { size: metro.tiles.size, keys: new Set(metro.tiles.keys), loaded: options.tiles.loaded } : undefined;
   const streetObstacles: Point2[] = [];
-  for (const segment of segments) {
+  for (const segment of tiled ? [] : segments) {
     if (segment.road.width < 8) continue;
     for (let d = 14; d < segment.length - 8; d += 25) for (const side of [-1, 1]) {
       const offset = side * (paved(segment.road) / 2 + 2);
@@ -135,22 +141,72 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   }
   // The Commonwealth Avenue Mall is a fenced lawn with no sidewalk along the avenue: its walkers keep to the centre walk (below).
   const onMallLawn = mallGroundTest(city.parks ?? [], 0);
+  const ribbonClear = (p: Point2, clearance: number) => nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > paved(segment.road) / 2 + clearance);
+  // With streamed tiles a walk is tested against the streets as the tiles draw them (drawn-streets.ts), not against
+  // each street's ribbon of median width: a roadway is locally wider than its median and seldom centred on its line
+  // (walkers paced the asphalt of Newmarket Square), and a lot's stalls are in no ribbon at all. A walk is verified
+  // once every tile it needs is resident; `unseen` says a test met one that is not, and the walk is asked again
+  // when the tiles have changed.
+  let unseen = false, residents = '';
+  const postCells = new WeakMap<readonly Point2[], (p: Point2) => Point2[]>();
+  /** Whether p keeps `room` to the roadway and the parking stalls every resident tile in reach draws, and clears their posts. */
+  function drawnClear(p: Point2, room: number) {
+    const { size, keys, loaded } = tiled!, reach = STALL_REACH + room; let ribbons = false;
+    for (let tx = Math.floor((p[0] - reach) / size); tx <= Math.floor((p[0] + reach) / size); tx++) for (let tz = Math.floor((p[1] - reach) / size); tz <= Math.floor((p[1] + reach) / size); tz++) {
+      const key = tileKey(tx, tz), built = loaded.get(key);
+      if (!built) { if (keys.has(key)) { unseen = true; return false; } continue; }
+      const streets = drawnStreets(built.tile);
+      if (streets.inset(p[0], p[1]) > -room && streets.near(p[0], p[1], room) || streets.stall(p[0], p[1], room)) return false;
+      if (built.posts?.length) { let near = postCells.get(built.posts); if (!near) postCells.set(built.posts, near = spatialIndex(built.posts as Point2[], q => [q[0], q[1], q[0], q[1]], 1)); if (!near(p).every(post => gap(p, post) > .76)) return false; }
+      if (!built.tile.streetPavement) ribbons = true;   // (a tile without compiled pavement: its streets by their ribbons)
+    }
+    return !ribbons || ribbonClear(p, room);
+  }
+  /** The drawn streets of the resident tile a point lies in (`unseen` where its tile is not in yet). */
+  function streetsAt(p: Point2) {
+    const { size, keys, loaded } = tiled!, key = tileKey(Math.floor(p[0] / size), Math.floor(p[1] / size)), built = loaded.get(key);
+    if (!built && keys.has(key)) unseen = true;
+    return built?.tile.streetPavement ? drawnStreets(built.tile) : undefined;
+  }
+  /** Where the roadway ends beside a station of a street, from its centre line: its drawn edge, or undefined where the tile cannot tell (a junction mouth, its border). */
+  function kerb(road: Road, at: Point2, nx: number, nz: number) {
+    const streets = streetsAt(at), found = streets && roadwayEdge(streets, at, nx, nz, paved(road) / 2, (x, z) => nearSegments([x, z]).some(other => other.road !== road && pointSegment([x, z], other.a, other.b) < paved(other.road) / 2));
+    return found && found !== 'border' ? found.edge : undefined;
+  }
+  /** Whether the step from one clear point of a walk to the next keeps its room too: a kerb's corner can reach in between two points .75 m apart. */
+  const stepClear = (from: Point2 | undefined, to: Point2, room: number) => !tiled || !from || drawnClear([lerp(from[0], to[0], 1 / 3), lerp(from[1], to[1], 1 / 3)], room) && drawnClear([lerp(from[0], to[0], 2 / 3), lerp(from[1], to[1], 2 / 3)], room);
   function sidewalkClear(p: Point2, clearance = .42) {
-    return !onMallLawn(p[0], p[1]) && !inTransitCorridor(city,...p) && !inTunnelApproach(city,...p) && inBounds(p) && buildingClear(p, clearance) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > paved(segment.road) / 2 + clearance);
+    return !onMallLawn(p[0], p[1]) && !inTransitCorridor(city,...p) && !inTunnelApproach(city,...p) && inBounds(p) && buildingClear(p, clearance) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && (tiled ? drawnClear(p, clearance) : nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && ribbonClear(p, clearance));
   }
 
   // Sidewalk stretches are verified per segment the first time a neighborhood
   // asks for them, so a metro never walks every street up front.
-  const segmentRoutes = new Map<Segment, WalkRoute[]>();
-  function routesFor(segment: Segment): WalkRoute[] {
-    const cached = segmentRoutes.get(segment); if (cached) return cached;
-    const routes: WalkRoute[] = []; segmentRoutes.set(segment, routes);
-    if (segment.road.width < 7 || /alley|unnamed|private|ring road|cahners|copley place/i.test(segment.road.name) || segment.length < 20) return routes;
+  const segmentRoutes = new Map<Segment, WalkRoute[]>(), NONE: WalkRoute[] = [], waiting = new Map<unknown, string>();
+  /** A walk's routes, verified once and kept: none for now where a tile the walk needs is not resident. */
+  function verify<K>(kept: Map<K, WalkRoute[]>, key: K, walk: (routes: WalkRoute[]) => void): WalkRoute[] {
+    const cached = kept.get(key); if (cached) return cached;
+    if (tiled && waiting.get(key) === residents) return NONE;
+    const routes: WalkRoute[] = []; unseen = false; walk(routes);
+    if (unseen) { waiting.set(key, residents); return NONE; }
+    waiting.delete(key); kept.set(key, routes); return routes;
+  }
+  const routesFor = (segment: Segment) => verify(segmentRoutes, segment, routes => {
+    if (segment.road.width < 7 || /alley|unnamed|private|ring road|cahners|copley place/i.test(segment.road.name) || segment.length < 20) return;
+    const endMargin=segment.length<45?5:9;
     for (const side of [-1, 1]) {
+      // The sidewalk lies beyond the kerb: half the street's width from its centre line, or, with the tiles at
+      // hand, where the drawn roadway ends beside this segment (the middle one of its stations' edges).
+      let kerbside = paved(segment.road) / 2;
+      if (tiled) {
+        const edges: number[] = [];
+        for (let d = endMargin; d <= segment.length - endMargin; d += 4) { const edge = kerb(segment.road, [segment.a[0] + segment.tx * d, segment.a[1] + segment.tz * d], -segment.tz * side, segment.tx * side); if (edge !== undefined) edges.push(edge); }
+        if (unseen) return;
+        if (edges.length) kerbside = edges.sort((p, q) => p - q)[edges.length >> 1];
+      }
       let best: WalkRoute[] = [], bestLength=0;
       for (const setback of [1.1, 1.65, 2.2]) {
         const stretches:WalkRoute[]=[];
-        const offset = side * (paved(segment.road) / 2 + setback);
+        const offset = side * (kerbside + setback);
         let start: Point2 | undefined, previous: Point2 | undefined;
         const finish = () => {
           if (start && previous && gap(start, previous) >= 8) {
@@ -158,19 +214,17 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
           }
           start = previous = undefined;
         };
-        const endMargin=segment.length<45?5:9;
         for (let d = endMargin; d <= segment.length - endMargin; d += .75) {
           const p: Point2 = [segment.a[0] + segment.tx * d - segment.tz * offset, segment.a[1] + segment.tz * d + segment.tx * offset];
-          if (sidewalkClear(p, .45)) { start ??= p; previous = p; } else finish();
+          if (sidewalkClear(p, .45) && stepClear(previous, p, .45)) { start ??= p; previous = p; } else finish();
         }
-        finish();
+        finish(); if (unseen) return;
         const length=stretches.reduce((sum,route)=>sum+route.length,0);
         if(length>bestLength){best=stretches;bestLength=length;}
       }
       for(const route of best)pieces(route,routes);
     }
-    return routes;
-  }
+  });
   // A long sidewalk can support several walkers. Give each its own clear
   // stretch, separated by a small gap, so opposing walkers never overlap.
   function pieces(route:WalkRoute,routes:WalkRoute[]){
@@ -197,7 +251,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   const inWater = (p: Point2, w: typeof waters[number]) => p[0] >= w.minX && p[0] <= w.maxX && p[1] >= w.minZ && p[1] <= w.maxZ && pointInside(p, w.rings[0]) && !w.rings.slice(1).some(hole => pointInside(p, hole));
   const wet = (p: Point2) => nearPonds(p).some(w => inWater(p, w)) || broad.some(w => inWater(p, w));
   function pathClear(p: Point2) {
-    return !inTransitCorridor(city,...p) && !inTunnelApproach(city,...p) && inBounds(p) && buildingClear(p, .45) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && nearSegments(p).every(segment => pointSegment(p, segment.a, segment.b) > paved(segment.road) / 2 + .45) && !wet(p);
+    return !inTransitCorridor(city,...p) && !inTunnelApproach(city,...p) && inBounds(p) && buildingClear(p, .45) && sampleTerrainNormal(city,p[0],p[1]).y>.75 && (tiled ? drawnClear(p, .45) : nearObstacles(p).every(obstacle => gap(p, obstacle) > .76) && ribbonClear(p, .45)) && !wet(p);
   }
   /** The clear parts of a straight stretch, at least 8 m each, as one walker's pieces. */
   function walkable(stretch: WalkStretch, routes: WalkRoute[]) {
@@ -207,22 +261,20 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       if (start && previous && gap(start, previous) >= 8) pieces({ road: nearestStreet((start[0] + previous[0]) / 2, (start[1] + previous[1]) / 2), start, end: previous, length: gap(start, previous), yaw: Math.atan2(tx, tz), park: true }, routes);
       start = previous = undefined;
     };
-    for (let d = 0; d <= length; d += .75) { const p: Point2 = [stretch.start[0] + tx * d, stretch.start[1] + tz * d]; if (pathClear(p)) { start ??= p; previous = p; } else finish(); }
+    for (let d = 0; d <= length; d += .75) { const p: Point2 = [stretch.start[0] + tx * d, stretch.start[1] + tz * d]; if (pathClear(p) && stepClear(previous, p, .45)) { start ??= p; previous = p; } else finish(); }
     finish();
   }
   const onMall = mallPathTest(city.parks ?? []), pathRoutes = new Map<string, WalkRoute[]>();
   /** Verified the first time a neighborhood asks, and kept by the path's id: a tile that streams in again brings the same paths. */
-  function routesForPath(path: ParkPath): WalkRoute[] {
-    const cached = pathRoutes.get(path.id); if (cached) return cached;
-    const routes: WalkRoute[] = []; pathRoutes.set(path.id, routes);
+  const routesForPath = (path: ParkPath) => verify(pathRoutes, path.id, routes => {
     // A footbridge has a deck of its own; a planned block of the Commonwealth Avenue Mall has its walk's two files (below).
-    const mall = onMall(path); if (path.bridge || path.points.length < 2 || mall === 'block') return routes;
+    const mall = onMall(path); if (path.bridge || path.points.length < 2 || mall === 'block') return;
     const width = mall ? Math.min(path.width, 6.3) : path.width;
-    for (const points of outsideGreenwayPath(path.points)) for (const lane of pathLaneOffsets(width)) for (const stretch of straightRuns(offsetLine(points, lane), laneTolerance(width, lane))) walkable(stretch, routes);
-    return routes;
-  }
-  let mallRoutes: WalkRoute[] | undefined;
-  const mallWalks = () => { if (!mallRoutes) { mallRoutes = []; if ((city.parks ?? []).some(isCommonwealthMall)) for (const stretch of mallWalkLanes()) walkable(stretch, mallRoutes); } return mallRoutes; };
+    for (const points of outsideGreenwayPath(path.points)) for (const lane of pathLaneOffsets(width)) for (const stretch of straightRuns(offsetLine(points, lane), laneTolerance(width, lane))) { walkable(stretch, routes); if (unseen) return; }
+  });
+  let mallLanes: WalkStretch[] | undefined;
+  const mallRoutes = new Map<WalkStretch, WalkRoute[]>();
+  const mallWalks = () => (mallLanes ??= (city.parks ?? []).some(isCommonwealthMall) ? mallWalkLanes() : []).flatMap(stretch => verify(mallRoutes, stretch, routes => walkable(stretch, routes)));
   type PathEntry = Box & { path: ParkPath };
   const boxed = (paths: readonly ParkPath[]): PathEntry[] => paths.filter(path => path.points.length >= 2).map(path => ({ path, ...boxOf(path.points) }));
   const cityPaths = boxed(city.parkPaths ?? []), tilePaths = new WeakMap<object, PathEntry[]>();
@@ -234,7 +286,10 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     for (const built of options.tiles?.loaded.values() ?? []) { let entries = tilePaths.get(built.tile); if (!entries) tilePaths.set(built.tile, entries = boxed(built.tile.parkPaths)); collect(entries); }
     for (const route of mallWalks()) if (within(route)) result.push(route);
   }
-  const routesNear = (x: number, z: number, radius: number) => { const result: WalkRoute[] = []; for (const segment of segmentsNear(x, z, Number.isFinite(radius) ? radius + 60 : radius)) result.push(...routesFor(segment)); parkRoutesNear(x, z, radius, result); return result; };
+  const routesNear = (x: number, z: number, radius: number) => {
+    if (tiled) residents = [...tiled.loaded.keys()].join(' ');
+    const result: WalkRoute[] = []; for (const segment of segmentsNear(x, z, Number.isFinite(radius) ? radius + 60 : radius)) result.push(...routesFor(segment)); parkRoutesNear(x, z, radius, result); return result;
+  };
   const spawnStreet=nearestStreet(city.spawn.x,city.spawn.z);
   // Spend most of the bounded pool on the neighborhood around the camera. The
   // rest remains distributed on busy sidewalks and can follow later map trips.
@@ -257,20 +312,29 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       yaw: route.yaw, speed, height: .94 + random() * .11, width: .93 + random() * .15,
       phase, bag: random() < .42, scarf: random() < .28, outfit:pedestrians.length%5 });
   }
+  // With streamed tiles only the tiles about the spawn are resident yet, and no walk beyond them is verified: the
+  // rest of the pool waits far outside the city, each on a stretch of its own, until a neighbourhood calls it (refill).
+  for (let i = 0; tiled && pedestrians.length < PEDESTRIAN_CAPACITY; i++) {
+    const start: Point2 = [city.bounds.minX - 3000 - i * 4, city.bounds.minZ - 3000], route: WalkRoute = { road: '', start, end: [start[0], start[1] + 10], length: 10, yaw: 0, waiting: true };
+    pedestrians.push({ id: pedestrians.length, road: '', start, end: route.end, route, position: new THREE.Vector3(start[0], sampleElevation(city, start[0], start[1]) + .035, start[1]),
+      yaw: 0, speed: .87 + random() * .42, height: .94 + random() * .11, width: .93 + random() * .15, phase: 0, bag: random() < .42, scarf: random() < .28, outfit: pedestrians.length % 5 });
+  }
 
   const count = pedestrians.length;
   const pedestrianModel = createPedestrianModel(peopleGroup,pedestrians,ownedMaterials,{mainCamera:options.camera});
   const shown = new Uint8Array(count), viewFrustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), reach = new THREE.Sphere(new THREE.Vector3(), WALKER_REACH), poseHidden = options.poseHidden ?? true;
 
   const parked: ParkedVehicle[] = [];
-  const candidates: { segment: Segment; x: number; z: number; side: number; yaw: number; score: number }[] = [];
+  const candidates: { segment: Segment; x: number; z: number; side: number; yaw: number; kerbside: number; score: number }[] = [];
   // Kerbside parking: the original streets in the survey, or in a metro any named
   // street or avenue of parking width within reach of the spawn.
   const parkable = (road: Road) => metro ? road.width >= 9.5 && road.width <= 15 && /\b(Street|Avenue)$/.test(road.name) : /^(Boylston|Dartmouth|Parker|Tremont|Wigglesworth|Calumet|Saint Alphonsus|Smith|Worthington) Street$/.test(road.name) && road.width >= 9.5;
   for (const segment of segmentsNear(city.spawn.x, city.spawn.z, metro ? 700 : Infinity)) {
     if (!parkable(segment.road)) continue;
     for (let d = 21; d < segment.length - 21; d += 18) for (const side of [-1, 1]) {
-      const offset = side * (paved(segment.road) / 2 - 1.1);
+      // A car stands 1.1 m inside the kerb: half the street's width from its centre line, or, with the tiles at hand, where the drawn roadway ends beside it.
+      const kerbside = tiled ? kerb(segment.road, [segment.a[0] + segment.tx * d, segment.a[1] + segment.tz * d], -segment.tz * side, segment.tx * side) : paved(segment.road) / 2; if (kerbside === undefined) continue;
+      const offset = side * (kerbside - 1.1);
       const x = segment.a[0] + segment.tx * d - segment.tz * offset, z = segment.a[1] + segment.tz * d + segment.tx * offset;
       // The worksite reserves both its closed lane and the passing lane. A
       // parked car beside the cones must not narrow that remaining corridor.
@@ -281,20 +345,22 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       })) continue;
       const direction = segment.road.oneway || side;
       const yaw = Math.atan2(segment.tx * direction, segment.tz * direction);
-      candidates.push({ segment, x, z, side, yaw, score: Math.hypot(x - city.spawn.x, z - city.spawn.z) + random() * 250 });
+      candidates.push({ segment, x, z, side, yaw, kerbside, score: Math.hypot(x - city.spawn.x, z - city.spawn.z) + random() * 250 });
     }
   }
   candidates.sort((a, b) => a.score - b.score);
   for (const candidate of spreadByBlock(candidates,c=>[c.x,c.z])) {
     if (parked.length >= 8) break;
-    const { x, z, yaw, segment, side } = candidate;
+    const { x, z, yaw, segment, side, kerbside } = candidate;
     if (Math.hypot(x - city.spawn.x, z - city.spawn.z) < 42 || parked.some(vehicle => Math.hypot(vehicle.x - x, vehicle.z - z) < 42)) continue;
     const forward: Point2 = [Math.sin(yaw), Math.cos(yaw)], right: Point2 = [-forward[1], forward[0]];
     const spec=npcVehicleAt(parked.length),halfWidth=spec.width/2+.12,halfLength=spec.length/2+.16;
     const samples: Point2[] = [[x, z]];
     for (const width of [-halfWidth, halfWidth]) for (const length of [-halfLength, 0, halfLength]) samples.push([x + right[0] * width + forward[0] * length, z + right[1] * width + forward[1] * length]);
     if (!samples.every(p => inBounds(p, 12) && !inTunnelApproach(city,...p) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > paved(other.road) / 2 + 2))) continue;
-    const meterOffset = side * (paved(segment.road) / 2 + .65);
+    // (on the roadway from nose to tail, and the kerb no nearer the centre line at either end than beside the car's middle)
+    if (tiled && ![-halfLength, halfLength].every(along => { const at: Point2 = [x + forward[0] * along, z + forward[1] * along], edge = kerb(segment.road, [at[0] + segment.tz * side * (kerbside - 1.1), at[1] - segment.tx * side * (kerbside - 1.1)], -segment.tz * side, segment.tx * side); return edge !== undefined && edge > kerbside - .3 && streetsAt(at)?.paved(at[0], at[1]); })) continue;
+    const meterOffset = side * (kerbside + .65);
     const meter: Point2 = [segment.a[0] + segment.tx * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) - segment.tz * meterOffset,
       segment.a[1] + segment.tz * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) + segment.tx * meterOffset];
     parked.push({ type:spec.type,mass:spec.mass,id: parked.length, road: segment.road.name, x, y:sampleElevation(city,x,z), z, yaw, meter: sidewalkClear(meter, .25) ? meter : null });
@@ -451,6 +517,8 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   update(0, 0);
   return {
     group, pedestrians, parked, count, parkedCount: parked.length, meterCount: meters.length, update,populateAt,population,get relocations(){return relocations;},
+    /** The verified walks about a point (diagnostics and tests): none yet where a tile they need is not resident. */
+    walksNear:routesNear,
     /** Vehicle speeds of the walkers struck since the previous call; the caller plays their sounds. */
     takeHits(){return hits.splice(0,hits.length);},
     /** Collider handles of the kerbside parked cars, so an impact can be classified as a vehicle. */

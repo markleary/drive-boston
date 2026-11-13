@@ -36,11 +36,26 @@ export function bareCurbStretches(tile: Pick<CityTile, 'bareCurbs'>) {
   return out;
 }
 
-/** Parse a decompressed DBT2 buffer. Positions become absolute world metres. */
-export function parseTile(buffer: ArrayBuffer): CityTile {
+/** The JSON header of a decompressed DBT2 buffer, and its length in bytes. */
+function tileHeader(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer), view = new DataView(buffer);
   if (String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) !== 'DBT2') throw new Error('Not a Drive Boston tile');
-  const length = view.getUint32(4, true), header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + length)));
+  const length = view.getUint32(4, true);
+  return { header: JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + length))), length };
+}
+/** A tile as its header lists it, around the given building geometry. */
+function headerTile(header: any, geometry: Map<string, TileBuildingGeometry>): CityTile {
+  return { tx: header.tx, tz: header.tz, size: header.size, key: tileKey(header.tx, header.tz), buildings: header.buildings, geometry,
+    curbs: header.curbs ?? [], bareCurbs: header.bareCurbs, parks: header.parks ?? [], water: header.water ?? [], parkPaths: header.parkPaths ?? [], roads: header.roads ?? [],
+    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [], streetPavement: header.streetPavement, streetSidewalks: header.streetSidewalks, deckPavement: header.deckPavement, parking: header.parking };
+}
+/** A decompressed DBT2 buffer's tile without its buildings' shells (`geometry` is empty): the surfaces, curbs, paths
+ * and stalls are all in the header, which is all an audit of every tile needs to read. */
+export function parseTileHeader(buffer: ArrayBuffer): CityTile { return headerTile(tileHeader(buffer).header, new Map()); }
+
+/** Parse a decompressed DBT2 buffer. Positions become absolute world metres. */
+export function parseTile(buffer: ArrayBuffer): CityTile {
+  const view = new DataView(buffer), { header, length } = tileHeader(buffer);
   let offset = 8 + length; offset += (4 - offset % 4) % 4;
   const vertexCount: number = header.vertexCount, wide = header.indexBytes === 4;
   let indexOffset = offset + vertexCount * 6; indexOffset += (4 - indexOffset % 4) % 4;
@@ -58,9 +73,7 @@ export function parseTile(buffer: ArrayBuffer): CityTile {
     indexOffset += total * (wide ? 4 : 2);
     geometry.set(entry.id, { positions, facade: indices.subarray(0, entry.f), roof: indices.subarray(entry.f) });
   }
-  return { tx: header.tx, tz: header.tz, size: header.size, key: tileKey(header.tx, header.tz), buildings: header.buildings, geometry,
-    curbs: header.curbs ?? [], bareCurbs: header.bareCurbs, parks: header.parks ?? [], water: header.water ?? [], parkPaths: header.parkPaths ?? [], roads: header.roads ?? [],
-    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [], streetPavement: header.streetPavement, streetSidewalks: header.streetSidewalks, deckPavement: header.deckPavement, parking: header.parking };
+  return headerTile(header, geometry);
 }
 
 /** A pavement record's edges as world-metre left and right polylines. */

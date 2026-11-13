@@ -11,6 +11,7 @@
     "test:physics": "node --test tests/*.test.mjs",
     "validate:data": ".venv-data/bin/python scripts/validate-city.py",
     "audit:roads": ".venv-data/bin/python scripts/audit-road-generation.py",
+    "audit:furniture": "node scripts/audit-street-furniture.mjs",
     "build:traffic": "node scripts/build-traffic-fleet.mjs"
   },
   "dependencies": {
