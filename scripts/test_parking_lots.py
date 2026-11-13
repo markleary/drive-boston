@@ -83,6 +83,23 @@ class LayoutTest(unittest.TestCase):
   sides=ground(split);self.assertTrue(any(g.bounds[3]<23.1 for g in sides) and any(g.bounds[1]>36.9 for g in sides))
   self.assertTrue(all(g.bounds[3]<=23.1 or g.bounds[1]>=36.9 for g in sides));self.assertEqual(P.misplaced(split,[street],[wide],bands),[])
 
+ def test_a_lot_mapped_twice_is_laid_out_once_and_no_two_stalls_share_ground(self):
+  lot=box(0,0,60,18);aisle=LineString([(0,9),(60,9)]);once=P.stalls([lot],[aisle],[]);self.assertEqual(P.crowded(once),[])
+  # the same lot on a second way, its outline a little off: one layout, not two rows of cars through each other
+  twice=P.stalls([lot,box(.4,-.3,60.2,18.1)],[aisle],[]);self.assertEqual(len(twice),len(once));self.assertEqual(P.crowded(twice),[])
+  self.assertEqual(P.stalls([lot,lot],[aisle],[]),once,'an exact copy changes nothing');self.assertEqual(len(P.merged([lot,lot])),1)
+  # a section of the lot mapped again inside it is the lot
+  self.assertEqual(P.stalls([lot,box(10,0,30,18)],[aisle],[]),once);self.assertEqual(P.stalls([box(10,0,30,18),lot],[aisle],[]),once,'whatever their order')
+  # what the package would hold with each laid out alone: the same stalls twice, which the check names
+  doubled=once+once;pairs=P.crowded(doubled);self.assertEqual(len(pairs),len(once));self.assertEqual(pairs[0][0],pairs[0][1])
+  self.assertEqual(len(P.crowded(once+[(once[0][0]+.6,once[0][1]+.3,once[0][2])])),2,'a car half a metre off stands in its stall and the next')
+  # two lots that only overlap along their edges stay two lots, and the second keeps off the first's stalls
+  left=box(0,0,40,18);right=box(36,0,80,18);rows=[LineString([(0,9),(40,9)]),LineString([(36,9),(80,9)])];both=P.stalls([left,right],rows,[])
+  self.assertEqual(len(P.merged([left,right])),2);self.assertEqual(P.crowded(both),[]);self.assertTrue(any(s[0]<36 for s in both) and any(s[0]>42 for s in both))
+  alone=P.stalls([left],rows[:1],[])+P.stalls([right],rows[1:],[]);self.assertTrue(P.crowded(alone),'laid out alone, their rows meet in the strip they share');self.assertLess(len(both),len(alone))
+  # lots that only touch, or stand apart, are untouched
+  apart=[box(0,0,40,18),box(40,0,80,18),box(200,0,240,18)];self.assertEqual([g.bounds for g in P.merged(apart)],[g.bounds for g in apart])
+
  def test_the_drawn_polygons_and_stalls_of_a_package_are_read_back(self):
   tiles={'0_0':{'tx':0,'tz':0,'size':1000,'driveways':[[[[0,0],[10,0],[10,10],[0,10]],[[4,4],[6,4],[6,6],[4,6]]]],'parking':[150,250,9000]},'1_-1':{'tx':1,'tz':-1,'size':1000,'streetPavement':[[[[1000,-10],[1010,-10],[1010,0],[1000,0]]]],'parking':[50,99950,0,150,99950,18000]}}
   drive=P.tile_polygons(tiles,'driveways');self.assertEqual(len(drive),1);self.assertAlmostEqual(drive[0].area,96);self.assertEqual(len(P.tile_polygons(tiles,'streetPavement')),1);self.assertEqual(P.tile_polygons(tiles,'islands'),[])

@@ -225,6 +225,9 @@ street_surfaces=provenance.get('streetSurfaces');assert street_surfaces and stre
 import parking_lots
 misplaced_stalls=parking_lots.misplaced(parking_lots.in_world(surface_headers),parking_lots.tile_polygons(surface_headers,'streetPavement'),parking_lots.tile_polygons(surface_headers,'driveways'),parking_lots.tile_polygons(surface_headers,'streetSidewalks'))
 assert not misplaced_stalls,f'{len(misplaced_stalls)} parking stalls stand in a street, on a sidewalk or off the asphalt of their lot, the first at {misplaced_stalls[0]}; run build-street-surfaces.py'
+# and no two stalls share ground (a lot OpenStreetMap maps twice is laid out once: parking_lots.merged)
+crowded_stalls=parking_lots.crowded(parking_lots.in_world(surface_headers))
+assert not crowded_stalls,f'{len(crowded_stalls)} pairs of parking stalls share ground, the first at {crowded_stalls[0]}; run build-street-surfaces.py'
 
 def point_in_polygon(x,z,poly):
  inside=False

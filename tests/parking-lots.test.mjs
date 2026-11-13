@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {tileStalls,parkedCar,nearestParked,poolSlots,slotType,stallDraw,stallLines,OCCUPANCY,STALL_HALF,STALL_LINE} from '../src/simulation/parking-lots.ts';
+import {tileStalls,parkedCar,nearestParked,poolSlots,slotType,stallDraw,stallLines,OCCUPANCY,PARKED_TYPES,STALL_DEPTH,STALL_HALF,STALL_LINE} from '../src/simulation/parking-lots.ts';
 import {NPC_VEHICLES} from '../src/simulation/npc-vehicle-specs.ts';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 
@@ -16,8 +16,11 @@ test('a stall holds the same car on every visit, and about the set share of stal
   const stalls=Array.from({length:4000},(_,i)=>({x:(i%80)*2.6+.37,z:Math.floor(i/80)*11.6-.91,yaw:0}));
   const first=stalls.map(parkedCar),again=stalls.map(parkedCar);assert.deepEqual(first,again);
   const taken=first.filter(Boolean);assert.ok(Math.abs(taken.length/stalls.length-OCCUPANCY)<.04,`${taken.length} of ${stalls.length}`);
-  const types=new Set(taken.map(car=>car.spec.type));assert.ok(types.size>=4&&!types.has('box'),'passenger cars of several kinds, no box trucks');
-  for(const car of taken){assert.ok(car.spec.colors.includes(car.color));assert.ok(NPC_VEHICLES.includes(car.spec));assert.ok(car.spec.length<=5.9,'nothing longer than a stall holds');}
+  const types=new Set(taken.map(car=>car.spec.type));assert.ok(types.size>=3&&!types.has('box')&&!types.has('pickup'),'passenger cars of several kinds, none longer than a stall');
+  for(const car of taken){assert.ok(car.spec.colors.includes(car.color));assert.ok(NPC_VEHICLES.includes(car.spec));assert.ok(car.spec.length<=STALL_DEPTH&&car.spec.width<=2*STALL_HALF-.5,'a car fits its stall, with room to open a door');assert.deepEqual([car.x,car.z],[stalls[first.indexOf(car)].x,stalls[first.indexOf(car)].z]);}
+  // the rule, on the models themselves: rows stand nose to nose, so a model longer than a stall would stand in the car beyond it
+  for(const type of PARKED_TYPES)assert.ok(NPC_VEHICLES.find(v=>v.type===type).length<=STALL_DEPTH,`a ${type} is no longer than a stall`);
+  assert.ok(NPC_VEHICLES.filter(v=>v.length<=STALL_DEPTH).every(v=>PARKED_TYPES.includes(v.type)),'and every model that fits one parks');
   const backed=taken.filter((car,i)=>Math.abs(car.yaw-Math.PI)<1e-9).length/taken.length;assert.ok(backed>.06&&backed<.2,`one in eight backed in, got ${backed}`);
   // neighbouring stalls do not repeat one another
   const row=first.slice(0,80).map(car=>car?`${car.spec.type}${car.color}`:'-');assert.ok(new Set(row).size>=8);
@@ -58,9 +61,9 @@ test('the pool is shared out by model: of each the nearest it has slots for, nev
     }
     assert.ok(short>=2,`the nearest ${capacity} cars overrun a model's slots at ${short} of 4 places`);
   }
-  // a lot of pickups alone: as many as the pool has pickup slots, none in another model's
-  const pickups=lot.filter(car=>car.spec.type==='pickup');assert.ok(pickups.length>quota(220).pickup);
-  assert.equal(nearestParked(pickups,78,230,220,5000).length,quota(220).pickup);
+  // a lot of minivans alone: as many as the pool has minivan slots, none in another model's
+  const vans=lot.filter(car=>car.spec.type==='minivan');assert.ok(vans.length>quota(220).minivan);
+  assert.equal(nearestParked(vans,78,230,220,5000).length,quota(220).minivan);
 });
 
 test('a car is drawn in a slot of its own model as the pool moves on, and keeps its slot while it is wanted',()=>{
@@ -82,8 +85,8 @@ test('a car is drawn in a slot of its own model as the pool moves on, and keeps 
   const slots=Array(30).fill(undefined);poolSlots(slots,nearestParked(lot,78,230,30,150));const held=slots.filter(Boolean).length,{freed}=poolSlots(slots,[]);
   assert.ok(held>0&&freed.length===held&&slots.every(car=>!car));
   // a car with no slot of its model free is not drawn as another
-  const full=Array(6).fill(undefined),pickups=lot.filter(car=>car.spec.type==='pickup').slice(0,3),placed=poolSlots(full,pickups);
-  assert.equal(placed.held.size,1);assert.deepEqual(full.map(car=>car?.spec.type),[undefined,undefined,undefined,undefined,undefined,'pickup']);
+  const full=Array(PARKED_TYPES.length).fill(undefined),vans=lot.filter(car=>car.spec.type==='minivan').slice(0,3),placed=poolSlots(full,vans);
+  assert.equal(placed.held.size,1);assert.deepEqual(full.map(car=>car?.spec.type),PARKED_TYPES.map(type=>type==='minivan'?'minivan':undefined));
 });
 
 test('stalls in a row are painted with one line between neighbours, along the cars',()=>{
@@ -96,9 +99,10 @@ test('stalls in a row are painted with one line between neighbours, along the ca
 });
 
 // ---- the installed package: a stall stands on what its tile draws (scripts/parking_lots.py lays it there, validate-city.py holds every tile to it)
-const city=await loadMetroCity({tiles:['0_2','-7_-3','-7_-2','-3_-2']});
+const city=await loadMetroCity({tiles:['0_2','-7_-3','-7_-2','-3_-2','-6_-5']});
 const within=(p,rings)=>{let hit=false;for(const ring of rings)for(let i=0,j=ring.length-1;i<ring.length;j=i++){const a=ring[i],b=ring[j];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])hit=!hit;}return hit;};
 // the ground a stall and a kerbside bay share, a little inside it: its centre and its four corners
+const parkedKey=s=>`${Math.round(s.x*100)},${Math.round(s.z*100)}`;
 const ground=s=>{const f=[Math.sin(s.yaw),Math.cos(s.yaw)],r=[f[1],-f[0]];return [[0,0],[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>[s.x+f[0]*a*2.5+r[0]*b*1.1,s.z+f[1]*a*2.5+r[1]*b*1.1]);};
 
 test('a stall stands on the asphalt of its lot, in no street and on no street sidewalk: Newmarket Square, the edge of the coverage and Cambridge',()=>{
@@ -121,4 +125,25 @@ test('a stall stands on the asphalt of its lot, in no street and on no street si
   assert.ok(square.length<=8&&!square.some(s=>Math.hypot(s.x-710.94,s.z-2583.71)<2),`${square.length} stalls left at the square`);
   // and beyond the playable coverage no lot is drawn, so none has stalls (2,267 stood on bare ground in this tile)
   const beyond=city.loadedTiles.get('-7_-2');assert.equal(tileStalls(beyond).length,0);assert.equal((beyond.parking??[]).length,0);
+});
+
+test('no two stalls share ground: a lot that two OpenStreetMap ways trace is laid out once',()=>{
+  // The 3.5 hectare lot at Fresh Pond in Cambridge is mapped twice, and so are a few others: laid out one by one their rows fell on each
+  // other (263 stalls exactly on another, 997 pairs of cars through each other). A car's footprint, a little inside its stall:
+  const car=(s,hl=2.3,hw=.95)=>{const f=[Math.sin(s.yaw),Math.cos(s.yaw)],r=[f[1],-f[0]];return [[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>[s.x+f[0]*a*hl+r[0]*b*hw,s.z+f[1]*a*hl+r[1]*b*hw]);};
+  // (two rectangles are apart when the edges of one or the other separate them)
+  const apart=(p,q)=>[p,q].some(poly=>poly.some((a,i)=>{const b=poly[(i+1)%4],n=[b[1]-a[1],a[0]-b[0]],on=c=>c[0]*n[0]+c[1]*n[1],P=p.map(on),Q=q.map(on);return Math.max(...P)<=Math.min(...Q)+1e-9||Math.max(...Q)<=Math.min(...P)+1e-9;}));
+  for(const key of ['-6_-5','0_2','-3_-2']){
+    const stalls=tileStalls(city.loadedTiles.get(key));assert.ok(stalls.length>500,`${stalls.length} stalls in tile ${key}`);
+    assert.equal(new Set(stalls.map(s=>parkedKey(s))).size,stalls.length,`every stall of tile ${key} has a place of its own (the key the pool knows a car by)`);
+    const cells=new Map();for(const s of stalls){const k=`${Math.floor(s.x/8)},${Math.floor(s.z/8)}`;if(!cells.has(k))cells.set(k,[]);cells.get(k).push(s);}
+    let through=0,models=0;const parked=new Map(stalls.map(s=>[s,parkedCar(s)]));
+    for(const s of stalls)for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)for(const o of cells.get(`${Math.floor(s.x/8)+i},${Math.floor(s.z/8)+j}`)??[]){
+      if(o===s||!(o.x>s.x||(o.x===s.x&&o.z>s.z)))continue;
+      if(!apart(car(s),car(o)))through++;
+      // and the cars that stand in them, by the length and width of their own models (a pickup, longer than a stall, stood in the car nose to nose with it)
+      const a=parked.get(s),b=parked.get(o);if(a&&b&&!apart(car(a,a.spec.length/2,a.spec.width/2),car(b,b.spec.length/2,b.spec.width/2)))models++;
+    }
+    assert.equal(through,0,`${through} pairs of stalls share ground in tile ${key}`);assert.equal(models,0,`${models} pairs of parked cars stand in each other in tile ${key}`);
+  }
 });
