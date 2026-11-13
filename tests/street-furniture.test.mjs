@@ -7,7 +7,7 @@ import {LAMP_ROOM,SIGN_ROOM,TREE_ROOM,VERGE,postClear,roadwayEdge,streetFurnitur
 import {roadCells} from '../src/simulation/road-cells.ts';
 import {createStreetLife} from '../src/render/street-life.ts';
 import {hasMetroData,loadTileHeaders} from './helpers/metro-city.mjs';
-import {alongWalk,drawnGround,loadStreetCity,residentTiles,roadIndex,tileFurniture} from './helpers/street-furniture.mjs';
+import {alongWalk,drawnGround,loadStreetCity,openStretchGround,residentTiles,roadIndex,tileFurniture} from './helpers/street-furniture.mjs';
 
 const near=(a,b,eps=1e-9)=>Math.abs(a-b)<=eps;
 const box=(x0,z0,x1,z1)=>[[x0,z0],[x1,z0],[x1,z1],[x0,z1]];
@@ -153,6 +153,10 @@ test('a tile\'s trees and lamps: every 25 m on both verges, a lamp before each t
   const ribbons=streetRibbons({footbridges:[{id:'f',width:3,points:[[96,200],[99,260]],elevations:[0,4]}]},[road,{id:'d',name:'Deck',points:[[111.5,300],[111.5,400]],width:8,elevations:[6,6]}],{minX:0,maxX:1000,minZ:0,maxZ:1000});
   assert.ok(ribbons.raised(111.5,350)&&ribbons.raised(98,240)&&!ribbons.raised(98,300)&&!ribbons.raised(105,300),'a surface street is no deck');
   assert.ok(ribbons.any(105,300)&&ribbons.crossing(105,300,cross)&&!ribbons.crossing(105,300,road));
+  // so is the open stretch of a tunnel record, a walled cut or a ramp on its way up to a viaduct; ground over its roofed stretch is not
+  const ramp={id:'t',name:'Ramp',points:[[130,300],[130,400]],width:8,oneway:1,elevations:[6,2],tunnel:{clearance:5.2,covered:[[60,100]]}},open=streetRibbons({},[road,ramp],{minX:0,maxX:1000,minZ:0,maxZ:1000});
+  assert.ok(open.raised(130,320)&&open.raised(134.7,320)&&!open.raised(135,320)&&!open.raised(130,380)&&!open.crossing(130,320,road),'the ramp\'s width and 0.8 m, as far as it lies open');
+  assert.ok(!streetRibbons({},[road,{...ramp,tunnel:{clearance:5.2}}],{minX:0,maxX:1000,minZ:0,maxZ:1000}).raised(130,320),'a bore roofed all its length leaves the ground over it');
   // a tile with no compiled pavement keeps the survey build's rule: its own roads by their ribbons, half the width and two metres out
   const legacy=run({tx:0,tz:0,size:1000},[road,{...cross,points:[[1105,504],[1000,504]]}]);
   assert.equal(legacy.trees.length,24);assert.ok(legacy.trees.every(p=>near(Math.abs(p[0]-105),5+VERGE,1e-9)));
@@ -197,6 +201,15 @@ test('Newmarket Square: the trees and lamps of a roadway twice its street\'s wid
     assert.ok(fromLine(square,p)>11,`${fromLine(square,p).toFixed(1)} m from the centre line`);
     assert.ok(ground.roadway(p[0],p[1],VERGE+.3)&&!ground.roadway(p[0],p[1],VERGE-.3),'two metres from the kerb');
   }
+});
+
+test('Beverly Street under the Central Artery\'s ramp: no lamp in the line of a tunnel record\'s open stretch',{skip},()=>{
+  // The Artery's southbound record climbs out of its bore here to the viaduct: an open stretch 2 to 10 m over the
+  // ground, drawn by the tunnel builder, no street pavement and no cut. Two lamps of Beverly Street stood up through it.
+  const tile=loadTileHeaders(city,['1_-2']).get('1_-2'),plan=tileFurniture(city,tile,roads),open=openStretchGround(city,roads);
+  const through=open(1229.4,-1715.0);assert.ok(through>1&&through<3,`the fixture: the ramp passes ${through} m over the ground where a lamp stood`);
+  for(const [kind,places] of [['tree',plan.trees],['lamp',plan.lamps],['sign',plan.signs.map(sign=>sign.position)]])for(const p of places)assert.equal(open(p[0],p[1]),undefined,`a ${kind} at ${p} stands in the line of an open stretch`);
+  assert.ok(plan.lamps.length>40&&plan.trees.length>100,'the tile keeps its other lamps and trees');
 });
 
 test('Blue Hill Avenue: two carriageways about a narrow median, their trees on the median\'s middle and the outer sidewalks',{skip},()=>{

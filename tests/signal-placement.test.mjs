@@ -3,8 +3,9 @@ import {HEAD_ROOM,planTrafficSignals,POST_GAP,SIGNAL_ROOM} from '../src/simulati
 import {drawnStreets} from '../src/simulation/drawn-streets.ts';
 import {closestRoad,pointInside} from '../src/simulation/roads.ts';
 import {reserveTransitCorridors,inTransitCorridor} from '../src/simulation/transit-corridors.ts';
+import {inTunnelApproach} from '../src/simulation/tunnels.ts';
 import {loadCentralCity,loadMetroCity,loadTileHeaders} from './helpers/metro-city.mjs';
-import {deckGround,drawnGround,loadStreetCity,roadIndex,signalHeads,tileFurniture,tileSignals} from './helpers/street-furniture.mjs';
+import {deckGround,drawnGround,loadStreetCity,openStretchGround,roadIndex,signalHeads,tileFurniture,tileSignals} from './helpers/street-furniture.mjs';
 const distance=(p,a,b)=>{const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(p[0]-a[0]-dx*t,p[1]-a[1]-dz*t);};
 test('signal poles stand clear of every travel lane and building at real angled Boston intersections',async()=>{
  const city=await loadCentralCity();
@@ -46,6 +47,21 @@ test('a mast stands behind the kerb as drawn, at a corner of the junction, where
  const moved=planTrafficSignals(city,{...ground,posts:[[x+.4,z+.4]]})[0];assert.ok(moved&&Math.hypot(moved.position[0]-x-.4,moved.position[1]-z-.4)>=POST_GAP&&!streets.near(...moved.position,SIGNAL_ROOM));
  const walled=planTrafficSignals(city,{...ground,hulls:(px,pz)=>Math.hypot(px-x,pz-z)<6?[{footprint:[[x-4,z-4],[x+4,z-4],[x+4,z+4],[x-4,z+4]]}]:[]})[0];
  assert.ok(walled&&Math.hypot(walled.position[0]-x,walled.position[1]-z)>4&&!streets.near(...walled.position,SIGNAL_ROOM));
+});
+
+test('no mast stands in a tunnel approach: the open cut of a ramp passes under its footing by the terrain grid',()=>{
+ const tile=tileOf(0,0,[[[100,0],[114,0],[114,500],[1000,500],[1000,510],[114,510],[114,1000],[100,1000],[100,510],[0,510],[0,500],[100,500]]]),streets=drawnStreets(tile),ground={streets,owns:()=>true,hulls:()=>[]};
+ const [first]=planTrafficSignals(town([main,cross],[[107,505]]),ground),[x,z]=first.position;
+ // A ramp in a walled cut, 3 m down, runs where that mast stands. The grid is whole across a cut (the runtime cuts the
+ // terrain out), so the road lies under the footing by its heights and the lane test passes it: what keeps the mast
+ // out is the tunnel approach, as it keeps every tree, lamp and sign out.
+ const cut={id:'cut',name:'Entrance ramp',points:[[x,z-40],[x,z+.5]],width:6,oneway:1,elevations:[-3,-3],tunnel:{clearance:5.2,covered:[]}},city=town([main,cross,cut],[[107,505]]);
+ assert.ok(inTunnelApproach(city,x,z),'the fixture: the first corner lies in the cut');
+ const [moved]=planTrafficSignals(city,ground);assert.ok(moved&&!inTunnelApproach(city,...moved.position)&&Math.hypot(moved.position[0]-x,moved.position[1]-z)>3.8,`another corner: ${moved?.position}`);
+ assert.ok(!streets.near(...moved.position,SIGNAL_ROOM));for(const head of signalHeads(moved))assert.ok(streets.paved(...head));
+ // a tile asks the whole city, whose tunnel index is built once (`excavated`); so does the rule without a tile's ground
+ const asked=planTrafficSignals(town([main,cross],[[107,505]]),{...ground,excavated:(px,pz)=>Math.hypot(px-x,pz-z)<6})[0];assert.ok(asked&&Math.hypot(asked.position[0]-x,asked.position[1]-z)>=6);
+ for(const mast of planTrafficSignals(city))assert.ok(!inTunnelApproach(city,...mast.position));
 });
 
 test('where a street\'s perpendiculars run on across a wide junction, the mast takes the nearest kerb to the signal itself',()=>{
@@ -109,12 +125,15 @@ test('the shipped signals: every mast clear of the roadway its tile draws, each 
 
 test('the shipped signals: both heads of every mast hang over a roadway, the arm across its street where that reaches one',()=>{
  // Commercial Street at the Mystic Valley Parkway and Francis Street (masts found from the signal itself, 12 and 19 m from their street's
- // line), Beacon Street at Marion Street (an island's nose), Ukraine Way (a raised road that ends at its junction), and the
- // three tiles above. A head can hang across a tile border, so the ground is read with the tiles about each.
- const keys=['-2_-6','-3_1','-5_1','-4_5','0_2','-2_0','-2_1'],about=new Set(keys.flatMap(key=>{const [tx,tz]=key.split('_').map(Number);return [-1,0,1].flatMap(i=>[-1,0,1].map(j=>`${tx+i}_${tz+j}`));}).filter(key=>street.tiles.keys.includes(key)));
- const tiles=loadTileHeaders(street,[...about]),ground=drawnGround(tiles),deck=deckGround(network),planned=new Map();let heads=0;
+ // line), Beacon Street at Marion Street (an island's nose), Ukraine Way (a raised road that ends at its junction), Summer
+ // Street's viaduct in the Seaport (over a Turnpike ramp's open cut) and the three tiles above. A head can hang across a
+ // tile border, so the ground is read with the tiles about each.
+ const keys=['-2_-6','-3_1','-5_1','-4_5','2_0','0_2','-2_0','-2_1'],about=new Set(keys.flatMap(key=>{const [tx,tz]=key.split('_').map(Number);return [-1,0,1].flatMap(i=>[-1,0,1].map(j=>`${tx+i}_${tz+j}`));}).filter(key=>street.tiles.keys.includes(key)));
+ const tiles=loadTileHeaders(street,[...about]),ground=drawnGround(tiles),deck=deckGround(network),openStretch=openStretchGround(street,network),planned=new Map();let heads=0;
  for(const key of keys){
   const masts=tileSignals(street,tiles.get(key),network);planned.set(key,masts);
+  // (a mast is 5.65 m tall: under a ramp that passes more than 6.2 m over its footing it stands as under a viaduct)
+  for(const mast of masts){const over=openStretch(...mast.position);assert.ok((over===undefined||over>=6.2)&&!inTunnelApproach(street,...mast.position),`tile ${key}: the mast at ${mast.position.map(v=>v.toFixed(1))} stands in a tunnel record's open cut or ramp`);}
   for(const mast of masts)for(const head of signalHeads(mast)){heads++;assert.ok(ground.roadway(...head)||deck(...head),`tile ${key}: a head of the mast at ${mast.position.map(v=>v.toFixed(1))} hangs over no roadway (${head.map(v=>v.toFixed(1))})`);}
  }
  assert.ok(heads>=200,`${heads} signal heads`);
@@ -125,6 +144,10 @@ test('the shipped signals: both heads of every mast hang over a roadway, the arm
  assert.ok(toSignal(of('-3_1',[-2681.706,1598.431]))>.99,'Francis Street');
  // where an arm across the signal's street does reach its roadway, it stays across it
  assert.ok(acrossStreet(of('-5_1',[-4265.353,1046.605]))>.99,'Beacon Street');
+ // The signal on Summer Street's viaduct: its mast stood 1.2 m off the centre line of the Turnpike's entrance ramp from the
+ // Haul Road, in the ramp's open cut beneath the viaduct, 2 m over the road. It stands beside the Haul Road now.
+ const summer=of('2_0',[2432.49,224.301]);assert.ok(openStretch(2436.3,218.4)<0&&inTunnelApproach(street,2436.3,218.4),'the fixture: the old place lies in the cut');
+ assert.ok(summer.road.elevations&&openStretch(...summer.position)===undefined&&Math.hypot(summer.position[0]-2436.3,summer.position[1]-218.4)>8,`Summer Street: ${summer.position}`);
  // beside Ukraine Way's deck, its heads over the deck, not across Washington Street from the end of it
  const ukraine=of('-4_5',[-3352.152,5766.657]);assert.ok(ukraine.road.elevations&&signalHeads(ukraine).every(head=>deck(...head))&&ukraine.position[0]>-3345,`Ukraine Way: ${ukraine.position}`);
 });

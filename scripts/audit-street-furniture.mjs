@@ -10,6 +10,9 @@
  * - no tree, lamp, sign or signal mast in the street pavement or nearer it than its room (1.2 m, 0.6 m, 0.4 m,
  *   0.5 m), in the tile it stands in or the next one;
  * - none in a parking stall, with half that room to spare, and no signal planned by two tiles;
+ * - none in the open stretch of a tunnel record, which the tunnel builder draws and no tile lists as pavement: a
+ *   highway's walled cut, or a ramp on its way up to a viaduct (a mast may stand under one that passes more than
+ *   6.2 m over its footing, as under a viaduct);
  * - both signal heads of every mast over a roadway: the street pavement, or the deck of a raised road (which no
  *   tile draws as pavement), so an arm reaches back over the kerb its mast stands behind;
  * - no walk in the pavement, nearer it than 0.3 m anywhere along it, or through a stall;
@@ -22,7 +25,7 @@
 import * as THREE from 'three';
 import '../tests/helpers/npc-fleet.mjs';
 import {loadTileHeaders} from '../tests/helpers/metro-city.mjs';
-import {alongWalk,deckGround,drawnGround,loadStreetCity,roadIndex,signalHeads,tileStreetside} from '../tests/helpers/street-furniture.mjs';
+import {alongWalk,deckGround,drawnGround,loadStreetCity,openStretchGround,roadIndex,signalHeads,tileStreetside} from '../tests/helpers/street-furniture.mjs';
 import {drawnStreets,STALL_REACH} from '../src/simulation/drawn-streets.ts';
 import {LAMP_ROOM,SIGN_ROOM,TREE_ROOM} from '../src/simulation/street-furniture.ts';
 import {SIGNAL_ROOM} from '../src/simulation/signal-placement.ts';
@@ -36,6 +39,8 @@ const failures=[],fail=(what,list)=>{if(list.length)failures.push(`${list.length
 // ---- trees, lamps, name signs and signal masts, tile by tile
 const kinds=['trees','lamps','signs','masts'],count={trees:0,lamps:0,signs:0,masts:0},plans=new Map(),inRoadway={trees:[],lamps:[],signs:[],masts:[]},inStall={trees:[],lamps:[],signs:[],masts:[]},signalled=new Map(),headsOff=[];
 const deck=deckGround(roads);let heads=0;
+// (a mast is 5.65 m tall: a ramp passing more than MAST_CLEAR over its footing clears it; nothing else stands in the line of an open stretch at all)
+const openStretch=openStretchGround(city,roads),MAST_CLEAR=6.2,inCut={trees:[],lamps:[],signs:[],masts:[]};
 for(const [key,tile] of tiles){
   const plan=tileStreetside(city,tile,roads);plans.set(key,plan);
   for(const mast of plan.masts){
@@ -48,14 +53,15 @@ for(const [key,tile] of tiles){
       // (a hair inside the room: a place drawn in from a border stands at exactly its room from it)
       if(ground.roadway(p[0],p[1],room-1e-6))inRoadway[kind].push(p);
       if(ground.stall(p[0],p[1],room/2-1e-6))inStall[kind].push(p);
+      const over=openStretch(p[0],p[1]);if(over!==undefined&&(kind!=='masts'||over<MAST_CLEAR))inCut[kind].push(p);
     }
   }
 }
-for(const kind of kinds){fail(`${kind} in the street pavement or within their room of it`,inRoadway[kind]);fail(`${kind} in a parking stall`,inStall[kind]);}
+for(const kind of kinds){fail(`${kind} in the street pavement or within their room of it`,inRoadway[kind]);fail(`${kind} in a parking stall`,inStall[kind]);fail(`${kind} in the open stretch of a tunnel record (a highway's cut or ramp)`,inCut[kind]);}
 const twice=[...signalled].filter(([,planners])=>planners.size>1).map(([source])=>source.split(',').map(Number));fail('signals planned by two tiles',twice);
 fail('signal heads hanging over no roadway (street pavement or a deck)',headsOff);
 const sum=lists=>kinds.reduce((n,kind)=>n+lists[kind].length,0),signals=new Set(city.signals.map(signal=>signal.join(',')));
-console.log(`${tiles.size} tiles: ${count.trees} street trees, ${count.lamps} lamps, ${count.signs} name signs, ${count.masts} signal masts; in the roadway or too near it ${sum(inRoadway)}, in a stall ${sum(inStall)}`);
+console.log(`${tiles.size} tiles: ${count.trees} street trees, ${count.lamps} lamps, ${count.signs} name signs, ${count.masts} signal masts; in the roadway or too near it ${sum(inRoadway)}, in a stall ${sum(inStall)}, in a highway's open cut or ramp ${sum(inCut)}`);
 console.log(`${signals.size} signals: ${signalled.size} with a mast, none planned by two tiles (${twice.length}); ${signals.size-signalled.size} without one (no street within 35 m, or no clear kerb); signal heads over no roadway ${headsOff.length} of ${heads}`);
 
 // ---- the walks, with every tile resident (the street life verifies a walk once its tiles are in)
