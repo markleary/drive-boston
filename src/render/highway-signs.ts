@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { warningLegend, type HighwaySignPlacement } from '../simulation/highway-signs';
+import { WARNING_POST, roadsidePoint, warningLegend, type HighwaySignPlacement } from '../simulation/highway-signs';
 
 const WIDTH = 1.5, POST = 2.3;
 const faces = new Map<string, THREE.MeshBasicMaterial>();
@@ -27,14 +27,14 @@ function warningFace(lines: string[]) {
   return material;
 }
 
-/** A roadside warning on the right shoulder, its face turned toward traffic. The shared face material is the caller's to keep. */
+/** A roadside warning on the right shoulder, its face turned toward traffic: `WARNING_POST` beyond the road's edge, or where the caller found it a place clear of the lanes beside the road (`approach.post`, clearRoadside). The shared face material is the caller's to keep. */
 export function createWarningSign(place: HighwaySignPlacement, groundAt: (x: number, z: number) => number, steel: THREE.Material) {
-  const { x, y, z, yaw, width } = place.approach, lines = warningLegend(place.sign), height = WIDTH * (lines.length > 2 ? 320 : 224) / 256;
+  const { x, y, z, yaw, edge, post } = place.approach, lines = warningLegend(place.sign), height = WIDTH * (lines.length > 2 ? 320 : 224) / 256;
   const group = new THREE.Group();
   group.name = `Warning sign: ${lines.join(' ')} on ${place.road.id}`;
   group.position.set(x, y, z);
   group.rotation.y = yaw + Math.PI;
-  const shoulder = width / 2 + .75, ground = Math.min(-.1, groundAt(x - Math.cos(yaw) * shoulder, z + Math.sin(yaw) * shoulder) - y), mid = POST + height / 2;
+  const shoulder = post ?? edge + WARNING_POST, foot = roadsidePoint({ x, z, yaw }, shoulder), ground = Math.min(-.1, groundAt(foot.x, foot.z) - y), mid = POST + height / 2;
   const face = new THREE.Mesh(new THREE.PlaneGeometry(WIDTH, height), warningFace(lines));
   face.name = lines.join(' ');
   face.position.set(shoulder, mid, .045);

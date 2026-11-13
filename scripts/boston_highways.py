@@ -76,12 +76,20 @@ Storrow Drive its lane counts, its tunnel and its posted clearances.
   for that length before it descends (street_stretch: the Dartmouth Street
   entrance to the nose of the island between Huntington Avenue's carriageways,
   the Haul Road entrance to where the curbs part it from the road).
+- Roadways: once the profiles are solved and the records classified, every road in the open at its own ground is
+  measured to Boston's curb survey (the `curbs` of the source sidecar) and corrected (highway_roadways.py): a cut
+  and a Turnpike carriageway are moved and narrowed to their surveyed pavement, Storrow Drive's cuts take theirs
+  whole, and the decks of Storrow Drive and of the ramps on the ground keep their lanes while the roadway beside
+  them is paved (`roadways.aprons` of the provenance, compiled by build-street-surfaces.py) and the ground set
+  under them. The lane-count widths remain where the survey shows nothing: under a roof, on a viaduct, and
+  along a side with no curb in reach.
 - Signs: the sidecar lists Storrow Drive's warnings (`signs`): CARS ONLY where
   traffic comes onto it and LOW CLEARANCE, with the height the OpenStreetMap way
   posts, ahead of every structure it passes under (warning_signs).
 
 The stage reads only what the stages before it wrote: class widths, never the
-roadway widths build-street-surfaces.py measures afterwards, and for a shell
+roadway widths build-street-surfaces.py measures afterwards (the curb survey it
+measures its own roads to is in its source sidecar), and for a shell
 building_passages.py has carved the outline kept with it. validate-city.py
 replays it (replay) and checks its records (validate).
 
@@ -100,6 +108,7 @@ from road_connections import stations
 from road_structure_clearance import crossing_points,road_height
 
 import water_crossings as W
+import highway_roadways as HR
 from building_outline import from_rings,roof_outline
 
 SOURCE_NAME='boston-highways-source.json'
@@ -257,6 +266,11 @@ TURNPIKE=[
  # The entrance leaves the Haul Road as a lane on its pavement; the curb survey has the two roadways apart 24 m on.
  R('i90-eb-entrance-135','I-90 East · Entrance from the South Boston Haul Road',[17593,10364],landing=24),
  R('i90-wb-entrance-135','I-90 West · Entrance from the South Boston Haul Road',[11020,8712]),
+ # Layer 8 draws each turning roadway where a ramp meets its streets as a segment of its own, and the entrance from Congress Street
+ # (17590) goes down its own cut in the survey to the Exit 134 ramp, 5.7 m below the street: a trench with no road in it until the ramp is one.
+ R('i90-eb-exit-135-haul-road-east','I-90 East · Exit 135 to the South Boston Haul Road',[11025]),
+ R('i90-wb-entrance-135-congress','I-90 West · Entrance from Congress Street to I-93 North',[17591,17590]),
+ R('i90-wb-entrance-135-congress-east','I-90 West · Entrance from B Street to I-93 North',[17584]),
  # East Boston, Exit 137 and Route 1A
  R('i90-eb-exit-137','I-90 East · Exit 137 Logan Airport',[11065]),
  R('i90-eb-exit-137-terminals','I-90 East · Exit 137 to the Logan Airport terminals',[11023,8516,9777,10411,10410]),
@@ -267,8 +281,8 @@ TURNPIKE=[
  R('route1a-nb-entrance-logan','Route 1A North · Entrance from Logan Airport',[8493,10407,9020,8494,8627],bridge='route1a'),
 ]
 # Storrow Drive (James J Storrow Memorial Drive in layer 8) between the Boston University Bridge, where it carries on
-# as Soldiers Field Road, and David G. Mugar Way, which the package already has along the river to Leverett Circle. Both
-# carriageways land on those streets' own vertices, so neither has a closed end. Lane counts follow the OpenStreetMap
+# as Soldiers Field Road, and David G. Mugar Way, which the package already has along the river to Leverett Circle (as
+# David G. Mugar Way, then Charlesbank Road). Both carriageways land on those streets' own vertices, so neither has a closed end. Lane counts follow the OpenStreetMap
 # ways of the cached Brookline and Cambridge extracts (STORROW_TAG_WAYS).
 def SR(id,name,parts,**extra):return R(id,name,parts,bridge='storrow',**{'stiffness':I.STIFFNESS,**extra})
 STORROW=[
@@ -296,6 +310,12 @@ STORROW=[
  SR('storrow-eb-exit-beacon','Storrow Drive East · Exit to Beacon Street / Arlington Street',[8513,10291,10290]),
  SR('storrow-eb-entrance-berkeley','Storrow Drive East · Entrance from Berkeley Street',[10288,10289,14326]),
  SR('storrow-wb-entrance-berkeley','Storrow Drive West · Entrance from Berkeley Street',[9742]),
+ # Charles Circle. North of David G. Mugar Way layer 8 names the two roadways Charlesbank Road and Charles Street, which the
+ # package has as streets; the ramps between the southbound one and the circle, over the northbound one, are unnamed
+ # segments like every ramp above.
+ SR('storrow-wb-exit-charles-circle','Storrow Drive West · Exit to Charles Circle / Government Center',[11054,11053,11052,8895]),
+ SR('storrow-wb-exit-charles-circle-longfellow','Storrow Drive West · Exit to the Longfellow Bridge',[8460]),
+ SR('storrow-wb-entrance-charles-circle','Storrow Drive West · Entrance from Charles Circle',[11146,11055,11056]),
 ]
 ROUTES=TURNPIKE+STORROW
 # OpenStreetMap ways the routes use: the Turnpike through the Brookline sliver at the Boston University Bridge.
@@ -323,11 +343,15 @@ def extract(source_dir):
    if e.get('type')=='way' and e['id'] in wanted_ways and e['id'] not in ways:
     ways[e['id']]={'id':e['id'],'town':town,'tags':{k:e['tags'][k] for k in TAGS if k in e.get('tags',{})},'points':[project(g['lon'],g['lat']) for g in e['geometry']]}
  missing=sorted(wanted_ways-set(ways));assert not missing,f'highway source ways missing from the extracts: {missing}'
+ # The curb survey along the routes (layer 6), which the roadways are measured to (highway_roadways.py).
+ survey=json.loads((source_dir/'layer-6.json').read_text());used=[features[p]['points'] if isinstance(p,int) else ways[int(p[1:])]['points'] for r in ROUTES for p in r['parts']]
+ curbs=HR.extract_curbs(survey['features'],project,used)
  return {'version':1,'name':'Massachusetts Turnpike, Storrow Drive and the Central Artery tunnel ramps','source':layer.get('source','Boston GIS street centerlines (layer 8)'),
   'url':'https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/8','license':'City of Boston open data; source centerline attributes retained',
   'osm':{'source':'OpenStreetMap town road extracts (data-source-cache/osm-<town>-roads.json)','url':'https://www.openstreetmap.org/','license':'ODbL 1.0, © OpenStreetMap contributors','extracts':stamps},
   'projection':'EPSG:4326 to Massachusetts State Plane feet (EPSG:2249), metres from 771100 E, 2952900 N, z southward, like every Boston street',
-  'features':[features[i] for i in sorted(features)],'ways':[ways[i] for i in sorted(ways)]}
+  'features':[features[i] for i in sorted(features)],'ways':[ways[i] for i in sorted(ways)],
+  'curbSurvey':{'source':survey.get('source','Boston GIS curbs (layer 6)'),'url':'https://gisportal.boston.gov/arcgis/rest/services/Infrastructure/OpenData/MapServer/6','reachMeters':HR.CURB_ZONE},'curbs':curbs}
 
 
 # The OpenStreetMap ways along Storrow Drive that carry a posted clearance (`maxheight`) or its tunnel, west to east then back.
@@ -1618,7 +1642,11 @@ def record(plan,a,b,id,levels,name):
  if piece_is_tunnel(plan,a,b):
   rec['tunnel']={'clearance':plan.clearance,'covered':covered_intervals(plan,a,b)}
   rec['highway']=spec['bridge']
- else:rec['bridge']={'id':spec['bridge'],'kind':KIND,'thickness':THICKNESS,'clearanceEstimated':True,'sourceLayer':max(plan.level[a:b+1]) if b>a else plan.level[a]}
+ else:
+  rec['bridge']={'id':spec['bridge'],'kind':KIND,'thickness':THICKNESS,'clearanceEstimated':True,'sourceLayer':max(plan.level[a:b+1]) if b>a else plan.level[a]}
+  # The surveyed roadway beside the deck's lanes (highway_roadways.py): its edges left and right of the centre line at each station that has one.
+  edges=getattr(plan,'roadway',None)
+  if edges and any(edges[i] for i in range(a,b+1)):rec['roadway']=[list(edges[i]) if edges[i] else None for i in range(a,b+1)]
  return I.seam_tangents(rec,plan,a,b,n)
 
 
@@ -1629,8 +1657,8 @@ def landing_interval(plan,rec,a,b,e,streets):
  (plan.mid, the median across the lanes): the runtime keeps the ground whole over a landing and builds no wall beside
  it, so a landing that ran on over a road already below the ground left the ground standing over the road. Such a
  landing ends where the ground first stood LANDING_STEP over the road."""
- line=LineString(rec['points']);total=line.length
- extent=min(float(plan.spec['landing']),total) if 'landing' in plan.spec else pavement_reach(line,rec['width'],e,streets)
+ line=LineString(rec['points']);total=line.length;width=round(max(min(20,v) for v in plan.solved_widths[a:b+1]),2) if hasattr(plan,'solved_widths') else rec['width']   # (the width the road was solved with)
+ extent=min(float(plan.spec['landing']),total) if 'landing' in plan.spec else pavement_reach(line,width,e,streets)
  if not plan.on_deck[e]:
   end=float(plan.along[a if e==0 else b]);track=[]
   for i in (range(a,b+1) if e==0 else range(b,a-1,-1)):
@@ -1779,7 +1807,7 @@ def standing_ground(plans,ground):
  return {k:sorted(v) for k,v in out.items()}
 
 
-FIELDS=('name','points','width','oneway','kind','lanes','closed','elevations','startLevel','endLevel','deckWidths','deckTangents','bridge','tunnel','highway')
+FIELDS=('name','points','width','oneway','kind','lanes','closed','elevations','startLevel','endLevel','deckWidths','deckTangents','bridge','tunnel','highway','roadway')
 
 
 def stage_owned(road):
@@ -1861,6 +1889,40 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   if len(over['removed'])==len(removed):break
   removed=over['removed']
  else:raise AssertionError('the structures to remove did not settle')
+ # The surveyed roadways: every road in the open is moved and resized to the curbs, the ground set under the decks that ride it.
+ gores={plan.id:set() for plan in plans}
+ for r in plans:
+  for kind in r.ends:
+   if kind and kind[0] in ('gore','node') and isinstance(kind[1],I.Plan):gores[kind[1].id].add(kind[2])
+ measured=HR.survey(plans,source.get('curbs',[]),paved,I.Terrain(grid,lidded),raw,standing_buildings,least_width);hold={};before=I.Terrain(grid,lidded)
+ for _ in range(16):
+  pairs,surveyed=HR.apply(plans,measured,gores,least_width,hold)
+  for plan in plans:
+   x=cross_sections(plan,.5);g=np.array([[before(float(a),float(b)) for a,b in row] for row in x]);plan.edge=g.max(1).tolist()
+  # the cut again, under the roads as they now lie, then the ground set under the decks that ride it
+  runs_=deck_runs(plans);cut=I.cut_plan(runs_,grid,lidded);cut=(cut[0],cut[1]-street_pavements(cut,runs_,paved,paved_lines,paved_tree,grid,joined))
+  replaced,notes=I.carry_overpasses(city['roads'],under,grid,before,cut[1]) if cut[0] else ({},[])
+  for parts in replaced.values():
+   for piece in parts:
+    if piece.get('bridge',{}).get('kind')==I.APPROACH:piece['bridge']={**piece['bridge'],'id':f"highway-{piece['id']}",'kind':APPROACH}
+  roads=[x for r in city['roads'] for x in replaced.get(r['id'],[r])]
+  result,_,_=I.cut_terrain(runs_,grid,lidded,roads,standing_buildings.footprints,cut)
+  result=HR.grade(plans,pairs,grid,result,paved,joined,standing_buildings.footprints,water[0],runs_,[r for r in roads if r.get('elevations') and not r.get('tunnel')],LANDING_LIP)
+  left=standing_ground(plans,I.Terrain(grid,result))
+  if not left:break
+  # A station whose surveyed place the ground does not leave free (a street's corridor, a building) stays where it was solved,
+  # and so do the stations of every road within HOLD_NEAR of it: the ground a ramp left when it moved can stand in the road beside it.
+  for k,rows in left.items():
+   hold.setdefault(k,set()).update(j for i in rows for j in (i-1,i,i+1))
+   for i in rows:
+    q=Point(by_id[k].solved_points[i])
+    for other in plans:
+     if other.line.distance(q)<=HR.HOLD_NEAR+1:hold.setdefault(other.id,set()).update(j for j,o in enumerate(other.solved_points) if math.dist(o,(q.x,q.y))<=HR.HOLD_NEAR)
+ else:raise AssertionError(f'ground stands in the pavement of roads moved to their surveyed roadway: {left}')
+ # the paving beside a deck's lanes stays only where the ground came to lie flush under the deck
+ trimmed=HR.trim(plans,pairs,I.Terrain(grid,result))
+ # (what the buildings over the roads need stays as it was found for the solved pavements: a station under or beside a building is not moved,
+ # and a moved pavement keeps clear of every other building, highway_roadways.building_caps)
  vertices=np.flatnonzero(result!=heights);originals=heights[vertices].astype(int).tolist();vertices=vertices.tolist()
  hoods=[{'name':n['name'],'shape':Polygon(n['rings'][0],n['rings'][1:])} for n in city['neighborhoods']]
  decks,tunnel_records,ids=records(plans,hoods);signs=warning_signs(plans,report,source);pieces=[x for k in sorted(replaced) for x in replaced[k] if x.get('elevations')]
@@ -1872,6 +1934,7 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   'crossings':report['crossings'],'newCrossings':report['newCrossings'],'atGrade':report['atGrade'],'unresolved':report['unresolved'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'steep':steep,'movedBeside':report['movedBeside'],'narrowed':report['narrowed'],'junctions':report['junctions'],
   'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'buildings':over,'signs':signs,
+  'roadways':{'method':HR.METHOD,'routes':surveyed,'trimmedMeters':trimmed,'aprons':[{k:a[k] for k in ('road','left','right')} for _,a in pairs]},
   'deckMeters':length(decks),'tunnelMeters':length(tunnel_records),
   'roads':{'added':[r['id'] for r in decks]+seam_pieces+[p['id'] for p in pieces if p['id'] not in replaced],'tunnels':[r['id'] for r in tunnel_records],'sources':flattened+[copy.deepcopy(r) for r in source_roads if r['id'] in replaced and r['id'] not in {f['id'] for f in flattened}],'removed':copies},
   'terrain':{'vertices':[int(v) for v in vertices],'heights':[int(h) for h in originals],'maxCutMeters':round(float(-delta.min()),3) if len(vertices) else 0,'maxFillMeters':round(float(delta.max()),3) if len(vertices) else 0,
@@ -1887,7 +1950,7 @@ def replay(data_dir,city,record,source,installed=None):
  again,out,tunnel_records,result,_=install({**city,'roads':roads},source,heights,load_grid(data_dir/grid['source']),tile_buildings(data_dir,city),central_artery(data_dir,city),removed=record['buildings']['removed'])
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']};sidecar=json.loads((data_dir/SIDECAR).read_text())
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
- return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','overpasses','bridgeSeams','hollows'))
+ return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','overpasses','bridgeSeams','hollows','roadways'))
 
 
 def validate(data_dir,city,record,ground):
@@ -1970,7 +2033,9 @@ def validate(data_dir,city,record,ground):
     specs=[{k_:q[k_] for k_ in ('road','start','end','left','right','ceiling','ceilingEnd')} for q in over['passages'] if q['building']==b['id']];done=b.get('buildingPassage') or {}
     assert not done.get('highway') or done.get('digest')==passage_digest(specs),f"{b['id']} was carved for other passages; rebuild from the baseline"
  assert seen==set(mesh),'every building over the highway must be in its tile'
- return {'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'joins':joins,'streetLandings':landings,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
+ # the surveyed roadways (highway_roadways.py): no pavement steps along a route, every paved roadway a surface over ground set under its deck
+ surveyed=HR.check({base:[x for _,x in sorted(parts,key=lambda q:q[0])] for base,parts in routes.items()},(record.get('roadways') or {}).get('aprons',[]),{r['id']:r for r in decks},ground)
+ return {**surveyed,'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'joins':joins,'streetLandings':landings,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
 
 
 def routes_of(road,record):
@@ -1979,21 +2044,34 @@ def routes_of(road,record):
  m=re.fullmatch(r'(.*?)-(\d+)',road['id']);return m.group(1) if m and m.group(1) in record['routes'] else road['id']
 
 
-def roadway_edges(data_dir,city):
- """Both pavement edges of the stage's records where they run in the open at or under the ground, as lines.
- build-street-surfaces.py measures a street's roadway up to them as it does up to a surveyed curb: the survey
- has no curb between Back Street and Storrow Drive, whose lanes the street's roadway otherwise takes in. A
- deck more than 1.5 m over the ground is a viaduct the streets pass beneath, and a roofed stretch lies under them."""
+def open_stretches(data_dir,city):
+ """The stretches of the stage's records that run in the open at or under the ground: (points, widths) arrays.
+ A deck more than 1.5 m over the ground is a viaduct the streets pass beneath, and a roofed stretch lies under them."""
  from north_overpasses import load_grid
  grid=city['elevation'];ground=I.Terrain(grid,load_grid(data_dir/grid['file']));side=data_dir/SIDECAR;out=[]
  records=[r for r in city['roads'] if r.get('bridge',{}).get('kind')==KIND]+(json.loads(side.read_text())['roads'] if side.exists() else [])
  for r in records:
-  p=np.asarray(r['points'],float);y=r['elevations'];w=np.asarray(r.get('deckWidths') or [r['width']]*len(p),float);s=stations(r['points']);t=np.asarray(I.tangents(r['points']));normal=np.stack([-t[:,1],t[:,0]],1)
+  p=np.asarray(r['points'],float);y=r['elevations'];w=np.asarray(r.get('deckWidths') or [r['width']]*len(p),float);s=stations(r['points'])
   covered=(r.get('tunnel') or {}).get('covered',[])
   keep=[not any(a-.01<=s[i]<=b+.01 for a,b in covered) and (bool(r.get('tunnel')) or y[i]-ground(float(p[i,0]),float(p[i,1]))<=1.5) for i in range(len(p))]
-  for a,b in runs(keep):
-   if b>a:out+=[LineString(p[a:b+1]+normal[a:b+1]*(sign*w[a:b+1,None]/2)) for sign in (1,-1)]
+  out+=[(r,a,b) for a,b in runs(keep) if b>a]
  return out
+
+
+def roadway_edges(data_dir,city):
+ """Both pavement edges of the stage's records where they run in the open at or under the ground, as lines.
+ build-street-surfaces.py measures a street's roadway up to them as it does up to a surveyed curb: the survey
+ has no curb between Back Street and Storrow Drive, whose lanes the street's roadway otherwise takes in."""
+ out=[]
+ for r,a,b in open_stretches(data_dir,city):
+  p=np.asarray(r['points'],float);w=np.asarray(r.get('deckWidths') or [r['width']]*len(p),float);t=np.asarray(I.tangents(r['points']));normal=np.stack([-t[:,1],t[:,0]],1)
+  out+=[LineString(p[a:b+1]+normal[a:b+1]*(sign*w[a:b+1,None]/2)) for sign in (1,-1)]
+ return out
+
+
+def open_roads(data_dir,city):
+ """Those stretches as roads (`points`, `width`), for the stages that ask what a curb or a curb face belongs to."""
+ return [{'id':r['id'],'points':r['points'][a:b+1],'width':r['width']} for r,a,b in open_stretches(data_dir,city)]
 
 
 def central_artery(data_dir,city):

@@ -63,6 +63,12 @@ class ProfileTest(unittest.TestCase):
   self.assertLessEqual(max(math.dist(a,b) for a,b in zip(pts,pts[1:])),F.STEP+1e-6);self.assertLess(max(turns(pts)),F.BEND)
   self.assertAlmostEqual(p['grade'],max(abs(b-a)/math.dist(q,r) for q,r,a,b in zip(pts,pts[1:],e,e[1:])),3)
 
+ def test_a_street_that_is_not_level_across_sets_the_deck_from_its_higher_edge(self):
+  # a street 8 m wide by its class along z=31 whose pavement rises 0.3 m toward z=27, as where a lane shares its roadway with a road that stands higher
+  street={'id':'s','name':'Mugar Way','points':[[-40,31],[60,31]],'width':8};tilted=lambda x,z:-1.0+.3*max(0.0,min(1.0,(31-z)/4))
+  p=self.planned([street],ground=tilted);self.assertEqual(p['deck'],round(-.7+F.STREET_UNDER+F.SLAB+F.MARGIN,4));self.assertEqual(p['crossings'][0]['surface'],-.7)
+  self.assertEqual(self.planned([street])['deck'],round(-1+F.STREET_UNDER+F.SLAB+F.MARGIN,4))
+
  def test_each_road_asks_for_its_own_room_and_a_roofed_tunnel_for_none(self):
   street=self.planned([road('street',31,-.5)]);self.assertEqual(street['deck'],round(-.5+F.STREET_UNDER+F.SLAB+F.MARGIN,4))
   pike=self.planned([road('i90-x',31,-.5,bridge={'id':'i90','kind':H.KIND})]);self.assertEqual(pike['deck'],round(-.5+H.CLEAR_UNDER+F.SLAB+F.MARGIN,4))

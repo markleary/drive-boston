@@ -14,18 +14,27 @@ export interface TileSidewalk { rings: Point2[][]; material?: 'brick'; }
 export interface CityTile {
   tx: number; tz: number; size: number; key: string;
   buildings: TileBuilding[]; geometry: Map<string, TileBuildingGeometry>;
-  curbs: Point2[][]; parks: CityArea[]; water: (CityArea & { level?: number })[]; parkPaths: ParkPath[]; roads: string[];
+  curbs: Point2[][]; /** Stretches of `curbs` with no roadway, sidewalk, island, lot or path beside them (scripts/street_surfaces.py, bare_curbs), which are not drawn: [curb, from, to, ...], the curb's index and centimetres along it. */ bareCurbs?: number[]; parks: CityArea[]; water: (CityArea & { level?: number })[]; parkPaths: ParkPath[]; roads: string[];
   pavements: TilePavement[]; /** Records of other tiles' roads that run alongside this tile's roads at their crosswalk stations, read by `roadwaySpan` only; the owning tile draws them. */ borderPavements: TilePavement[]; sidewalks: TileSidewalk[]; /** Closed curb faces filled with concrete (traffic islands, lane dividers, platforms). */ islands: Point2[][][];
   /** Closed curb faces an OSM service road or parking area explains (pull-offs, turnarounds, lots), filled with asphalt. */ driveways: Point2[][][];
   /** Compiled unions, clipped to tile boundaries after resolving folds and junctions. */
   streetPavement?: Point2[][][]; streetSidewalks?: Point2[][][];
   /** Pavement on terrain only where an embankment reaches a deck. */
   deckPavement?: Point2[][][];
+  /** Stalls of the tile's surface parking lots (scripts/parking_lots.py): [x, z, yaw, ...], centimetres from the tile origin and the
+   * heading of a car parked nose in, in hundredths of a degree (vehicle yaw). src/simulation/parking-lots.ts reads them. */
+  parking?: number[];
 }
 export const TILE_SCALE = .01;
 export const tileKey = (tx: number, tz: number) => `${tx}_${tz}`;
 export const tileOf = (x: number, z: number, size: number): [number, number] => [Math.floor(x / size), Math.floor(z / size)];
 export const tileFile = (tx: number, tz: number) => `t_${tx}_${tz}.bin`;
+/** The undrawn stretches of each curb of a tile, in metres along it: curb index to [from, to] pairs. */
+export function bareCurbStretches(tile: Pick<CityTile, 'bareCurbs'>) {
+  const out = new Map<number, [number, number][]>(), flat = tile.bareCurbs ?? [];
+  for (let i = 0; i + 2 < flat.length; i += 3) { const list = out.get(flat[i]); if (list) list.push([flat[i + 1] / 100, flat[i + 2] / 100]); else out.set(flat[i], [[flat[i + 1] / 100, flat[i + 2] / 100]]); }
+  return out;
+}
 
 /** Parse a decompressed DBT2 buffer. Positions become absolute world metres. */
 export function parseTile(buffer: ArrayBuffer): CityTile {
@@ -50,8 +59,8 @@ export function parseTile(buffer: ArrayBuffer): CityTile {
     geometry.set(entry.id, { positions, facade: indices.subarray(0, entry.f), roof: indices.subarray(entry.f) });
   }
   return { tx: header.tx, tz: header.tz, size: header.size, key: tileKey(header.tx, header.tz), buildings: header.buildings, geometry,
-    curbs: header.curbs ?? [], parks: header.parks ?? [], water: header.water ?? [], parkPaths: header.parkPaths ?? [], roads: header.roads ?? [],
-    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [], streetPavement: header.streetPavement, streetSidewalks: header.streetSidewalks, deckPavement: header.deckPavement };
+    curbs: header.curbs ?? [], bareCurbs: header.bareCurbs, parks: header.parks ?? [], water: header.water ?? [], parkPaths: header.parkPaths ?? [], roads: header.roads ?? [],
+    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [], streetPavement: header.streetPavement, streetSidewalks: header.streetSidewalks, deckPavement: header.deckPavement, parking: header.parking };
 }
 
 /** A pavement record's edges as world-metre left and right polylines. */

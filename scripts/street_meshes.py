@@ -91,7 +91,7 @@ def strip(left, right):
  return shapely.set_precision(unary_union(triangles),PRECISION)
 
 
-def compile_surfaces(roads, records, road_key, obstacles=()):
+def compile_surfaces(roads, records, road_key, obstacles=(), aprons=()):
  asphalt=[];walks=[];nodes=defaultdict(list);folded=0
  for road in roads:
   rec=records[road_key(road)];left=np.asarray(rec['left']);right=np.asarray(rec['right'])
@@ -118,12 +118,14 @@ def compile_surfaces(roads, records, road_key, obstacles=()):
   hits=blockers.query(patch,predicate='intersects')
   if len(hits):patch=patch.difference(unary_union(blockers.geometries[hits]))
   junctions.extend(parts(shapely.set_precision(patch,PRECISION)))
- return asphalt+junctions,walks,{'foldedStrips':folded,'junctionParts':len(junctions)}
+ # The roadway beside a highway deck's lanes (`aprons`: edge pairs) is asphalt like a street's, with no sidewalk band and no junction patch of its own.
+ extra=[strip(np.asarray(left),np.asarray(right)) for left,right in aprons]
+ return asphalt+junctions+[e for e in extra if not e.is_empty],walks,{'foldedStrips':folded,'junctionParts':len(junctions),'highwayAprons':len(extra)}
 
 
-def install_surfaces(headers, roads, records, road_key, obstacles=(), contacts=()):
+def install_surfaces(headers, roads, records, road_key, obstacles=(), contacts=(), aprons=()):
  """One global solve, then exact tile clipping; no tile-local endpoint guesses."""
- asphalt,walks,stats=compile_surfaces(roads,records,road_key,obstacles)
+ asphalt,walks,stats=compile_surfaces(roads,records,road_key,obstacles,aprons)
  asphalt_tree=STRtree(asphalt);walk_tree=STRtree(walks);contact_tree=STRtree(contacts)
  for key,tile in headers.items():
   size=tile['size'];x=tile['tx']*size;z=tile['tz']*size;area=box(x,z,x+size,z+size)
@@ -150,9 +152,10 @@ def compile_headers(headers,roads,contacts=()):
  by=defaultdict(list)
  for r in roads:
   if not r.get('elevations') and not r.get('tunnel'):by[r['id']].append(r)
- records={};surface=[];obstacles=[]
+ records={};surface=[];obstacles=[];aprons=[]
  for tile in headers.values():
   origin=np.array([tile['tx'],tile['tz']])*tile['size']
+  for rec in tile.get('highwayPavements',[]):e=np.asarray(rec['edges']).reshape(-1,4)/100;aprons.append((e[:,:2]+origin,e[:,2:]+origin))
   for rec in tile['pavements']:
    e=np.asarray(rec['edges']).reshape(-1,4)/100;left=e[:,:2]+origin;right=e[:,2:]+origin
    road=min(by[rec['road']],key=lambda r:np.linalg.norm((left[0]+right[0])/2-r['points'][0]))
@@ -162,7 +165,7 @@ def compile_headers(headers,roads,contacts=()):
   for building in tile['buildings']:
    if not building.get('structure'):obstacles.append(Polygon(building['footprint']).buffer(0))
  surface.sort(key=road_key)
- stats=install_surfaces(headers,surface,records,road_key,obstacles,contacts)
+ stats=install_surfaces(headers,surface,records,road_key,obstacles,contacts,aprons)
  parking_tiles=reviewed_parking_edges(headers)
  stats['fallbackSidewalkParts']=sum(len(t['streetSidewalks']) for t in headers.values())
  return {**stats,'reviewedPavementTiles':reviewed_tiles,'reviewedStreetTiles':reviewed_street_tiles,'reviewedParkingTiles':parking_tiles,'reviewedSourceSHA256':source_hash()}

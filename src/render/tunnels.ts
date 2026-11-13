@@ -120,6 +120,13 @@ export function tunnelExitSigns(city:CityData){
     const lines=ramp.highway?highwayLegend(ramp).map((line,i)=>i===0&&right<0?line.replace('↗','↖'):line):[`EXIT${number?' '+number:''} ${right>=0?'↗':'↖'}`,...parts];
     signs.push({road:best.road,station:best.station-40,lines,rampId:ramp.id,right});
   }
+  // Where a ramp tunnel forks, its two exits point apart: the one further left takes the left arrow whatever the tangent of the road they leave says
+  // (a record moved onto its surveyed roadway comes back to its end in a slight bend, against which a 14 m ramp piece that bears right reads as bearing left).
+  for(const sign of signs){
+    const row=signs.filter(other=>other.road===sign.road&&Math.abs(other.station-sign.station)<FORK);if(row.length<2)continue;
+    const arrow=row.every(other=>other===sign||other.right>sign.right)?'↖':row.every(other=>other===sign||other.right<sign.right)?'↗':undefined;
+    if(arrow)sign.lines=[sign.lines[0].replace(/[↖↗]/,arrow),...sign.lines.slice(1)];
+  }
   return signs;
 }
 

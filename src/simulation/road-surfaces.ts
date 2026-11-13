@@ -308,7 +308,7 @@ function coveredDeckInterval(a:Point2,b:Point2,ya:number,yb:number,triangle:Deck
  * centerline; rails probe outside the deck to retain coincident outer edges. */
 export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset=inset,levelTolerance=.8){
   if(!road.elevations)return[];
-  const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number;side:number}[]=[];
+  const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number;side:number;index:number}[]=[];
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
     const a=deckEdge(road,i-1,side,inset),b=deckEdge(road,i,side,inset),ya=road.deckEdgeElevations?sampleRoadElevation(city,road,...a):deckEdgeElevation(road,i-1,side),yb=road.deckEdgeElevations?sampleRoadElevation(city,road,...b):deckEdgeElevation(road,i,side);
     const outsideA=deckEdge(road,i-1,side,probeInset),outsideB=deckEdge(road,i,side,probeInset);
@@ -324,7 +324,7 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),length=Math.hypot(distance,dy);
     for(const [start,end]of exposed){
       if((end-start)*length<.12)continue;
-      parts.push({a:[a[0]+dx*start,a[1]+dz*start],b:[a[0]+dx*end,a[1]+dz*end],ya:ya+dy*start,yb:ya+dy*end,side});
+      parts.push({a:[a[0]+dx*start,a[1]+dz*start],b:[a[0]+dx*end,a[1]+dz*end],ya:ya+dy*start,yb:ya+dy*end,side,index:i});
     }
   }
   return parts;
@@ -342,6 +342,8 @@ export const SHELF_DROP=.75,SHELF_REACH=[4,7];
  * beyond a narrow cross street falls away too, and the crosswalk station lies
  * 8 m along the road, so a rail there would stand across its landing. */
 export const MOUTH_REACH=12;
+/** Beside a deck's paved roadway (`Road.roadway`) a rail stands only in runs this long, pieces closer than `RAIL_GAP` counting as one. */
+export const RAIL_RUN=12,RAIL_GAP=.6;
 
 /** Whether a deck edge at (x, z, y) sits on the ground: the terrain just outside
  * the rail and 1.5 m further out, along the unit outward normal (ox, oz), lies
@@ -392,11 +394,14 @@ export function bridgeBarriers(city:CityData,road:Road){
     : junctionMouths(city,road);
   // The outside probe preserves protection on the union's exposed perimeter,
   // including where two source road ribbons share the same outer edge.
-  return bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb,side})=>{
+  const along=road.roadway?stations(road.points):undefined;
+  const rails=bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb,side,index})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),ox=-dz/(distance||1)*side,oz=dx/(distance||1)*side;
+    // A highway deck on the ground with a surveyed roadway (`Road.roadway`: Storrow Drive, a ramp between its curbs) is a street's pavement there, not a railed carriageway.
+    const paved=!!(road.roadway?.[index-1]&&road.roadway?.[index]);
     const grounded=(t:number)=>{
       const x=a[0]+dx*t,z=a[1]+dz*t,mouth=mouths.some(m=>Math.hypot(m[0]-x,m[1]-z)<MOUTH_REACH);
-      return (!interstate||mouth)&&deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouth);
+      return (!interstate||mouth||paved)&&deckEdgeGrounded(city,x,z,ya+dy*t,ox,oz,mouth||paved);
     };
     const clear=(t:number)=>grounded(t)||inTransitClearance(city,a[0]+dx*t,a[1]+dz*t,ya+dy*t),steps=Math.max(1,Math.ceil(distance/.4));
     const exposed:[number,number][]=[],boundary=(low:number,high:number,state:boolean)=>{
@@ -408,10 +413,22 @@ export function bridgeBarriers(city:CityData,road:Road){
       const edge=boundary((i-1)/steps,t,previous);if(!previous)exposed.push([start,edge]);else start=edge;previous=current;
     }
     if(!previous)exposed.push([start,1]);
+    const from=along?.[index-1]??0,span=along?along[index]-from:0;
     return exposed.filter(([lo,hi])=>(hi-lo)*distance>.12).map(([lo,hi])=>{
-      const center=(lo+hi)/2;return{x:a[0]+dx*center,y:ya+dy*center+.38,z:a[1]+dz*center,length:Math.hypot(distance,dy)*(hi-lo)+.008,yaw:Math.atan2(dx,dz),slope:Math.atan2(dy,distance)};
+      const center=(lo+hi)/2;return{x:a[0]+dx*center,y:ya+dy*center+.38,z:a[1]+dz*center,length:Math.hypot(distance,dy)*(hi-lo)+.008,yaw:Math.atan2(dx,dz),slope:Math.atan2(dy,distance),side,paved,from:from+lo*span,to:from+hi*span};
     });
   });
+  if(!along)return rails;
+  // Beside a paved roadway the ground comes and goes within RAIL_LIP of the deck (a twin carriageway a step lower, a verge the grid could not
+  // bring up): a rail there stands only as a run of RAIL_RUN or more, or as part of one that goes on along a stretch with no roadway. No stubs.
+  const kept=new Set<number>();
+  for(const side of new Set(rails.map(r=>r.side))){
+    const mine=rails.map((r,i)=>({r,i})).filter(e=>e.r.side===side).sort((p,q)=>p.r.from-q.r.from);let run:typeof mine=[];
+    const close=()=>{if(run.length&&(run.at(-1)!.r.to-run[0].r.from>=RAIL_RUN||run.some(e=>!e.r.paved)))for(const e of run)kept.add(e.i);run=[];};
+    for(const e of mine){if(run.length&&e.r.from-run.at(-1)!.r.to>RAIL_GAP)close();run.push(e);}
+    close();
+  }
+  return rails.filter((_,i)=>kept.has(i));
 }
 
 /** A precast concrete barrier unit (New Jersey profile): height, base and top

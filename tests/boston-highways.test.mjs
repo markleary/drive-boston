@@ -7,10 +7,10 @@ import {addTunnels,highwayLegend} from '../src/render/tunnels.ts';
 import {isHighwayDeck,isMotorway,openStretches,stations} from '../src/simulation/motorway.ts';
 import {inTunnelPortal,tunnelCoveredAt,tunnelGeometry,tunnelPointAt,tunnelStations,tunnelSurfaceLandingAt} from '../src/simulation/tunnels.ts';
 import {deckUndersideAt,roadProjection,roadWidthAt,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
-import {planI93ExitSigns} from '../src/simulation/i93-exit-signs.ts';
+import {planI93ExitSigns,EXIT_SIGN_POST} from '../src/simulation/i93-exit-signs.ts';
 import {planEntranceSigns,entranceGantry,entranceSignStands,ENTRANCE_CLEARANCE,ENTRANCE_PANEL,GANTRY_SETBACK} from '../src/simulation/entrance-signs.ts';
-import {planHighwaySigns,warningLegend} from '../src/simulation/highway-signs.ts';
-import {highwayMasts,mastHead,MAST_ARM,MAST_HEIGHT,MAST_LIGHT,MAST_SPACING,STREET_LIGHT} from '../src/simulation/highway-lighting.ts';
+import {planHighwaySigns,warningLegend,clearRoadside,inLanes,roadsidePoint,POST_ROOM,ROADSIDE_REACH,WARNING_POST} from '../src/simulation/highway-signs.ts';
+import {highwayMasts,mastHead,MAST_ARM,MAST_HEIGHT,MAST_LIGHT,MAST_OUT,MAST_SPACING,STREET_LIGHT} from '../src/simulation/highway-lighting.ts';
 import {roadGraph} from '../src/simulation/traffic.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 
@@ -81,6 +81,51 @@ test('the Turnpike is lit along its carriageways and Storrow Drive and the ramps
   const bridged=highwayMasts(deck('i90-eb-01',line(0,400)),(x,z,above)=>x>170&&x<190?above+2:Infinity);
   assert.equal(bridged.length,masts.length-1);assert.ok(!bridged.some(m=>m.x>170&&m.x<190)&&highwayMasts(deck('i90-eb-01',line(0,400)),()=>Infinity).length===masts.length);
   assert.deepEqual(highwayMasts({...deck('i90-eb-exit-131',line(0,400)),kind:'motorway_link'}),[]);
+});
+
+test('no roadside post stands in a lane at its own level: a sign or a mast stands beyond the ramp beside its road',()=>{
+  // An eastbound carriageway along z 0, 15.2 m wide and 2 m up. From x 100 to 300 a ramp 5 m wide adjoins it on the right (+z, going east
+  // with z south) at its level: the pavement edge, where a post would stand, is in the ramp's lane.
+  const ground={elevation:{width:3,height:3,cellSize:400,originX:-200,originZ:-400,heights:Array(9).fill(0)}};
+  const main=deck('i90-eb-01',line(0,400)),beside=line(100,300,7.6+2.5),ramp=deck('i90-eb-exit-9',beside,{width:5,deckWidths:beside.map(()=>5),lanes:1});
+  const lanes=roads=>(x,z,y=2)=>inLanes(ground,roads,x,z,y);
+  assert.ok(lanes([main,ramp])(150,7.6+MAST_OUT),'the pavement edge beside the ramp is in the ramp\'s lane');
+  assert.ok(!lanes([main])(150,7.6+MAST_OUT)&&!lanes([main])(150,7.6+WARNING_POST)&&!lanes([main])(150,7.6+EXIT_SIGN_POST),'a road\'s own edge is never in its lanes');
+  assert.ok(lanes([main])(150,7.6+POST_ROOM-.05)&&lanes([main])(150,0),'which reach a post\'s room beyond the pavement');
+  assert.ok(!lanes([main,ramp])(50,7.6+MAST_OUT)&&!lanes([main,ramp])(360,7.6+MAST_OUT),'nor before the ramp begins or after it ends');
+  // only lanes at the post's own level count: not a bridge overhead, not a street on the ground under a viaduct
+  const over=line(100,300,7.6+2.5),bridge=deck('street-bridge',over,{width:5,deckWidths:over.map(()=>5),elevations:over.map(()=>9)}),street={id:'street',name:'Street',points:over,width:5,oneway:0};
+  assert.ok(!lanes([main,bridge])(150,7.6+MAST_OUT)&&!lanes([main,street])(150,7.6+MAST_OUT));
+  assert.ok(lanes([street])(150,10.1,.4)&&lanes([{...street,pavedWidth:9}])(150,10.1+4.6,.4)&&!lanes([street])(150,10.1+4.6,.4),'a street on the ground by its measured roadway');
+  // a walled cut alongside is lanes in the open and none under its roof
+  const trench=cut('i90-eb-entrance-9',over,[[100,200]],{width:5,deckWidths:over.map(()=>5)});
+  assert.ok(lanes([main,trench])(150,7.6+MAST_OUT)&&!lanes([main,trench])(250,7.6+MAST_OUT),'(the cut runs from x 100: roofed from x 200 on)');
+  // the paving beside a deck's lanes is shoulder: a post may stand in it
+  assert.ok(!lanes([deck('storrow-wb-01',line(0,400),{roadway:line(0,400).map(()=>[12,7.6])})])(150,11));
+
+  // the place of a post: the first clear one going out from the edge, half a metre at a time
+  const blocked=(x,z)=>lanes([main,ramp])(x,z),at=tunnelPointAt(main,150),place=clearRoadside(at,MAST_OUT,blocked);
+  assert.ok(place&&Math.abs(place.post-(7.6+MAST_OUT+5))<1e-9,`beyond the ramp, ${place?.post} m from the centre line`);
+  const foot=roadsidePoint(place,place.post);assert.ok(Math.abs(foot.x-150)<1e-9&&Math.abs(foot.z-place.post)<1e-9,'on the right of eastbound traffic');
+  assert.ok(foot.z-(7.6+5)>=POST_ROOM&&foot.z-(7.6+5)<POST_ROOM+.5,'a post\'s room beyond the ramp\'s pavement and no further');
+  assert.deepEqual({...place,post:0},{...at,post:0},'the approach itself is unchanged');
+  assert.equal(clearRoadside(tunnelPointAt(main,50),MAST_OUT,blocked).post,7.6+MAST_OUT,'where nothing is beside the road the post stays at its edge');
+  assert.equal(clearRoadside(at,MAST_OUT,blocked,3),undefined,'no place within reach');assert.equal(clearRoadside(at,MAST_OUT,()=>true),undefined);
+  assert.ok(Math.abs(clearRoadside(at,MAST_OUT,(x,z)=>z<7.6+MAST_OUT+ROADSIDE_REACH-1e-6).post-(7.6+MAST_OUT+ROADSIDE_REACH))<1e-9,'the reach itself is tried');
+  // westbound the right hand is -z, northbound +x, southbound -x
+  for(const [points,side] of [[line(400,0),[0,-1]],[line(0,400).map(([x])=>[0,-x]),[1,0]],[line(0,400).map(([x])=>[0,x]),[-1,0]]]){
+    const p=tunnelPointAt(deck('i90-wb-01',points),150),q=roadsidePoint(p,10);assert.ok(Math.abs(q.x-p.x-side[0]*10)<1e-9&&Math.abs(q.z-p.z-side[1]*10)<1e-9);
+  }
+
+  // the masts of the carriageway: those beside the ramp stand beyond it, their arms over its lane, the others where they stood
+  const plain=highwayMasts(main),placed=highwayMasts(main,undefined,(x,z,y)=>lanes([main,ramp])(x,z,y));
+  assert.equal(placed.length,plain.length);
+  for(const [i,m] of placed.entries()){
+    assert.equal(m.x,plain[i].x);assert.ok(Math.abs(m.z-(m.x>=100&&m.x<=300?7.6+MAST_OUT+5:7.6+MAST_OUT))<1e-9,`mast at x ${m.x} stands at z ${m.z}`);
+    assert.ok(!lanes([main,ramp])(m.x,m.z)&&lanes([main,ramp])(mastHead(m).x,mastHead(m).z),'clear of every lane, its luminaire over one');
+  }
+  // and one that finds no place is left out
+  const none=highwayMasts(main,undefined,x=>x>100&&x<300);assert.ok(none.length===plain.filter(m=>!(m.x>100&&m.x<300)).length&&none.length<plain.length&&none.every(m=>m.z===7.6+MAST_OUT));
 });
 
 test('a mast\'s night light shines from its luminaire and lights the road beneath as a street lamp does',()=>{
@@ -156,6 +201,47 @@ test('exit signs and lighting masts stand on the installed carriageways in the o
   assert.ok(masts>350&&lit>60,`the Turnpike is lit along its length (${masts} masts on ${lit} records)`);
 });
 
+test('no sign post and no mast stands in a lane on the installed package, and each stands on the right of its traffic',()=>{
+  // the lanes of the roads around a point, as the tile builder asks for them
+  const CELL=200,cells=new Map(),box=new Map();
+  for(const road of city.roads){
+    let a=Infinity,b=-Infinity,c=Infinity,d=-Infinity;for(const [x,z] of road.points){a=Math.min(a,x);b=Math.max(b,x);c=Math.min(c,z);d=Math.max(d,z);}box.set(road,[a,b,c,d]);
+    for(let i=Math.floor(a/CELL);i<=Math.floor(b/CELL);i++)for(let j=Math.floor(c/CELL);j<=Math.floor(d/CELL);j++){const key=`${i},${j}`;if(!cells.has(key))cells.set(key,[]);cells.get(key).push(road);}
+  }
+  const around=(x,z,m=30)=>{const out=new Set();for(let i=Math.floor((x-m)/CELL);i<=Math.floor((x+m)/CELL);i++)for(let j=Math.floor((z-m)/CELL);j<=Math.floor((z+m)/CELL);j++)for(const road of cells.get(`${i},${j}`)??[]){const [a,b,c,d]=box.get(road);if(a<=x+m&&b>=x-m&&c<=z+m&&d>=z-m)out.add(road);}return[...out];};
+  const lanes=(x,z,y)=>inLanes(city,around(x,z),x,z,y),inLane=(x,z,y)=>around(x,z).filter(road=>inLanes(city,[road],x,z,y)).map(road=>road.id);
+  // A post is as tall as its structure: it must not come up through a pavement over its own road either (a street at the rim of its cut, a
+  // deck beside it), `rise` metres up from its foot. The rule asks for the lanes at the post's level only; this holds the package to the rest.
+  const through=(x,z,y,rise)=>{const out=new Set();for(let h=y+1;h<y+rise;h+=1)for(const id of inLane(x,z,h))out.add(id);return[...out];};
+  // beyond the pavement on the right hand of the road's traffic: +n, n = (-tz, tx)
+  const right=(road,x,z)=>{const hit=roadProjection(road,x,z),a=road.points[hit.index],b=road.points[hit.index+1];return(b[0]-a[0])*(z-a[1])-(b[1]-a[1])*(x-a[0])>0&&hit.distance>=roadWidthAt(road,x,z)/2;};
+  // (a warning's face ends 4.2 m over the road, an exit sign's pole 7.3 m)
+  const signs=[...planHighwaySigns(city).map(s=>({road:s.road,approach:s.approach,out:WARNING_POST,rise:4.2})),...planI93ExitSigns(city.roads).map(s=>({road:s.road,approach:s.approach,out:EXIT_SIGN_POST,rise:7.3}))];
+  assert.ok(signs.length>=30,`${signs.length} roadside signs`);let moved=0;
+  for(const {road,approach,out,rise} of signs){
+    const place=clearRoadside(approach,out,(x,z)=>lanes(x,z,approach.y));assert.ok(place,`the sign on ${road.id} finds a place within reach`);
+    const foot=roadsidePoint(place,place.post);assert.deepEqual(inLane(foot.x,foot.z,approach.y),[],`the post of the sign on ${road.id} at ${foot.x.toFixed(0)}, ${foot.z.toFixed(0)}`);
+    assert.deepEqual(through(foot.x,foot.z,approach.y,rise),[],`the post of the sign on ${road.id} at ${foot.x.toFixed(0)}, ${foot.z.toFixed(0)} comes up through a pavement`);
+    assert.ok(right(road,foot.x,foot.z),`the sign on ${road.id} stands on the right of its traffic`);
+    // the surveyed roadway beside the lanes is all on this side of the post
+    if(road.roadway)assert.ok(place.post>=approach.edge+out-1e-9&&approach.edge>=approach.width/2);
+    if(place.post>approach.edge+out+1e-9)moved++;
+  }
+  const overhead=(x,z,above)=>deckUndersideAt(city,x,z,above);let masts=0,shifted=0;
+  for(const road of highway){
+    const plain=highwayMasts(road,overhead),placed=highwayMasts(road,overhead,lanes);masts+=placed.length;assert.ok(placed.length<=plain.length);
+    for(const m of placed){
+      assert.deepEqual(inLane(m.x,m.z,m.y),[],`a mast of ${road.id} at ${m.x.toFixed(0)}, ${m.z.toFixed(0)}`);assert.ok(right(road,m.x,m.z),`a mast of ${road.id} stands on the right of its traffic`);
+      assert.deepEqual(through(m.x,m.z,m.y,MAST_HEIGHT),[],`a mast of ${road.id} at ${m.x.toFixed(0)}, ${m.z.toFixed(0)} comes up through a pavement`);
+      const head=mastHead(m);assert.ok(lanes(head.x,head.z,m.y),`the luminaire of the mast of ${road.id} at ${m.x.toFixed(0)}, ${m.z.toFixed(0)} hangs over a lane`);
+      if(!plain.some(p=>Math.hypot(p.x-m.x,p.z-m.z)<1e-6))shifted++;
+    }
+  }
+  assert.ok(masts>350,`${masts} masts`);
+  // (13 masts stood in the lane of a ramp beside their carriageway, and the CARS ONLY sign at the University Road exit in the exit's)
+  assert.ok(moved>=1&&shifted>=5,`${moved} signs and ${shifted} masts stand beyond a ramp beside their road`);
+});
+
 test('the tunnels sign every installed exit by its number or by none, the two of a fork side by side, and no panel among the cars',()=>{
   for(const road of highway){
     const legend=highwayLegend(road);
@@ -194,7 +280,8 @@ test('a street bridge over the cut spans it: Tremont Street, the walls beneath e
   let steepest=0;for(const r of bridge){const along=stations(r.points);for(let i=1;i<along.length;i++)if(along[i]-along[i-1]>.7)steepest=Math.max(steepest,Math.abs(r.elevations[i]-r.elevations[i-1])/(along[i]-along[i-1]));}
   assert.ok(steepest<.085,`no step and no steep ramp on the bridge (${(steepest*100).toFixed(1)}%)`);
   for(const prefix of ['i90-eb','i90-wb']){
-    const under=family(prefix).find(r=>bridge.some(b=>b.points.some(p=>roadProjection(r,...p).distance<1)));assert.ok(under,`${prefix} passes under the bridge`);
+    // (a vertex of the bridge over the road's pavement: the carriageway lies on its surveyed roadway, which is not centred on the city's line the bridge was split at)
+    const under=family(prefix).find(r=>bridge.some(b=>b.points.some(p=>roadProjection(r,...p).distance<roadWidthAt(r,...p)/2)));assert.ok(under,`${prefix} passes under the bridge`);
     for(const b of bridge)for(let i=0;i<b.points.length;i++){
       const hit=roadProjection(under,...b.points[i]);if(hit.distance>roadWidthAt(under,...b.points[i])/2)continue;
       assert.ok(b.elevations[i]-.75-sampleRoadElevation(city,under,...b.points[i])>=3.4,`room under the slab over ${under.id}`);

@@ -34,7 +34,7 @@ The stage reads the roads and the graded grid as the stages before it leave them
 a rerun on the installed package writes the same tiles; validate-city.py replays it (plan) and checks the room
 under every deck (validate). Deck heights and clearances are game estimates, not surveyed structures."""
 import gzip,json,math,struct
-from shapely.geometry import LineString
+from shapely.geometry import LineString,Point
 from shapely.strtree import STRtree
 import boston_highways as H
 from road_structure_clearance import crossing_points,road_height
@@ -146,6 +146,34 @@ def room(road):
  return H.CLEAR_UNDER if road.get('highway') or H.stage_owned(road) or road.get('lanes') else STREET_UNDER
 
 
+def under(road,line,d,width):
+ """Points of a road's roadway under a bridge `width` wide that crosses its line `d` metres along it: three stations along the road, five across its width
+ (a deck's own, a street's class width, as the runtime's roadWidthAt has it)."""
+ along=stations_of(road);widths=road.get('deckWidths')
+ for o in (-width/2,0,width/2):
+  s=min(max(d+o,0.0),line.length);c=line.interpolate(s);a=line.interpolate(max(0,s-.5));b=line.interpolate(min(line.length,s+.5));l=math.hypot(b.x-a.x,b.y-a.y) or 1;nx,nz=-(b.y-a.y)/l,(b.x-a.x)/l
+  k=max(1,min(len(along)-1,next((i for i,v in enumerate(along) if v>=s),len(along)-1)));f=(s-along[k-1])/((along[k]-along[k-1]) or 1)
+  half=(widths[k-1]+(widths[k]-widths[k-1])*min(1,max(0,f)) if widths else road['width'])/2
+  for f in (-1,-.5,0,.5,1):yield [c.x+nx*half*f,c.y+nz*half*f]
+
+
+def over(road,line,points):
+ """The stations of a bridge that stand over a road's roadway in the open, wherever the bridge crosses its line: a bridge that runs along a road
+ or meets it at a slant is over its pavement well away from that crossing (the Fiedler bridge over the lane to Beacon Street, which climbs under it)."""
+ along=stations_of(road);widths=road.get('deckWidths')
+ for p in points:
+  q=Point(p);s=line.project(q)
+  k=max(1,min(len(along)-1,next((i for i,v in enumerate(along) if v>=s),len(along)-1)));f=(s-along[k-1])/((along[k]-along[k-1]) or 1)
+  half=(widths[k-1]+(widths[k]-widths[k-1])*min(1,max(0,f)) if widths else road['width'])/2
+  if line.distance(q)<=half and not covered(road,s):yield p
+
+
+def stations_of(road):
+ out=[0.0]
+ for a,b in zip(road['points'],road['points'][1:]):out.append(out[-1]+math.dist(a,b))
+ return out
+
+
 def covered(road,along):
  """Whether a road is roofed at a station. A tunnel record that lists no `covered` intervals is roofed all along (Road.tunnel in src/types.ts, tunnelCoveredAt in src/simulation/tunnels.ts); one that lists none of its length is an open cut."""
  tunnel=road.get('tunnel')
@@ -183,8 +211,9 @@ def profile(spec,bridge,roads,ground):
  for road,road_line,q in roads.crossing(line):
   at=line.project(q)
   if min(at,along[-1]-at)<ENDS or covered(road,road_line.project(q)):continue
-  # the road's surface across the bridge's width, along the road
-  d=road_line.project(q);surface=max(road_height(road,[c.x,c.y],ground) for c in (road_line.interpolate(d+o) for o in (-width/2,0,width/2)))
+  # the road's surface under the bridge: across the bridge's width along the road, and across the road's own width (a roadway is not level across:
+  # where the lane to Beacon Street shares its pavement with Storrow Drive West it rises 0.3 m toward it, and the Fiedler deck stood 3 cm short over that edge)
+  d=road_line.project(q);surface=max([road_height(road,spot,ground) for spot in under(road,road_line,d,width)]+[road_height(road,spot,ground) for spot in over(road,road_line,points)])
   i=min(range(n-1),key=lambda i:abs((along[i]+along[i+1])/2-at));k=owners[i];first=k if first is None else min(first,k);last=k if last is None else max(last,k)
   crossings.append({'road':road['id'],'name':road.get('name',''),'at':round(at,2),'surface':round(surface,3),'room':room(road)})
  if first is None:raise ValueError(f"footbridge {spec['id']} crosses no road")
