@@ -228,22 +228,25 @@ for(const [name,first,second]of HIGHWAYS)test(`${name}: wherever the decks of it
 });
 
 // (Interstate 93 has one unbroken median from the Somerville line to Roosevelt Circle; the Turnpike's is parted by its walled cuts, twelve stretches on this package)
-for(const [name,first,second,least,most]of [['Interstate 93','i93-nb','i93-sb',1,1],['the Turnpike','i90-eb','i90-wb',8,16]])test(`${name}: no two rails stand side by side on its median, and a row ends only where the two decks part or one of them ends`,()=>{
+for(const [name,first,second,least,most]of [['Interstate 93','i93-nb','i93-sb',1,1],['the Turnpike','i90-eb','i90-wb',6,12]])test(`${name}: no two rails stand side by side on its median, and a row ends only where the two decks part or one of them ends`,()=>{
   const [a,b]=[series(first),series(second)].map(list=>list.filter(isHighwayDeck)),theirs=grid(railSegments(b));
   for(const rail of railSegments(a)){
     const mx=(rail[0]+rail[2])/2,mz=(rail[1]+rail[3])/2,l=Math.hypot(rail[2]-rail[0],rail[3]-rail[1])||1,nx=-(rail[3]-rail[1])/l,nz=(rail[2]-rail[0])/l;
     const near=theirs(mx-nx*1.5,mz-nz*1.5,mx+nx*1.5,mz+nz*1.5).filter(h=>Math.abs(h.segment[4]-rail[4])<.8);
     assert.equal(near.length,0,`a rail of ${rail[5]} at ${mx.toFixed(0)}, ${mz.toFixed(0)} has one of ${near[0]?.segment[5]} ${near.length?Math.abs(near[0].at-1.5).toFixed(2):''} m beside it`);
   }
-  const runs=[...a,...b].flatMap(road=>medianBarriers(city,road).map(run=>({road,run})));
+  // (every record of the two carriageways that carries a piece of the row: a walled cut carries it on between two decks, tests/median-cuts.test.mjs)
+  const runs=[...series(first),...series(second)].flatMap(road=>medianBarriers(city,road).map(run=>({road,run})));
   assert.ok(runs.every(r=>r.road.id.startsWith(first)),'one carriageway carries every row of the pair');
   // A run ends where the next record's begins (the same section) or in the open: there the two decks have parted beyond
   // the reach, or one of them has ended (it carries on as a walled cut, whose wall is the barrier, or the road is closed).
   const sides=[boxed(a),boxed(b)];let open=0;
   for(const {road,run}of runs){
-    assert.ok(metres(run)>=10,`a run of ${metres(run).toFixed(1)} m on ${road.id}`);
+    const joined=end=>runs.some(o=>o.run!==run&&[o.run[0],o.run.at(-1)].some(s=>Math.hypot(s.x-end.x,s.z-end.z)<.05&&Math.abs(s.y-end.y)<.05&&Math.abs(s.half-end.half)<.05));
+    // (a record's piece of a longer row may be short; one that stands alone is a run of its own)
+    if(!joined(run[0])&&!joined(run.at(-1)))assert.ok(metres(run)>=10,`a run of ${metres(run).toFixed(1)} m on ${road.id}`);
     for(const [end,inner]of [[run[0],run[1]],[run.at(-1),run.at(-2)]]){
-      if(runs.some(o=>o.run!==run&&[o.run[0],o.run.at(-1)].some(s=>Math.hypot(s.x-end.x,s.z-end.z)<.05&&Math.abs(s.y-end.y)<.05&&Math.abs(s.half-end.half)<.05)))continue;
+      if(joined(end))continue;
       open++;
       // two metres on along the row's line: the pavements of both carriageways' decks, if they are still there
       const l=Math.hypot(end.x-inner.x,end.z-inner.z),ux=(end.x-inner.x)/l,uz=(end.z-inner.z)/l,x=end.x+ux*2,z=end.z+uz*2;
@@ -268,7 +271,8 @@ test('the rows are the same on a tile\'s road view as on the whole city, and the
   }
   assert.ok(compared>120);
   const carrying=city.roads.filter(r=>r.elevations&&medianBarriers(city,r).length);
-  assert.ok(carrying.every(r=>isHighwayDeck(r)&&!r.roadway&&r.kind==='motorway'),'only carriageway decks without a surveyed roadway carry a row');
+  // (a walled cut of such a carriageway carries the row on: tests/median-cuts.test.mjs)
+  assert.ok(carrying.every(r=>(isHighwayDeck(r)||!!r.tunnel&&!!r.highway)&&!r.roadway&&r.kind==='motorway'),'only carriageways without a surveyed roadway carry a row');
   assert.deepEqual([...new Set(carrying.map(r=>r.id.replace(/-\d+$/,'')))].sort(),['i90-eb','i93-nb'],'Interstate 93 and the Turnpike; Storrow Drive and the ramps as they were');
   // No row within a junction mouth of a street landing, none across a closed end's barrier row.
   const landings=city.roads.filter(isHighwayDeck).flatMap(r=>[r.startLevel===0?r.points[0]:undefined,r.endLevel===0?r.points.at(-1):undefined].filter(Boolean));

@@ -11,7 +11,7 @@ import {inheritRoadHeadlights} from './road-headlights.ts';
 
 /** The precast barriers' concrete (a closure's row, a median's), and the other materials of the highway closures, shared by every tile. */
 let precast:THREE.Material|undefined,shared:{barrier:THREE.Material;amber:THREE.Material;metal:THREE.Material;sign:THREE.Material}|undefined;
-const precastMaterial=()=>precast??=new THREE.MeshStandardMaterial({color:'#b4b2a6',roughness:.93});
+export const precastMaterial=()=>precast??=new THREE.MeshStandardMaterial({color:'#b4b2a6',roughness:.93});
 const closureMaterials=()=>shared??={
   barrier:precastMaterial(),
   amber:new THREE.MeshBasicMaterial({color:'#f0b23c'}),metal:new THREE.MeshStandardMaterial({color:'#394342',roughness:.8,metalness:.3}),sign:signMaterial(['ROAD CLOSED','DO NOT ENTER'],true),
