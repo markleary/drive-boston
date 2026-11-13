@@ -163,6 +163,38 @@ class GradeTest(unittest.TestCase):
   self.assertEqual(int(HR.grade([q],pairs,self.grid,heights,[],set(),none,[],H.deck_runs([q]),[],H.LANDING_LIP)[v]),40)
 
 
+class LiftTest(unittest.TestCase):
+ grid=GradeTest.grid
+ def lifted(self,by=.5,rows=range(15,46),**extra):
+  """A Turnpike carriageway on the ground whose twin has lifted the stations `rows` by `by` (boston_highways.build)."""
+  p=plan('i90-t',bridge='i90',width=15.0,lanes=3,**extra);p.solo=list(p.y);p.y=[y+(by if i in rows else 0.) for i,y in enumerate(p.y)];return p
+ def graded(self,p,heights,existing=()):
+  return I.Terrain(self.grid,HR.grade([p],HR.fills([p],[]),self.grid,heights,[],set(),none,[],H.deck_runs([p]),list(existing),H.LANDING_LIP))
+
+ def test_what_a_road_is_reads_the_heights_it_has_alone(self):
+  p=self.lifted(2.0);self.assertEqual(HR.alone(p),p.solo);self.assertEqual(HR.alone(plan()),[.35]*61,'a road no twin has lifted: as it lies')
+  self.assertTrue(all(HR.station_state(p,H.least_width)[0]),'a deck its twin has lifted 2 m still rides its ground')
+  self.assertFalse(any(HR.station_state(plan('i90-u',bridge='i90',y=2.35),H.least_width)[0]),'one that stands as high alone is a viaduct')
+
+ def test_the_ground_comes_up_with_a_lifted_road(self):
+  p=self.lifted();strips=HR.fills([p],[]);self.assertEqual([(s['a'],s['b'],s['graded']) for _,s in strips],[(14,46,False)],'one strip over the lifted stretch, closed on the stations beside it')
+  g=self.graded(p,np.full(60*30,-20,dtype='<i2'))   # the ground 0.55 m under the road as it rode alone
+  self.assertAlmostEqual(g(90.0,0.0),.3,delta=.011,msg='up by what the road rose: it lies under the road as before');self.assertAlmostEqual(g(90.0,6.0),.3,delta=.011,msg='across its pavement')
+  self.assertEqual(g(90.0,-40.0),-.2,'and nowhere else');self.assertEqual(g(15.0,0.0),-.2,'nor where the road kept its height')
+  near=self.graded(p,np.full(60*30,30,dtype='<i2'));self.assertAlmostEqual(near(90.0,0.0),.85-HR.DROP,delta=.011,msg='to no more than DROP under the road');self.assertEqual(H.standing_ground([p],near),{})
+
+ def test_the_ground_follows_under_a_bridge_but_not_under_a_road_that_lies_on_it(self):
+  p=self.lifted();heights=np.full(60*30,-20,dtype='<i2');bridge={'id':'b','name':'Bridge','points':[[90.0,-60.0],[90.0,60.0]],'width':12.0,'elevations':[8.0,8.0]}
+  self.assertAlmostEqual(self.graded(p,heights,[bridge])(90.0,0.0),.3,delta=.011,msg='a deck 7 m overhead passes over the road')
+  self.assertEqual(self.graded(p,heights,[{**bridge,'elevations':[.6,.6]}])(90.0,0.0),-.2,'one at the height of that ground is a road on it, whose ground stays')
+
+ def test_no_fill_where_a_graded_strip_sets_the_ground_or_the_road_is_a_viaduct_or_roofed(self):
+  p=self.lifted();self.assertEqual(HR.fills([p],[(p,{'graded':True,'a':0,'b':60})]),[]);self.assertEqual(len(HR.fills([p],[(p,{'graded':False,'a':0,'b':60})])),1,'a strip that only raises (a street landing) sets nothing')
+  v=self.lifted();v.solo=[y+2.0 for y in v.solo];v.y=[y+2.0 for y in v.y];self.assertEqual(HR.fills([v],[]),[],'a deck that stood over its ground alone')
+  c=self.lifted(cut=True);c.covered=[True]*61;self.assertEqual(HR.fills([c],[]),[],'under a roof');c.covered=[False]*61;self.assertEqual(len(HR.fills([c],[])),1,'an open cut takes its ground up like a deck')
+  self.assertEqual(HR.fills([plan()],[]),[],'a road no twin has lifted has none')
+
+
 class CheckTest(unittest.TestCase):
  def record(self,widths):return {'id':'t','points':[[i*3.0,0.0] for i in range(len(widths))],'deckWidths':widths}
  def test_a_step_in_the_pavement_fails(self):

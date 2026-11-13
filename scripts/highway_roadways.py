@@ -47,7 +47,8 @@ changes:
   that sags). A deck inside its street landing (`landing`) is paved the same way but not moved, and its ground is
   only raised to DROP under it, never lowered: the ground there is the street's. Of two roads side by side each
   keeps its own ground across its own roadway (a vertex takes the level of the road whose roadway it lies in
-  before that of a strip that only passes over its cell), and once the ground is laid trim() keeps the paving
+  before that of a strip that only passes over its cell; the two carriageways of one road share a height where only
+  a median lies between them, boston_highways.build, and so one ground), and once the ground is laid trim() keeps the paving
   beside a deck's lanes only where the ground ends up FLUSH under it: beside a ramp that has left the ground over
   the road it crosses, or a lane from a road at another level, a strip of asphalt a step below the deck is not its roadway.
   The records carry those edges (`roadway`), so that the runtime plants no tree and posts no lamp in the paved roadway.
@@ -58,6 +59,12 @@ changes:
 - The stage then cuts its ground again for the roads as they lie and holds a station where it was solved
   wherever ground still stands in its pavement (a street's corridor or a building keeps its ground there),
   with the stations of every road within HOLD_NEAR (boston_highways.install).
+- A carriageway its twin has lifted (boston_highways.build brings the two carriageways of a road to one height;
+  plan.solo keeps what each was solved with alone) is measured, and taken to ride its ground or not, at the height
+  it has alone (alone): the survey reads the same roadway whatever the twins do. Under a deck that is graded its
+  ground follows as above; under any other lifted road (a Turnpike carriageway, a cut, a deck the survey shows no
+  curb for) the ground comes up with it (fills): by no more than the road rose, so that it lies under the road as it
+  did, to DROP under it at most, never lowered, and under a bridge that passes OVERHEAD as well.
 - check() is the stage's own test of the result, run by validate: no width changes faster than WIDTH_RATE along
   a route, and every paved roadway is a surface of an installed route.
 
@@ -70,6 +77,7 @@ from shapely.geometry import LineString,Polygon
 from shapely.strtree import STRtree
 import i93_north as I
 from road_connections import stations
+from road_structure_clearance import road_height
 
 STEP=1.0          # measuring stations along a road
 REACH=9.0         # a curb this far beyond the lanes' pavement still bounds the roadway
@@ -103,6 +111,8 @@ CURB_ZONE=40      # the survey is kept this far from every route
 MIN_RUN=6.0       # shortest stretch paved beside a deck
 STEP_SLACK=.05    # (check) a width step may pass WIDTH_RATE by this
 HOLD_NEAR=15      # a road is held where it was solved this close to a station whose surveyed place the ground does not leave free
+LIFTED=.02        # a road its twin has lifted by more than this has its ground brought up under it
+OVERHEAD=2.5      # a deck of another stage this far over that ground passes over the road: the ground under it comes up too
 METHOD=('Every road in the open at its own ground measured to the curb survey of the source sidecar every 1 m (the first curb each way; a far one kept unless another road begins behind it or its ground stands off the road; a road alongside at the same height shares the roadway half way; short excursions dropped, gaps carried between measured neighbours); '
  'cuts and the Turnpike carriageways on the ground moved onto the middle of their roadway and sized to it, the decks only narrowed; Storrow Drive and ramp decks on the ground moved only as far as the curbs need, '
  'the roadway beside their lanes handed to build-street-surfaces.py as aprons and the graded grid set under them across every cell it passes over (the surveyed roadway whatever street class width reaches across it, each of two roads side by side its own; a pavement shared with a street raised to fall 4% from the deck to that street\'s far curb; a deck in its street landing only raised to), the aprons then kept only where the ground lies within 0.45 m under the deck; nothing moved where other roads meet, under a roof or a building; moves and widths rate-limited')
@@ -120,6 +130,12 @@ def extract_curbs(features,project,lines):
    for g in getattr(part,'geoms',[part]):
     if g.geom_type=='LineString' and g.length>=.5:out.append([[round(x,2),round(z,2)] for x,z in g.coords])
  return out
+
+
+def alone(plan):
+ """The heights a plan was solved with on its own ground: plan.solo once its twin may have lifted it (boston_highways.build), else plan.y.
+ What a road is (on its ground or a viaduct over it) and whose a curb is are read from these, so that a lift changes neither."""
+ return getattr(plan,'solo',None) or plan.y
 
 
 def fine_stations(plan):
@@ -141,9 +157,9 @@ def station_state(plan,least):
  span sized to its lanes alone, Storrow Drive's cuts: it takes the roadway whole), `frozen` (a station under or
  beside a building: the stage has measured the building against its pavement, which stays as solved) and `landing`
  (a deck inside its street landing: measured and paved beside its lanes, not moved)."""
- n=len(plan.points);parkway=plan.spec['bridge']=='storrow';open_=[];flush=[];span=[];widen=[];landing=[];frozen=[any(plan.built[j] for j in (i-1,i,i+1) if 0<=j<n) for i in range(n)]
+ n=len(plan.points);parkway=plan.spec['bridge']=='storrow';open_=[];flush=[];span=[];widen=[];landing=[];frozen=[any(plan.built[j] for j in (i-1,i,i+1) if 0<=j<n) for i in range(n)];y=alone(plan)
  for i in range(n):
-  cut=plan.tunnel[i] and not plan.covered[i];deck=not plan.tunnel[i] and plan.y[i]-plan.high[i]<=GROUNDED
+  cut=plan.tunnel[i] and not plan.covered[i];deck=not plan.tunnel[i] and y[i]-plan.high[i]<=GROUNDED
   # (a cut is walled to the street it comes up to; a deck inside its street landing lies on that street's ground: `landing`)
   o=(cut or deck) and not plan.street[i] and (cut or plan.allowance[i]>.999) and not frozen[i]
   open_.append(o);flush.append(o and deck and (parkway or not plan.main));span.append(o and not (deck and (parkway or not plan.main)));widen.append(o and cut and parkway)
@@ -172,7 +188,7 @@ def neighbours(plans,streets,ground):
  """Every road a roadway may be shared with: the other plans at their solved heights and the surface streets on the ground."""
  out=[]
  for plan in plans:
-  along=np.asarray(plan.along,float);y=np.asarray(plan.y,float);w=np.asarray(plan.widths,float);cov=np.asarray(plan.covered,bool)
+  along=np.asarray(plan.along,float);y=np.asarray(alone(plan),float);w=np.asarray(plan.widths,float);cov=np.asarray(plan.covered,bool)
   out.append(Other(plan.id,plan.line,(lambda s,along=along,w=w:float(np.interp(s,along,w))/2),(lambda s,q,along=along,y=y:float(np.interp(s,along,y))),
    (lambda s,along=along,cov=cov:bool(cov[min(len(cov)-1,max(0,int(np.searchsorted(along,s))-1))] and cov[min(len(cov)-1,int(np.searchsorted(along,s)))])),plan))
  # (a street as its source drew it: build-street-surfaces.py, which follows this stage, moves a few centre lines and keeps the source in `sourcePoints`)
@@ -216,7 +232,7 @@ def measure(plans,curbs,streets,ground,raw,least):
   pts,nrm,seg,frac,at=fine_stations(plan);m=len(pts);n=len(plan.points);state=station_state(plan,least);open_=np.asarray(state[0],bool)|np.asarray(state[5],bool)
   roofed=np.asarray([plan.tunnel[i] and plan.tunnel[i+1] and plan.covered[i] and plan.covered[i+1] for i in range(n-1)],bool)
   fo=open_[seg]&open_[np.minimum(seg+1,n-1)]&~roofed[seg];fo[at]=open_;walled=np.asarray(plan.tunnel,bool)[seg]&np.asarray(plan.tunnel,bool)[np.minimum(seg+1,n-1)]
-  y=np.asarray(plan.y,float);w=np.asarray(plan.widths,float);fy=y[seg]*(1-frac)+y[np.minimum(seg+1,n-1)]*frac;h0=(w[seg]*(1-frac)+w[np.minimum(seg+1,n-1)]*frac)/2
+  y=np.asarray(alone(plan),float);w=np.asarray(plan.widths,float);fy=y[seg]*(1-frac)+y[np.minimum(seg+1,n-1)]*frac;h0=(w[seg]*(1-frac)+w[np.minimum(seg+1,n-1)]*frac)/2
   along=np.asarray(plan.along,float);fa=along[seg]*(1-frac)+along[np.minimum(seg+1,n-1)]*frac;tan=np.stack([nrm[:,1],-nrm[:,0]],1);sides={}
   # A curb crossing the centre line is the edge of something over the road (a bridge, a roof slab) or a junction's: the survey there shows that, not the roadway.
   under=np.zeros(m,bool)
@@ -393,6 +409,31 @@ def aprons(plan,m):
  return out
 
 
+def fills(plans,pairs):
+ """The ground under the roads their twins have lifted (boston_highways.build brings the two carriageways of a road to one
+ height; plan.solo keeps the heights each was solved with alone), wherever no graded strip (`pairs`) sets it already: strips
+ for grade over the road's own pavement, [(plan, strip)], under which the ground comes up with the road: by no more than
+ the road rose, so that it lies under the road as it did before, to no more than DROP under it, and never lowered. A
+ carriageway on the ground whose twin stands higher would otherwise ride a slab's thickness over its own verge. A
+ viaduct (a deck that stood more than GROUNDED over its ground) and a roofed stretch have none."""
+ graded={};out=[]
+ for plan,apron in pairs:
+  if apron['graded']:graded.setdefault(plan.id,set()).update(range(apron['a'],apron['b']+1))
+ for plan in plans:
+  solo=getattr(plan,'solo',None)
+  if not solo:continue
+  n=len(plan.points);lift=np.asarray(plan.y,float)-np.asarray(solo,float);done=graded.get(plan.id,())
+  mask=[bool(lift[i]>LIFTED) and i not in done and ((not plan.covered[i]) if plan.tunnel[i] else solo[i]-plan.high[i]<=GROUNDED) for i in range(n)]
+  p=np.asarray(plan.points,float);t=np.asarray(plan.tangents,float);nrm=np.stack([-t[:,1],t[:,0]],1);half=np.asarray(plan.widths,float)/2
+  for a,b in runs(mask):
+   a,b=max(0,a-1),min(n-1,b+1)   # (closed on the stations beside it, whose lift is none or another strip's)
+   if b<=a:continue
+   lp=p[a:b+1]+nrm[a:b+1]*half[a:b+1,None];rp=p[a:b+1]-nrm[a:b+1]*half[a:b+1,None];m=b-a+1
+   fine={'pts':p[a:b+1],'nrm':nrm[a:b+1],'left':half[a:b+1].copy(),'right':half[a:b+1].copy(),'far':(np.full(m,np.nan),np.full(m,np.nan)),'who':([None]*m,[None]*m),'deck':(half[a:b+1],half[a:b+1]),'y':np.asarray(plan.y[a:b+1],float),'at':list(range(m))}
+   out.append((plan,{'road':plan.id,'a':a,'b':b,'graded':False,'left':lp.tolist(),'right':rp.tolist(),'fine':fine,'lift':lift}))
+ return out
+
+
 def strip(apron):
  """An apron's surface: the union of the quads between its stations (an edge that turns back on itself folds one)."""
  l=apron['left'];r=apron['right'];parts=[]
@@ -462,7 +503,8 @@ def grade(plans,strips,grid,heights,streets,joined,footprints,water,decks,existi
  (`strips`: (plan, apron) pairs), as the grader levels a street corridor: DROP under the deck. Under a deck inside
  its street landing (an apron that is not `graded`) the ground is only raised to that, never lowered: it is the street's.
  A vertex keeps its height in the corridor of a surface street that does not join the road, under a building, in
- mapped water and under a road of another stage, with two exceptions the survey decides:
+ mapped water and under a road of another stage (`existing`; a bridge passing over a lifted road, `fills`, is none),
+ with two exceptions the survey decides:
 
  - the deck's own surveyed roadway (a vertex within its paved edges) is the deck's ground whatever street's class
    width reaches across it, and
@@ -505,14 +547,16 @@ def grade(plans,strips,grid,heights,streets,joined,footprints,water,decks,existi
      foot=shapely.get_coordinates(shapely.line_interpolate_point(blines[j],shapely.line_locate_point(blines[j],points[rest])));there=(foot[:,0]-P[k[rest],0])*N[k[rest],0]+(foot[:,1]-P[k[rest],1])*N[k[rest],1]
      for q in rest[(there*off[rest]<0)&(np.abs(there)>.5)&(dist[rest]>.5)].tolist():across[q]=(*across[q],j)
   cur=result[v]*scale
+  # (under a road its twin has lifted, `fills`, the ground comes up by no more than the road did)
+  if 'lift' in apron:low=np.minimum(low,cur+np.interp(d,along,apron['lift']))
   for q in range(len(v)):
    if only_up[q] and low[q]<=cur[q]+scale/2:continue
    # (a vertex in a strip's own roadway takes that road's level before any strip that merely passes over its cell: of two roads side by side each keeps its own ground)
    key=int(v[q]);claim=(not bool(own[q]),float(low[q]))
-   if key not in wanted or claim<wanted[key][0]:wanted[key]=(claim,bool(own[q]),bool(only_up[q]),across[q])
+   if key not in wanted or claim<wanted[key][0]:wanted[key]=(claim,bool(own[q]),bool(only_up[q]),across[q],'lift' in apron)
  if not wanted:return result
  vs=np.asarray(sorted(wanted),dtype=np.int64);gx=ox+(vs%W)*C;gz=oz+(vs//W)*C;pts=shapely.points(gx,gz);entries=[wanted[v] for v in vs.tolist()]
- target=np.asarray([e[0][1] for e in entries]);roadway=np.asarray([e[1] for e in entries],bool);only_up=np.asarray([e[2] for e in entries],bool);keep=np.zeros(len(vs),bool)
+ target=np.asarray([e[0][1] for e in entries]);roadway=np.asarray([e[1] for e in entries],bool);only_up=np.asarray([e[2] for e in entries],bool);keep=np.zeros(len(vs),bool);lifted=[e[4] for e in entries]
  win=Window(grid,(float(gx.min())-C,float(gz.min())-C,float(gx.max())+C,float(gz.max())+C));area=shapely.box(*win.bounds)
  near=[j for j,r in enumerate(beside) if blines[j].buffer(half_width(r)+C).intersects(area)];shielded={}
  for q,e in enumerate(entries):
@@ -543,9 +587,11 @@ def grade(plans,strips,grid,heights,streets,joined,footprints,water,decks,existi
  wet=[poly for poly in water if poly.intersects(area)]
  if wet:
   for k,_ in zip(*STRtree([poly.buffer(2) for poly in wet]).query(pts,predicate='within')):keep[k]=True
- other=[LineString(r['points']).buffer(r['width']/2+1) for r in existing if LineString(r['points']).intersects(area)]
+ other=[r for r in existing if LineString(r['points']).intersects(area)]
  if other:
-  for k,_ in zip(*STRtree(other).query(pts,predicate='within')):keep[k]=True
+  # (but under a bridge: where a road its twin has lifted brings its ground up, a deck standing OVERHEAD over that ground passes over the road and is no road on it)
+  for k,j in zip(*STRtree([LineString(r['points']).buffer(r['width']/2+1) for r in other]).query(pts,predicate='within')):
+   if not (lifted[k] and road_height(other[j],(float(gx[k]),float(gz[k])),None)>=target[k]+OVERHEAD):keep[k]=True
  new=np.floor(target/scale+1e-6).astype(np.int64);change=~keep&(new!=result[vs])&(~only_up|(new>result[vs]))
  result[vs[change]]=new[change].astype(result.dtype)
  return settle(plans,grid,result,vs[~keep],lip)

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {loadMetroCity} from './helpers/metro-city.mjs';
+import {loadMetroCity,readJson} from './helpers/metro-city.mjs';
 import {bridgeBarriers,roadProjection} from '../src/simulation/road-surfaces.ts';
 import {canopyHitsDeck,STREET_CANOPY} from '../src/simulation/deck-canopy.ts';
 import {tunnelPointAt} from '../src/simulation/tunnels.ts';
@@ -133,4 +133,74 @@ test('no curb is drawn standing alone, and the lots by Charles Circle have their
   assert.ok(drawn>300,`${drawn} curb samples drawn around the ramps`);assert.ok(alone<=drawn*.01,`${alone} of ${drawn} drawn curb samples have nothing beside them`);
   const stalls=tileStalls(city.loadedTiles.get('0_-2')).filter(s=>s.x>150&&s.x<450&&s.z>-1600&&s.z<-1250);
   assert.ok(stalls.length>=40,`${stalls.length} stalls in the lots north of the Longfellow Bridge`);
+});
+
+// The two carriageways of a road at one height (the twins of scripts/boston_highways.py). Solved each on its own ground they
+// stood 0.3 to 0.5 m apart along Storrow Drive between Massachusetts Avenue and Dartmouth Street, and the 6 m grid cannot hold
+// two levels a lane apart: the eastbound one stood proud of the ground on its median side, behind a rail.
+const twins=readJson('provenance.json').bostonHighways.twins;
+const decksOf=route=>[...byId.values()].filter(r=>isHighwayDeck(r)&&new RegExp(`^${route}-\\d+$`).test(r.id));
+/** The deck of the other carriageway beside station i of `road`: its height and grade there, what lies between the two
+ * pavements and the side it is on, or nothing where no deck of it runs alongside. */
+function beside(road,i,others){
+  const [x,z]=road.points[i];let best;
+  for(const o of others){const hit=roadProjection(o,x,z);if(!best||hit.distance<best.hit.distance)best={o,hit};}
+  if(!best)return;
+  const {o,hit}=best,k=hit.index,a=o.points[k],b=o.points[k+1],l=Math.hypot(b[0]-a[0],b[1]-a[1])||1,{n}=frame(road,i);
+  if((k===0&&hit.t<=0)||(k===o.points.length-2&&hit.t>=1)||Math.abs((b[0]-a[0])*n[1]-(b[1]-a[1])*n[0])/l<.87)return;
+  const at=v=>v[k]+(v[k+1]-v[k])*hit.t;
+  return{road:o,height:at(o.elevations),grade:Math.abs(o.elevations[k+1]-o.elevations[k])/l,median:hit.distance-(road.deckWidths[i]+at(o.deckWidths))/2,side:Math.sign((hit.x-x)*n[0]+(hit.z-z)*n[1])||1};
+}
+
+test('the two carriageways of Storrow Drive lie at one height from Massachusetts Avenue to Dartmouth Street',()=>{
+  const west=decksOf('storrow-wb');let near=0,level=0,edges=0,flush=0,rail=0,length=0;
+  for(const id of ['storrow-eb-12','storrow-eb-14','storrow-eb-16','storrow-eb-18','storrow-eb-19']){
+    const road=byId.get(id);assert.ok(road&&isHighwayDeck(road)&&road.roadway,`${id} is a deck with its roadway`);
+    length+=stations(road.points).at(-1);rail+=bridgeBarriers(city,road).reduce((sum,r)=>sum+r.length,0);
+    for(let i=0;i<road.points.length;i++){
+      const twin=beside(road,i,west);if(!twin||twin.median>6)continue;
+      near++;if(Math.abs(road.elevations[i]-twin.height)<=.05)level++;
+      // the edge of its roadway on the median's side lies on the ground: no ledge, no rail
+      const e=road.roadway[i];if(!e)continue;
+      const {p,n}=frame(road,i),o=twin.side*((twin.side>0?e[0]:e[1])-.3);edges++;if(road.elevations[i]-sampleElevation(city,p[0]+n[0]*o,p[1]+n[1]*o)<.25)flush++;
+    }
+  }
+  assert.ok(near>200,`${near} stations of the eastbound decks have the westbound deck within 6 m`);
+  assert.ok(level>=near*.97,`${level} of ${near} lie within 5 cm of it (6 of 237 before the two were brought level)`);
+  assert.ok(flush>=edges*.95,`${flush} of ${edges} median-side edges lie within 0.25 m of the ground (50 of 230 before)`);
+  assert.ok(rail<.1*length,`${rail.toFixed(0)} m of rail along ${length.toFixed(0)} m of roadway (389 m before)`);
+});
+
+test('no carriageway deck lies a step under its twin across a median, but where the stage lists it',()=>{
+  assert.deepEqual(twins.pairs.map(p=>p.roads),[['i90-eb','i90-wb'],['storrow-eb','storrow-wb']]);
+  const listed=new Map();for(const pair of twins.pairs)for(const e of pair.apart)listed.set(e.road,[...(listed.get(e.road)??[]),e.stations]);
+  let checked=0;
+  for(const pair of twins.pairs)for(const [mine,theirs] of [pair.roads,[...pair.roads].reverse()]){
+    const others=decksOf(theirs);
+    for(const road of decksOf(mine))for(let i=0;i<road.points.length;i++){
+      const twin=beside(road,i,others);if(!twin||twin.median>3)continue;
+      checked++;const under=twin.height-road.elevations[i];
+      // (the records lie where the curb survey put them, a few metres from the lines the stage paired: 2 m along the twin's grade)
+      assert.ok(under<=.05+2*twin.grade||(listed.get(road.id)??[]).some(([lo,hi])=>i>=lo-2&&i<=hi+2),`${road.id} lies ${under.toFixed(2)} m under ${twin.road.id} at ${road.points[i]}`);
+    }
+  }
+  assert.ok(checked>3500,`${checked} deck stations have the twin's deck within 3 m (1,446 of 4,009 lay a step under it before)`);
+  // what could not be brought level (a fade before a portal, a street landing or a building, the room under a bridge) is a small part of it
+  const apart=twins.pairs.map(p=>p.apart.reduce((sum,e)=>sum+e.stations[1]-e.stations[0]+1,0)),beside_=twins.pairs.map(p=>p.alongsideMeters);
+  assert.ok(apart[0]*3<=.1*beside_[0],`${apart[0]} stations of the Turnpike left apart along ${beside_[0]} m`);assert.ok(apart[1]*3<=.02*beside_[1],`${apart[1]} of Storrow Drive along ${beside_[1]} m`);
+  const lifted=twins.pairs[1].lifted;assert.ok(lifted['storrow-wb'].meters>1500&&lifted['storrow-wb'].max<.9,`Storrow Drive West rose over ${lifted['storrow-wb'].meters} m, by ${lifted['storrow-wb'].max} m at most`);
+});
+
+test('the ground came up with a Turnpike carriageway its twin has lifted: no deck edge floats over the median',()=>{
+  let checked=0,floating=0;
+  for(const [mine,theirs] of [['i90-eb','i90-wb'],['i90-wb','i90-eb']]){
+    const others=decksOf(theirs);
+    for(const road of decksOf(mine))for(let i=0;i<road.points.length;i++){
+      const twin=beside(road,i,others);if(!twin||twin.median>3)continue;
+      const {p,n}=frame(road,i),y=road.elevations[i];if(y-sampleElevation(city,p[0],p[1])>1)continue;   // (on the ground: a viaduct has none)
+      const o=twin.side*(road.deckWidths[i]/2-.3);checked++;if(y-sampleElevation(city,p[0]+n[0]*o,p[1]+n[1]*o)>.75)floating++;
+    }
+  }
+  assert.ok(checked>2000,`${checked} Turnpike deck stations on the ground beside the twin's deck`);
+  assert.ok(floating<=checked*.03,`the median-side edge of ${floating} stands more than its slab (0.75 m) over the ground (255 of 2,490 before)`);
 });

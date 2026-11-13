@@ -378,6 +378,74 @@ class RestoreTest(unittest.TestCase):
   both=H.before_road_stages(roads,np.array([1.0,.5,2.0,0.0]),{'bostonHighways':record});self.assertEqual(both[0],[bridge])
 
 
+def twins(n=80,gap=14.0,width=10.0):
+ """The two carriageways of a road on level lines `gap` apart, the second running the other way."""
+ a=plan(line(n),[width]*n);b=plan([[x,gap] for x,_ in reversed(line(n))],[width]*n)
+ for p,name in ((a,'eb'),(b,'wb')):p.id=name;p.junctions=[];p.covered=[False]*n
+ return a,b
+
+
+class TwinTest(unittest.TestCase):
+ def test_the_two_mains_of_one_road_are_twins(self):
+  a,b=twins();c=plan(line(10));c.spec={'bridge':'storrow'};ramp=plan(line(10),main=False);self.assertEqual(H.twin_pairs([a,ramp,c,b]),[(a,b)])
+
+ def test_a_road_rises_only_in_the_open_off_its_street_and_clear_of_a_junction_or_a_building(self):
+  p=plan(line(30),levels=[0]*10+[-1]*10+[1]*10);p.junctions=[(25,0.0)];p.covered=[False]*30;p.candidate[3]=True;p.covered[4]=True;p.allowance[0]=.5;p.street[1]=True;p.built[28]=[0]
+  self.assertEqual([i for i,v in enumerate(H.in_the_open(p)) if not v],[3,4,*range(10,20)],'under a roof, a candidate for one, or below source level 0')
+  self.assertEqual([i for i,v in enumerate(H.may_rise(p)) if v],[2,*range(5,10),*range(20,25),26],'and it keeps its height on its landing, where a street joins it and under or beside a building')
+
+ def test_alongside_is_within_a_median_and_reaches_on_to_where_they_part(self):
+  a,b=twins();free=[True]*80;beside,near=H.alongside(a,b,free,free)
+  self.assertTrue(all(near[1:-1]),'pavements 10 m wide 14 m apart: 4 m between them');self.assertAlmostEqual(beside[10],b.line.length-30.0,places=6,msg='the distance along the twin, which runs the other way')
+  self.assertIsNone(beside[0],"not beyond the twin's end")
+  c,d=twins(gap=10+H.TWIN_MEDIAN+2);beside,near=H.alongside(c,d,free,free);self.assertFalse(any(near),'more than a cell between them: each keeps its height');self.assertIsNotNone(beside[10],'but a lift may still fade out there')
+  e,f=twins(gap=10+H.TWIN_APART+1);self.assertTrue(all(s is None for s in H.alongside(e,f,free,free)[0]),'two roads')
+  # a short stretch where they stand further apart is bridged, a long one is not
+  g=plan(line(80),[4.0 if 30<=i<40 else 10.0 for i in range(80)]);self.assertTrue(all(H.alongside(g,b,free,free)[1][1:-1]),'27 m with 7 m between them')
+  k=plan(line(80),[4.0 if 30<=i<60 else 10.0 for i in range(80)]);self.assertEqual(H.runs([not v for v in H.alongside(k,b,free,free)[1][1:-1]]),[[29,58]])
+  # nothing to rise to where the twin is under a roof, and no rising where this road keeps its height
+  shut=[not 20<=i<30 for i in range(80)]
+  self.assertEqual([i for i in range(1,79) if H.alongside(a,b,free,shut)[0][i] is None],list(range(50,61)),'beside the stations of the twin, which runs the other way')
+  self.assertEqual([i for i in range(1,79) if H.alongside(a,b,shut,free)[0][i] is None],list(range(20,30)))
+
+ def test_the_lower_follows_the_higher(self):
+  a,b=twins();free=[True]*80;a.y=[1.0]*80;b.y=[1.5]*80;beside,near=H.alongside(a,b,free,free);lift=H.twin_lift(a,a.y,beside,near,b.at)
+  self.assertAlmostEqual(lift[40],.5,places=6);self.assertEqual((lift[0],lift[-1]),(0.,0.),'a station that keeps its height')
+  self.assertLessEqual(max(abs(p-q) for p,q in zip(lift,lift[1:])),H.TWIN_RATE*3+1e-9,'it is left no faster than TWIN_RATE');self.assertLess(lift[1],.02,'and on a curve')
+  self.assertEqual(H.twin_lift(b,b.y,*H.alongside(b,a,free,free),a.at),[0.]*80,'the higher one stays')
+  # no higher than the room under a bridge
+  a.ceiling=[1.2 if 38<=i<=42 else math.inf for i in range(80)];low=H.twin_lift(a,a.y,beside,near,b.at)
+  self.assertAlmostEqual(max(low[38:43]),.2,places=6);self.assertLessEqual(max(abs(p-q) for p,q in zip(low,low[1:])),H.TWIN_RATE*3+1e-9);self.assertAlmostEqual(low[20],.5,places=6)
+
+ def test_a_lift_keeps_the_road_within_its_grade(self):
+  c,d=twins();free=[True]*80;c.y=[i*3.0*c.grade for i in range(80)];d.y=[(79-j)*3.0*c.grade+.5 for j in range(80)]
+  self.assertEqual(max(H.twin_lift(c,c.y,*H.alongside(c,d,free,free),d.at)),0.,'a road climbing at its grade has no room to rise faster')
+  e,f=twins();e.y=[i*3.0*.03 for i in range(80)];f.y=[(79-j)*3.0*.03+.5 for j in range(80)];lift=H.twin_lift(e,e.y,*H.alongside(e,f,free,free),f.at)
+  self.assertAlmostEqual(lift[60],.5,places=6);self.assertLessEqual(max((e.y[i+1]+lift[i+1]-e.y[i]-lift[i])/3 for i in range(79)),e.grade+1e-9)
+
+ def test_a_lift_fades_out_where_the_two_stand_further_apart(self):
+  # only a median between them over the first half, 7 m beyond it: the lift is whole to the end of the first and fades in the second
+  a=plan(line(80),[10.0 if i<40 else 4.0 for i in range(80)]);b=twins()[1];free=[True]*80;a.y=[1.0]*80;b.y=[1.5]*80;beside,near=H.alongside(a,b,free,free)
+  self.assertEqual(H.runs(near),[[1,39]]);lift=H.twin_lift(a,a.y,beside,near,b.at)
+  self.assertAlmostEqual(lift[38],.5,delta=.02);self.assertGreater(lift[42],.2);self.assertEqual(lift[52],0.);self.assertLessEqual(max(lift),.5+1e-9,'never over the twin')
+
+ def test_eased_cuts_a_crest_from_below_and_fills_a_sag_from_above(self):
+  x=[i*3.0 for i in range(81)];ends=[i in (0,80) for i in range(81)];sharpest=lambda v:max(abs(v[i+1]-2*v[i]+v[i-1])/9 for i in range(1,80))
+  crest=[min(i,80-i)*.06 for i in range(81)];out=H.eased(crest,x,250,ends).tolist()
+  self.assertLess(out[40],crest[40]);self.assertTrue(all(o<=c+1e-9 for o,c in zip(out,crest)),'nothing is raised for a crest');self.assertLessEqual(sharpest(out),1/250+1e-9)
+  sag=[max(i,80-i)*.06 for i in range(81)];out=H.eased(sag,x,250,ends).tolist()
+  self.assertGreater(out[40],sag[40]);self.assertTrue(all(o>=c-1e-9 for o,c in zip(out,sag)));self.assertLessEqual(sharpest(out),1/250+1e-9)
+  self.assertAlmostEqual(H.eased(sag,x,250,[i in (0,40,80) for i in range(81)])[40],sag[40],places=9,msg='a station that keeps its value is not raised')
+  self.assertEqual(H.lower_envelope([0,9,9,9,0],[0,1,1,1,1],[0,2,2,2,2]),[0,1,2,2,0],'up by 1 a station, down by 2')
+
+ def test_a_lifted_road_is_classified_cut_and_judged_as_it_rides_its_own_ground(self):
+  p=plan(line(60));p.edge=[2.0 if 20<=i<30 else 0.0 for i in range(60)];p.ends=[None,None];p.y=[1.5]*60;H.classify_ground(p);self.assertFalse(any(p.tunnel),'half a metre under the bank: no wall')
+  p.solo=[0.0]*60;H.classify_ground(p);self.assertEqual(H.runs(p.tunnel),[[19,30]],'lifted there by its twin, it is the walled cut it is alone')
+  q=plan(line(20));q.tunnel=[False]*20;q.y=[.5]*20;q.solo=[.1]*20;ground=lambda x,z:.2
+  self.assertEqual(H.standing_ground([q],ground),{},'the ground lies under the road as it lies');self.assertEqual(H.standing_ground([q],ground,True),{'t':list(range(20))},'and stands in it as it rode alone')
+  self.assertEqual(H.DeckRun(q,0,19,True).y,q.solo,'the cut is made for the road alone');self.assertEqual(H.DeckRun(q,0,19).y,q.y)
+
+
 class RouteTest(unittest.TestCase):
  def test_every_route_names_layer_eight_segments_once_and_storrow_has_no_closed_end(self):
   ids=[r['id'] for r in H.ROUTES];self.assertEqual(len(ids),len(set(ids)))
