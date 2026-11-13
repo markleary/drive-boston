@@ -5,6 +5,7 @@ import type {RoadCells} from './road-cells.ts';
 import {closestRoad,pointInside} from './roads.ts';
 import {postClear,roadwayEdge} from './street-furniture.ts';
 import {inTransitCorridor,shareTransitCorridors} from './transit-corridors.ts';
+import {inTunnelApproach} from './tunnels.ts';
 import {roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
 import {sampleElevation} from './terrain.ts';
 
@@ -20,6 +21,9 @@ export interface SignalGround{
   hulls(x:number,z:number):readonly {footprint:Point2[]}[];
   /** What the tile has planted already (tree places, lamps, name signs): a mast keeps POST_GAP from each. */
   posts?:readonly Point2[];
+  /** Whether a point lies in a tunnel approach (an open cut, a portal, a ramp's landing), asked of the whole city,
+   * whose tunnel index is built once. Left out, the planner asks the city it was given. */
+  excavated?(x:number,z:number):boolean;
 }
 /** The room a mast keeps to every roadway its tile draws (its footing is half a metre across), and to a tree, lamp or sign. */
 export const SIGNAL_ROOM=.5,POST_GAP=1.2;
@@ -74,6 +78,11 @@ export function planTrafficSignals(city:CityData,ground?:SignalGround){
   };
   /** Whether a point lies over the deck of a raised road, which no tile draws as street pavement. */
   const decked=(x:number,z:number)=>(roads.get(`${Math.floor(x/cellSize)},${Math.floor(z/cellSize)}`)??[]).some(s=>!!s.road.elevations&&distance([x,z],s.a,s.b)<roadWidthAt(s.road,x,z)/2);
+  // No mast in a tunnel approach, where every other post is kept out too (street-furniture.ts): the terrain grid is
+  // whole across a highway's open cut, which the runtime cuts out of it, so by its heights the road in the cut lies
+  // under the mast's footing and `clear` passes it. The mast of a signal on Summer Street's viaduct stood in the lane
+  // of the Turnpike's entrance ramp beneath it, 2 m over the road in the open cut.
+  const excavated=ground?.excavated??((x:number,z:number)=>inTunnelApproach(city,x,z));
   const placed:PlacedSignal[]=[];
   for(const source of city.signals){
     const major=closestRoad(city,...source,true,{maxDistance:35}),approach=closestRoad(approaches,...source,false,{maxDistance:35});
@@ -83,7 +92,7 @@ export function planTrafficSignals(city:CityData,ground?:SignalGround){
     // A surface street's kerb is read from the tile; a raised road has no drawn roadway and keeps its own width.
     const kerbed=ground&&!nearest.road.elevations?ground:undefined,half=(nearest.road.pavedWidth??nearest.road.width)/2,planted=ground?.posts?.filter(q=>Math.hypot(q[0]-source[0],q[1]-source[1])<60)??[];
     const tryAt=(p:Point2,roadPoint:Point2,along:number,arm?:{length:number;yaw:number})=>{
-      if(inTransitCorridor(city,...p)||!clear(p,sampleRoadElevation(city,nearest.road,...roadPoint))||placed.some(s=>Math.hypot(s.position[0]-p[0],s.position[1]-p[1])<7))return;
+      if(inTransitCorridor(city,...p)||excavated(...p)||!clear(p,sampleRoadElevation(city,nearest.road,...roadPoint))||placed.some(s=>Math.hypot(s.position[0]-p[0],s.position[1]-p[1])<7))return;
       if(ground&&(!postClear(ground.streets,p[0],p[1],SIGNAL_ROOM)||planted.some(q=>Math.hypot(q[0]-p[0],q[1]-p[1])<POST_GAP)))return;
       candidates.push({p,roadPoint,cost:Math.hypot(p[0]-source[0],p[1]-source[1])+Math.abs(along)*.08,arm});
     };
@@ -134,5 +143,5 @@ export function planTileSignals(city:MetroCity,tile:StreetTile,roads:RoadCells,p
   const signals=city.signals.filter(s=>s[0]>=minX-40&&s[0]<bounds.maxX+40&&s[1]>=minZ-40&&s[1]<bounds.maxZ+40);if(!signals.length)return [];
   const about=roads.near({minX:minX-80,maxX:bounds.maxX+80,minZ:minZ-80,maxZ:bounds.maxZ+80}),view:CityData={...city,roads:about,signals,buildings:[]};
   shareTransitCorridors(view,city);
-  return planTrafficSignals(view,{streets:drawnStreets(tile),owns:(x,z)=>x>=minX&&x<bounds.maxX&&z>=minZ&&z<bounds.maxZ,hulls:(x,z)=>city.index.query(x-.5,x+.5,z-.5,z+.5).filter(hull=>!hull.fragment),posts});
+  return planTrafficSignals(view,{streets:drawnStreets(tile),owns:(x,z)=>x>=minX&&x<bounds.maxX&&z>=minZ&&z<bounds.maxZ,hulls:(x,z)=>city.index.query(x-.5,x+.5,z-.5,z+.5).filter(hull=>!hull.fragment),posts,excavated:(x,z)=>inTunnelApproach(city,x,z)});
 }
