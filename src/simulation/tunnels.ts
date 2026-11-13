@@ -17,8 +17,10 @@ export function tunnelSurfaceLandingAt(road:Road,station:number){return !!road.t
 export function tunnelPointAt(road:Road,station:number){
   const distances=tunnelStations(road);let i=1;while(i<distances.length-1&&distances[i]<station)i++;
   const a=road.points[i-1],b=road.points[i],t=Math.max(0,Math.min(1,(station-distances[i-1])/(distances[i]-distances[i-1]||1)));
-  const wa=road.deckWidths?.[i-1]??road.width,wb=road.deckWidths?.[i]??road.width;
-  return{x:a[0]+(b[0]-a[0])*t,y:(road.elevations?.[i-1]??0)+((road.elevations?.[i]??0)-(road.elevations?.[i-1]??0))*t,z:a[1]+(b[1]-a[1])*t,yaw:Math.atan2(b[0]-a[0],b[1]-a[1]),width:wa+(wb-wa)*t};
+  const wa=road.deckWidths?.[i-1]??road.width,wb=road.deckWidths?.[i]??road.width,width=wa+(wb-wa)*t;
+  // `edge`: the roadside where signs and masts stand (the deck's left edge, as its pavement names its sides), beyond the surveyed roadway where the deck has one beside its lanes
+  const ea=road.roadway?.[i-1]?.[0],eb=road.roadway?.[i]?.[0],edge=Math.max(width/2,ea===undefined||eb===undefined?0:ea+(eb-ea)*t);
+  return{x:a[0]+(b[0]-a[0])*t,y:(road.elevations?.[i-1]??0)+((road.elevations?.[i]??0)-(road.elevations?.[i-1]??0))*t,z:a[1]+(b[1]-a[1])*t,yaw:Math.atan2(b[0]-a[0],b[1]-a[1]),width,edge};
 }
 
 type Portal={polygon:Point2[];minX:number;maxX:number;minZ:number;maxZ:number};

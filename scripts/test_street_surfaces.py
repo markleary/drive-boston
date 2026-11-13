@@ -261,6 +261,20 @@ class DrivewayDissolveTest(unittest.TestCase):
   self.assertTrue(drives);self.assertTrue(all(d.is_valid for d in drives))
 
 
+class BareCurbTest(unittest.TestCase):
+ def tile(self,**extra):return {'curbs':[[[0,0],[40,0]],[[0,20],[40,20]]],'sidewalks':[],'parkPaths':[],**extra}
+ def test_a_curb_with_nothing_beside_it_is_listed_and_one_that_edges_a_surface_is_not(self):
+  road=[[[0,0],[20,0],[20,-6],[0,-6]]];out,total=ss.bare_curbs({'0_0':self.tile(streetPavement=[road])},[])
+  self.assertEqual(out,{'0_0':[0,2100,4000,1,0,4000]},'the first curb past the end of the roadway (and ATTACH), the second whole');self.assertAlmostEqual(total,59)
+  for surface in ({'streetSidewalks':[[[[0,20],[40,20],[40,23],[0,23]]]]},{'sidewalks':[{'rings':[[[0,20],[40,20],[40,23],[0,23]]]}]},{'islands':[[[[0,20],[40,20],[40,23],[0,23]]]]},{'driveways':[[[[0,20.4],[40,20.4],[40,30],[0,30]]]]},{'parkPaths':[{'points':[[0,21],[40,21]],'width':2}]}):
+   self.assertEqual(ss.bare_curbs({'0_0':self.tile(streetPavement=[[[[0,0],[40,0],[40,-6],[0,-6]]]],**surface)},[])[0],{},f'beside {list(surface)[0]}')
+ def test_a_deck_on_the_ground_holds_its_curb_and_a_short_gap_is_no_stretch(self):
+  deck={'points':[[0,-3],[40,-3]],'width':6,'elevations':[0,0]};self.assertEqual(ss.bare_curbs({'0_0':self.tile(curbs=[[[0,0],[40,0]]])},[deck])[0],{})
+  parts=[[[[0,0],[19,0],[19,-6],[0,-6]]],[[[20.5,0],[40,0],[40,-6],[20.5,-6]]]];self.assertEqual(ss.bare_curbs({'0_0':self.tile(curbs=[[[0,0],[40,0]]],streetPavement=parts)},[])[0],{},'a metre and a half between two roadways')
+ def test_a_surface_in_the_next_tile_counts(self):
+  out,_=ss.bare_curbs({'0_0':self.tile(curbs=[[[990,0],[1000,0]]]),'1_0':{'curbs':[],'sidewalks':[],'parkPaths':[],'streetSidewalks':[[[[985,0],[1010,0],[1010,3],[985,3]]]]}},[]);self.assertEqual(out,{})
+
+
 class SidewalkTest(unittest.TestCase):
  def test_esri_rings_build_polygons_with_holes(self):
   outer=[[0,0],[0,10],[10,10],[10,0],[0,0]];hole=[[4,4],[6,4],[6,6],[4,6],[4,4]]
@@ -375,6 +389,10 @@ class InstallTest(unittest.TestCase):
    self.assertEqual([p['road'] for p in header['pavements']],['b-1','b-2'],'decks keep their ribbons');self.assertEqual(record['walk'],[0,1])
    self.assertEqual([p['road'] for p in header['borderPavements']],['osm-3-0'],'the other carriageway, owned across the tile line, runs alongside the Boston Street crosswalk station; the Cross Street continuation does not');self.assertEqual(first['borderPavements'],2)
    self.assertEqual(first['staleCurbs'],1);self.assertEqual(first['staleCurbMetres'],200);self.assertNotIn([[150,700],[350,700]],header['curbs']);self.assertIn([[600,700],[800,700]],header['curbs'],'beyond reach but outside parkland')
+   # The curb left 200 m from any street has nothing attached: it stays in the tile for the next run's measuring and is listed as undrawn, whole.
+   lone=header['curbs'].index([[600,700],[800,700]]);gaps=[header['bareCurbs'][i:i+3] for i in range(0,len(header['bareCurbs']),3)]
+   self.assertIn([lone,0,20000],gaps);self.assertGreaterEqual(first['bareCurbMetres'],200);self.assertEqual(first['bareCurbs'],len(gaps))
+   kerb=header['curbs'].index([[0,493],[1000,493]]);self.assertFalse([g for g in gaps if g[0]==kerb and g[1]<95000],'the curb the street and its sidewalk stand on is drawn all along them')
    self.assertEqual(first['staleSidewalks'],1);self.assertTrue(all(max(z for x,z in w['rings'][0])<600 for w in header['sidewalks']),'the removed roadway\'s sidewalk strip goes with its curb');self.assertEqual(first['parkEdgeStations'],0)
    edges=np.array(record['edges']).reshape(-1,4)/100;np.testing.assert_allclose(edges[:,1],507,atol=.011);np.testing.assert_allclose(edges[:,3],493,atol=.011)
    self.assertLess(len(edges),6,'straight edges compress; the driveway tongue is suppressed');self.assertEqual(len(header['islands']),1);self.assertEqual(len(header['sidewalks']),1)

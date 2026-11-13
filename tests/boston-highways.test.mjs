@@ -194,7 +194,8 @@ test('a street bridge over the cut spans it: Tremont Street, the walls beneath e
   let steepest=0;for(const r of bridge){const along=stations(r.points);for(let i=1;i<along.length;i++)if(along[i]-along[i-1]>.7)steepest=Math.max(steepest,Math.abs(r.elevations[i]-r.elevations[i-1])/(along[i]-along[i-1]));}
   assert.ok(steepest<.085,`no step and no steep ramp on the bridge (${(steepest*100).toFixed(1)}%)`);
   for(const prefix of ['i90-eb','i90-wb']){
-    const under=family(prefix).find(r=>bridge.some(b=>b.points.some(p=>roadProjection(r,...p).distance<1)));assert.ok(under,`${prefix} passes under the bridge`);
+    // (a vertex of the bridge over the road's pavement: the carriageway lies on its surveyed roadway, which is not centred on the city's line the bridge was split at)
+    const under=family(prefix).find(r=>bridge.some(b=>b.points.some(p=>roadProjection(r,...p).distance<roadWidthAt(r,...p)/2)));assert.ok(under,`${prefix} passes under the bridge`);
     for(const b of bridge)for(let i=0;i<b.points.length;i++){
       const hit=roadProjection(under,...b.points[i]);if(hit.distance>roadWidthAt(under,...b.points[i])/2)continue;
       assert.ok(b.elevations[i]-.75-sampleRoadElevation(city,under,...b.points[i])>=3.4,`room under the slab over ${under.id}`);

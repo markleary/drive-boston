@@ -29,12 +29,12 @@ function warningFace(lines: string[]) {
 
 /** A roadside warning on the right shoulder, its face turned toward traffic. The shared face material is the caller's to keep. */
 export function createWarningSign(place: HighwaySignPlacement, groundAt: (x: number, z: number) => number, steel: THREE.Material) {
-  const { x, y, z, yaw, width } = place.approach, lines = warningLegend(place.sign), height = WIDTH * (lines.length > 2 ? 320 : 224) / 256;
+  const { x, y, z, yaw, edge } = place.approach, lines = warningLegend(place.sign), height = WIDTH * (lines.length > 2 ? 320 : 224) / 256;
   const group = new THREE.Group();
   group.name = `Warning sign: ${lines.join(' ')} on ${place.road.id}`;
   group.position.set(x, y, z);
   group.rotation.y = yaw + Math.PI;
-  const shoulder = width / 2 + .75, ground = Math.min(-.1, groundAt(x - Math.cos(yaw) * shoulder, z + Math.sin(yaw) * shoulder) - y), mid = POST + height / 2;
+  const shoulder = edge + .75, ground = Math.min(-.1, groundAt(x - Math.cos(yaw) * shoulder, z + Math.sin(yaw) * shoulder) - y), mid = POST + height / 2;
   const face = new THREE.Mesh(new THREE.PlaneGeometry(WIDTH, height), warningFace(lines));
   face.name = lines.join(' ');
   face.position.set(shoulder, mid, .045);

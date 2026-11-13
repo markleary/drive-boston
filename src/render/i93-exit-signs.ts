@@ -76,7 +76,7 @@ function exitFace(sign: I93ExitSign) {
 
 /** A right-shoulder cantilever, with the printed face turned toward traffic. */
 export function createI93ExitSign(sign: I93ExitSign, groundAt: (x: number, z: number) => number, steel: THREE.Material) {
-  const { x, y, z, yaw, width } = sign.approach;
+  const { x, y, z, yaw, edge } = sign.approach;
   const group = new THREE.Group();
   group.name = `${sign.rampId.startsWith('i93-') ? 'I-93 advance' : 'Advance exit'} sign: ${sign.rampId}`;
   group.position.set(x, y, z);
@@ -84,8 +84,8 @@ export function createI93ExitSign(sign: I93ExitSign, groundAt: (x: number, z: nu
 
   // A smaller panel (Storrow Drive) hangs over the right lane of a narrower road.
   const scale = sign.scale ?? 1, PANEL_WIDTH = PANEL_FULL_WIDTH * scale, PANEL_HEIGHT = PANEL_FULL_HEIGHT * scale, TAB_WIDTH = TAB_FULL_WIDTH * scale, TAB_HEIGHT = TAB_FULL_HEIGHT * scale;
-  const center = Math.max(width / 2 - 4.8, width / 2 + .3 - PANEL_WIDTH / 2 - .35);
-  const shoulder = width / 2 + .85;
+  const center = Math.max(edge - 4.8, edge + .3 - PANEL_WIDTH / 2 - .35);
+  const shoulder = edge + .85;
   const ground = Math.min(-.12, groundAt(x - Math.cos(yaw) * shoulder, z + Math.sin(yaw) * shoulder) - y);
   const mid = CLEARANCE + PANEL_HEIGHT / 2;
   const material = exitFace(sign);

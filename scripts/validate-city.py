@@ -129,7 +129,7 @@ assert set(far_counts)<=set(keys),'far hull tiles must be manifest tiles (tiles 
 policies={'assessor-style','assessor-storeys','catalog-metres-and-source-floor','source-floor-no-catalog-ground','legacy-backbay-feet','cambridge-catalog-feet-and-source-floor','osm-type-default','osm-levels','osm-height-tag'}
 west,north,east,south=provenance['legacyCoreBounds']
 buildings={};footprints_by_tile=defaultdict(list);curbs=0;park_paths=0;triangles=0;grounded=0;supported=[];scaled=0
-pavements=0;borders=0;sidewalks=0;bricks=0;islands=0;driveways=0;measured_roads={r['id'] for r in city['roads'] if r.get('pavedWidth')};road_ids={r['id'] for r in city['roads']}
+pavements=0;borders=0;sidewalks=0;bricks=0;islands=0;driveways=0;aprons=0;stalls=0;bare=0;measured_roads={r['id'] for r in city['roads'] if r.get('pavedWidth')};road_ids={r['id'] for r in city['roads']}
 clearance_index=RoadClearanceIndex(city['roads']);surface_headers={}
 for key in keys:
  tx,tz=map(int,key.split('_'));reproducible(f'{tiles["directory"]}/{tileformat.tile_name(tx,tz)}');header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
@@ -150,6 +150,15 @@ for key in keys:
   assert rings and all(len(ring)>=3 for ring in rings) and Polygon(rings[0]).area<=2600,f'{key}: island exceeds the closed-face limit';islands+=1
  for rings in header['driveways']:
   assert rings and all(len(ring)>=3 for ring in rings) and Polygon(rings[0]).area<=size*size,f'{key}: driveway part exceeds its tile';driveways+=1
+ # The roadway beside a highway deck's lanes (highway_roadways.py), filed like a street's record, and the stalls of the surface lots (parking_lots.py).
+ for record in header.get('highwayPavements',[]):
+  e=record['edges'];assert len(e)>=8 and len(e)%4==0 and all(isinstance(v,int) for v in e) and all(math.hypot(e[i]-e[i+2],e[i+1]-e[i+3])/100<=60 for i in range(0,len(e),4)),f"{key}: malformed highway roadway of {record.get('road')}";aprons+=1
+ # stretches of the tile's curbs with nothing attached, which the runtime leaves undrawn (street_surfaces.bare_curbs): [curb, from, to, ...] in centimetres along it
+ gaps=header.get('bareCurbs',[]);assert len(gaps)%3==0 and all(isinstance(v,int) for v in gaps),f'{key}: malformed bare curb list'
+ for i in range(0,len(gaps),3):
+  c,a,b=gaps[i:i+3];assert 0<=c<len(header['curbs']) and 0<=a<b<=sum(math.dist(p,q) for p,q in zip(header['curbs'][c],header['curbs'][c][1:]))*100+2,f'{key}: a bare stretch off its curb';bare+=1
+ parking=header.get('parking',[]);assert len(parking)%3==0 and all(isinstance(v,int) for v in parking),f'{key}: malformed parking stalls'
+ assert all(0<=parking[i]<size*100 and 0<=parking[i+1]<size*100 and 0<=parking[i+2]<36000 for i in range(0,len(parking),3)),f'{key}: a parking stall outside its tile';stalls+=len(parking)//3
  for ordinal,b in enumerate(entries):
   assert b['id'] not in buildings,f"duplicate building {b['id']}";buildings[b['id']]=b
   x,z=b['center'];assert tx*size<=x<(tx+1)*size and tz*size<=z<(tz+1)*size,'building filed in the wrong tile'
@@ -209,7 +218,7 @@ surface_roads=[r for r in city['roads'] if not r.get('elevations') and not r.get
 assert pavements==len(surface_roads),f'{pavements} roadway records for {len(surface_roads)} surface roads; run build-street-surfaces.py'
 assert all(1.5<=r['pavedWidth']<=45 for r in city['roads'] if r.get('pavedWidth')) and len(measured_roads)>len(surface_roads)*.7,'measured paved widths'
 assert sidewalks>20000 and bricks>500 and islands>100 and driveways>100,'sidewalk inventory, curb islands and driveway fills were not installed'
-street_surfaces=provenance.get('streetSurfaces');assert street_surfaces and street_surfaces['pavements']==pavements and street_surfaces.get('borderPavements',borders)==borders and street_surfaces['sidewalkParts']==sidewalks and street_surfaces['islandParts']==islands and street_surfaces['drivewayParts']==driveways,'provenance must describe the installed street surfaces'
+street_surfaces=provenance.get('streetSurfaces');assert street_surfaces and street_surfaces['pavements']==pavements and street_surfaces.get('borderPavements',borders)==borders and street_surfaces['sidewalkParts']==sidewalks and street_surfaces['islandParts']==islands and street_surfaces['drivewayParts']==driveways and street_surfaces.get('highwayAprons',0)==aprons==len(((provenance.get('bostonHighways') or {}).get('roadways') or {}).get('aprons',[])) and street_surfaces.get('parkingStalls',0)==stalls and street_surfaces.get('bareCurbs',0)==bare,'provenance must describe the installed street surfaces'
 
 def point_in_polygon(x,z,poly):
  inside=False
