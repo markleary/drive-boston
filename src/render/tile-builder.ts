@@ -16,7 +16,7 @@ import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid, terrainVertexNormal } from '../simulation/terrain.ts';
 import { shareTransitCorridors } from '../simulation/transit-corridors.ts';
-import { planTrafficSignals, type PlacedSignal } from '../simulation/signal-placement.ts';
+import { planTileSignals, planTrafficSignals, type PlacedSignal } from '../simulation/signal-placement.ts';
 import { usesExactBuildingCollision } from '../simulation/building-collisions.ts';
 import { pointInside } from '../simulation/roads.ts';
 import { type createMaterials, facadeStyleIndex } from './materials';
@@ -96,7 +96,7 @@ export interface TileStats {
 export type Lamp = THREE.Vector3 & { light?: LampLight };
 export interface BuiltTile {
   key: string; tile: CityTile; group: THREE.Group; bounds: Bounds; colliders: RAPIER.Collider[]; meshes: THREE.Mesh[]; lamps: Lamp[]; signals: PlacedSignal[]; stats: TileStats;
-  /** Where the street trees (every place found for one), lamps and name signs of the tile stand: the sidewalk walkers keep clear of them (street-life.ts). */ posts: Point2[];
+  /** Where the street trees (every place found for one), lamps, name signs and signal masts of the tile stand: the sidewalk walkers keep clear of them (street-life.ts). */ posts: Point2[];
   dispose(): void;
 }
 export type TileStage = 'survey' | 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
@@ -554,7 +554,9 @@ export function createTileBuilder(ctx: TileContext) {
     }
     yield 'props';
 
-    const placements = planTrafficSignals(subCity);
+    // Signal masts: those of the signals that stand in this tile, behind the kerb as it draws it (signal-placement.ts).
+    const placements = tile.streetPavement ? planTileSignals(city, tile, roadIndex, posts) : planTrafficSignals(subCity);
+    posts.push(...placements.map(signal => signal.position));
     if (placements.length) createTrafficSignals(target, subCity, placements);
     stats.signals = placements.length;
     yield 'signals';

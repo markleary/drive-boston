@@ -4,8 +4,10 @@ import { mallGroundTest } from './commonwealth-mall.ts';
 import { canopyHitsDeck, STREET_CANOPY } from './deck-canopy.ts';
 import { drawnStreets, STALL_REACH, type DrawnStreets, type StreetTile } from './drawn-streets.ts';
 import { inGreenway } from './greenway.ts';
+import { openStretches } from './motorway.ts';
 import type { RoadCells } from './road-cells.ts';
 import { roadMidpoint } from './road-tile-coverage.ts';
+import { roadWidthAt } from './road-surfaces.ts';
 import { planStreetSigns, type PlacedStreetSign } from './street-signs.ts';
 import { tileKey } from './tile-format.ts';
 import { sampleElevation } from './terrain.ts';
@@ -56,7 +58,7 @@ const WIDE = 1.5;
 type Ribbon = { a: Point2; b: Point2; radius: number; road?: Road; raised: boolean };
 /** The lines of the roads and footbridges about a tile, by what they are to a planter. */
 export interface StreetRibbons {
-  /** In the line of a raised deck or a footbridge (with .8 m to spare): those are not part of the drawn pavement. */
+  /** In the line of a raised deck, a tunnel record's open stretch or a footbridge (with .8 m to spare): those are not part of the drawn pavement. */
   raised(x: number, z: number): boolean;
   /** In the ribbon of any road or footbridge, by its median width (with .8 m to spare): all a tile without compiled pavement can tell. */
   any(x: number, z: number): boolean;
@@ -73,6 +75,12 @@ export function streetRibbons(city: Pick<CityData, 'footbridges'>, roads: readon
     // (a highway deck on the ground with a surveyed roadway beside its lanes keeps that whole roadway clear: its wider edge, either side)
     const edges = Math.max(0, ...(road.roadway?.[i - 1] ?? []), ...(road.roadway?.[i] ?? []));
     add({ a: road.points[i - 1], b: road.points[i], radius: Math.max((road.pavedWidth ?? road.width) / 2, edges) + .8, road, raised: !!road.elevations });
+  }
+  // Nor in the open stretch of a tunnel record: a highway's walled cut, or a ramp that has left the ground on its way
+  // to a viaduct, drawn by the tunnel builder and no street pavement either way. A cut is `occupied` besides
+  // (inTunnelApproach); a ramp over the ground is not, and two lamps stood up through the Central Artery's.
+  for (const road of roads) if (road.tunnel) for (const line of openStretches(road)) for (let i = 1; i < line.length; i++) {
+    add({ a: line[i - 1], b: line[i], radius: Math.max(roadWidthAt(road, ...line[i - 1]), roadWidthAt(road, ...line[i])) / 2 + .8, raised: true });
   }
   // A footbridge's line is no street, but nothing is planted or posted in its deck either (a ramp comes down along the edge of a street's roadway).
   for (const deck of city.footbridges ?? []) for (let i = 1; i < deck.points.length; i++) {

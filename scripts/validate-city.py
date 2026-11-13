@@ -285,7 +285,7 @@ if i93:
  i93_counts=i93_north.validate(base_city,i93,i93_north.tunnel_joins(data_dir,city),base_elevation)
  assert i93_north.replay(data_dir,base_city,i93,json.loads(i93_path.read_text()),north_overpasses.tile_footprints(data_dir,city),base_grid),'I-93 roads, terrain cuts or survey cut differ from a replay of build-i93-north.py'
  pre_roads,pre_heights=i93_north.before_stage(base_roads,base_heights,i93,grid.get('scale',.01))
- print(f"Validated I-93: {i93_counts['carriageways']} carriageway pieces, {i93_counts['ramps']} ramps ({i93_counts['streetLandings']} street landings) and {i93_counts['traces']} survey traces match a replay of build-i93-north.py.")
+ print(f"Validated I-93: {i93_counts['carriageways']} carriageway pieces, {i93_counts['ramps']} ramps ({i93_counts['streetLandings']} street landings) and {i93_counts['traces']} survey traces match a replay of build-i93-north.py; at {i93_counts['twinStations']} stations with only a median between them the two carriageways share a height or are listed apart.")
 def pre_elevation(x,z):return elevation(x,z,pre_heights)
 if north_overpasses.applies(pre_roads):
  recorded=provenance.get('northOverpasses');assert recorded,'provenance must describe the northern overpass repairs; run level-north-overpasses.py'

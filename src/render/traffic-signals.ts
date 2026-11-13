@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type {CityData} from '../types';
-import {planTrafficSignals} from '../simulation/signal-placement.ts';
+import {planTrafficSignals,SIGNAL_HEADS} from '../simulation/signal-placement.ts';
 import {sampleElevation} from '../simulation/terrain.ts';
 import {sampleRoadElevation} from '../simulation/road-surfaces.ts';
 import {signalAxis,signalPhase} from '../simulation/signals.ts';
@@ -26,7 +26,7 @@ export function createTrafficSignals(scene:THREE.Object3D,city:CityData,placemen
     add(new THREE.CylinderGeometry(.21,.26,.18,10),iron,x,footing+.09,z);
     add(new THREE.CylinderGeometry(.065,.085,length,8).rotateX(Math.PI/2),iron,x+nx*length*.5,y+5.5,z+nz*length*.5,signal.armYaw);
     for(const side of [0,1]){
-      const sx=x+nx*(length-.35-side*.9),sz=z+nz*(length-.35-side*.9),yaw=signal.yaw+side*Math.PI,axis=signalAxis(yaw);
+      const sx=x+nx*(length-SIGNAL_HEADS[side]),sz=z+nz*(length-SIGNAL_HEADS[side]),yaw=signal.yaw+side*Math.PI,axis=signalAxis(yaw);
       add(new THREE.BoxGeometry(.65,1.52,.08),rim,sx,y+4.94,sz,yaw);
       add(new THREE.BoxGeometry(.53,1.39,.27),back,sx,y+4.94,sz,yaw);
       for(let bulb=0;bulb<3;bulb++){

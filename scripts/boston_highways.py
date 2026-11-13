@@ -185,7 +185,7 @@ SHED=4               # a building lower than this (a kiosk, a shed) does not roo
 DIP_MAX=1.5          # a carriageway at source level 0 goes down this far under its own ground to pass under a building
 WALLED=.8            # ground this far over the road at either pavement edge is a cut's wall: the stretch is a walled cut, not a deck
 GAP=60               # a deck shorter than this between two walled or covered stretches stays part of them
-PARALLEL=.87         # cosine between a ramp and a street that runs along it rather than across it (30 degrees)
+PARALLEL=I.PARALLEL  # cosine between a ramp and a street that runs along it rather than across it (30 degrees)
 FILL=.75             # graded ground this far over the survey is fill the grader laid for another street: the road follows the survey there
 WATER_CLEAR=.4       # under the slab over a culverted stream (the Muddy River at Charlesgate)
 BLEND=40             # an OpenStreetMap filler's ends shift onto the layer 8 segment ends over this distance
@@ -195,12 +195,12 @@ LANDING_LIP=.15      # ground this far over a ramp inside its street landing's t
 LANDING_STEP=.05     # and a landing that ends for it ends where the ground first stood this far over the road: the step the runtime leaves there
 SIGN_IN=25           # a CARS ONLY sign stands this far along Storrow Drive from where traffic comes onto it
 SIGN_AHEAD=70        # and a LOW CLEARANCE sign this far before the structure
-TWIN_MEDIAN=6.0      # the two carriageways of a road share one height where no more than this lies between their pavements: a cell of the terrain grid, which cannot hold two levels closer together
-TWIN_REACH=60        # a stretch where they stand further apart than that is bridged when it is no longer than this (two source lines wander apart and back)
-TWIN_APART=12.0      # with more than this between them they are two roads: a lift fades out before it (the ground of a wider median takes up the difference)
-TWIN_RATE=.02        # a carriageway leaves its own profile for the shared one no faster than this
-TWIN_STEP=.03        # where they share a height the two may differ by this: a station left further under its twin is listed (`twins.apart` of the provenance)
-LIFTED=.001          # a lift smaller than this is none
+TWIN_MEDIAN=I.TWIN_MEDIAN  # the two carriageways of a road share one height where no more than this lies between their pavements (the rule and its functions are i93_north.py's, shared with Interstate 93: alongside, twin_lift, eased, lower_envelope)
+TWIN_REACH=I.TWIN_REACH
+TWIN_APART=I.TWIN_APART
+TWIN_RATE=I.TWIN_RATE
+TWIN_STEP=I.TWIN_STEP
+LIFTED=I.LIFTED
 TO_FEET=Transformer.from_crs(4326,2249,always_xy=True)
 FT=1200/3937
 METHOD=('Boston GIS layer 8 segments of the Massachusetts Turnpike, Storrow Drive and their ramps in travel order, resampled with source vertices kept; '
@@ -1380,71 +1380,7 @@ def may_rise(plan):
  return [o and plan.allowance[i]>.999 and not plan.street[i] and i not in joins and not any(plan.built[j] for j in (i-1,i,i+1) if 0<=j<n) for i,o in enumerate(in_the_open(plan))]
 
 
-def alongside(plan,other,free,other_open):
- """Where `other` runs alongside `plan` in the open: (beside, near). `beside` gives, per station of `plan` that may
- rise (`free`: may_rise), the distance along `other` of the point beside it, None where `other` does not run there in
- the open (`other_open`: in_the_open) the same way (PARALLEL) with no more than TWIN_APART between the two pavements.
- `near` marks the stations where only a median lies between them (TWIN_MEDIAN): there the two share one height; a
- stretch where more does is bridged when it is no longer than TWIN_REACH."""
- n=len(plan.points);pts=shapely.points(plan.points);d=shapely.distance(other.line,pts);s=shapely.line_locate_point(other.line,pts);total=other.line.length
- k=np.clip(np.searchsorted(other.along,s,'right'),1,len(other.points)-1);q=np.asarray(other.points,float);t=q[k]-q[k-1];t/=np.maximum(np.hypot(t[:,0],t[:,1]),1e-9)[:,None]
- shown=np.asarray(other_open,bool);median=d-(np.asarray(plan.widths,float)+np.interp(s,other.along,other.widths))/2
- ok=(s>.5)&(s<total-.5)&(np.abs(np.sum(t*np.asarray(plan.tangents,float),axis=1))>=PARALLEL)&np.asarray(free,bool)&shown[k-1]&shown[k]&(median<=TWIN_APART);near=ok&(median<=TWIN_MEDIAN)
- for a,b in runs((~near).tolist()):
-  if a>0 and b<n-1 and plan.along[b+1]-plan.along[a-1]<=TWIN_REACH and ok[a:b+1].all():near[a:b+1]=True
- return [float(s[i]) if ok[i] else None for i in range(n)],near.tolist()
-
-
-def lower_envelope(cap,up,down):
- """The largest sequence under `cap` that rises by no more than up[i] and falls by no more than down[i] from station i-1 to i."""
- f=list(cap)
- for i in range(1,len(f)):f[i]=min(f[i],f[i-1]+up[i])
- for i in range(len(f)-2,-1,-1):f[i]=min(f[i],f[i+1]+down[i+1])
- return f
-
-
-def eased(values,along,radius,pinned):
- """`values` along a road with no corner sharper than `radius`: a crest is cut from below (the lower hull of
- values + x^2/2R, less x^2/2R: nothing is raised for it), then a sag is filled from above between the stations that
- keep their value (`pinned`; the upper hull of values - x^2/2R, plus x^2/2R)."""
- v=np.asarray(values,float).copy();x=np.asarray(along,float);q=(x-x[0])**2/(2*radius)
- def hull(lo,hi,u,sign):
-  out=[]
-  for i in range(lo,hi+1):
-   while len(out)>=2 and sign*((u[out[-1]]-u[out[-2]])*(x[i]-x[out[-2]])-(u[i]-u[out[-2]])*(x[out[-1]]-x[out[-2]]))<=0:out.pop()
-   out.append(i)
-  return out
- u=v+q;k=hull(0,len(v)-1,u,-1);v=np.interp(x,x[k],u[k])-q
- for lo,hi in I.free_runs(np.asarray(pinned,bool)):
-  u=v-q;k=hull(lo,hi,u,1);v[lo:hi+1]=np.maximum(v[lo:hi+1],np.interp(x[lo:hi+1],x[k],u[k])+q[lo:hi+1])
- return v
-
-
-def twin_lift(plan,heights,beside,near,level):
- """How far a carriageway rises to its twin: per station, metres over `heights` (its profile alone). `beside` and
- `near` are alongside's, `level(distance)` the twin's height. Where only a median lies between them (`near`) the lift
- is what the twin stands higher by. It fades from there no faster than TWIN_RATE: out into the stretch where they
- stand further apart (never over the twin's level there), or, before a station that may not move, inside the stretch
- itself, which it leaves on the road's radius. It is no more than the room under whatever the road passes beneath
- (plan.ceiling), and nowhere changes faster than the road's own grade leaves room for (the nearest point of the twin
- jumps where the two lines bend apart), so the lifted profile keeps within the grade; its corners (where the two
- profiles cross at an angle, where a fade ends) are rounded to that radius (eased)."""
- n=len(heights);x=np.asarray(plan.along,float);h=np.maximum(np.diff(x),1e-6);slope=np.diff(np.asarray(heights,float))/h;limit=plan.grade-1e-4
- rise=[0.,*(np.maximum(0.,limit-slope)*h).tolist()];fall=[0.,*(np.maximum(0.,limit+slope)*h).tolist()]   # what the grade leaves a lift to rise and to fall by from station i-1 to i
- slow=[0.,*(TWIN_RATE*h).tolist()];up=[min(a,b) for a,b in zip(rise,slow)];down=[min(a,b) for a,b in zip(fall,slow)]
- twin=[max(0.,level(s)-heights[i]) if s is not None else 0. for i,s in enumerate(beside)];want=[v if near[i] else 0. for i,v in enumerate(twin)]
- if max(want)<=LIFTED:return [0.]*n
- for i in range(1,n):want[i]=max(want[i],want[i-1]-down[i])   # carried on, fading as fast as it may
- for i in range(n-2,-1,-1):want[i]=max(want[i],want[i+1]-up[i+1])
- cap=[max(0.,plan.ceiling[i]-heights[i]) if beside[i] is not None else 0. for i in range(n)];fade=lower_envelope(cap,up,down)
- still=x[[s is None for s in beside]]
- if len(still):
-  # (a station that keeps its height is left on a curve, not at an angle: on the road's radius until the lift changes at TWIN_RATE)
-  k=np.searchsorted(still,x);d=np.minimum(np.abs(x-still[np.clip(k-1,0,len(still)-1)]),np.abs(still[np.clip(k,0,len(still)-1)]-x));r=TWIN_RATE*plan.radius
-  fade=np.minimum(fade,np.where(d<=r,d*d/(2*plan.radius),TWIN_RATE*(d-r/2))).tolist()
- lift=lower_envelope([min(want[i],fade[i],twin[i]) for i in range(n)],rise,fall)   # (never over the twin)
- lift=np.minimum(eased(lift,x,plan.radius,[beside[i] is None or lift[i]>=cap[i]-1e-9 for i in range(n)]),cap)
- return [float(v) if v>LIFTED else 0. for v in lift]
+alongside,lower_envelope,eased,twin_lift=I.alongside,I.lower_envelope,I.eased,I.twin_lift   # where the two run alongside each other, and how far the lower rises: shared with Interstate 93
 
 
 def cut_ground(city,plans,grid,lidded,paved,paved_lines,paved_tree,under,joined,footprints):
@@ -1713,14 +1649,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
 
 
 # ---------------------------------------------------------------- decks and tunnels
-def runs(mask):
- """[start, end] index pairs of the True runs of a boolean list."""
- out=[];start=None
- for i,v in enumerate(mask):
-  if v and start is None:start=i
-  if not v and start is not None:out.append([start,i-1]);start=None
- if start is not None:out.append([start,len(mask)-1])
- return out
+runs=I.runs   # [start, end] index pairs of the True runs of a boolean list
 
 
 def building_relation(plan,i,building,y=None):
