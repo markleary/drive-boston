@@ -47,6 +47,9 @@ def main():
  print(f"{len(record['terrain']['vertices'])} grid vertices changed (cut up to {record['terrain']['maxCutMeters']} m, filled up to {record['terrain']['maxFillMeters']} m); {len(record['approachPieces'])} street approach pieces")
  print(f"{len(record['overpasses'])} bridges levelled over the cut ({sum(len(c['changed']) for c in record['overpasses'])} deck pieces)")
  for c in record['overpasses']:print(f"  {', '.join(c['names'])}: deck {c['deck'][0]} to {c['deck'][1]} m between landings at {c['landings']}")
+ for pair in record['twins']['pairs']:
+  one,other=pair['roads'];lift=pair['lifted'];print(f"{one} and {other} share one height along {pair['alongsideMeters']:.0f} m: {one} lifted over {lift[one]['meters']:.0f} m (up to {lift[one]['max']:.2f} m), {other} over {lift[other]['meters']:.0f} m (up to {lift[other]['max']:.2f} m); {len(pair['apart'])} stretches left apart (up to {max((e['by'] for e in pair['apart']),default=0):.2f} m)")
+ if record['twins']['ramps']:print(f"  ramps solved again with them: {', '.join(record['twins']['ramps'])}")
  seams=record['bridgeSeams'];print(f"{len(seams['changed'])} records changed where a bridge stopped over the cut ({', '.join(sorted({c['name'] for c in seams['changed']})) or 'none'}); ramp pieces added: {', '.join(seams['pieces']) or 'none'}")
  for i in record['infeasible']:print(f"  tight: {i['road']} {i['at']} by {i['worst']} m")
  for u in record['unresolved']:print(f"  unresolved crossing: {u['road']} and {u['other']} at {u['point']}")

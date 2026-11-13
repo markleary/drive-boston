@@ -76,6 +76,21 @@ Storrow Drive its lane counts, its tunnel and its posted clearances.
   for that length before it descends (street_stretch: the Dartmouth Street
   entrance to the nose of the island between Huntington Avenue's carriageways,
   the Haul Road entrance to where the curbs part it from the road).
+- Twins: the two carriageways of a road are each solved on their own ground, and came out a step apart wherever that
+  ground differs across the median (a street's graded corridor reaching under one, a crossfall, two bridge approaches
+  a few stations apart): 0.3 to 0.5 m along Storrow Drive between Massachusetts Avenue and Dartmouth Street, up to
+  1.9 m where the Allston viaduct comes down. The 6 m grid cannot hold two levels a lane apart, so the higher one
+  stood proud of the ground on its median side, railed. They are brought to one height wherever they run alongside
+  each other in the open (at or above source level 0, under no roof: in_the_open) with no more than TWIN_MEDIAN
+  between their pavements, the lower following the higher, so that nothing is taken into the ground (twin_lift). A
+  lift fades at TWIN_RATE, out into the stretch where more lies between them (up to TWIN_APART) or, before a station
+  that keeps its height (a portal, a street landing, a street joining the road, a building over the pavement:
+  may_rise), inside the stretch itself; it ends under a bridge's clearance and keeps the road within its grade. A ramp
+  that takes its heights from a lifted carriageway is solved again. The roads are classified, the ground is cut and
+  the ground a deck stands in is judged on each road as it rides alone (plan.solo; classify_ground, cut_ground, stand),
+  so no record boundary and no id moves; the ground then comes up with a lifted road (the graded roadway of
+  highway_roadways.py, or its fills). `twins` of the provenance lists the lifts and, record by record, what stays
+  under its twin (`apart`), against which validate checks the installed decks.
 - Roadways: once the profiles are solved and the records classified, every road in the open at its own ground is
   measured to Boston's curb survey (the `curbs` of the source sidecar) and corrected (highway_roadways.py): a cut
   and a Turnpike carriageway are moved and narrowed to their surveyed pavement, Storrow Drive's cuts take theirs
@@ -175,6 +190,12 @@ LANDING_LIP=.15      # ground this far over a ramp inside its street landing's t
 LANDING_STEP=.05     # and a landing that ends for it ends where the ground first stood this far over the road: the step the runtime leaves there
 SIGN_IN=25           # a CARS ONLY sign stands this far along Storrow Drive from where traffic comes onto it
 SIGN_AHEAD=70        # and a LOW CLEARANCE sign this far before the structure
+TWIN_MEDIAN=6.0      # the two carriageways of a road share one height where no more than this lies between their pavements: a cell of the terrain grid, which cannot hold two levels closer together
+TWIN_REACH=60        # a stretch where they stand further apart than that is bridged when it is no longer than this (two source lines wander apart and back)
+TWIN_APART=12.0      # with more than this between them they are two roads: a lift fades out before it (the ground of a wider median takes up the difference)
+TWIN_RATE=.02        # a carriageway leaves its own profile for the shared one no faster than this
+TWIN_STEP=.03        # where they share a height the two may differ by this: a station left further under its twin is listed (`twins.apart` of the provenance)
+LIFTED=.001          # a lift smaller than this is none
 TO_FEET=Transformer.from_crs(4326,2249,always_xy=True)
 FT=1200/3937
 METHOD=('Boston GIS layer 8 segments of the Massachusetts Turnpike, Storrow Drive and their ramps in travel order, resampled with source vertices kept; '
@@ -1317,10 +1338,127 @@ def separation(lower_tunnel,lower):
  return (lower.clearance+ROOF+.35) if lower_tunnel else THICKNESS+(STORROW_UNDER if getattr(lower,'under',None)==STORROW_UNDER else I.CLEAR_OVER)
 
 
-def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None):
+def twin_pairs(plans):
+ """The pairs of carriageways of one road, in route order: the main plans that share a `bridge`."""
+ mains=[p for p in plans if p.main];return [(a,b) for k,a in enumerate(mains) for b in mains[k+1:] if a.spec['bridge']==b.spec['bridge']]
+
+
+def in_the_open(plan):
+ """The stations of a solved, classified plan that run in the open at or above source level 0: under no roof and no
+ candidate for one (cover). Its twin beside it comes up to it there."""
+ return [plan.level[i]>=0 and not plan.candidate[i] and not plan.covered[i] for i in range(len(plan.points))]
+
+
+def may_rise(plan):
+ """Of those, the stations a twin may lift: off the street the road lands on, none where a street joins it at its
+ height (the street's end is the ground's, which does not follow), and none with a building over its pavement there
+ or at the station beside it (what that building needs, buildings_over, is measured against the road as it lies)."""
+ n=len(plan.points);joins={k for k,_ in plan.junctions}
+ return [o and plan.allowance[i]>.999 and not plan.street[i] and i not in joins and not any(plan.built[j] for j in (i-1,i,i+1) if 0<=j<n) for i,o in enumerate(in_the_open(plan))]
+
+
+def alongside(plan,other,free,other_open):
+ """Where `other` runs alongside `plan` in the open: (beside, near). `beside` gives, per station of `plan` that may
+ rise (`free`: may_rise), the distance along `other` of the point beside it, None where `other` does not run there in
+ the open (`other_open`: in_the_open) the same way (PARALLEL) with no more than TWIN_APART between the two pavements.
+ `near` marks the stations where only a median lies between them (TWIN_MEDIAN): there the two share one height; a
+ stretch where more does is bridged when it is no longer than TWIN_REACH."""
+ n=len(plan.points);pts=shapely.points(plan.points);d=shapely.distance(other.line,pts);s=shapely.line_locate_point(other.line,pts);total=other.line.length
+ k=np.clip(np.searchsorted(other.along,s,'right'),1,len(other.points)-1);q=np.asarray(other.points,float);t=q[k]-q[k-1];t/=np.maximum(np.hypot(t[:,0],t[:,1]),1e-9)[:,None]
+ shown=np.asarray(other_open,bool);median=d-(np.asarray(plan.widths,float)+np.interp(s,other.along,other.widths))/2
+ ok=(s>.5)&(s<total-.5)&(np.abs(np.sum(t*np.asarray(plan.tangents,float),axis=1))>=PARALLEL)&np.asarray(free,bool)&shown[k-1]&shown[k]&(median<=TWIN_APART);near=ok&(median<=TWIN_MEDIAN)
+ for a,b in runs((~near).tolist()):
+  if a>0 and b<n-1 and plan.along[b+1]-plan.along[a-1]<=TWIN_REACH and ok[a:b+1].all():near[a:b+1]=True
+ return [float(s[i]) if ok[i] else None for i in range(n)],near.tolist()
+
+
+def lower_envelope(cap,up,down):
+ """The largest sequence under `cap` that rises by no more than up[i] and falls by no more than down[i] from station i-1 to i."""
+ f=list(cap)
+ for i in range(1,len(f)):f[i]=min(f[i],f[i-1]+up[i])
+ for i in range(len(f)-2,-1,-1):f[i]=min(f[i],f[i+1]+down[i+1])
+ return f
+
+
+def eased(values,along,radius,pinned):
+ """`values` along a road with no corner sharper than `radius`: a crest is cut from below (the lower hull of
+ values + x^2/2R, less x^2/2R: nothing is raised for it), then a sag is filled from above between the stations that
+ keep their value (`pinned`; the upper hull of values - x^2/2R, plus x^2/2R)."""
+ v=np.asarray(values,float).copy();x=np.asarray(along,float);q=(x-x[0])**2/(2*radius)
+ def hull(lo,hi,u,sign):
+  out=[]
+  for i in range(lo,hi+1):
+   while len(out)>=2 and sign*((u[out[-1]]-u[out[-2]])*(x[i]-x[out[-2]])-(u[i]-u[out[-2]])*(x[out[-1]]-x[out[-2]]))<=0:out.pop()
+   out.append(i)
+  return out
+ u=v+q;k=hull(0,len(v)-1,u,-1);v=np.interp(x,x[k],u[k])-q
+ for lo,hi in I.free_runs(np.asarray(pinned,bool)):
+  u=v-q;k=hull(lo,hi,u,1);v[lo:hi+1]=np.maximum(v[lo:hi+1],np.interp(x[lo:hi+1],x[k],u[k])+q[lo:hi+1])
+ return v
+
+
+def twin_lift(plan,heights,beside,near,level):
+ """How far a carriageway rises to its twin: per station, metres over `heights` (its profile alone). `beside` and
+ `near` are alongside's, `level(distance)` the twin's height. Where only a median lies between them (`near`) the lift
+ is what the twin stands higher by. It fades from there no faster than TWIN_RATE: out into the stretch where they
+ stand further apart (never over the twin's level there), or, before a station that may not move, inside the stretch
+ itself, which it leaves on the road's radius. It is no more than the room under whatever the road passes beneath
+ (plan.ceiling), and nowhere changes faster than the road's own grade leaves room for (the nearest point of the twin
+ jumps where the two lines bend apart), so the lifted profile keeps within the grade; its corners (where the two
+ profiles cross at an angle, where a fade ends) are rounded to that radius (eased)."""
+ n=len(heights);x=np.asarray(plan.along,float);h=np.maximum(np.diff(x),1e-6);slope=np.diff(np.asarray(heights,float))/h;limit=plan.grade-1e-4
+ rise=[0.,*(np.maximum(0.,limit-slope)*h).tolist()];fall=[0.,*(np.maximum(0.,limit+slope)*h).tolist()]   # what the grade leaves a lift to rise and to fall by from station i-1 to i
+ slow=[0.,*(TWIN_RATE*h).tolist()];up=[min(a,b) for a,b in zip(rise,slow)];down=[min(a,b) for a,b in zip(fall,slow)]
+ twin=[max(0.,level(s)-heights[i]) if s is not None else 0. for i,s in enumerate(beside)];want=[v if near[i] else 0. for i,v in enumerate(twin)]
+ if max(want)<=LIFTED:return [0.]*n
+ for i in range(1,n):want[i]=max(want[i],want[i-1]-down[i])   # carried on, fading as fast as it may
+ for i in range(n-2,-1,-1):want[i]=max(want[i],want[i+1]-up[i+1])
+ cap=[max(0.,plan.ceiling[i]-heights[i]) if beside[i] is not None else 0. for i in range(n)];fade=lower_envelope(cap,up,down)
+ still=x[[s is None for s in beside]]
+ if len(still):
+  # (a station that keeps its height is left on a curve, not at an angle: on the road's radius until the lift changes at TWIN_RATE)
+  k=np.searchsorted(still,x);d=np.minimum(np.abs(x-still[np.clip(k-1,0,len(still)-1)]),np.abs(still[np.clip(k,0,len(still)-1)]-x));r=TWIN_RATE*plan.radius
+  fade=np.minimum(fade,np.where(d<=r,d*d/(2*plan.radius),TWIN_RATE*(d-r/2))).tolist()
+ lift=lower_envelope([min(want[i],fade[i],twin[i]) for i in range(n)],rise,fall)   # (never over the twin)
+ lift=np.minimum(eased(lift,x,plan.radius,[beside[i] is None or lift[i]>=cap[i]-1e-9 for i in range(n)]),cap)
+ return [float(v) if v>LIFTED else 0. for v in lift]
+
+
+def cut_ground(city,plans,grid,lidded,paved,paved_lines,paved_tree,under,joined,footprints):
+ """The deck cut under the plans as they lie (i93_north.cut_plan, a street's corridor kept out of it: street_pavements):
+ (the cut grid, the streets carried over its edge on deck pieces, the notes on those not carried, the road list with
+ those pieces, the deck runs as they lie)."""
+ # (each deck at the height it has on its own ground, HR.alone: a carriageway its twin has lifted takes its ground up with it afterwards, highway_roadways.fills)
+ runs_=deck_runs(plans,True);cut=I.cut_plan(runs_,grid,lidded);cut=(cut[0],cut[1]-street_pavements(cut,runs_,paved,paved_lines,paved_tree,grid,joined))
+ replaced,notes=I.carry_overpasses(city['roads'],under,grid,I.Terrain(grid,lidded),cut[1]) if cut[0] else ({},[])
+ for parts in replaced.values():
+  for piece in parts:
+   if piece.get('bridge',{}).get('kind')==I.APPROACH:piece['bridge']={**piece['bridge'],'id':f"highway-{piece['id']}",'kind':APPROACH}
+ roads=[x for r in city['roads'] for x in replaced.get(r['id'],[r])]
+ result,_,_=I.cut_terrain(runs_,grid,lidded,roads,footprints,cut)
+ return result,replaced,notes,roads,deck_runs(plans)
+
+
+def stand(city,plans,grid,lidded,paved,paved_lines,paved_tree,under,joined,footprints):
+ """Cut the ground under the decks until none has ground standing in its pavement: a deck station the ground still
+ stands in becomes a walled cut (plan.forced), and the grid is cut again for the decks that remain. Like the
+ classification it feeds, this is judged on each road as it rides its own ground (HR.alone), so a lift moves no record
+ boundary. Returns what cut_ground returns for the last cut."""
+ by_id={p.id:p for p in plans}
+ for _ in range(12):
+  out=cut_ground(city,plans,grid,lidded,paved,paved_lines,paved_tree,under,joined,footprints);standing=standing_ground(plans,I.Terrain(grid,out[0]),True)
+  if not standing:return out
+  for k,rows in standing.items():
+   for i in rows:by_id[k].forced[i]=True
+   classify_ground(by_id[k])
+ raise AssertionError(f'decks with ground standing in their pavement: {sorted(standing)}')
+
+
+def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twins=True):
  """Solved plans and a report. `graded` is the int16 graded grid with any earlier cut of this stage
  restored, `ungraded` the survey grid, `water` (polygons, level(x,z)), `buildings(bounds)` the buildings of the package tiles
- (tile_buildings), `tunnels` the Central Artery tunnel roads."""
+ (tile_buildings), `tunnels` the Central Artery tunnel roads. With `twins` the two carriageways of a road are brought to
+ one height where they run alongside each other (see the module text); without, each keeps the profile of its own ground."""
  ground=I.Terrain(city['elevation'],graded);raw=I.Terrain(city['elevation'],ungraded);existing=[r for r in city['roads'] if not stage_owned(r) and not r.get('tunnel')]
  lines=[LineString(r['points']) for r in existing];tree=STRtree(lines);streets={}
  for r in existing:
@@ -1440,7 +1578,8 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None):
     plan.on_deck[e]=bool(r.get('elevations')) and not ((j==0 and r.get('startLevel')==0) or (j==len(r['points'])-1 and r.get('endLevel')==0)) and heights[k]-ground(*r['points'][j])>.5
     if 'landing' in plan.spec and not plan.on_deck[e]:street_stretch(plan,e)
  leads=defaultdict(list)
- def solve_ramp(plan):
+ def bind_ramp(plan):
+  # What a ramp is solved between: its ends, the stations held to the roads it leaves, joins or follows, and its bounds.
   plan.fixed={};land(plan)
   for e,kind in enumerate(plan.ends):
    i=0 if e==0 else len(plan.points)-1
@@ -1468,11 +1607,13 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None):
      if other is plan or not kind or kind[0]!='node' or kind[1] is not plan or key(other.points[j])!=key(plan.points[i]) or not hasattr(other,'floors'):continue
      need=max(v-other.grade*.9*abs(float(other.along[q]-other.along[j])) for q,v in enumerate(other.floors))
      if need>-math.inf:plan.floor[i]=max(plan.floor[i],need)
+ def settle_ramp(plan):
   I.solve(plan,report)
   # Held to the road it follows at the stations beside its end as well, or squeezed between its bounds further on, the spline
   # can leave the end itself centimetres off the road it meets: the end is exact, and its first segment takes up the difference.
   for i in (0,len(plan.points)-1):
    if i in plan.fixed and abs(plan.y[i]-plan.fixed[i])<SNAP:plan.y[i]=plan.fixed[i]
+ def solve_ramp(plan):bind_ramp(plan);settle_ramp(plan)
  for sweep in range(3):
   report['infeasible']=[]
   for plan in mains:plan.fixed={};land(plan);prepare(plan);I.solve(plan,report)
@@ -1493,15 +1634,57 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None):
   if not late:break
   for plan in late:report['infeasible']=[x for x in report['infeasible'] if x['road']!=plan.id];solve_ramp(plan)
  # Close the survey's cut over the tunnels, then read the ground again: the lids decide what is covered.
- lidded=lids(plans,surface,surface_lines,city['elevation'],graded,buildings);ground=I.Terrain(city['elevation'],lidded)
- def read():
-  for plan in plans:
-   x=cross_sections(plan,.5);g=np.array([[ground(float(a),float(b)) for a,b in row] for row in x]);plan.edge=g.max(1).tolist();plan.high=g[:,1:6].max(1).tolist();plan.low=g.min(1).tolist();plan.mid=np.median(g[:,1:6],axis=1).tolist()
-   plan.forced=[False]*len(plan.points);classify_ground(plan)
- read()
- # and the holes the lids leave between them over a tunnel
- closed=close_gaps(plans,surface,surface_lines,city['elevation'],lidded,buildings)
- if closed is not None:lidded=closed;ground=I.Terrain(city['elevation'],lidded);read()
+ def finish():
+  lidded=lids(plans,surface,surface_lines,city['elevation'],graded,buildings)
+  def read(heights):
+   over=I.Terrain(city['elevation'],heights)
+   for plan in plans:
+    x=cross_sections(plan,.5);g=np.array([[over(float(a),float(b)) for a,b in row] for row in x]);plan.edge=g.max(1).tolist();plan.high=g[:,1:6].max(1).tolist();plan.low=g.min(1).tolist();plan.mid=np.median(g[:,1:6],axis=1).tolist()
+    plan.forced=[False]*len(plan.points);classify_ground(plan)
+  read(lidded)
+  # and the holes the lids leave between them over a tunnel
+  closed=close_gaps(plans,surface,surface_lines,city['elevation'],lidded,buildings)
+  if closed is not None:lidded=closed;read(lidded)
+  return lidded
+ lidded=finish();report['twins']={'pairs':[],'ramps':[]};pairs_=twin_pairs(plans) if twins else []
+ if not pairs_:return plans,fixed,report,lidded
+ # The two carriageways of a road, each solved on its own ground, come out a step apart where that ground differs across the
+ # median (a street's graded corridor reaching under one, a crossfall, two bridge approaches a few stations apart), and the 6 m
+ # grid cannot hold two levels a lane apart. They are brought to one height where they run alongside each other in the open.
+ # Every plan first keeps the heights it has alone (plan.solo): the classification, the cut and the ground a road stands in
+ # are read from those from here on (classify_ground, cut_ground, stand), so lifting a road moves no record boundary.
+ for plan in plans:plan.solo=list(plan.y)
+ def couple(a,b):
+  # The lower follows the higher: `a`, the first in route order, rises to its twin's profile wherever that stands higher,
+  # and `b` then to what `a` has become, so the two are one where both may move and each keeps its own height elsewhere.
+  ua,ub=list(a.y),list(b.y);sa,na=alongside(a,b,may_rise(a),in_the_open(b));sb,nb=alongside(b,a,may_rise(b),in_the_open(a))
+  for plan in (a,b):plan.fixed={};land(plan);prepare(plan)   # (its bounds as it was last solved with: the ceilings)
+  a.y=[round(y+v,4) for y,v in zip(ua,twin_lift(a,ua,sa,na,b.at))];b.y=[round(y+v,4) for y,v in zip(ub,twin_lift(b,ub,sb,nb,a.at))]
+  def tally(plan,u):
+   lift=np.asarray(plan.y)-np.asarray(u);rows=np.flatnonzero(lift>.02).tolist();return {'meters':round(float(sum(plan.along[min(len(u)-1,i+1)]-plan.along[i] for i in rows)),1),'max':round(float(lift.max()),3)}
+  def apart(plan,other,beside,near):
+   # what stays under its twin although only a median lies between them: a fade before a station that keeps its height, the room under a bridge
+   under=[other.at(s)-plan.y[i] if s is not None and near[i] else 0. for i,s in enumerate(beside)];return [[i,j,round(max(under[i:j+1]),3)] for i,j in runs([v>TWIN_STEP for v in under])]
+  return {'roads':[a.id,b.id],'alongsideMeters':round(float(sum(a.along[min(len(ua)-1,i+1)]-a.along[i] for i,v in enumerate(na) if v)),1),'lifted':{a.id:tally(a,ua),b.id:tally(b,ub)},'apart':{a.id:apart(a,b,sa,na),b.id:apart(b,a,sb,nb)}}
+ # A ramp is solved again when what it is solved between has changed: the carriageway it leaves or joins, a road it follows or crosses.
+ def reads(plan):bind_ramp(plan);return (tuple(sorted(plan.fixed.items())),*(tuple(v) for v in (plan.floor,plan.lift,plan.ceiling,plan.drop,plan.hold,plan.trench,plan.stiff)))
+ for plan in I.ordered(ramps,leads,trunks):bind_ramp(plan)   # (a trunk reads the floors its branches were last bound with)
+ known={plan.id:reads(plan) for plan in I.ordered(ramps,leads,trunks)}
+ report['twins']['pairs']=[couple(a,b) for a,b in pairs_];again=set()
+ if all(max(v['max'] for v in pair['lifted'].values())<=LIFTED for pair in report['twins']['pairs']):return plans,fixed,report,lidded
+ for _ in range(8):
+  late=False
+  for plan in I.ordered(ramps,leads,trunks):
+   now=reads(plan)
+   if now!=known[plan.id]:
+    known[plan.id]=now;report['infeasible']=[x for x in report['infeasible'] if x['road']!=plan.id];settle_ramp(plan);again.add(plan.id);late=True
+    # (a ramp only ever rises with its carriageway: a station the spline lets sag beside the lift stays where it was)
+    plan.y=[max(y,u) for y,u in zip(plan.y,plan.solo)]
+  if not late:break
+ else:raise AssertionError('the ramps of the lifted carriageways did not settle')
+ report['twins']['ramps']=sorted(again)
+ # the lids again under the roads as they now lie (the classification reads plan.solo)
+ lidded=finish()
  return plans,fixed,report,lidded
 
 
@@ -1516,11 +1699,13 @@ def runs(mask):
  return out
 
 
-def building_relation(plan,i,building):
+def building_relation(plan,i,building,y=None):
  """How station i of a solved plan passes a building over its pavement: 'under' its base with the roof slab between,
- 'over' its roof on a deck, or None: the two stand in each other's space."""
- if plan.y[i]+plan.clearance+ROOF<=building['base']-.05+1e-6:return 'under'
- if plan.y[i]-THICKNESS>=building['base']+building['height']+.3:return 'over'
+ 'over' its roof on a deck, or None: the two stand in each other's space. `y` is the road's height there when it is
+ not plan.y[i]."""
+ y=plan.y[i] if y is None else y
+ if y+plan.clearance+ROOF<=building['base']-.05+1e-6:return 'under'
+ if y-THICKNESS>=building['base']+building['height']+.3:return 'over'
  return None
 
 
@@ -1538,12 +1723,14 @@ def classify_ground(plan):
    instead of the grid being graded around a deck.
  A deck shorter than GAP between two such stretches stays part of them. A street landing is never part of a deep stretch;
  a street stretch (street_stretch) is the first part of the tunnel record its road goes down into.
- Every other station is a deck (plan.in_cut: one whose ground stands at its surface)."""
- n=len(plan.points);roof=plan.clearance+ROOF;below=[plan.y[i]<plan.high[i]+SUNK for i in range(n)];plan.tunnel=[False]*n
+ Every other station is a deck (plan.in_cut: one whose ground stands at its surface).
+ A road is classified as it rides its own ground: once its twin may have lifted it (build), the heights read here are
+ the ones it was solved with alone (plan.solo), so that bringing two carriageways level moves no record boundary."""
+ n=len(plan.points);roof=plan.clearance+ROOF;y=getattr(plan,'solo',None) or plan.y;below=[y[i]<plan.high[i]+SUNK for i in range(n)];plan.tunnel=[False]*n
  for e in (0,1):
   if plan.landing[e]:
    for i in range(n):
-    if (plan.along[i] if e==0 else plan.along[-1]-plan.along[i])<LANDING and plan.y[i]>plan.high[i]-.4:below[i]=False
+    if (plan.along[i] if e==0 else plan.along[-1]-plan.along[i])<LANDING and y[i]>plan.high[i]-.4:below[i]=False
  for a,b in runs(below):
   if not any(plan.level[i]<0 for i in range(a,b+1)):continue
   for i in range(max(0,a-1),min(n-1,b+1)+1):plan.tunnel[i]=True
@@ -1552,9 +1739,9 @@ def classify_ground(plan):
   if a>0 and b<n-1 and plan.along[b]-plan.along[a]<30 and all(plan.level[i]<=0 for i in range(a,b+1)):
    for i in range(a,b+1):plan.tunnel[i]=True
  plan.deep=list(plan.tunnel)
- plan.conflict=[any(building_relation(plan,i,plan.buildings[j]) is None for j in plan.built[i]) for i in range(n)]
- plan.fits=[not plan.conflict[i] and any(building_relation(plan,i,plan.buildings[j])=='under' for j in plan.above[i]) for i in range(n)]
- walled=[plan.level[i]<=0 and plan.edge[i]-plan.y[i]>=WALLED for i in range(n)]
+ plan.conflict=[any(building_relation(plan,i,plan.buildings[j],y[i]) is None for j in plan.built[i]) for i in range(n)]
+ plan.fits=[not plan.conflict[i] and any(building_relation(plan,i,plan.buildings[j],y[i])=='under' for j in plan.above[i]) for i in range(n)]
+ walled=[plan.level[i]<=0 and plan.edge[i]-y[i]>=WALLED for i in range(n)]
  # Like a deep stretch, a walled or roofed one takes one more station at each end, so the decks beside it start on clear ground.
  for a,b in runs([plan.fits[i] or plan.conflict[i] or walled[i] or plan.forced[i] for i in range(n)]):
   for i in range(max(0,a-1),min(n-1,b+1)+1):plan.tunnel[i]=True
@@ -1587,7 +1774,7 @@ def classify_ground(plan):
   while 0<=j<n and not plan.tunnel[j]:j+=step
   if 0<=j<n and abs(float(plan.along[j]-plan.along[i-step]))<GAP and all(plan.level[q]<=0 for q in range(min(k,j),max(k,j)+1)):
    for q in range(min(k,j),max(k,j)+1):plan.tunnel[q]=True
- plan.covered=[plan.tunnel[i] and (plan.fits[i] or (plan.deep[i] and plan.y[i]+roof<=plan.low[i]-.05)) for i in range(n)]
+ plan.covered=[plan.tunnel[i] and (plan.fits[i] or (plan.deep[i] and y[i]+roof<=plan.low[i]-.05)) for i in range(n)]
  plan.in_cut=[(not plan.tunnel[i]) and below[i] for i in range(n)]
 
 
@@ -1741,20 +1928,20 @@ def warning_signs(plans,report,source):
 
 
 class DeckRun:
- """The deck stations a..b of a plan, as cut_plan and cut_terrain read a plan."""
- def __init__(self,plan,a,b):
-  self.id=plan.id;self.points=plan.points[a:b+1];self.y=plan.y[a:b+1];self.widths=plan.widths[a:b+1];self.terrain=plan.edge[a:b+1];self.allowance=plan.allowance[a:b+1]
+ """The deck stations a..b of a plan, as cut_plan and cut_terrain read a plan: at the heights it has on its own ground (`alone`) or as it lies."""
+ def __init__(self,plan,a,b,alone=False):
+  self.id=plan.id;self.points=plan.points[a:b+1];self.y=(HR.alone(plan) if alone else plan.y)[a:b+1];self.widths=plan.widths[a:b+1];self.terrain=plan.edge[a:b+1];self.allowance=plan.allowance[a:b+1]
   self.along=np.asarray(plan.along[a:b+1])-float(plan.along[a]);self.line=LineString(self.points)
 
 
-def deck_runs(plans):
- """The deck stretches of the plans, each with the tunnel station it shares at either end."""
+def deck_runs(plans,alone=False):
+ """The deck stretches of the plans, each with the tunnel station it shares at either end (`alone`: DeckRun)."""
  out=[]
  for plan in plans:
   n=len(plan.points)
   for a,b in runs([not t for t in plan.tunnel]):
    a,b=max(0,a-1),min(n-1,b+1)
-   if b>a:out.append(DeckRun(plan,a,b))
+   if b>a:out.append(DeckRun(plan,a,b,alone))
  return out
 
 
@@ -1778,19 +1965,20 @@ def street_pavements(cut,decks,streets,lines,tree,grid,joined=frozenset()):
  return set(vs[paved].tolist())
 
 
-def standing_ground(plans,ground):
+def standing_ground(plans,ground,alone=False):
  """Deck stations whose pavement the ground still stands in after the cut (a building keeps its ground, and a
- 6 m cell with one vertex under it slopes into the roadway): {plan id: stations}."""
+ 6 m cell with one vertex under it slopes into the roadway): {plan id: stations}. `alone` reads each road at the
+ height it has on its own ground (HR.alone), as the cut it follows does."""
  out={}
  for plan in plans:
-  n=len(plan.points);rows=[i for i in range(n) if not plan.tunnel[i]]
+  n=len(plan.points);rows=[i for i in range(n) if not plan.tunnel[i]];heights=HR.alone(plan) if alone else plan.y
   if not rows:continue
   # A deck record starts on the tunnel station beside it: where the ground stands in that one, the tunnel takes the next station.
   for i in range(n):
    if plan.tunnel[i] and any(0<=j<n and not plan.tunnel[j] for j in (i-1,i+1)):
     half=plan.widths[i]/2-.3;(x,z),(tx,tz)=plan.points[i],plan.tangents[i];lip=LANDING_LIP+.02 if plan.allowance[i]<=.999 else -.02
-    if max(ground(x-tz*o,z+tx*o) for o in np.linspace(-half,half,9).tolist())>plan.y[i]+lip:out.setdefault(plan.id,set()).update(j for j in (i-1,i+1) if 0<=j<n and not plan.tunnel[j])
-  p=np.asarray(plan.points,float)[rows];t=np.asarray(plan.tangents,float)[rows];half=np.asarray(plan.widths,float)[rows]/2-.3;y=np.asarray(plan.y,float)[rows]
+    if max(ground(x-tz*o,z+tx*o) for o in np.linspace(-half,half,9).tolist())>heights[i]+lip:out.setdefault(plan.id,set()).update(j for j in (i-1,i+1) if 0<=j<n and not plan.tunnel[j])
+  p=np.asarray(plan.points,float)[rows];t=np.asarray(plan.tangents,float)[rows];half=np.asarray(plan.widths,float)[rows]/2-.3;y=np.asarray(heights,float)[rows]
   hit=set()
   def stands(q,d,h,height):return max(ground(float(q[0]-d[1]*o),float(q[1]+d[0]*o)) for o in np.linspace(-h,h,9).tolist())>height-.02
   for k,i in enumerate(rows):
@@ -1851,7 +2039,8 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  seamed,seams,seam_notes,seam_pieces=bridge_seams(kept,pre,ground)
  levelled,flattened,overpasses=level_overpasses(seamed,pre,ground)
  # then again from a first solve: where the road lies lower than its ground suggested, the bridge comes down to what it needs
- first,*_=build({**city,'roads':levelled},source,heights,ungraded,water,buildings.without(r['id'] for r in removed),tunnels,routes)
+ # (each road on its own ground: a bridge is levelled over the road as its ground has it, and stays a ceiling for a carriageway its twin would lift)
+ first,*_=build({**city,'roads':levelled},source,heights,ungraded,water,buildings.without(r['id'] for r in removed),tunnels,routes,twins=False)
  solved={p.id:(np.asarray(p.along,float),np.asarray(p.y,float)) for p in first};levelled,flattened,overpasses=level_overpasses(seamed,pre,ground,solved)
  # A landing of a levelled bridge in a hollow of the ground: the ground is raised to the bridge, which is then levelled once more on it.
  work,raised,lowered,hollows=raise_hollows(seamed,levelled,overpasses,pre,grid,heights)
@@ -1870,21 +2059,8 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   bad={p.id:round(grades[p.id],3) for p in plans if grades[p.id]>p.grade+GRADE_SLACK};assert not bad,f'highway profiles exceed their grade: {bad}'
   steep=[{'road':p.id,'grade':round(grades[p.id],4),'limit':p.grade} for p in plans if grades[p.id]>p.grade+1e-4]
   under=sorted({c['under'] for c in report['crossings'] if 'under' in c});by_id={p.id:p for p in plans};joined={id(r) for p in plans for r in p.joined}
-  for _ in range(12):
-   runs_=deck_runs(plans);cut=I.cut_plan(runs_,grid,lidded);cut=(cut[0],cut[1]-street_pavements(cut,runs_,paved,paved_lines,paved_tree,grid,joined))
-   replaced,notes=I.carry_overpasses(city['roads'],under,grid,I.Terrain(grid,lidded),cut[1]) if cut[0] else ({},[])
-   for parts in replaced.values():
-    for piece in parts:
-     if piece.get('bridge',{}).get('kind')==I.APPROACH:piece['bridge']={**piece['bridge'],'id':f"highway-{piece['id']}",'kind':APPROACH}
-   roads=[x for r in city['roads'] for x in replaced.get(r['id'],[r])]
-   result,_,_=I.cut_terrain(runs_,grid,lidded,roads,standing_buildings.footprints,cut)
-   # A deck the ground still stands in becomes a walled cut there, and the grid is cut again for the decks that remain.
-   standing=standing_ground(plans,I.Terrain(grid,result))
-   if not standing:break
-   for k,rows in standing.items():
-    for i in rows:by_id[k].forced[i]=True
-    classify_ground(by_id[k])
-  else:raise AssertionError(f'decks with ground standing in their pavement: {sorted(standing)}')
+  # A deck the ground still stands in becomes a walled cut there, and the grid is cut again for the decks that remain.
+  result,replaced,notes,roads,runs_=stand(city,plans,grid,lidded,paved,paved_lines,paved_tree,under,joined,standing_buildings.footprints)
   over=buildings_over(plans,I.Terrain(grid,result),removed)
   if len(over['removed'])==len(removed):break
   removed=over['removed']
@@ -1899,15 +2075,9 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   pairs,surveyed=HR.apply(plans,measured,gores,least_width,hold)
   for plan in plans:
    x=cross_sections(plan,.5);g=np.array([[before(float(a),float(b)) for a,b in row] for row in x]);plan.edge=g.max(1).tolist()
-  # the cut again, under the roads as they now lie, then the ground set under the decks that ride it
-  runs_=deck_runs(plans);cut=I.cut_plan(runs_,grid,lidded);cut=(cut[0],cut[1]-street_pavements(cut,runs_,paved,paved_lines,paved_tree,grid,joined))
-  replaced,notes=I.carry_overpasses(city['roads'],under,grid,before,cut[1]) if cut[0] else ({},[])
-  for parts in replaced.values():
-   for piece in parts:
-    if piece.get('bridge',{}).get('kind')==I.APPROACH:piece['bridge']={**piece['bridge'],'id':f"highway-{piece['id']}",'kind':APPROACH}
-  roads=[x for r in city['roads'] for x in replaced.get(r['id'],[r])]
-  result,_,_=I.cut_terrain(runs_,grid,lidded,roads,standing_buildings.footprints,cut)
-  result=HR.grade(plans,pairs,grid,result,paved,joined,standing_buildings.footprints,water[0],runs_,[r for r in roads if r.get('elevations') and not r.get('tunnel')],LANDING_LIP)
+  # the cut again, under the roads as they now lie, then the ground set under the decks that ride it and brought up under every other road its twin has lifted
+  result,replaced,notes,roads,runs_=cut_ground(city,plans,grid,lidded,paved,paved_lines,paved_tree,under,joined,standing_buildings.footprints)
+  result=HR.grade(plans,pairs+HR.fills(plans,pairs),grid,result,paved,joined,standing_buildings.footprints,water[0],runs_,[r for r in roads if r.get('elevations') and not r.get('tunnel')],LANDING_LIP)
   left=standing_ground(plans,I.Terrain(grid,result))
   if not left:break
   # A station whose surveyed place the ground does not leave free (a street's corridor, a building) stays where it was solved,
@@ -1926,6 +2096,8 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  vertices=np.flatnonzero(result!=heights);originals=heights[vertices].astype(int).tolist();vertices=vertices.tolist()
  hoods=[{'name':n['name'],'shape':Polygon(n['rings'][0],n['rings'][1:])} for n in city['neighborhoods']]
  decks,tunnel_records,ids=records(plans,hoods);signs=warning_signs(plans,report,source);pieces=[x for k in sorted(replaced) for x in replaced[k] if x.get('elevations')]
+ # (what the twins left apart, by record: stations of the record and the most its twin stands over it there)
+ twins={**report['twins'],'pairs':[{**pair,'apart':[{'road':rid,'stations':[max(i,a)-a,min(j,b)-a],'by':by} for k in pair['roads'] for i,j,by in pair['apart'][k] for a,b,rid in by_id[k].pieces if max(i,a)<=min(j,b)]} for pair in report['twins']['pairs']]}
  scale=grid.get('scale',.01);delta=(result.astype(np.int64)-heights.astype(np.int64))*scale
  def length(recs):return round(sum(stations(r['points'])[-1] for r in recs),1)
  summary={p.id:{'lengthMeters':round(float(p.along[-1]),1),'records':len(ids[p.id]),'tunnelMeters':round(sum(float(p.along[b]-p.along[a]) for a,b in runs(p.tunnel)),1),
@@ -1933,7 +2105,7 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  record_={'method':METHOD,'routes':summary,'closed':[{'road':r['id'],'end':r['closed'],'point':r['points'][-1 if r['closed']=='end' else 0]} for r in decks+tunnel_records if r.get('closed')],
   'crossings':report['crossings'],'newCrossings':report['newCrossings'],'atGrade':report['atGrade'],'unresolved':report['unresolved'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'steep':steep,'movedBeside':report['movedBeside'],'narrowed':report['narrowed'],'junctions':report['junctions'],
-  'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'buildings':over,'signs':signs,
+  'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'twins':twins,'buildings':over,'signs':signs,
   'roadways':{'method':HR.METHOD,'routes':surveyed,'trimmedMeters':trimmed,'aprons':[{k:a[k] for k in ('road','left','right')} for _,a in pairs]},
   'deckMeters':length(decks),'tunnelMeters':length(tunnel_records),
   'roads':{'added':[r['id'] for r in decks]+seam_pieces+[p['id'] for p in pieces if p['id'] not in replaced],'tunnels':[r['id'] for r in tunnel_records],'sources':flattened+[copy.deepcopy(r) for r in source_roads if r['id'] in replaced and r['id'] not in {f['id'] for f in flattened}],'removed':copies},
@@ -1950,7 +2122,7 @@ def replay(data_dir,city,record,source,installed=None):
  again,out,tunnel_records,result,_=install({**city,'roads':roads},source,heights,load_grid(data_dir/grid['source']),tile_buildings(data_dir,city),central_artery(data_dir,city),removed=record['buildings']['removed'])
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']};sidecar=json.loads((data_dir/SIDECAR).read_text())
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
- return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','overpasses','bridgeSeams','hollows','roadways'))
+ return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','overpasses','bridgeSeams','hollows','twins','roadways'))
 
 
 def validate(data_dir,city,record,ground):
@@ -2033,9 +2205,30 @@ def validate(data_dir,city,record,ground):
     specs=[{k_:q[k_] for k_ in ('road','start','end','left','right','ceiling','ceilingEnd')} for q in over['passages'] if q['building']==b['id']];done=b.get('buildingPassage') or {}
     assert not done.get('highway') or done.get('digest')==passage_digest(specs),f"{b['id']} was carved for other passages; rebuild from the baseline"
  assert seen==set(mesh),'every building over the highway must be in its tile'
+ # the two carriageways of a road at one height where they run alongside each other (build): a deck station whose twin's deck
+ # stands more than TWIN_STEP over it with only a median between the two pavements is one the stage lists as left apart. (The
+ # records lie where the curb survey put them, highway_roadways.py, a few metres from the lines the stage paired: half of
+ # TWIN_MEDIAN is surely a median, and the twin's height is read within 2 m along its grade of the point the stage read.)
+ level=0
+ for pair in (record.get('twins') or {}).get('pairs',[]):
+  listed=defaultdict(list);chains=[[x for _,x in sorted(routes[k],key=lambda q:q[0])] for k in pair['roads']]
+  for e in pair['apart']:listed[e['road']].append(e['stations'])
+  for mine,theirs in (chains,chains[::-1]):
+   others=[x for x in theirs if not x.get('tunnel')];lines=[LineString(x['points']) for x in others]
+   if not others:continue
+   tree_=STRtree(lines)
+   for r in mine:
+    if r.get('tunnel'):continue
+    pts=shapely.points(r['points']);t=I.tangents(r['points'])
+    for i,j in zip(*tree_.query_nearest(pts,all_matches=False)):
+     o=others[int(j)];line=lines[int(j)];s=line.project(pts[int(i)]);along=stations(o['points']);k=min(len(along)-1,max(1,int(np.searchsorted(along,s,'right'))));a,b=o['points'][k-1],o['points'][k];l=math.dist(a,b) or 1
+     if not .5<s<line.length-.5 or abs((b[0]-a[0])*t[int(i)][0]+(b[1]-a[1])*t[int(i)][1])/l<PARALLEL:continue
+     if line.distance(pts[int(i)])-(r['deckWidths'][int(i)]+float(np.interp(s,along,o['deckWidths'])))/2>TWIN_MEDIAN/2:continue
+     level+=1;low=float(np.interp(s,along,o['elevations']))-r['elevations'][int(i)];slack=.02+2*abs(o['elevations'][k]-o['elevations'][k-1])/l
+     assert low<=TWIN_STEP+slack or any(lo-2<=int(i)<=hi+2 for lo,hi in listed[r['id']]),f"{r['id']} lies {low:.2f} m under its twin {o['id']} at {r['points'][int(i)]} with only a median between them"
  # the surveyed roadways (highway_roadways.py): no pavement steps along a route, every paved roadway a surface over ground set under its deck
  surveyed=HR.check({base:[x for _,x in sorted(parts,key=lambda q:q[0])] for base,parts in routes.items()},(record.get('roadways') or {}).get('aprons',[]),{r['id']:r for r in decks},ground)
- return {**surveyed,'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'joins':joins,'streetLandings':landings,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
+ return {**surveyed,'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'twinStations':level,'joins':joins,'streetLandings':landings,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
 
 
 def routes_of(road,record):
