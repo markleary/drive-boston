@@ -34,11 +34,11 @@ import { due, until, UNPACED, type Pace } from './pacing';
 import { createTrafficSignals } from './traffic-signals';
 import { createStreetSign } from './signs';
 import { createI93ExitSign } from './i93-exit-signs';
-import { planI93ExitSigns } from '../simulation/i93-exit-signs';
+import { EXIT_SIGN_POST, planI93ExitSigns } from '../simulation/i93-exit-signs';
 import { createEntranceSign } from './entrance-signs';
 import { planEntranceSigns, entranceSignStands } from '../simulation/entrance-signs';
 import { createWarningSign } from './highway-signs';
-import { planHighwaySigns } from '../simulation/highway-signs';
+import { WARNING_POST, clearRoadside, inLanes, planHighwaySigns } from '../simulation/highway-signs';
 import { highwayMasts, mastHead, MAST_ARM, MAST_HEIGHT, MAST_LIGHT, type LampLight } from '../simulation/highway-lighting';
 import { deckUndersideAt } from '../simulation/road-surfaces';
 import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
@@ -251,12 +251,17 @@ export function createTileBuilder(ctx: TileContext) {
       for (const road of elevated) { if (due(pace)) yield 'structures'; colliders.push(...physics.addRoadDeck(subCity, road)); }
       stats.structures = elevated.length;
     }
+    // No post stands in a lane: at a gore the ramp's pavement begins where the shoulder would be, and a ramp can run beside a carriageway at its
+    // level. A sign's post and a mast's foot stand beyond those lanes instead (clearRoadside), and are left out where they find no place.
+    const lanes = (x: number, z: number, y: number) => inLanes(city, roadsNear({ minX: x - 30, maxX: x + 30, minZ: z - 30, maxZ: z + 30 }), x, z, y);
     for (const sign of exitSigns) {
       if (!insideTile(sign.approach.x, sign.approach.z)) continue;
       // (a street bridge over the road right there would stand in the panel)
       if (deckUndersideAt(city, sign.approach.x, sign.approach.z, sign.approach.y + 2.5) < sign.approach.y + 9) continue;
+      const approach = clearRoadside(sign.approach, EXIT_SIGN_POST, (x, z) => lanes(x, z, sign.approach.y));
+      if (!approach) continue;
       if (due(pace)) yield 'structures';
-      const exit = createI93ExitSign(sign, height, signSteel);
+      const exit = createI93ExitSign({ ...sign, approach }, height, signSteel);
       group.add(exit.group);
       owned.push(exit.material);
     }
@@ -269,10 +274,14 @@ export function createTileBuilder(ctx: TileContext) {
       owned.push(entrance.material);
     }
     // Storrow Drive's CARS ONLY and LOW CLEARANCE warnings (their yellow faces are shared by every tile, so none is this tile's to dispose).
-    for (const place of warningSigns) if (insideTile(place.approach.x, place.approach.z)) group.add(createWarningSign(place, height, signSteel));
+    for (const place of warningSigns) {
+      if (!insideTile(place.approach.x, place.approach.z)) continue;
+      const approach = clearRoadside(place.approach, WARNING_POST, (x, z) => lanes(x, z, place.approach.y));
+      if (approach) group.add(createWarningSign({ ...place, approach }, height, signSteel));
+    }
     // The Turnpike's lighting masts: a pole at the right edge, an arm over the lanes and a luminaire that glows with
     // the street lamps at night; the pooled night lights hang in the nearest luminaires as they do in a street lamp's globe.
-    const masts = ownedRoads.flatMap(road => highwayMasts(road, (x, z, above) => deckUndersideAt(city, x, z, above)));
+    const masts = ownedRoads.flatMap(road => highwayMasts(road, (x, z, above) => deckUndersideAt(city, x, z, above), lanes));
     if (masts.length) {
       const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(.09, .14, MAST_HEIGHT, 8), ctx.iron, masts.length), arms = new THREE.InstancedMesh(new THREE.BoxGeometry(MAST_ARM, .09, .11), ctx.iron, masts.length), heads = new THREE.InstancedMesh(new THREE.BoxGeometry(.95, .12, .38), ctx.lampMat, masts.length), post = new THREE.Object3D();
       masts.forEach((m, i) => {

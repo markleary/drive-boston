@@ -1,5 +1,6 @@
 import type {Road} from '../types';
 import {tunnelCoveredAt,tunnelPointAt,tunnelStations} from './tunnels.ts';
+import {clearRoadside} from './highway-signs.ts';
 
 /** Metres between the Turnpike's lighting masts along each carriageway. */
 export const MAST_SPACING=40;
@@ -7,6 +8,8 @@ export const MAST_SPACING=40;
 export const MAST_HEIGHT=10.5,MAST_ARM=2.6;
 /** A lighting mast at the right edge of a carriageway: its foot, the road surface there and the heading of traffic. */
 export interface HighwayMast {x:number;y:number;z:number;yaw:number}
+/** A mast's foot stands this far beyond the carriageway's pavement. */
+export const MAST_OUT=.55;
 /** How far the middle of the luminaire's head hangs under the mast's nominal height. */
 const HEAD_DROP=.43;
 /** The luminaire of a mast: the middle of its head, at the end of the arm over the lanes. */
@@ -25,13 +28,17 @@ export const MAST_LIGHT:LampLight={rise:MAST_HEIGHT-HEAD_DROP,intensity:135,dist
 /** The Massachusetts Turnpike is lit along its whole length through Boston: a mast every MAST_SPACING metres on the
  * right of each carriageway record (`i90-eb-…`, `i90-wb-…`), on its decks and in its open cut alike. A stretch under
  * a roof has the tunnel's own fixtures instead, and a mast keeps half a spacing clear of each portal; one that would
- * stand under a street bridge over the road is left out. */
-export function highwayMasts(road:Road,overhead?:(x:number,z:number,above:number)=>number):HighwayMast[]{
+ * stand under a street bridge over the road is left out. Where a ramp runs beside the carriageway at its level, the
+ * pavement edge is in that ramp's lane: with `blocked` (the lanes around the road, `inLanes`) the mast stands beyond
+ * the ramp instead, its arm over the ramp's lane, and is left out when it finds no place within reach (clearRoadside). */
+export function highwayMasts(road:Road,overhead?:(x:number,z:number,above:number)=>number,blocked?:(x:number,z:number,y:number)=>boolean):HighwayMast[]{
   if(!/^i90-(eb|wb)-\d+$/.test(road.id)||!road.elevations||road.points.length<2)return[];
   const total=tunnelStations(road).at(-1)!,out:HighwayMast[]=[];
   for(let s=MAST_SPACING/2;s<total;s+=MAST_SPACING){
     if(road.tunnel&&[s-MAST_SPACING/2,s,s+MAST_SPACING/2].some(at=>tunnelCoveredAt(road,Math.max(0,Math.min(total,at)))))continue;
-    const p=tunnelPointAt(road,s),out_=p.width/2+.55,mast={x:p.x-Math.cos(p.yaw)*out_,y:p.y,z:p.z+Math.sin(p.yaw)*out_,yaw:p.yaw};
+    const p=tunnelPointAt(road,s),place=blocked?clearRoadside({...p,edge:p.width/2},MAST_OUT,(x,z)=>blocked(x,z,p.y)):{post:p.width/2+MAST_OUT};
+    if(!place)continue;
+    const out_=place.post,mast={x:p.x-Math.cos(p.yaw)*out_,y:p.y,z:p.z+Math.sin(p.yaw)*out_,yaw:p.yaw};
     // None under a bridge over the road: `overhead` gives the underside of whatever stands over a point (deckUndersideAt), at the foot and at the luminaire.
     if(overhead&&[0,MAST_ARM].some(d=>overhead(mast.x+Math.cos(p.yaw)*d,mast.z-Math.sin(p.yaw)*d,p.y+2.5)<p.y+MAST_HEIGHT+.5))continue;
     out.push(mast);

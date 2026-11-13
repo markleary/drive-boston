@@ -8,6 +8,7 @@ import {isHighwayDeck,stations} from '../src/simulation/motorway.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 import {bareCurbStretches} from '../src/simulation/tile-format.ts';
 import {tileStalls} from '../src/simulation/parking-lots.ts';
+import {roadsidePoint,WARNING_POST} from '../src/simulation/highway-signs.ts';
 
 // The surveyed roadways of the Turnpike and Storrow Drive (scripts/highway_roadways.py): a deck on the ground carries
 // the edges of its roadway (`roadway`), which the tile paves, and a cut is as wide as its surveyed trench.
@@ -31,6 +32,13 @@ test('roadside signs stand beyond the surveyed roadway',()=>{
   assert.equal(tunnelPointAt(deck(points),30).edge,3.3);
   assert.ok(Math.abs(tunnelPointAt(paved,30).edge-5)<1e-9,'the left edge, between two stations');
   assert.equal(tunnelPointAt(deck(points,{roadway:points.map(()=>[2,2])}),30).edge,3.3,'never inside the deck');
+  // The side a roadway lists first and the records call "left" is +n, n = (-tz, tx). Going east with z south that is +z, the right hand of
+  // traffic, where a post stands: it is beyond that edge, and the median's edge (the second) does not move it.
+  const at=tunnelPointAt(paved,30),foot=roadsidePoint(at,at.edge+WARNING_POST);
+  assert.ok(Math.abs(foot.x-30)<1e-9&&Math.abs(foot.z-(5+WARNING_POST))<1e-9,`the post stands at z ${foot.z}`);
+  assert.equal(tunnelPointAt(deck(points,{roadway:points.map(()=>[3.3,9])}),30).edge,3.3);
+  const west=[...points].reverse(),back=tunnelPointAt(deck(west,{roadway:west.map(()=>[6,3.3])}),30),other=roadsidePoint(back,back.edge+WARNING_POST);
+  assert.ok(Math.abs(other.z+(6+WARNING_POST))<1e-9,'going west it is -z');
 });
 
 test('beside a paved roadway a rail stands in runs, never as a stub where the ground dips for a few metres',()=>{

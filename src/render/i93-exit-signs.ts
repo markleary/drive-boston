@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { I93ExitSign } from '../simulation/i93-exit-signs';
+import { EXIT_SIGN_POST, type I93ExitSign } from '../simulation/i93-exit-signs';
+import { roadsidePoint } from '../simulation/highway-signs';
 
 const PANEL_FULL_WIDTH = 7.5;
 const PANEL_FULL_HEIGHT = PANEL_FULL_WIDTH * 320 / 768;
@@ -74,9 +75,9 @@ function exitFace(sign: I93ExitSign) {
   return new THREE.MeshBasicMaterial({ map, alphaTest: .45, toneMapped: false });
 }
 
-/** A right-shoulder cantilever, with the printed face turned toward traffic. */
+/** A right-shoulder cantilever, with the printed face turned toward traffic. Its pole stands `EXIT_SIGN_POST` beyond the road's edge, or where the caller found it a place clear of the lanes beside the road (`approach.post`, clearRoadside): the panel stays over the right lane and the truss is as long as that takes. */
 export function createI93ExitSign(sign: I93ExitSign, groundAt: (x: number, z: number) => number, steel: THREE.Material) {
-  const { x, y, z, yaw, edge } = sign.approach;
+  const { x, y, z, yaw, edge, post } = sign.approach;
   const group = new THREE.Group();
   group.name = `${sign.rampId.startsWith('i93-') ? 'I-93 advance' : 'Advance exit'} sign: ${sign.rampId}`;
   group.position.set(x, y, z);
@@ -85,8 +86,8 @@ export function createI93ExitSign(sign: I93ExitSign, groundAt: (x: number, z: nu
   // A smaller panel (Storrow Drive) hangs over the right lane of a narrower road.
   const scale = sign.scale ?? 1, PANEL_WIDTH = PANEL_FULL_WIDTH * scale, PANEL_HEIGHT = PANEL_FULL_HEIGHT * scale, TAB_WIDTH = TAB_FULL_WIDTH * scale, TAB_HEIGHT = TAB_FULL_HEIGHT * scale;
   const center = Math.max(edge - 4.8, edge + .3 - PANEL_WIDTH / 2 - .35);
-  const shoulder = edge + .85;
-  const ground = Math.min(-.12, groundAt(x - Math.cos(yaw) * shoulder, z + Math.sin(yaw) * shoulder) - y);
+  const shoulder = post ?? edge + EXIT_SIGN_POST, foot = roadsidePoint({ x, z, yaw }, shoulder);
+  const ground = Math.min(-.12, groundAt(foot.x, foot.z) - y);
   const mid = CLEARANCE + PANEL_HEIGHT / 2;
   const material = exitFace(sign);
   const face = new THREE.Mesh(new THREE.PlaneGeometry(PANEL_WIDTH, PANEL_HEIGHT), material);
