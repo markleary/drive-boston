@@ -23,6 +23,26 @@ export interface SignalGround{
 }
 /** The room a mast keeps to every roadway its tile draws (its footing is half a metre across), and to a tree, lamp or sign. */
 export const SIGNAL_ROOM=.5,POST_GAP=1.2;
+/** Where the two signal heads hang on a mast's arm, back from its tip (traffic-signals.ts draws them there), the room
+ * each keeps inside the kerbs of the roadway it hangs over, and the longest arm. */
+export const SIGNAL_HEADS=[.35,1.25],HEAD_ROOM=.3,ARM=7;
+/** Whether both heads of an arm `length` long, from a mast at `p` toward (ux, uz), hang over a roadway: street
+ * pavement as the tile draws it, or a deck where `decked` says so. A head beyond the tile's border is over ground
+ * the tile cannot see: `beyond` answers for it. */
+function headsOver(streets:DrawnStreets,p:Point2,ux:number,uz:number,length:number,beyond:boolean,decked?:(x:number,z:number)=>boolean){
+  return SIGNAL_HEADS.every(back=>{const x=p[0]+ux*(length-back),z=p[1]+uz*(length-back);return decked?.(x,z)||(streets.inset(x,z)<0?beyond:streets.paved(x,z));});
+}
+/** The arm of a mast at `p`, stood `margin` behind a kerb: it reaches back over that kerb along the line the kerb was
+ * found on, (ux, uz) from the mast, to 1.2 m short of the middle of the roadway there (`width` across on that line),
+ * no shorter than brings both heads over the roadway and no longer than keeps them there. Undefined where no arm
+ * does (a sliver of pavement), or where the tile sees a head hang over anything else: a mast is stood where its
+ * signal heads hang over a roadway, or not at all. (A head beyond the tile's border hangs over the pavement that
+ * runs on there: the tiles' polygons are one surface cut at the border.) */
+function armOver(streets:DrawnStreets,p:Point2,ux:number,uz:number,margin:number,width:number){
+  const least=margin+SIGNAL_HEADS[1]+HEAD_ROOM,most=Math.min(ARM,margin+width+SIGNAL_HEADS[0]-HEAD_ROOM);if(most<least)return undefined;
+  const length=Math.min(most,Math.max(least,margin+width/2-1.2));
+  return headsOver(streets,p,ux,uz,length,true)?{length,yaw:Math.atan2(ux,uz)}:undefined;
+}
 /** Stations along the signal's street, from the junction out, at which a mast is tried: closer together where the
  * kerb is read from the tile, so that a mast finds the corner the kerb comes round. */
 const ALONG=[0,-7,7,-13,13,-20,20,-27,27],ALONG_KERB=[0,-4,4,-7,7,-10,10,-13,13,-16,16,-20,20,-27,27];
@@ -52,6 +72,8 @@ export function planTrafficSignals(city:CityData,ground?:SignalGround){
       const y=sampleRoadElevation(city,s.road,...p);return y>=footing-.55&&y<=top+.55;
     })&&!(ground?ground.hulls(...p):buildings.get(key)??[]).some(b=>pointInside(p,b.footprint)||b.footprint.some((a,i)=>distance(p,a,b.footprint[(i+1)%b.footprint.length])<.5));
   };
+  /** Whether a point lies over the deck of a raised road, which no tile draws as street pavement. */
+  const decked=(x:number,z:number)=>(roads.get(`${Math.floor(x/cellSize)},${Math.floor(z/cellSize)}`)??[]).some(s=>!!s.road.elevations&&distance([x,z],s.a,s.b)<roadWidthAt(s.road,x,z)/2);
   const placed:PlacedSignal[]=[];
   for(const source of city.signals){
     const major=closestRoad(city,...source,true,{maxDistance:35}),approach=closestRoad(approaches,...source,false,{maxDistance:35});
@@ -70,22 +92,34 @@ export function planTrafficSignals(city:CityData,ground?:SignalGround){
       const roadPoint:Point2=[nearest.x+tx*along,nearest.z+tz*along],nx=normal[0]*side,nz=normal[1]*side,kerb=kerbed&&roadwayEdge(kerbed.streets,roadPoint,nx,nz,half);
       if(kerbed&&(!kerb||kerb==='border'))continue;   // no kerb at the station: the pavement runs on down a cross street, or beyond what the tile sees
       const edge=kerb&&kerb!=='border'?kerb.edge:roadWidthAt(nearest.road,...roadPoint)/2;
-      // The arm reaches back over the kerb to the middle of the roadway there (the centre line can run along one kerb).
+      // The arm reaches back over that kerb, the roadway as wide as it is on this line (the centre line can run along one kerb).
       const far=kerb&&kerb!=='border'?roadwayEdge(kerbed!.streets,roadPoint,-nx,-nz,half):undefined,width=edge+(far&&far!=='border'?far.edge:half);
-      for(const margin of [1.25,2.0])tryAt([roadPoint[0]+nx*(edge+margin),roadPoint[1]+nz*(edge+margin)],roadPoint,along,kerbed&&{length:Math.min(7,Math.max(2.5,margin+width/2-1.2)),yaw:Math.atan2(-nx,-nz)});
+      for(const margin of [1.25,2.0]){
+        // (a raised road has no drawn roadway: its arm reaches toward its line as in the survey build, and its mast stands
+        // only where the heads then hang over a deck or a street's pavement: a station can lie beyond the end of the road)
+        const p:Point2=[roadPoint[0]+nx*(edge+margin),roadPoint[1]+nz*(edge+margin)],reach=Math.min(ARM,edge+margin-1.2);
+        const arm=kerbed?armOver(kerbed.streets,p,-nx,-nz,margin,width):ground&&headsOver(ground.streets,p,-nx,-nz,reach,false,decked)?{length:reach,yaw:Math.atan2(-nx,-nz)}:undefined;
+        if(!ground||arm)tryAt(p,roadPoint,along,arm);
+      }
     }
     // No kerb beside the street within reach (its perpendiculars run on across a wide junction): the nearest kerb to
-    // the signal itself, looked for on sixteen bearings, the arm toward the street's line.
+    // the signal itself, looked for on sixteen bearings. Its arm reaches across the signal's street, toward the
+    // street's line, where the heads then hang over the roadway; that line can lie 20 m from the kerb, along the
+    // kerb or beyond an island (such an arm hung its heads over the sidewalk), and the arm then reaches back along
+    // the bearing the kerb was found on.
     if(kerbed&&!candidates.length)for(let k=0;k<16;k++){
       const dx=Math.sin(k*Math.PI/8),dz=Math.cos(k*Math.PI/8),kerb=roadwayEdge(kerbed.streets,source,dx,dz,half);if(!kerb||kerb==='border')continue;
+      const far=roadwayEdge(kerbed.streets,source,-dx,-dz,half),width=kerb.edge+(far&&far!=='border'?far.edge:half);
       for(const margin of [1.25,2.0]){
-        const p:Point2=[source[0]+dx*(kerb.edge+margin),source[1]+dz*(kerb.edge+margin)],along=(p[0]-nearest.x)*tx+(p[1]-nearest.z)*tz,roadPoint:Point2=[nearest.x+tx*along,nearest.z+tz*along],reach=Math.hypot(roadPoint[0]-p[0],roadPoint[1]-p[1]);
-        tryAt(p,roadPoint,0,{length:Math.min(7,Math.max(2.5,reach-1.2)),yaw:reach>.5?Math.atan2(roadPoint[0]-p[0],roadPoint[1]-p[1]):Math.atan2(-dx,-dz)});
+        const p:Point2=[source[0]+dx*(kerb.edge+margin),source[1]+dz*(kerb.edge+margin)],along=(p[0]-nearest.x)*tx+(p[1]-nearest.z)*tz,roadPoint:Point2=[nearest.x+tx*along,nearest.z+tz*along];
+        const reach=Math.hypot(roadPoint[0]-p[0],roadPoint[1]-p[1]),ux=(roadPoint[0]-p[0])/(reach||1),uz=(roadPoint[1]-p[1])/(reach||1),across=Math.min(ARM,reach-1.2);
+        const arm=across>=margin+SIGNAL_HEADS[1]+HEAD_ROOM&&headsOver(kerbed.streets,p,ux,uz,across,false)?{length:across,yaw:Math.atan2(ux,uz)}:armOver(kerbed.streets,p,-dx,-dz,margin,width);
+        if(arm)tryAt(p,roadPoint,0,arm);
       }
     }
     candidates.sort((a,b)=>a.cost-b.cost);const best=candidates[0];if(!best)continue;
     const dx=best.roadPoint[0]-best.p[0],dz=best.roadPoint[1]-best.p[1];
-    placed.push({position:best.p,source,road:nearest.road,roadPoint:best.roadPoint,yaw:nearest.yaw,armLength:best.arm?.length??Math.min(7,Math.hypot(dx,dz)-1.2),armYaw:best.arm?.yaw??Math.atan2(dx,dz)});
+    placed.push({position:best.p,source,road:nearest.road,roadPoint:best.roadPoint,yaw:nearest.yaw,armLength:best.arm?.length??Math.min(ARM,Math.hypot(dx,dz)-1.2),armYaw:best.arm?.yaw??Math.atan2(dx,dz)});
   }
   return placed;
 }

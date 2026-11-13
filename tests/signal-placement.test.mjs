@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';import test from 'node:test';import fs from 'node:fs';
-import {planTrafficSignals,POST_GAP,SIGNAL_ROOM} from '../src/simulation/signal-placement.ts';
+import {HEAD_ROOM,planTrafficSignals,POST_GAP,SIGNAL_ROOM} from '../src/simulation/signal-placement.ts';
 import {drawnStreets} from '../src/simulation/drawn-streets.ts';
 import {closestRoad,pointInside} from '../src/simulation/roads.ts';
 import {reserveTransitCorridors,inTransitCorridor} from '../src/simulation/transit-corridors.ts';
 import {loadCentralCity,loadMetroCity,loadTileHeaders} from './helpers/metro-city.mjs';
-import {drawnGround,loadStreetCity,roadIndex,tileFurniture,tileSignals} from './helpers/street-furniture.mjs';
+import {deckGround,drawnGround,loadStreetCity,roadIndex,signalHeads,tileFurniture,tileSignals} from './helpers/street-furniture.mjs';
 const distance=(p,a,b)=>{const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(p[0]-a[0]-dx*t,p[1]-a[1]-dz*t);};
 test('signal poles stand clear of every travel lane and building at real angled Boston intersections',async()=>{
  const city=await loadCentralCity();
@@ -39,7 +39,7 @@ test('a mast stands behind the kerb as drawn, at a corner of the junction, where
  assert.ok(mast&&!streets.near(...mast.position,SIGNAL_ROOM),'clear of every roadway by its room');
  const [x,z]=mast.position;assert.ok(Math.abs(x-107)>7+1&&Math.abs(z-505)>5+1&&Math.hypot(x-107,z-505)<16,`at a corner, not along a kerb: ${mast.position}`);
  // the arm reaches back over the kerb, the heads over the roadway
- assert.ok(mast.armLength>=2.5&&mast.armLength<=7);const head=[x+Math.sin(mast.armYaw)*(mast.armLength-.35),z+Math.cos(mast.armYaw)*(mast.armLength-.35)];assert.ok(streets.paved(...head),'the signal heads hang over the roadway');
+ assert.ok(mast.armLength>=2.5&&mast.armLength<=7);for(const head of signalHeads(mast))assert.ok(streets.paved(...head),'both signal heads hang over the roadway');
  // a tile plans the signals whose street is met in it, and no other
  assert.deepEqual(planTrafficSignals(city,{...ground,owns:()=>false}),[]);
  // a tree, lamp or sign already planted there, or a building, sends the mast to another corner
@@ -54,7 +54,36 @@ test('where a street\'s perpendiculars run on across a wide junction, the mast t
  const street={...main,points:[[107,1000],[107,2000]]},[mast]=planTrafficSignals({...town([street],[[107,1500]]),bounds:{minX:0,maxX:1000,minZ:1000,maxZ:2000}},{streets,owns:()=>true,hulls:()=>[]});
  assert.ok(mast&&!streets.near(...mast.position,SIGNAL_ROOM));assert.ok(Math.abs(mast.position[1]-1500)>30&&Math.abs(mast.position[0]-107)>5+SIGNAL_ROOM,`beyond the place's kerb, beside the street: ${mast.position}`);
  assert.ok(mast.armLength>=2.5&&mast.armLength<=7);
+ // The street's own line lies 13 m from that kerb, along the verge: an arm toward it (the rule this replaces) hung
+ // both heads over the verge. The arm reaches back over the kerb the mast stands behind, toward the signal.
+ const [x,z]=mast.position,toLine=Math.sign(107-x);assert.ok([.35,1.25].every(back=>!streets.paved(x+toLine*(7-back),z)),'the fixture: an arm toward the street\'s line reaches no roadway');
+ for(const head of signalHeads(mast))assert.ok(streets.paved(...head),`both signal heads hang over the roadway: ${head}`);
+ assert.ok(Math.sin(mast.armYaw)*(107-x)+Math.cos(mast.armYaw)*(1500-z)>.99*Math.hypot(107-x,1500-z),'back along the bearing the kerb was found on');
 });
+
+test('the arm brings both signal heads over the roadway on a street narrower than its class',()=>{
+ // Main Street is 10 m by its class and 4 m between its kerbs: to the middle of the roadway less 1.2 m the arm would
+ // be 2.05 m, and at the old least length of 2.5 m the inner head hung over the kerb line itself.
+ const tile=tileOf(0,0,[[[105,0],[109,0],[109,500],[1000,500],[1000,510],[109,510],[109,1000],[105,1000],[105,510],[0,510],[0,500],[105,500]]]),streets=drawnStreets(tile);
+ const [mast]=planTrafficSignals(town([main,cross],[[107,505]]),{streets,owns:()=>true,hulls:()=>[]});assert.ok(mast&&!streets.near(...mast.position,SIGNAL_ROOM));
+ const ux=Math.sin(mast.armYaw),uz=Math.cos(mast.armYaw);
+ for(const [hx,hz] of signalHeads(mast))for(const along of [-(HEAD_ROOM-.01),0,HEAD_ROOM-.01])assert.ok(streets.paved(hx+ux*along,hz+uz*along),`a head ${HEAD_ROOM} m inside the kerbs: ${hx}, ${hz}`);
+ assert.ok(mast.armLength>2.5&&mast.armLength<4);
+});
+
+test('beside a raised road a mast stands only where its heads hang over that road\'s deck or a street\'s pavement',()=>{
+ // Bridge Street leaves Main Street on a deck, which no tile draws as street pavement. The stations along its line
+ // run on 27 m beyond its end, across Main Street: a mast there stood in the grass with its arm away from every road.
+ const bridge={id:'c',name:'Bridge Street',points:[[107,505],[300,505]],width:10,elevations:[0,6]},streets=drawnStreets(tileOf(0,0,[[[100,0],[114,0],[114,1000],[100,1000]]]));
+ const city=town([main,bridge],[[125,505]]),ground={streets,owns:()=>true,hulls:()=>[]},[mast]=planTrafficSignals(city,ground);
+ assert.ok(mast&&mast.road===bridge&&Math.abs(mast.position[0]-125)<.01&&Math.abs(Math.abs(mast.position[1]-505)-6.25)<.01,`beside the deck at the signal: ${mast?.position}`);
+ for(const [hx,hz] of signalHeads(mast))assert.ok(hx>107&&hx<300&&Math.abs(hz-505)<5&&!streets.paved(hx,hz),'both heads over the deck');
+ // buildings along the deck leave only the stations beyond the road's end, west of Main Street: no mast, rather than one whose heads hang over the verge there
+ const walled={...ground,hulls:px=>px>114.5&&px<160?[{footprint:[[114.5,480],[160,480],[160,530],[114.5,530]]}]:[]};
+ assert.ok(postsClearWest(streets),'the fixture: the verge west of Main Street is a place a post may stand');assert.deepEqual(planTrafficSignals(city,walled),[]);
+});
+
+const postsClearWest=streets=>!streets.near(98,498.75,SIGNAL_ROOM)&&streets.inset(98,498.75)>SIGNAL_ROOM;
 
 const street=await loadStreetCity(),network=roadIndex(street);
 test('the shipped signals: every mast clear of the roadway its tile draws, each signal planned by one tile',()=>{
@@ -76,4 +105,26 @@ test('the shipped signals: every mast clear of the roadway its tile draws, each 
  const reported=planned.get([-1061.941,996.024].join());assert.deepEqual(reported,['-2_1'],'planned once, by the tile its street is met in');
  for(const [source,keys] of planned)assert.equal(new Set(keys).size,1,`the signal at ${source} is planned by ${keys}`);
  assert.ok(tile&&planned.size>=40);
+});
+
+test('the shipped signals: both heads of every mast hang over a roadway, the arm across its street where that reaches one',()=>{
+ // Commercial Street at the Mystic Valley Parkway and Francis Street (masts found from the signal itself, 12 and 19 m from their street's
+ // line), Beacon Street at Marion Street (an island's nose), Ukraine Way (a raised road that ends at its junction), and the
+ // three tiles above. A head can hang across a tile border, so the ground is read with the tiles about each.
+ const keys=['-2_-6','-3_1','-5_1','-4_5','0_2','-2_0','-2_1'],about=new Set(keys.flatMap(key=>{const [tx,tz]=key.split('_').map(Number);return [-1,0,1].flatMap(i=>[-1,0,1].map(j=>`${tx+i}_${tz+j}`));}).filter(key=>street.tiles.keys.includes(key)));
+ const tiles=loadTileHeaders(street,[...about]),ground=drawnGround(tiles),deck=deckGround(network),planned=new Map();let heads=0;
+ for(const key of keys){
+  const masts=tileSignals(street,tiles.get(key),network);planned.set(key,masts);
+  for(const mast of masts)for(const head of signalHeads(mast)){heads++;assert.ok(ground.roadway(...head)||deck(...head),`tile ${key}: a head of the mast at ${mast.position.map(v=>v.toFixed(1))} hangs over no roadway (${head.map(v=>v.toFixed(1))})`);}
+ }
+ assert.ok(heads>=200,`${heads} signal heads`);
+ const of=(key,source)=>{const mast=planned.get(key).find(m=>m.source[0]===source[0]&&m.source[1]===source[1]);assert.ok(mast,`the signal at ${source} has a mast in tile ${key}`);return mast;};
+ const acrossStreet=mast=>Math.abs(Math.sin(mast.armYaw-mast.yaw)),toSignal=mast=>(Math.sin(mast.armYaw)*(mast.source[0]-mast.position[0])+Math.cos(mast.armYaw)*(mast.source[1]-mast.position[1]))/Math.hypot(mast.source[0]-mast.position[0],mast.source[1]-mast.position[1]);
+ // found on the far kerb of the parkway Commercial Street ends at, 12 m along that kerb from its line: the arm reaches back over the kerb, toward the signal
+ for(const source of [[-1205.253,-5978.446],[-1179.121,-5991.69]]){const mast=of('-2_-6',source);assert.ok(toSignal(mast)>.99&&acrossStreet(mast)<.2,`Commercial Street: ${mast.armYaw}`);}
+ assert.ok(toSignal(of('-3_1',[-2681.706,1598.431]))>.99,'Francis Street');
+ // where an arm across the signal's street does reach its roadway, it stays across it
+ assert.ok(acrossStreet(of('-5_1',[-4265.353,1046.605]))>.99,'Beacon Street');
+ // beside Ukraine Way's deck, its heads over the deck, not across Washington Street from the end of it
+ const ukraine=of('-4_5',[-3352.152,5766.657]);assert.ok(ukraine.road.elevations&&signalHeads(ukraine).every(head=>deck(...head))&&ukraine.position[0]>-3345,`Ukraine Way: ${ukraine.position}`);
 });
