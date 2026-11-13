@@ -3,6 +3,7 @@
  * scripts/audit-street-furniture.mjs. */
 import {roadCells} from '../../src/simulation/road-cells.ts';
 import {tileFurnitureSteps} from '../../src/simulation/street-furniture.ts';
+import {planTileSignals} from '../../src/simulation/signal-placement.ts';
 import {reserveTransitCorridors} from '../../src/simulation/transit-corridors.ts';
 import {STALL_DEPTH,STALL_HALF,tileStalls} from '../../src/simulation/parking-lots.ts';
 import {insideIcaForecourt} from '../../src/render/ica-boston.ts';
@@ -17,9 +18,16 @@ export const roadIndex=city=>roadCells(city.roads);
 export function tileFurniture(city,tile,roads=roadIndex(city)){
   const steps=tileFurnitureSteps(city,tile,roads,insideIcaForecourt);let step=steps.next();while(!step.done)step=steps.next();return step.value;
 }
+/** The signal masts of a tile, exactly as src/render/tile-builder.ts plans them once the tile's furniture is planted. */
+export const tileSignals=(city,tile,roads=roadIndex(city),furniture=tileFurniture(city,tile,roads))=>planTileSignals(city,tile,roads,furniture.posts);
+/** Everything a tile stands beside its streets: its furniture, its signal masts, and `posts`, the list the built tile keeps of them all. */
+export function tileStreetside(city,tile,roads=roadIndex(city)){
+  const furniture=tileFurniture(city,tile,roads),signals=tileSignals(city,tile,roads,furniture);
+  return {...furniture,masts:signals,posts:[...furniture.posts,...signals.map(signal=>signal.position)]};
+}
 /** The resident tiles as the streamer lists them to the street life: each tile with the posts it planted. */
 export function residentTiles(city,tiles,roads=roadIndex(city)){
-  const loaded=new Map();for(const [key,tile] of tiles)loaded.set(key,{tile,posts:tileFurniture(city,tile,roads).posts});return {loaded};
+  const loaded=new Map();for(const [key,tile] of tiles)loaded.set(key,{tile,posts:tileStreetside(city,tile,roads).posts});return {loaded};
 }
 
 /** The ground as the tiles draw it, read from their polygons edge by edge with no index of any kind, so that it

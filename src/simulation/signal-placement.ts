@@ -1,15 +1,39 @@
 import type {CityData,Point2,Road} from '../types';
+import type {MetroCity} from './city-tiles.ts';
+import {drawnStreets,type DrawnStreets,type StreetTile} from './drawn-streets.ts';
+import type {RoadCells} from './road-cells.ts';
 import {closestRoad,pointInside} from './roads.ts';
-import {inTransitCorridor} from './transit-corridors.ts';
+import {postClear,roadwayEdge} from './street-furniture.ts';
+import {inTransitCorridor,shareTransitCorridors} from './transit-corridors.ts';
 import {roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
 import {sampleElevation} from './terrain.ts';
 
 export interface PlacedSignal{position:Point2;source:Point2;road:Road;roadPoint:Point2;yaw:number;armLength:number;armYaw:number;}
+/** The ground of the tile a signal stands in, where a streamed tile is at hand: a mast then stands behind the kerb
+ * as that tile draws it (drawn-streets.ts), not half the street's class width from its centre line, which put 693 of
+ * 2,419 masts in the asphalt of roadways wider than their class (most avenues) and of junction mouths. */
+export interface SignalGround{
+  streets:DrawnStreets;
+  /** Whether a point lies in the tile: a signal is planned by the tile its street is met in, which sees the kerbs there. */
+  owns(x:number,z:number):boolean;
+  /** The building hulls about a point, whichever tile holds them. */
+  hulls(x:number,z:number):readonly {footprint:Point2[]}[];
+  /** What the tile has planted already (tree places, lamps, name signs): a mast keeps POST_GAP from each. */
+  posts?:readonly Point2[];
+}
+/** The room a mast keeps to every roadway its tile draws (its footing is half a metre across), and to a tree, lamp or sign. */
+export const SIGNAL_ROOM=.5,POST_GAP=1.2;
+/** Stations along the signal's street, from the junction out, at which a mast is tried: closer together where the
+ * kerb is read from the tile, so that a mast finds the corner the kerb comes round. */
+const ALONG=[0,-7,7,-13,13,-20,20,-27,27],ALONG_KERB=[0,-4,4,-7,7,-10,10,-13,13,-16,16,-20,20,-27,27];
 const cellSize=48;
 function distance(point:Point2,a:Point2,b:Point2){const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((point[0]-a[0])*dx+(point[1]-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(point[0]-a[0]-dx*t,point[1]-a[1]-dz*t);}
 /** GIS points identify controlled intersections, not guaranteed curbside poles.
- * Choose the nearest clear sidewalk corner; never leave hardware in a lane. */
-export function planTrafficSignals(city:CityData){
+ * Choose the nearest clear sidewalk corner; never leave hardware in a lane. With `ground` (a streamed tile's, see
+ * planTileSignals) the lane is the roadway as drawn: a candidate stands a margin beyond the kerb at its own station,
+ * with SIGNAL_ROOM to every roadway the tile draws, in no stall and POST_GAP from what is planted; surface streets
+ * are then judged by their pavement alone, raised roads keep their ribbons. */
+export function planTrafficSignals(city:CityData,ground?:SignalGround){
   // Preserve the existing major-road ownership rule city-wide. Only the
   // repaired interchange's narrow slips need an additional eligible source.
   // All roads still participate in the mast/lane clearance checks below.
@@ -23,23 +47,58 @@ export function planTrafficSignals(city:CityData){
     // An elevated junction's mast reaches down to the terrain outside its
     // deck. Keep that entire vertical support clear of lower and upper lanes.
     return !(roads.get(key)??[]).some(s=>{
+      if(ground&&!s.road.elevations)return false;
       const d=distance(p,s.a,s.b);if(d>=s.width||d>=roadWidthAt(s.road,...p)/2+.55)return false;
       const y=sampleRoadElevation(city,s.road,...p);return y>=footing-.55&&y<=top+.55;
-    })&&!(buildings.get(key)??[]).some(b=>pointInside(p,b.footprint)||b.footprint.some((a,i)=>distance(p,a,b.footprint[(i+1)%b.footprint.length])<.5));
+    })&&!(ground?ground.hulls(...p):buildings.get(key)??[]).some(b=>pointInside(p,b.footprint)||b.footprint.some((a,i)=>distance(p,a,b.footprint[(i+1)%b.footprint.length])<.5));
   };
   const placed:PlacedSignal[]=[];
   for(const source of city.signals){
     const major=closestRoad(city,...source,true,{maxDistance:35}),approach=closestRoad(approaches,...source,false,{maxDistance:35});
     const nearest=approach.distance<major.distance?approach:major;if(!nearest.road||nearest.distance>35)continue;
-    const tx=Math.sin(nearest.yaw),tz=Math.cos(nearest.yaw),normal:Point2=[-tz,tx],candidates:{p:Point2;roadPoint:Point2;cost:number}[]=[];
-    for(const along of [0,-7,7,-13,13,-20,20,-27,27])for(const side of [-1,1])for(const margin of [1.25,2.0]){
-      const roadPoint:Point2=[nearest.x+tx*along,nearest.z+tz*along],width=roadWidthAt(nearest.road,...roadPoint),p:Point2=[roadPoint[0]+normal[0]*side*(width/2+margin),roadPoint[1]+normal[1]*side*(width/2+margin)];
-      if(inTransitCorridor(city,...p)||!clear(p,sampleRoadElevation(city,nearest.road,...roadPoint))||placed.some(s=>Math.hypot(s.position[0]-p[0],s.position[1]-p[1])<7))continue;
-      candidates.push({p,roadPoint,cost:Math.hypot(p[0]-source[0],p[1]-source[1])+Math.abs(along)*.08});
+    if(ground&&!ground.owns(nearest.x,nearest.z))continue;
+    const tx=Math.sin(nearest.yaw),tz=Math.cos(nearest.yaw),normal:Point2=[-tz,tx],candidates:{p:Point2;roadPoint:Point2;cost:number;arm?:{length:number;yaw:number}}[]=[];
+    // A surface street's kerb is read from the tile; a raised road has no drawn roadway and keeps its own width.
+    const kerbed=ground&&!nearest.road.elevations?ground:undefined,half=(nearest.road.pavedWidth??nearest.road.width)/2,planted=ground?.posts?.filter(q=>Math.hypot(q[0]-source[0],q[1]-source[1])<60)??[];
+    const tryAt=(p:Point2,roadPoint:Point2,along:number,arm?:{length:number;yaw:number})=>{
+      if(inTransitCorridor(city,...p)||!clear(p,sampleRoadElevation(city,nearest.road,...roadPoint))||placed.some(s=>Math.hypot(s.position[0]-p[0],s.position[1]-p[1])<7))return;
+      if(ground&&(!postClear(ground.streets,p[0],p[1],SIGNAL_ROOM)||planted.some(q=>Math.hypot(q[0]-p[0],q[1]-p[1])<POST_GAP)))return;
+      candidates.push({p,roadPoint,cost:Math.hypot(p[0]-source[0],p[1]-source[1])+Math.abs(along)*.08,arm});
+    };
+    for(const along of kerbed?ALONG_KERB:ALONG)for(const side of [-1,1]){
+      // (the kerb the pavement ends at, whichever street's it is: at a junction the corner belongs to both, and beyond a second carriageway stands the far-side mast)
+      const roadPoint:Point2=[nearest.x+tx*along,nearest.z+tz*along],nx=normal[0]*side,nz=normal[1]*side,kerb=kerbed&&roadwayEdge(kerbed.streets,roadPoint,nx,nz,half);
+      if(kerbed&&(!kerb||kerb==='border'))continue;   // no kerb at the station: the pavement runs on down a cross street, or beyond what the tile sees
+      const edge=kerb&&kerb!=='border'?kerb.edge:roadWidthAt(nearest.road,...roadPoint)/2;
+      // The arm reaches back over the kerb to the middle of the roadway there (the centre line can run along one kerb).
+      const far=kerb&&kerb!=='border'?roadwayEdge(kerbed!.streets,roadPoint,-nx,-nz,half):undefined,width=edge+(far&&far!=='border'?far.edge:half);
+      for(const margin of [1.25,2.0])tryAt([roadPoint[0]+nx*(edge+margin),roadPoint[1]+nz*(edge+margin)],roadPoint,along,kerbed&&{length:Math.min(7,Math.max(2.5,margin+width/2-1.2)),yaw:Math.atan2(-nx,-nz)});
+    }
+    // No kerb beside the street within reach (its perpendiculars run on across a wide junction): the nearest kerb to
+    // the signal itself, looked for on sixteen bearings, the arm toward the street's line.
+    if(kerbed&&!candidates.length)for(let k=0;k<16;k++){
+      const dx=Math.sin(k*Math.PI/8),dz=Math.cos(k*Math.PI/8),kerb=roadwayEdge(kerbed.streets,source,dx,dz,half);if(!kerb||kerb==='border')continue;
+      for(const margin of [1.25,2.0]){
+        const p:Point2=[source[0]+dx*(kerb.edge+margin),source[1]+dz*(kerb.edge+margin)],along=(p[0]-nearest.x)*tx+(p[1]-nearest.z)*tz,roadPoint:Point2=[nearest.x+tx*along,nearest.z+tz*along],reach=Math.hypot(roadPoint[0]-p[0],roadPoint[1]-p[1]);
+        tryAt(p,roadPoint,0,{length:Math.min(7,Math.max(2.5,reach-1.2)),yaw:reach>.5?Math.atan2(roadPoint[0]-p[0],roadPoint[1]-p[1]):Math.atan2(-dx,-dz)});
+      }
     }
     candidates.sort((a,b)=>a.cost-b.cost);const best=candidates[0];if(!best)continue;
     const dx=best.roadPoint[0]-best.p[0],dz=best.roadPoint[1]-best.p[1];
-    placed.push({position:best.p,source,road:nearest.road,roadPoint:best.roadPoint,yaw:nearest.yaw,armLength:Math.min(7,Math.hypot(dx,dz)-1.2),armYaw:Math.atan2(dx,dz)});
+    placed.push({position:best.p,source,road:nearest.road,roadPoint:best.roadPoint,yaw:nearest.yaw,armLength:best.arm?.length??Math.min(7,Math.hypot(dx,dz)-1.2),armYaw:best.arm?.yaw??Math.atan2(dx,dz)});
   }
   return placed;
+}
+
+/** The signal masts of one tile as the tile builder plans them, so that a test or an audit plans the same. A signal
+ * is planned by one tile: the one in which its street is met (the nearest point of that street to the signal, which
+ * can lie 35 m from the signal and so across a border from it), since that tile draws the kerbs a mast is stood
+ * behind. Before, every tile within 40 m of a signal planned it, and 338 masts were drawn twice. `posts`: what the
+ * tile's furniture stage planted. A mast the tile cannot stand clear of its roadway is left out. */
+export function planTileSignals(city:MetroCity,tile:StreetTile,roads:RoadCells,posts:readonly Point2[]=[]):PlacedSignal[]{
+  const size=tile.size,minX=tile.tx*size,minZ=tile.tz*size,bounds={minX,maxX:minX+size,minZ,maxZ:minZ+size};
+  const signals=city.signals.filter(s=>s[0]>=minX-40&&s[0]<bounds.maxX+40&&s[1]>=minZ-40&&s[1]<bounds.maxZ+40);if(!signals.length)return [];
+  const about=roads.near({minX:minX-80,maxX:bounds.maxX+80,minZ:minZ-80,maxZ:bounds.maxZ+80}),view:CityData={...city,roads:about,signals,buildings:[]};
+  shareTransitCorridors(view,city);
+  return planTrafficSignals(view,{streets:drawnStreets(tile),owns:(x,z)=>x>=minX&&x<bounds.maxX&&z>=minZ&&z<bounds.maxZ,hulls:(x,z)=>city.index.query(x-.5,x+.5,z-.5,z+.5).filter(hull=>!hull.fragment),posts});
 }
