@@ -62,10 +62,11 @@ test('neither carriageway lies a step under the other across the median, but whe
   assert.ok(lifted['i93-nb'].meters>3000&&lifted['i93-nb'].max<2.3&&lifted['i93-sb'].meters>1500&&lifted['i93-sb'].max<2.7,JSON.stringify(lifted));
 });
 
-test('where their pavements meet the two are one surface: no ledge runs down the middle of the road without a rail',()=>{
-  // The runtime rails no deck edge that another deck covers within 0.8 m of its height (bridgeEdgeSections), so the two
-  // carriageways have no rail between them wherever their pavements overlap, about a kilometre of the road in all: at 92 of
-  // those 705 stations they stood 0.25 to 0.8 m apart.
+test('where their pavements meet the two are one surface: no ledge runs down the middle of the road',()=>{
+  // No deck edge that another deck covers within 0.8 m of its height is an edge of its own (bridgeEdgeSections), so the two
+  // carriageways are one surface wherever their pavements overlap, about a kilometre of the road in all: at 92 of those 705
+  // stations they stood 0.25 to 0.8 m apart, a ledge with nothing on it. One barrier row now stands along that line
+  // (tests/median-barriers.test.mjs), on the higher of the two pavements: a ledge would show as a step under its foot.
   let unrailed=0,worst=0;
   for(const [mine,theirs] of pairs){
     const c=lanes[mine],o=lanes[theirs];let at=0;
@@ -76,7 +77,7 @@ test('where their pavements meet the two are one surface: no ledge runs down the
         const length=Math.hypot(road.points[j][0]-road.points[j-1][0],road.points[j][1]-road.points[j-1][1]);
         if((exposed.get(`${j},${twin.side}`)??0)>length/2)continue;
         unrailed++;const step=Math.abs(twin.height-c.y[i]);worst=Math.max(worst,step);
-        assert.ok(step<=.15,`${road.id} station ${j}: a ${step.toFixed(2)} m ledge to its twin with no rail between them`);
+        assert.ok(step<=.15,`${road.id} station ${j}: a ${step.toFixed(2)} m ledge to its twin where the two pavements meet`);
       }
       at+=road.points.length-1;
     }
