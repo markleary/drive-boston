@@ -15,17 +15,17 @@ import { curbRoadClearance } from '../simulation/road-curbs.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
 import { sampleElevation, terrainGrid, terrainVertexNormal } from '../simulation/terrain.ts';
-import { inTransitCorridor, shareTransitCorridors } from '../simulation/transit-corridors.ts';
+import { shareTransitCorridors } from '../simulation/transit-corridors.ts';
 import { planTrafficSignals, type PlacedSignal } from '../simulation/signal-placement.ts';
 import { usesExactBuildingCollision } from '../simulation/building-collisions.ts';
 import { pointInside } from '../simulation/roads.ts';
-import { type createMaterials, facadeStyleIndex, hash, seeded } from './materials';
+import { type createMaterials, facadeStyleIndex } from './materials';
 import { splitHouseRoof, tileCollisionIndices, tileShellGeometry, tileSourceGeometry } from './tile-geometry';
 import { drapedRibbonInto, drapedStripInto, foundationGeometry, backBayPaving, BACK_BAY_PAVING, clipPortalSurfaceSteps } from './terrain-ground';
 import { inTunnelApproach } from '../simulation/tunnels.ts';
-import { mallGroundTest } from '../simulation/commonwealth-mall.ts';
-import { greenway, obsoleteGreenwayCurb, inGreenway } from '../simulation/greenway.ts';
-import { canopyHitsDeck, STREET_CANOPY } from '../simulation/deck-canopy.ts';
+import { greenway, obsoleteGreenwayCurb } from '../simulation/greenway.ts';
+import { roadCells } from '../simulation/road-cells.ts';
+import { tileFurnitureSteps } from '../simulation/street-furniture.ts';
 import { spatialInstances } from './spatial-batches';
 import { PartBatches, box } from './geometry-writer';
 import { computeBounds } from './fast-bounds';
@@ -41,7 +41,7 @@ import { createWarningSign } from './highway-signs';
 import { WARNING_POST, clearRoadside, inLanes, planHighwaySigns } from '../simulation/highway-signs';
 import { highwayMasts, mastHead, MAST_ARM, MAST_HEIGHT, MAST_LIGHT, type LampLight } from '../simulation/highway-lighting';
 import { deckUndersideAt } from '../simulation/road-surfaces';
-import { planStreetSigns, POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
+import { POLE_HEIGHT, POLE_RADIUS } from '../simulation/street-signs';
 import { roadStructureSteps } from './bridges';
 import { addSurveyViaductSupports } from './viaducts';
 import { addSurveyDeckSurfaceSteps, addSurveyDeckParapetSteps } from './survey-deck-surface';
@@ -96,6 +96,7 @@ export interface TileStats {
 export type Lamp = THREE.Vector3 & { light?: LampLight };
 export interface BuiltTile {
   key: string; tile: CityTile; group: THREE.Group; bounds: Bounds; colliders: RAPIER.Collider[]; meshes: THREE.Mesh[]; lamps: Lamp[]; signals: PlacedSignal[]; stats: TileStats;
+  /** Where the street trees (every place found for one), lamps and name signs of the tile stand: the sidewalk walkers keep clear of them (street-life.ts). */ posts: Point2[];
   dispose(): void;
 }
 export type TileStage = 'survey' | 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
@@ -133,17 +134,12 @@ export function createTileBuilder(ctx: TileContext) {
   const isChelseaLiftFrame = (building: Building) => building.id === 'osm-way-196751230';
   const height = (x: number, z: number) => sampleElevation(city, x, z);
   // Road, signal and area lookups by 250 m cell, built once for the metro.
-  const CELL = 250, roadCells = new Map<string, Road[]>(), signalCells = new Map<string, Point2[]>(), parkCells = new Map<string, CityArea[]>(), waterCells = new Map<string, CityArea[]>();
+  const CELL = 250, signalCells = new Map<string, Point2[]>(), parkCells = new Map<string, CityArea[]>(), waterCells = new Map<string, CityArea[]>();
   const cellKey = (cx: number, cz: number) => `${cx},${cz}`;
   const spread = <T>(map: Map<string, T[]>, item: T, minX: number, maxX: number, minZ: number, maxZ: number) => {
     for (let cx = Math.floor(minX / CELL); cx <= Math.floor(maxX / CELL); cx++) for (let cz = Math.floor(minZ / CELL); cz <= Math.floor(maxZ / CELL); cz++) { const key = cellKey(cx, cz), list = map.get(key); if (list) list.push(item); else map.set(key, [item]); }
   };
-  const roadBounds = new Map<Road, Bounds>();
-  for (const road of city.roads) {
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const [x, z] of road.points) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
-    roadBounds.set(road, { minX, maxX, minZ, maxZ }); spread(roadCells, road, minX, maxX, minZ, maxZ);
-  }
+  const roadIndex = roadCells(city.roads, CELL), roadBounds = roadIndex.boxes, roadsNear = roadIndex.near;
   for (const signal of city.signals) spread(signalCells, signal, signal[0], signal[0], signal[1], signal[1]);
   const areaBounds = new Map<CityArea, Bounds>();
   for (const [list, map] of [[city.parks ?? [], parkCells], [city.water ?? [], waterCells]] as const) for (const area of list) { if (!area.rings[0]?.length) continue; const b = areaBoundsOf(area); areaBounds.set(area, b); spread(map, area, b.minX, b.maxX, b.minZ, b.maxZ); }
@@ -154,7 +150,6 @@ export function createTileBuilder(ctx: TileContext) {
   };
   const overlaps = (a: Bounds, b: Bounds) => a.minX <= b.maxX && a.maxX >= b.minX && a.minZ <= b.maxZ && a.maxZ >= b.minZ;
   const grow = (b: Bounds, m: number): Bounds => ({ minX: b.minX - m, maxX: b.maxX + m, minZ: b.minZ - m, maxZ: b.maxZ + m });
-  const roadsNear = (bounds: Bounds) => collect(roadCells, bounds, road => overlaps(roadBounds.get(road)!, bounds));
   const midpoint = roadMidpoint;
   // Source tiles include park monuments, shelters and utility structures among
   // the building meshes. Keep their measured forms without residential windows.
@@ -162,8 +157,6 @@ export function createTileBuilder(ctx: TileContext) {
   const parkStructure = (b: Building) => b.height < 30 && principalParks.some(p => { const box = areaBounds.get(p)!; return b.center[0] >= box.minX && b.center[0] <= box.maxX && b.center[1] >= box.minZ && b.center[1] <= box.maxZ && pointInside(b.center, p.rings[0]) && !p.rings.slice(1).some(r => pointInside(b.center, r)); });
   const grid = terrainGrid(city) ?? (() => { throw new Error('A metro city needs its elevation grid before tiles can be built'); })();
   const woodlandViewHeight = fellsViewHeight(city);
-  // The Commonwealth Avenue Mall plants its own rows: no street tree or grate on its lawns, nor before its fences.
-  const onMallLawn = mallGroundTest(city.parks ?? []);
   // Several tiles can be under construction: whichever needs the index first starts it, any of them may advance it.
   let junctions: JunctionIndex | undefined, junctionSteps: Generator<void, JunctionIndex> | undefined;
 
@@ -172,7 +165,7 @@ export function createTileBuilder(ctx: TileContext) {
     const began = performance.now(), key = tile.key, size = tile.size, x0 = tile.tx * size, z0 = tile.tz * size, x1 = x0 + size, z1 = z0 + size;
     const bounds: Bounds = { minX: x0, maxX: x1, minZ: z0, maxZ: z1 }, insideTile = (x: number, z: number) => x >= x0 && x < x1 && z >= z0 && z < z1;
     const group = partial.group; group.name = `Tile ${key}`;
-    const colliders = partial.colliders, meshes: THREE.Mesh[] = [], owned = partial.ownedMaterials ??= [], lamps: Lamp[] = [], highwayLamps: Lamp[] = [];
+    const colliders = partial.colliders, meshes: THREE.Mesh[] = [], owned = partial.ownedMaterials ??= [], lamps: Lamp[] = [], highwayLamps: Lamp[] = [], posts: Point2[] = [];
     const stats: TileStats = { buildings: 0, exactMeshes: 0, triangles: 0, roads: 0, structures: 0, trees: 0, lamps: 0, signs: 0, signals: 0, parkTrees: 0, storefronts: 0, facades: 0, rooftops: 0, porches: 0, housePorches: 0, colliders: 0, buildMs: 0, cpuMs: 0 };
     const near = grow(bounds, 80), roads = roadsNear(near), ownedRoads = roads.filter(r => { const m = midpoint(r); return insideTile(m[0], m[1]); });
     const subCity: CityData = { ...city, roads, buildings: tile.buildings, signals: collect(signalCells, grow(bounds, 40), s => s[0] >= x0 - 40 && s[0] < x1 + 40 && s[1] >= z0 - 40 && s[1] < z1 + 40), curbs: tile.curbs, parkPaths: tile.parkPaths,
@@ -533,52 +526,12 @@ export function createTileBuilder(ctx: TileContext) {
     }
     yield 'buildings';
 
-    // Street furniture on the owned roads: trees, lamps and name signs.
+    // Street furniture: trees, lamps and name signs, stood beside the roadway as this tile draws it (street-furniture.ts).
     {
-      const treePositions: THREE.Vector3[] = [];
-      const random = seeded(342 + hash(key) % 1000);
-      const occupied = (x: number, z: number) => ctx.landmarkForecourt?.(x, z) || inGreenway(x,z) || inTransitCorridor(city, x, z) || inTunnelApproach(city,x,z) || !!city.index.at(x, z);
-      const planted = (x: number, z: number) => occupied(x, z) || onMallLawn(x, z);
-      const segmentCells = new Map<string, { a: Point2; b: Point2; radius: number }[]>();
-      for (const road of roads.filter(r=>!r.tunnel)) for (let i = 1; i < road.points.length; i++) {
-        // (a highway deck on the ground with a surveyed roadway beside its lanes keeps that whole roadway clear: its wider edge, either side)
-        const a = road.points[i - 1], b = road.points[i], edges = Math.max(0, ...(road.roadway?.[i - 1] ?? []), ...(road.roadway?.[i] ?? [])), radius = Math.max((road.pavedWidth ?? road.width) / 2, edges) + .8, segment = { a, b, radius };
-        for (let x = Math.floor((Math.min(a[0], b[0]) - radius) / 64); x <= Math.floor((Math.max(a[0], b[0]) + radius) / 64); x++) for (let z = Math.floor((Math.min(a[1], b[1]) - radius) / 64); z <= Math.floor((Math.max(a[1], b[1]) + radius) / 64); z++) {
-          const k = `${x},${z}`, list = segmentCells.get(k) ?? []; list.push(segment); segmentCells.set(k, list);
-        }
-      }
-      // A footbridge's line is no street, but nothing is planted or posted in its deck either (a ramp comes down along the edge of a street's roadway).
-      for (const deck of city.footbridges ?? []) for (let i = 1; i < deck.points.length; i++) {
-        const a = deck.points[i - 1], b = deck.points[i], radius = deck.width / 2 + .8, segment = { a, b, radius };
-        if (Math.max(a[0], b[0]) < x0 - 64 || Math.min(a[0], b[0]) > x1 + 64 || Math.max(a[1], b[1]) < z0 - 64 || Math.min(a[1], b[1]) > z1 + 64) continue;
-        for (let x = Math.floor((Math.min(a[0], b[0]) - radius) / 64); x <= Math.floor((Math.max(a[0], b[0]) + radius) / 64); x++) for (let z = Math.floor((Math.min(a[1], b[1]) - radius) / 64); z <= Math.floor((Math.max(a[1], b[1]) + radius) / 64); z++) {
-          const k = `${x},${z}`, list = segmentCells.get(k) ?? []; list.push(segment); segmentCells.set(k, list);
-        }
-      }
-      const inRoad = (x: number, z: number) => (segmentCells.get(`${Math.floor(x / 64)},${Math.floor(z / 64)}`) ?? []).some(({ a, b, radius }) => {
-        const dx = b[0] - a[0], dz = b[1] - a[1], t = THREE.MathUtils.clamp(((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-        return Math.hypot(x - a[0] - t * dx, z - a[1] - t * dz) < radius;
-      });
-      const taken = new Set<string>();
-      for (const road of ownedRoads) {
-        if (road.elevations || road.width < 7 || /alley|unnamed/i.test(road.name)) continue;
-        if (due(pace)) yield 'props';
-        const verge = (road.pavedWidth ?? road.width) / 2 + 2;
-        for (let i = 1; i < road.points.length; i++) {
-          const a = road.points[i - 1], b = road.points[i], dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz); if (length < .1) continue;
-          const tx = dx / length, tz = dz / length;
-          for (let d = 14; d < length - 8; d += 25) {
-            for (const side of [-1, 1]) {
-              const x = a[0] + tx * d - tz * verge * side, z = a[1] + tz * d + tx * verge * side;
-              const k = `${Math.round(x / 8)},${Math.round(z / 8)}`; if (planted(x, z) || inRoad(x, z) || taken.has(k)) continue; taken.add(k);
-              if ((!/Boylston/.test(road.name) || random() > .5) && !canopyHitsDeck(city, x, z, height(x, z), STREET_CANOPY)) treePositions.push(new THREE.Vector3(x, height(x, z), z));
-              if (side === 1 && !inRoad(x - tx * 5, z - tz * 5) && !occupied(x - tx * 5, z - tz * 5)) lamps.push(new THREE.Vector3(x - tx * 5, height(x - tx * 5, z - tz * 5), z - tz * 5));
-            }
-          }
-        }
-      }
-      // Name signs stand at a sparse, tile-independent set of corners (see planStreetSigns).
-      const streetSigns = planStreetSigns(roadsNear(grow(bounds, 160)), (x, z) => !occupied(x, z) && !inRoad(x, z), insideTile);
+      const furniture = yield* paced('props', tileFurnitureSteps(city, tile, roadIndex, ctx.landmarkForecourt), pace);
+      const treePositions = furniture.trees.map(([x, z]) => new THREE.Vector3(x, height(x, z), z)), streetSigns = furniture.signs;
+      for (const [x, z] of furniture.lamps) lamps.push(new THREE.Vector3(x, height(x, z), z));
+      posts.push(...furniture.posts);
       if (treePositions.length) ctx.trees.add(key, treePositions); stats.trees = treePositions.length; stats.lamps = lamps.length; stats.signs = streetSigns.length;
       const dummy = new THREE.Object3D();
       if (lamps.length) {
@@ -676,7 +629,7 @@ export function createTileBuilder(ctx: TileContext) {
     }
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
-    const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps: [...lamps, ...highwayLamps], signals: placements, stats, dispose: () => dispose(built, owned) };
+    const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps: [...lamps, ...highwayLamps], posts, signals: placements, stats, dispose: () => dispose(built, owned) };
     return built;
   }
 

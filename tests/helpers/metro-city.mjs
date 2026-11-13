@@ -12,7 +12,7 @@ import {readFileSync,existsSync} from 'node:fs';
 import {gunzipSync} from 'node:zlib';
 import * as THREE from 'three';
 import {resolveCity,loadTile,isMetroCity} from '../../src/simulation/city-tiles.ts';
-import {decodeElevation,tileKey} from '../../src/simulation/tile-format.ts';
+import {decodeElevation,parseTileHeader,tileFile,tileKey} from '../../src/simulation/tile-format.ts';
 import {usesExactBuildingCollision} from '../../src/simulation/building-collisions.ts';
 import {addSourceFooting} from '../../src/render/source-footings.ts';
 import {tileShellGeometry,tileSourceGeometry,tileCollisionIndices} from '../../src/render/tile-geometry.ts';
@@ -44,6 +44,17 @@ export async function loadMetroCity({bounds=CENTRAL,tiles}={}){
     city.curbs.push(...tile.curbs);city.parkPaths.push(...tile.parkPaths);
   }
   return city;
+}
+
+/** Tiles by their headers alone (every tile of the package, or the keys given): the surfaces, curbs, paths and
+ * stalls a tile draws, with no building shells and no building list, so that an audit can hold all 265 at once. */
+export function loadTileHeaders(city,keys=city.tiles.keys){
+  const tiles=new Map();
+  for(const key of keys){
+    const [tx,tz]=key.split('_').map(Number),tile=parseTileHeader(exact(gunzipSync(readFileSync(new URL(`${city.tiles.directory}/${tileFile(tx,tz)}`,DATA_DIR)))));
+    tile.buildings=[];tiles.set(key,tile);
+  }
+  return tiles;
 }
 
 /** The ungraded USGS grid that grade-terrain.mjs kept beside the graded one. */
