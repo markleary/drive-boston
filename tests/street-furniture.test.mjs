@@ -6,7 +6,7 @@ import {drawnStreets,CLEARANCE,STALL_REACH} from '../src/simulation/drawn-street
 import {LAMP_ROOM,SIGN_ROOM,TREE_ROOM,VERGE,postClear,roadwayEdge,streetFurnitureSteps,streetRibbons,vergePlace} from '../src/simulation/street-furniture.ts';
 import {roadCells} from '../src/simulation/road-cells.ts';
 import {createStreetLife} from '../src/render/street-life.ts';
-import {hasMetroData} from './helpers/metro-city.mjs';
+import {hasMetroData,loadTileHeaders} from './helpers/metro-city.mjs';
 import {alongWalk,drawnGround,loadStreetCity,residentTiles,roadIndex,tileFurniture} from './helpers/street-furniture.mjs';
 
 const near=(a,b,eps=1e-9)=>Math.abs(a-b)<=eps;
@@ -237,5 +237,28 @@ test('the walkers of Newmarket Square pace its sidewalks, once the tile is in',{
     life.populateAt({x:735,z:2545},{x:735,z:2545});
     const local=life.pedestrians.filter(p=>Math.hypot(p.position.x-735,p.position.z-2545)<350);assert.ok(local.length>=12,`${local.length} walkers about the square`);
     for(const person of local)assert.ok(!ground.roadway(person.position.x,person.position.z,.3));
+  }finally{life.dispose();}
+});
+
+test('the kerbside cars about the spawn wait for its tile, then stand on the roadway 1.1 m inside the kerb',{skip},()=>{
+  // the tiles a desktop has resident when the game starts: those within 350 m of the spawn
+  const size=city.tiles.size,{x,z}=city.spawn,keys=city.tiles.keys.filter(key=>{const [tx,tz]=key.split('_').map(Number);return Math.hypot(Math.max(tx*size-x,0,x-(tx+1)*size),Math.max(tz*size-z,0,z-(tz+1)*size))<=350;});
+  const tiles=loadTileHeaders(city,keys),about=drawnGround(tiles),{loaded}=residentTiles(city,tiles,roads),resident=[...loaded];
+  // a phone that resumes somewhere else starts without them
+  loaded.clear();
+  const life=createStreetLife(new THREE.Scene(),city,undefined,[],{tiles:{loaded}});
+  try{
+    assert.equal(life.parkedCount,0);assert.equal(life.meterCount,0);assert.equal(life.parkedColliders.size,0);
+    life.update(1/60,1/60,{x,z});assert.equal(life.parkedCount,0,'no tile, no kerb to stand a car by');
+    for(const [key,entry] of resident)loaded.set(key,entry);
+    life.update(1/60,2/60,{x,z});
+    assert.equal(life.parkedCount,8);assert.ok(life.meterCount>=4,`${life.meterCount} meters`);
+    life.update(1/60,3/60,{x,z});assert.equal(life.parkedCount,8,'stood once');
+    for(const car of life.parked){
+      const f=[Math.sin(car.yaw),Math.cos(car.yaw)],r=[f[1],-f[0]],on=(along,across)=>about.roadway(car.x+f[0]*along+r[0]*across,car.z+f[1]*along+r[1]*across);
+      for(const [a,b] of [[-2,-.85],[2,-.85],[2,.85],[-2,.85]])assert.ok(on(a,b),`the car on ${car.road} at ${car.x.toFixed(1)}, ${car.z.toFixed(1)} stands off the roadway`);
+      assert.ok([-1,1].some(side=>on(0,side*1)&&!on(0,side*1.3)),`the car on ${car.road} stands 1.1 m inside its kerb`);
+      if(car.meter)assert.ok(!about.roadway(car.meter[0],car.meter[1],.2),'its meter stands behind the kerb');
+    }
   }finally{life.dispose();}
 });

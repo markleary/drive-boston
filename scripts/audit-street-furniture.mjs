@@ -11,6 +11,7 @@
  *   stands in or the next one;
  * - none in a parking stall, with half that room to spare;
  * - no walk in the pavement, nearer it than 0.3 m anywhere along it, or through a stall;
+ * - no walk within 0.6 m of a tree, a lamp or a sign pole (the walkers' own test is 0.76 m at points 25 cm apart);
  * - every kerbside car wholly on the roadway.
  *
  * The planters follow the drawn roadway by rule, so this holds for any package; the audit is what says so for the
@@ -25,7 +26,7 @@ import {LAMP_ROOM,SIGN_ROOM,TREE_ROOM} from '../src/simulation/street-furniture.
 import {NPC_VEHICLES} from '../src/simulation/npc-vehicle-specs.ts';
 import {createStreetLife} from '../src/render/street-life.ts';
 
-const WALK_ROOM=.3,began=performance.now();
+const WALK_ROOM=.3,POST_ROOM=.6,began=performance.now();
 const city=await loadStreetCity(),tiles=loadTileHeaders(city),roads=roadIndex(city),ground=drawnGround(tiles),size=city.tiles.size;
 const failures=[],fail=(what,list)=>{if(list.length)failures.push(`${list.length} ${what}: ${list.slice(0,5).map(p=>`(${p[0].toFixed(1)}, ${p[1].toFixed(1)})`).join(' ')}${list.length>5?' ...':''}`);};
 
@@ -52,17 +53,21 @@ const walks=new Set();
 for(let x=city.bounds.minX;x<city.bounds.maxX+1500;x+=1500)for(let z=city.bounds.minZ;z<city.bounds.maxZ+1500;z+=1500)for(const route of life.walksNear(x,z,1100))walks.add(route);
 const streetsAt=(tx,tz)=>{const tile=tiles.get(`${tx}_${tz}`);return tile&&drawnStreets(tile);};
 const about=(x,z,reach,test)=>{for(let tx=Math.floor((x-reach)/size);tx<=Math.floor((x+reach)/size);tx++)for(let tz=Math.floor((z-reach)/size);tz<=Math.floor((z+reach)/size);tz++){const streets=streetsAt(tx,tz);if(streets&&test(streets))return true;}return false;};
-let metres=0,points=0,checked=0;const paved=[],stalled=[],disagree=[];
+// (every post of the package by 2 m cell, an index of this script's own: the walkers look theirs up tile by tile)
+const postCells=new Map(),postCell=(i,j)=>(i+50000)*100003+j+50000;
+for(const plan of plans.values())for(const post of plan.posts){const cell=postCell(Math.floor(post[0]/2),Math.floor(post[1]/2)),list=postCells.get(cell);if(list)list.push(post);else postCells.set(cell,[post]);}
+const atPost=(x,z)=>{const ci=Math.floor(x/2),cj=Math.floor(z/2);for(let i=ci-1;i<=ci+1;i++)for(let j=cj-1;j<=cj+1;j++)for(const post of postCells.get(postCell(i,j))??[])if((post[0]-x)**2+(post[1]-z)**2<POST_ROOM**2)return true;return false;};
+let metres=0,points=0,checked=0;const paved=[],stalled=[],posted=[],disagree=[];
 for(const route of walks){
   metres+=route.length;
   for(const [x,z] of alongWalk(route)){
     const road=about(x,z,WALK_ROOM,streets=>streets.inset(x,z)>-WALK_ROOM&&streets.near(x,z,WALK_ROOM)),stall=about(x,z,STALL_REACH+WALK_ROOM,streets=>streets.stall(x,z,WALK_ROOM));
-    if(road)paved.push([x,z]);if(stall)stalled.push([x,z]);
+    if(road)paved.push([x,z]);if(stall)stalled.push([x,z]);if(atPost(x,z))posted.push([x,z]);
     if(points++%50===0){checked++;if(road!==ground.roadway(x,z,WALK_ROOM)||stall!==ground.stall(x,z,WALK_ROOM))disagree.push([x,z]);}
   }
 }
-fail(`points of walks in the street pavement or within ${WALK_ROOM} m of it`,paved);fail(`points of walks within ${WALK_ROOM} m of a parking stall`,stalled);fail('points where the planters\' index and the polygons disagree',disagree);
-console.log(`${walks.size} walks (${[...walks].filter(route=>route.park).length} on park paths), ${(metres/1000).toFixed(0)} km, ${points} points: in the roadway or within ${WALK_ROOM} m of it ${paved.length}, at a stall ${stalled.length}; ${checked} points checked against the polygons, ${disagree.length} disagree`);
+fail(`points of walks in the street pavement or within ${WALK_ROOM} m of it`,paved);fail(`points of walks within ${WALK_ROOM} m of a parking stall`,stalled);fail(`points of walks within ${POST_ROOM} m of a tree, lamp or sign pole`,posted);fail('points where the planters\' index and the polygons disagree',disagree);
+console.log(`${walks.size} walks (${[...walks].filter(route=>route.park).length} on park paths), ${(metres/1000).toFixed(0)} km, ${points} points: in the roadway or within ${WALK_ROOM} m of it ${paved.length}, at a stall ${stalled.length}, within ${POST_ROOM} m of a tree or post ${posted.length}; ${checked} points checked against the polygons, ${disagree.length} disagree`);
 
 // ---- the kerbside cars about the spawn: all four corners on the roadway
 const offRoad=[];

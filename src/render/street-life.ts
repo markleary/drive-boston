@@ -157,6 +157,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       if (!built) { if (keys.has(key)) { unseen = true; return false; } continue; }
       const streets = drawnStreets(built.tile);
       if (streets.inset(p[0], p[1]) > -room && streets.near(p[0], p[1], room) || streets.stall(p[0], p[1], room)) return false;
+      // (a post is listed in every 64 m cell within a metre of it, so the cell p lies in holds every post within .76 m of p, across a cell line too)
       if (built.posts?.length) { let near = postCells.get(built.posts); if (!near) postCells.set(built.posts, near = spatialIndex(built.posts as Point2[], q => [q[0], q[1], q[0], q[1]], 1)); if (!near(p).every(post => gap(p, post) > .76)) return false; }
       if (!built.tile.streetPavement) ribbons = true;   // (a tile without compiled pavement: its streets by their ribbons)
     }
@@ -324,61 +325,90 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   const pedestrianModel = createPedestrianModel(peopleGroup,pedestrians,ownedMaterials,{mainCamera:options.camera});
   const shown = new Uint8Array(count), viewFrustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), reach = new THREE.Sphere(new THREE.Vector3(), WALKER_REACH), poseHidden = options.poseHidden ?? true;
 
-  const parked: ParkedVehicle[] = [];
-  const candidates: { segment: Segment; x: number; z: number; side: number; yaw: number; kerbside: number; score: number }[] = [];
   // Kerbside parking: the original streets in the survey, or in a metro any named
-  // street or avenue of parking width within reach of the spawn.
+  // street or avenue of parking width within reach of the spawn. With streamed tiles the cars stand by the kerb
+  // as the tiles draw it, so they are stood once the tile the spawn lies in is resident (`park`, below): at
+  // once when the game starts there, later for a phone that resumes somewhere else.
+  const PARKED = 8, parked: ParkedVehicle[] = [];
+  const parkedFleet=createNPCVehicleBatches(parkedGroup,PARKED,options.mobile);
+  const parkedBodies:(RAPIER.RigidBody|undefined)[]=[],parkedHandles=new Set<number>(),parkedColors:THREE.Color[]=[];
+  const parkedPoses:({position:RAPIER.Vector;rotation:RAPIER.Rotation}|undefined)[]=[],parkedSuspended=new Set<number>();
+  const dummy=new THREE.Object3D(),parkedLift=new THREE.Vector3();
+  let meterCount = 0;
   const parkable = (road: Road) => metro ? road.width >= 9.5 && road.width <= 15 && /\b(Street|Avenue)$/.test(road.name) : /^(Boylston|Dartmouth|Parker|Tremont|Wigglesworth|Calumet|Saint Alphonsus|Smith|Worthington) Street$/.test(road.name) && road.width >= 9.5;
-  for (const segment of segmentsNear(city.spawn.x, city.spawn.z, metro ? 700 : Infinity)) {
-    if (!parkable(segment.road)) continue;
-    for (let d = 21; d < segment.length - 21; d += 18) for (const side of [-1, 1]) {
-      // A car stands 1.1 m inside the kerb: half the street's width from its centre line, or, with the tiles at hand, where the drawn roadway ends beside it.
-      const kerbside = tiled ? kerb(segment.road, [segment.a[0] + segment.tx * d, segment.a[1] + segment.tz * d], -segment.tz * side, segment.tx * side) : paved(segment.road) / 2; if (kerbside === undefined) continue;
-      const offset = side * (kerbside - 1.1);
-      const x = segment.a[0] + segment.tx * d - segment.tz * offset, z = segment.a[1] + segment.tz * d + segment.tx * offset;
-      // The worksite reserves both its closed lane and the passing lane. A
-      // parked car beside the cones must not narrow that remaining corridor.
-      if (constructionZones.some(zone => {
-        const dx=x-zone.x,dz=z-zone.z,sin=Math.sin(zone.yaw),cos=Math.cos(zone.yaw);
-        return Math.abs(dx*sin+dz*cos)<zone.length/2+8 && Math.abs(dx*cos-dz*sin)<zone.pavedWidth/2+2 &&
-          Math.abs(sampleRoadElevation(city,zone.road,x,z)-sampleElevation(city,x,z))<2;
-      })) continue;
-      const direction = segment.road.oneway || side;
-      const yaw = Math.atan2(segment.tx * direction, segment.tz * direction);
-      candidates.push({ segment, x, z, side, yaw, kerbside, score: Math.hypot(x - city.spawn.x, z - city.spawn.z) + random() * 250 });
+  function park() {
+    const candidates: { segment: Segment; x: number; z: number; side: number; yaw: number; kerbside: number; score: number }[] = [];
+    for (const segment of segmentsNear(city.spawn.x, city.spawn.z, metro ? 700 : Infinity)) {
+      if (!parkable(segment.road)) continue;
+      for (let d = 21; d < segment.length - 21; d += 18) for (const side of [-1, 1]) {
+        // A car stands 1.1 m inside the kerb: half the street's width from its centre line, or, with the tiles at hand, where the drawn roadway ends beside it.
+        const kerbside = tiled ? kerb(segment.road, [segment.a[0] + segment.tx * d, segment.a[1] + segment.tz * d], -segment.tz * side, segment.tx * side) : paved(segment.road) / 2; if (kerbside === undefined) continue;
+        const offset = side * (kerbside - 1.1);
+        const x = segment.a[0] + segment.tx * d - segment.tz * offset, z = segment.a[1] + segment.tz * d + segment.tx * offset;
+        // The worksite reserves both its closed lane and the passing lane. A
+        // parked car beside the cones must not narrow that remaining corridor.
+        if (constructionZones.some(zone => {
+          const dx=x-zone.x,dz=z-zone.z,sin=Math.sin(zone.yaw),cos=Math.cos(zone.yaw);
+          return Math.abs(dx*sin+dz*cos)<zone.length/2+8 && Math.abs(dx*cos-dz*sin)<zone.pavedWidth/2+2 &&
+            Math.abs(sampleRoadElevation(city,zone.road,x,z)-sampleElevation(city,x,z))<2;
+        })) continue;
+        const direction = segment.road.oneway || side;
+        const yaw = Math.atan2(segment.tx * direction, segment.tz * direction);
+        candidates.push({ segment, x, z, side, yaw, kerbside, score: Math.hypot(x - city.spawn.x, z - city.spawn.z) + random() * 250 });
+      }
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    for (const candidate of spreadByBlock(candidates,c=>[c.x,c.z])) {
+      if (parked.length >= PARKED) break;
+      const { x, z, yaw, segment, side, kerbside } = candidate;
+      if (Math.hypot(x - city.spawn.x, z - city.spawn.z) < 42 || parked.some(vehicle => Math.hypot(vehicle.x - x, vehicle.z - z) < 42)) continue;
+      const forward: Point2 = [Math.sin(yaw), Math.cos(yaw)], right: Point2 = [-forward[1], forward[0]];
+      const spec=npcVehicleAt(parked.length),halfWidth=spec.width/2+.12,halfLength=spec.length/2+.16;
+      const samples: Point2[] = [[x, z]];
+      for (const width of [-halfWidth, halfWidth]) for (const length of [-halfLength, 0, halfLength]) samples.push([x + right[0] * width + forward[0] * length, z + right[1] * width + forward[1] * length]);
+      if (!samples.every(p => inBounds(p, 12) && !inTunnelApproach(city,...p) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > paved(other.road) / 2 + 2))) continue;
+      // (on the roadway from nose to tail, and the kerb no nearer the centre line at either end than beside the car's middle)
+      if (tiled && ![-halfLength, halfLength].every(along => { const at: Point2 = [x + forward[0] * along, z + forward[1] * along], edge = kerb(segment.road, [at[0] + segment.tz * side * (kerbside - 1.1), at[1] - segment.tx * side * (kerbside - 1.1)], -segment.tz * side, segment.tx * side); return edge !== undefined && edge > kerbside - .3 && streetsAt(at)?.paved(at[0], at[1]); })) continue;
+      const meterOffset = side * (kerbside + .65);
+      const meter: Point2 = [segment.a[0] + segment.tx * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) - segment.tz * meterOffset,
+        segment.a[1] + segment.tz * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) + segment.tx * meterOffset];
+      parked.push({ type:spec.type,mass:spec.mass,id: parked.length, road: segment.road.name, x, y:sampleElevation(city,x,z), z, yaw, meter: sidewalkClear(meter, .25) ? meter : null });
+    }
+    for(const [i,vehicle] of parked.entries()){
+      const spec=NPC_VEHICLES.find(spec=>spec.type===vehicle.type)!,normal=sampleTerrainNormal(city,vehicle.x,vehicle.z),q=terrainRotation(city,vehicle.x,vehicle.z,vehicle.yaw);
+      parkedFleet.bind(i,spec.type);vehicle.registration=parkedFleet.registration(i);parkedColors.push(new THREE.Color(npcPaint(spec)));
+      dummy.position.set(vehicle.x+normal.x*NPC_BODY_LIFT,vehicle.y+normal.y*NPC_BODY_LIFT,vehicle.z+normal.z*NPC_BODY_LIFT);dummy.quaternion.set(q.x,q.y,q.z,q.w);
+      if(physics){
+        const body=physics.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(...dummy.position.toArray()).setRotation(q).setLinearDamping(.6).setAngularDamping(.8).setCanSleep(true));
+        for(const collider of createNPCVehicleColliders(physics.world,body,spec))parkedHandles.add(collider.handle);body.sleep();parkedBodies.push(body);
+        parkedPoses.push({position:body.translation(),rotation:body.rotation()});
+      }else{parkedBodies.push(undefined);parkedPoses.push(undefined);}
+    }
+    const meters = parked.filter(vehicle => vehicle.meter); meterCount = meters.length;
+    if (meters.length) {
+      const iron = new THREE.MeshStandardMaterial({ color: 0x344544, metalness: .45, roughness: .5 });
+      const face = new THREE.MeshStandardMaterial({ color: 0xbac4bb, metalness: .25, roughness: .37 }); ownedMaterials.add(iron); ownedMaterials.add(face);
+      const parts = [
+        { geometry: new THREE.CylinderGeometry(.032, .042, 1.1, 7), material: iron, y: .55 },
+        { geometry: new THREE.BoxGeometry(.17, .25, .13), material: iron, y: 1.21 },
+        { geometry: new THREE.BoxGeometry(.11, .10, .135), material: face, y: 1.25 },
+      ];
+      for (const part of parts) {
+        const mesh = new THREE.InstancedMesh(part.geometry, part.material, meters.length); mesh.castShadow = true; mesh.receiveShadow = true;
+        meters.forEach((vehicle, i) => { dummy.position.set(vehicle.meter![0],sampleElevation(city,...vehicle.meter!)+part.y, vehicle.meter![1]); dummy.rotation.set(0, vehicle.yaw, 0); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); });
+        furnitureGroup.add(mesh);
+      }
     }
   }
-  candidates.sort((a, b) => a.score - b.score);
-  for (const candidate of spreadByBlock(candidates,c=>[c.x,c.z])) {
-    if (parked.length >= 8) break;
-    const { x, z, yaw, segment, side, kerbside } = candidate;
-    if (Math.hypot(x - city.spawn.x, z - city.spawn.z) < 42 || parked.some(vehicle => Math.hypot(vehicle.x - x, vehicle.z - z) < 42)) continue;
-    const forward: Point2 = [Math.sin(yaw), Math.cos(yaw)], right: Point2 = [-forward[1], forward[0]];
-    const spec=npcVehicleAt(parked.length),halfWidth=spec.width/2+.12,halfLength=spec.length/2+.16;
-    const samples: Point2[] = [[x, z]];
-    for (const width of [-halfWidth, halfWidth]) for (const length of [-halfLength, 0, halfLength]) samples.push([x + right[0] * width + forward[0] * length, z + right[1] * width + forward[1] * length]);
-    if (!samples.every(p => inBounds(p, 12) && !inTunnelApproach(city,...p) && buildingClear(p, .45) && nearSegments(p).every(other => other.road.id === segment.road.id || pointSegment(p, other.a, other.b) > paved(other.road) / 2 + 2))) continue;
-    // (on the roadway from nose to tail, and the kerb no nearer the centre line at either end than beside the car's middle)
-    if (tiled && ![-halfLength, halfLength].every(along => { const at: Point2 = [x + forward[0] * along, z + forward[1] * along], edge = kerb(segment.road, [at[0] + segment.tz * side * (kerbside - 1.1), at[1] - segment.tx * side * (kerbside - 1.1)], -segment.tz * side, segment.tx * side); return edge !== undefined && edge > kerbside - .3 && streetsAt(at)?.paved(at[0], at[1]); })) continue;
-    const meterOffset = side * (kerbside + .65);
-    const meter: Point2 = [segment.a[0] + segment.tx * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) - segment.tz * meterOffset,
-      segment.a[1] + segment.tz * ((x - segment.a[0]) * segment.tx + (z - segment.a[1]) * segment.tz + 2) + segment.tx * meterOffset];
-    parked.push({ type:spec.type,mass:spec.mass,id: parked.length, road: segment.road.name, x, y:sampleElevation(city,x,z), z, yaw, meter: sidewalkClear(meter, .25) ? meter : null });
-  }
-  const parkedFleet=createNPCVehicleBatches(parkedGroup,Math.max(1,parked.length),options.mobile);
-  const parkedBodies:(RAPIER.RigidBody|undefined)[]=[],colliders:RAPIER.Collider[]=[],parkedColors:THREE.Color[]=[];
-  const dummy=new THREE.Object3D(),parkedLift=new THREE.Vector3();
-  for(const [i,vehicle] of parked.entries()){
-    const spec=NPC_VEHICLES.find(spec=>spec.type===vehicle.type)!,normal=sampleTerrainNormal(city,vehicle.x,vehicle.z),q=terrainRotation(city,vehicle.x,vehicle.z,vehicle.yaw);
-    parkedFleet.bind(i,spec.type);vehicle.registration=parkedFleet.registration(i);parkedColors.push(new THREE.Color(npcPaint(spec)));
-    dummy.position.set(vehicle.x+normal.x*NPC_BODY_LIFT,vehicle.y+normal.y*NPC_BODY_LIFT,vehicle.z+normal.z*NPC_BODY_LIFT);dummy.quaternion.set(q.x,q.y,q.z,q.w);
-    if(physics){
-      const body=physics.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(...dummy.position.toArray()).setRotation(q).setLinearDamping(.6).setAngularDamping(.8).setCanSleep(true));
-      colliders.push(...createNPCVehicleColliders(physics.world,body,spec));body.sleep();parkedBodies.push(body);
-    }else parkedBodies.push(undefined);
-  }
-  const parkedPoses=parkedBodies.map(body=>body?{position:body.translation(),rotation:body.rotation()}:undefined),parkedSuspended=new Set<number>();
+  let parkedYet = false;
+  /** Stands the kerbside cars once: at once without streamed tiles, otherwise when the spawn's own tile is resident. */
+  const parkWhenResident = () => {
+    if (tiled) { const key = tileKey(Math.floor(city.spawn.x / tiled.size), Math.floor(city.spawn.z / tiled.size)); if (tiled.keys.has(key) && !tiled.loaded.has(key)) return; }
+    parkedYet = true; park();
+  };
+  parkWhenResident();
   function updateParked(observer?:{x:number;z:number}){
+    if (!parkedYet) parkWhenResident();
     for(const [i,vehicle] of parked.entries()){
       const body=parkedBodies[i];
       if(body&&physics?.streaming){
@@ -400,21 +430,6 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       parkedFleet.draw(i,dummy.matrix,parkedColors[i],observer?Math.hypot(vehicle.x-observer.x,vehicle.z-observer.z):0);
     }
     parkedFleet.flush();
-  }
-  const meters = parked.filter(vehicle => vehicle.meter);
-  if (meters.length) {
-    const iron = new THREE.MeshStandardMaterial({ color: 0x344544, metalness: .45, roughness: .5 });
-    const face = new THREE.MeshStandardMaterial({ color: 0xbac4bb, metalness: .25, roughness: .37 }); ownedMaterials.add(iron); ownedMaterials.add(face);
-    const parts = [
-      { geometry: new THREE.CylinderGeometry(.032, .042, 1.1, 7), material: iron, y: .55 },
-      { geometry: new THREE.BoxGeometry(.17, .25, .13), material: iron, y: 1.21 },
-      { geometry: new THREE.BoxGeometry(.11, .10, .135), material: face, y: 1.25 },
-    ];
-    for (const part of parts) {
-      const mesh = new THREE.InstancedMesh(part.geometry, part.material, meters.length); mesh.castShadow = true; mesh.receiveShadow = true;
-      meters.forEach((vehicle, i) => { dummy.position.set(vehicle.meter![0],sampleElevation(city,...vehicle.meter!)+part.y, vehicle.meter![1]); dummy.rotation.set(0, vehicle.yaw, 0); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix); });
-      furnitureGroup.add(mesh);
-    }
   }
 
   let elapsed = 0,relocationTime=0,relocations=0;
@@ -516,13 +531,13 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   }
   update(0, 0);
   return {
-    group, pedestrians, parked, count, parkedCount: parked.length, meterCount: meters.length, update,populateAt,population,get relocations(){return relocations;},
+    group, pedestrians, parked, count, get parkedCount(){return parked.length;}, get meterCount(){return meterCount;}, update,populateAt,population,get relocations(){return relocations;},
     /** The verified walks about a point (diagnostics and tests): none yet where a tile they need is not resident. */
     walksNear:routesNear,
     /** Vehicle speeds of the walkers struck since the previous call; the caller plays their sounds. */
     takeHits(){return hits.splice(0,hits.length);},
     /** Collider handles of the kerbside parked cars, so an impact can be classified as a vehicle. */
-    parkedColliders:new Set(colliders.map(collider=>collider.handle)),
+    parkedColliders:parkedHandles,
     setNight:parkedFleet.setNight,
     dispose() {
       pedestrianModel.dispose();parkedFleet.dispose();
