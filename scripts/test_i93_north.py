@@ -128,6 +128,94 @@ class JointTest(unittest.TestCase):
   self.assertEqual(I.node_trunks([g,h,f]),set(),'no trunk on a ramp running through');self.assertEqual((g.ends[1],h.ends[0]),(('node',f,1),('node',f,1)))
 
 
+def carriageways(n=81,gap=19.4,width=18.8):
+ """The two carriageways on level lines `gap` apart, the second running the other way, as Interstate 93's do through
+ Medford: 0.6 m between their pavements. Both lie at 1.0 m."""
+ a=I.Plan('i93-nb',[[i*3.0,0.0] for i in range(n)],[1]*n,[width]*n,I.MAINLINE_GRADE,[4]*n)
+ b=I.Plan('i93-sb',[[(n-1-i)*3.0,gap] for i in range(n)],[1]*n,[width]*n,I.MAINLINE_GRADE,[4]*n)
+ for p in (a,b):p.y=[1.0]*n;p.solo=[1.0]*n
+ return a,b
+
+
+class TwinTest(unittest.TestCase):
+ grid={'width':60,'height':30,'cellSize':6,'originX':-60,'originZ':-90,'scale':.01}
+ def ground(self,under_twin=115,under_road=65):
+  """The grid at `under_road` cm, and at `under_twin` cm from z = 12 on: under the second carriageway."""
+  z=-90+6*np.repeat(np.arange(30),60);return np.where(z>=12,under_twin,under_road).astype('<i2')
+ def lifted(self,by=.5,rows=range(20,61),**kw):
+  a,b=carriageways(**kw);b.y=[1.0+by]*81;b.solo=list(b.y);a.y=[1.0+(by if i in rows else 0.) for i in range(81)];return a,b
+ def filled(self,a,b,heights,ramps=(),existing=(),footprints=lambda bounds:[]):
+  return I.Terrain(self.grid,I.fill({'nb':a,'sb':b},list(ramps),self.grid,heights,list(existing),footprints))
+
+ def test_the_rule_is_the_one_the_turnpike_stage_has(self):
+  import boston_highways as H
+  for name in ('alongside','twin_lift','eased','lower_envelope','runs'):self.assertIs(getattr(H,name),getattr(I,name),name)
+  for name in ('TWIN_MEDIAN','TWIN_REACH','TWIN_APART','TWIN_RATE','TWIN_STEP','LIFTED','PARALLEL'):self.assertEqual(getattr(H,name),getattr(I,name),name)
+
+ def test_a_carriageway_rises_in_the_open_and_off_the_survey(self):
+  a,_=carriageways();a.hold[10]=4.0;a.fixed={0:1.0,1:1.0}
+  self.assertEqual([i for i,v in enumerate(I.in_the_open(a)) if not v],[10],'held beneath the surveyed viaduct')
+  self.assertEqual([i for i,v in enumerate(I.may_rise(a)) if not v],[0,1,10],'and the deck laid over the survey keeps its height')
+
+ def test_a_storey_apart_is_two_levels(self):
+  level=lambda s:{10.0:1.5,20.0:1.0+I.STOREY,30.0:1.0-I.STOREY-.1,40.0:1.0}[s]
+  self.assertEqual(I.one_level([1.0]*5,[None,40.0,20.0,30.0,10.0],[False,True,True,True,True],level),([None,40.0,None,30.0,10.0],[False,True,False,True,True]),'a storey over it: another level; a storey under it is its twin\'s to judge')
+  self.assertEqual(I.one_level([1.0]*4,[10.0,20.0,10.0,40.0],[True]*4,level),([None,None,None,40.0],[False,False,False,True]),'and so is the whole way up to it')
+  # the lower follows the higher, but not onto another level: the stretch between the two keeps its height and a lift fades before it
+  a,b=carriageways();b.y=[7.0 if 40<=j<=50 else 1.5 if j<40 else 1.0 for j in range(81)]   # (station j of the twin lies beside station 80 - j)
+  s,near=I.one_level(a.y,*I.alongside(a,b,I.may_rise(a),I.in_the_open(b)),b.at);lift=I.graded_lift(a,a.y,I.twin_lift(a,a.y,s,near,b.at))
+  self.assertEqual(max(lift[30:]),0.,'beside the twin 6 m up, and all along its way down to it');self.assertEqual(max(lift[:30]),0.,'level with it before: nothing to rise to')
+  b.y=[7.0 if 40<=j<=50 else 1.5 if j<40 else 1.0 if j<60 else 1.5 for j in range(81)];s,near=I.one_level(a.y,*I.alongside(a,b,I.may_rise(a),I.in_the_open(b)),b.at);lift=I.graded_lift(a,a.y,I.twin_lift(a,a.y,s,near,b.at))
+  self.assertEqual(max(lift[30:]),0.);self.assertAlmostEqual(lift[10],.5,places=6,msg='a step across the median further on is still taken up')
+  self.assertLessEqual(max(abs(p-q) for p,q in zip(lift,lift[1:]))/3,a.grade+1e-9,'and the road stays within its grade where it comes back down to its twin')
+
+ def test_a_lift_is_held_to_what_the_grade_leaves_it(self):
+  a,_=carriageways();down=[10-i*3.0*.05 for i in range(81)];lift=[1.0]*40+[max(0.,1.0-.05*(i-39)) for i in range(40,81)]
+  out=I.graded_lift(a,down,lift);self.assertTrue(all(o<=l+1e-12 for o,l in zip(out,lift)),'only ever lowered')
+  self.assertLessEqual(max(abs(down[i+1]+out[i+1]-down[i]-out[i])/3 for i in range(80)),a.grade+1e-9,'a road at 5% has half a percent to give')
+  self.assertAlmostEqual(out[0],59*3.0*(a.grade-1e-4-.05),places=9,msg='so the lift starts down 59 stations before it must be gone');self.assertEqual(I.graded_lift(a,[1.0]*81,lift),lift,'a level road leaves it whole')
+
+ def test_a_lift_ends_under_a_deck_over_the_pavement(self):
+  a,_=carriageways();piece={'id':'s-deck','name':'S','points':[[90.0,-12.0],[120.0,-12.0]],'width':8.0,'elevations':[6.0,6.0],'bridge':{'thickness':.75}}
+  out=I.overhead(a,[piece],None);under=[i for i,v in enumerate(out) if v<np.inf]
+  self.assertTrue(set(range(30,41))<=set(under)<=set(range(28,43)),'a street carried over the trench edge lies over the shoulder for 30 m and crosses no centre line')
+  self.assertAlmostEqual(out[35],6.0-.75-I.CLEAR_UNDER,places=9)
+  self.assertEqual(I.overhead(a,[{**piece,'elevations':[1.2,1.2]}],None),[np.inf]*81,'a deck at the road\'s own height is beside it, not over it')
+  self.assertEqual(I.overhead(a,[{**piece,'points':[[90.0,-40.0],[120.0,-40.0]]}],None),[np.inf]*81);self.assertEqual(I.overhead(a,[],None),[np.inf]*81)
+
+ def test_the_ground_comes_up_to_the_ground_its_twin_stands_over(self):
+  a,b=self.lifted();g=self.filled(a,b,self.ground())
+  self.assertAlmostEqual(g(120.0,0.0),1.15,delta=.011,msg='the two lie on one ground');self.assertAlmostEqual(g(120.0,-8.0),1.15,delta=.011,msg='across its pavement')
+  self.assertEqual(g(120.0,-40.0),.65,'and nowhere else');self.assertEqual(g(15.0,0.0),.65,'nor where the road kept its height')
+  self.assertAlmostEqual(g(120.0,22.0),1.15,delta=1e-9,msg='the twin keeps its own')
+
+ def test_no_more_than_the_road_rose_and_no_nearer_a_deck_than_its_floor(self):
+  a,b=self.lifted();self.assertAlmostEqual(self.filled(a,b,self.ground(145))(120.0,0.0),1.15,delta=.011,msg='the twin on ground 0.8 m higher: up by the half metre the road rose')
+  self.assertAlmostEqual(self.filled(a,b,self.ground(145,95))(120.0,0.0),1.5-I.TERRAIN_FLOOR,delta=.011,msg='and to TERRAIN_FLOOR under the deck at most')
+  flat=self.ground(65);self.assertTrue(np.array_equal(I.fill({'nb':a,'sb':b},[],self.grid,flat,[],lambda bounds:[]),flat),'the twin on piers over the same ground: the lifted road stands on piers beside it')
+  low=self.ground(40,65);self.assertTrue(np.array_equal(I.fill({'nb':a,'sb':b},[],self.grid,low,[],lambda bounds:[]),low),'never lowered')
+
+ def test_no_fill_under_a_deck_that_stood_over_its_ground_alone(self):
+  a,b=self.lifted();a.solo=[y+1.0 for y in a.solo];a.y=[y+1.0 for y in a.y];b.y=[y+1.0 for y in b.y];heights=self.ground()
+  self.assertTrue(np.array_equal(I.fill({'nb':a,'sb':b},[],self.grid,heights,[],lambda bounds:[]),heights),'a bridge and its approach stand higher on their piers')
+  c,d=carriageways();self.assertTrue(np.array_equal(I.fill({'nb':c,'sb':d},[],self.grid,heights,[],lambda bounds:[]),heights),'no lift, no fill')
+
+ def test_a_street_and_a_building_keep_their_ground(self):
+  a,b=self.lifted();street={'id':'s','name':'S','points':[[120.0,-60.0],[120.0,60.0]],'width':8.0}
+  g=self.filled(a,b,self.ground(),existing=[street]);self.assertEqual(g(120.0,0.0),.65,'the corridor of a street crossing under');self.assertAlmostEqual(g(180.0,0.0),1.15,delta=.011)
+  g=self.filled(a,b,self.ground(),footprints=lambda bounds:[[(85.0,-4.0),(95.0,-4.0),(95.0,4.0),(85.0,4.0)]]);self.assertEqual(g(90.0,0.0),.65,'the vertex under a building');self.assertAlmostEqual(g(180.0,0.0),1.15,delta=.011)
+  bridge={'id':'b','name':'Bridge','points':[[120.0,-60.0],[120.0,60.0]],'width':8.0,'elevations':[8.0,8.0]}
+  self.assertAlmostEqual(self.filled(a,b,self.ground(),existing=[bridge])(120.0,0.0),1.15,delta=.011,msg='a deck 7 m overhead passes over the road')
+  self.assertEqual(self.filled(a,b,self.ground(),existing=[{**bridge,'elevations':[1.6,1.6]}])(120.0,0.0),.65,'one at the height of that ground is a road on it')
+
+ def test_a_ramp_lifted_with_its_carriageway_takes_its_ground_up_to_the_carriageways(self):
+  a,b=self.lifted();n=81;ramp=I.Plan('i93-nb-exit',[[i*3.0,-13.0] for i in range(n)],[1]*n,[7.0]*n,I.RAMP_GRADE,[1]*n);ramp.solo=[1.0]*n;ramp.y=list(a.y)
+  self.assertEqual(self.filled(a,b,self.ground())(120.0,-18.0),.65,'beyond the cells the carriageway passes over')
+  g=self.filled(a,b,self.ground(),ramps=[ramp]);self.assertAlmostEqual(g(120.0,-18.0),1.15,delta=.011,msg='under the ramp beside it');self.assertEqual(g(15.0,-18.0),.65)
+  still=I.Plan('i93-nb-exit',ramp.points,[1]*n,[7.0]*n,I.RAMP_GRADE,[1]*n);still.solo=[1.0]*n;still.y=[1.0]*n
+  self.assertEqual(self.filled(a,b,self.ground(),ramps=[still])(120.0,-18.0),.65,'a ramp that kept its height keeps its ground')
+
+
 class SurveyCutTest(unittest.TestCase):
  def deck(self):
   # A 20 m square deck at height 10 in two triangles over a wall along its z = 0 edge.

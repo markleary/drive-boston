@@ -44,7 +44,10 @@ def main():
  record={'source':{'file':I.SOURCE_NAME,'sha256':hashlib.sha256(raw).hexdigest(),'ways':len(source['ways'])},**record}
  for name,c in record['carriageways'].items():print(f"{name}: {c['lengthMeters']:.0f} m in {c['pieces']} pieces, {min(c['lanes'])} to {max(c['lanes'])} lanes")
  print(f"{record['ramps']} ramps; {len(record['crossings'])} crossings with existing roads, {len(record['newCrossings'])} between new roads; closed ends {', '.join(c['road']+' '+c['end'] for c in record['closed'])}")
- print(f"{len(record['terrain']['vertices'])} grid vertices cut (up to {record['terrain']['maxCutMeters']} m, {record['terrain']['volumeCubicMeters']} m3); {len(record['approachPieces'])} street approach pieces; {len(record['roads']['added'])} roads added")
+ print(f"{len(record['terrain']['vertices'])} grid vertices changed (cut up to {record['terrain']['maxCutMeters']} m, {record['terrain']['volumeCubicMeters']} m3; filled up to {record['terrain']['maxFillMeters']} m, {record['terrain']['fillCubicMeters']} m3); {len(record['approachPieces'])} street approach pieces; {len(record['roads']['added'])} roads added")
+ for pair in record['twins']['pairs']:
+  one,other=pair['roads'];lift=pair['lifted'];print(f"{one} and {other} share one height along {pair['alongsideMeters']:.0f} m: {one} lifted over {lift[one]['meters']:.0f} m (up to {lift[one]['max']:.2f} m), {other} over {lift[other]['meters']:.0f} m (up to {lift[other]['max']:.2f} m); {len(pair['apart'])} stretches left apart (up to {max((e['by'] for e in pair['apart']),default=0):.2f} m)")
+ if record['twins']['ramps']:print(f"  ramps solved again with them: {', '.join(record['twins']['ramps'])}")
  lower=record['lowerDeck'];cut=record['surveyCut']
  if lower:print(f"southbound lower deck: {lower['heldMeters']} m beneath the survey (at least {lower['minClearanceMeters']} m under its slab), {lower['curveMeters']} m curve to City Square, {lower['joinOverlapMeters']} m onto survey carriageway #30")
  if cut:print(f"survey cut {cut['sha256'][:12]}: {cut['droppedTriangles']} triangles dropped, {cut['splitTriangles']} split, {cut['areaSquareMeters']} m2")
