@@ -2,16 +2,18 @@
  *
  *   node scripts/audit-street-furniture.mjs            (npm run audit:furniture)
  *
- * The street trees, lamps and name signs of each tile are planned exactly as the tile builder plans them
- * (src/simulation/street-furniture.ts), and the sidewalk and park walks and the kerbside cars as the street life
+ * The street trees, lamps, name signs and signal masts of each tile are planned exactly as the tile builder plans
+ * them (src/simulation/street-furniture.ts, signal-placement.ts), and the sidewalk and park walks and the kerbside cars as the street life
  * verifies them with every tile resident (src/render/street-life.ts). Each place is then held against the ground
  * the tiles draw, read from their polygons with no index (tests/helpers/street-furniture.mjs):
  *
- * - no tree, lamp or sign in the street pavement or nearer it than its room (1.2 m, 0.6 m, 0.4 m), in the tile it
- *   stands in or the next one;
- * - none in a parking stall, with half that room to spare;
+ * - no tree, lamp, sign or signal mast in the street pavement or nearer it than its room (1.2 m, 0.6 m, 0.4 m,
+ *   0.5 m), in the tile it stands in or the next one;
+ * - none in a parking stall, with half that room to spare, and no signal planned by two tiles;
+ * - both signal heads of every mast over a roadway: the street pavement, or the deck of a raised road (which no
+ *   tile draws as pavement), so an arm reaches back over the kerb its mast stands behind;
  * - no walk in the pavement, nearer it than 0.3 m anywhere along it, or through a stall;
- * - no walk within 0.6 m of a tree, a lamp or a sign pole (the walkers' own test is 0.76 m at points 25 cm apart);
+ * - no walk within 0.6 m of a tree, a lamp, a sign pole or a mast (the walkers' own test is 0.76 m at points 25 cm apart);
  * - every kerbside car wholly on the roadway.
  *
  * The planters follow the drawn roadway by rule, so this holds for any package; the audit is what says so for the
@@ -20,9 +22,10 @@
 import * as THREE from 'three';
 import '../tests/helpers/npc-fleet.mjs';
 import {loadTileHeaders} from '../tests/helpers/metro-city.mjs';
-import {alongWalk,drawnGround,loadStreetCity,residentTiles,roadIndex,tileFurniture} from '../tests/helpers/street-furniture.mjs';
+import {alongWalk,deckGround,drawnGround,loadStreetCity,roadIndex,signalHeads,tileStreetside} from '../tests/helpers/street-furniture.mjs';
 import {drawnStreets,STALL_REACH} from '../src/simulation/drawn-streets.ts';
 import {LAMP_ROOM,SIGN_ROOM,TREE_ROOM} from '../src/simulation/street-furniture.ts';
+import {SIGNAL_ROOM} from '../src/simulation/signal-placement.ts';
 import {NPC_VEHICLES} from '../src/simulation/npc-vehicle-specs.ts';
 import {createStreetLife} from '../src/render/street-life.ts';
 
@@ -30,11 +33,16 @@ const WALK_ROOM=.3,POST_ROOM=.6,began=performance.now();
 const city=await loadStreetCity(),tiles=loadTileHeaders(city),roads=roadIndex(city),ground=drawnGround(tiles),size=city.tiles.size;
 const failures=[],fail=(what,list)=>{if(list.length)failures.push(`${list.length} ${what}: ${list.slice(0,5).map(p=>`(${p[0].toFixed(1)}, ${p[1].toFixed(1)})`).join(' ')}${list.length>5?' ...':''}`);};
 
-// ---- trees, lamps and name signs, tile by tile
-const count={trees:0,lamps:0,signs:0},plans=new Map(),inRoadway={trees:[],lamps:[],signs:[]},inStall={trees:[],lamps:[],signs:[]};
+// ---- trees, lamps, name signs and signal masts, tile by tile
+const kinds=['trees','lamps','signs','masts'],count={trees:0,lamps:0,signs:0,masts:0},plans=new Map(),inRoadway={trees:[],lamps:[],signs:[],masts:[]},inStall={trees:[],lamps:[],signs:[],masts:[]},signalled=new Map(),headsOff=[];
+const deck=deckGround(roads);let heads=0;
 for(const [key,tile] of tiles){
-  const plan=tileFurniture(city,tile,roads);plans.set(key,plan);
-  for(const [kind,places,room] of [['trees',plan.trees,TREE_ROOM],['lamps',plan.lamps,LAMP_ROOM],['signs',plan.signs.map(sign=>sign.position),SIGN_ROOM]]){
+  const plan=tileStreetside(city,tile,roads);plans.set(key,plan);
+  for(const mast of plan.masts){
+    const source=mast.source.join(','),planners=signalled.get(source);if(planners)planners.add(key);else signalled.set(source,new Set([key]));
+    for(const head of signalHeads(mast)){heads++;if(!ground.roadway(...head)&&!deck(...head))headsOff.push(head);}
+  }
+  for(const [kind,places,room] of [['trees',plan.trees,TREE_ROOM],['lamps',plan.lamps,LAMP_ROOM],['signs',plan.signs.map(sign=>sign.position),SIGN_ROOM],['masts',plan.masts.map(mast=>mast.position),SIGNAL_ROOM]]){
     count[kind]+=places.length;
     for(const p of places){
       // (a hair inside the room: a place drawn in from a border stands at exactly its room from it)
@@ -43,8 +51,12 @@ for(const [key,tile] of tiles){
     }
   }
 }
-for(const kind of ['trees','lamps','signs']){fail(`${kind} in the street pavement or within their room of it`,inRoadway[kind]);fail(`${kind} in a parking stall`,inStall[kind]);}
-console.log(`${tiles.size} tiles: ${count.trees} street trees, ${count.lamps} lamps, ${count.signs} name signs; in the roadway or too near it ${inRoadway.trees.length+inRoadway.lamps.length+inRoadway.signs.length}, in a stall ${inStall.trees.length+inStall.lamps.length+inStall.signs.length}`);
+for(const kind of kinds){fail(`${kind} in the street pavement or within their room of it`,inRoadway[kind]);fail(`${kind} in a parking stall`,inStall[kind]);}
+const twice=[...signalled].filter(([,planners])=>planners.size>1).map(([source])=>source.split(',').map(Number));fail('signals planned by two tiles',twice);
+fail('signal heads hanging over no roadway (street pavement or a deck)',headsOff);
+const sum=lists=>kinds.reduce((n,kind)=>n+lists[kind].length,0),signals=new Set(city.signals.map(signal=>signal.join(',')));
+console.log(`${tiles.size} tiles: ${count.trees} street trees, ${count.lamps} lamps, ${count.signs} name signs, ${count.masts} signal masts; in the roadway or too near it ${sum(inRoadway)}, in a stall ${sum(inStall)}`);
+console.log(`${signals.size} signals: ${signalled.size} with a mast, none planned by two tiles (${twice.length}); ${signals.size-signalled.size} without one (no street within 35 m, or no clear kerb); signal heads over no roadway ${headsOff.length} of ${heads}`);
 
 // ---- the walks, with every tile resident (the street life verifies a walk once its tiles are in)
 const loaded=new Map();for(const [key,tile] of tiles)loaded.set(key,{tile,posts:plans.get(key).posts});

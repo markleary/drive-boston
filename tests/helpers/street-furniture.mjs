@@ -3,6 +3,8 @@
  * scripts/audit-street-furniture.mjs. */
 import {roadCells} from '../../src/simulation/road-cells.ts';
 import {tileFurnitureSteps} from '../../src/simulation/street-furniture.ts';
+import {planTileSignals,SIGNAL_HEADS} from '../../src/simulation/signal-placement.ts';
+import {roadWidthAt} from '../../src/simulation/road-surfaces.ts';
 import {reserveTransitCorridors} from '../../src/simulation/transit-corridors.ts';
 import {STALL_DEPTH,STALL_HALF,tileStalls} from '../../src/simulation/parking-lots.ts';
 import {insideIcaForecourt} from '../../src/render/ica-boston.ts';
@@ -17,9 +19,24 @@ export const roadIndex=city=>roadCells(city.roads);
 export function tileFurniture(city,tile,roads=roadIndex(city)){
   const steps=tileFurnitureSteps(city,tile,roads,insideIcaForecourt);let step=steps.next();while(!step.done)step=steps.next();return step.value;
 }
+/** The signal masts of a tile, exactly as src/render/tile-builder.ts plans them once the tile's furniture is planted. */
+export const tileSignals=(city,tile,roads=roadIndex(city),furniture=tileFurniture(city,tile,roads))=>planTileSignals(city,tile,roads,furniture.posts);
+/** Where the two signal heads of a mast hang, as src/render/traffic-signals.ts draws them: SIGNAL_HEADS back from the tip of its arm. */
+export const signalHeads=mast=>SIGNAL_HEADS.map(back=>[mast.position[0]+Math.sin(mast.armYaw)*(mast.armLength-back),mast.position[1]+Math.cos(mast.armYaw)*(mast.armLength-back)]);
+/** Whether a point lies over the deck of a raised road, which no tile draws as street pavement: within the road's own
+ * width of its line, every road about the point tried segment by segment (`roads`: roadIndex(city)). */
+export function deckGround(roads){
+  const offLine=(x,z,a,b)=>{const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(x-a[0]-t*dx,z-a[1]-t*dz);};
+  return (x,z)=>roads.near({minX:x-40,maxX:x+40,minZ:z-40,maxZ:z+40}).some(road=>road.elevations&&road.points.some((p,i)=>i>0&&offLine(x,z,road.points[i-1],p)<roadWidthAt(road,x,z)/2));
+}
+/** Everything a tile stands beside its streets: its furniture, its signal masts, and `posts`, the list the built tile keeps of them all. */
+export function tileStreetside(city,tile,roads=roadIndex(city)){
+  const furniture=tileFurniture(city,tile,roads),signals=tileSignals(city,tile,roads,furniture);
+  return {...furniture,masts:signals,posts:[...furniture.posts,...signals.map(signal=>signal.position)]};
+}
 /** The resident tiles as the streamer lists them to the street life: each tile with the posts it planted. */
 export function residentTiles(city,tiles,roads=roadIndex(city)){
-  const loaded=new Map();for(const [key,tile] of tiles)loaded.set(key,{tile,posts:tileFurniture(city,tile,roads).posts});return {loaded};
+  const loaded=new Map();for(const [key,tile] of tiles)loaded.set(key,{tile,posts:tileStreetside(city,tile,roads).posts});return {loaded};
 }
 
 /** The ground as the tiles draw it, read from their polygons edge by edge with no index of any kind, so that it

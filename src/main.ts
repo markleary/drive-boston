@@ -501,14 +501,14 @@ async function boot(){
         return total;
       },
       // What stands and walks beside the streets of the resident tiles, each held against the pavement its tile draws
-      // (drawn-streets.ts): the posts a tile planted (street trees, lamps, name signs), its street lamps (a highway mast's
-      // lamp is the road under it), the walkers on a walk (those of the pool still waiting for a neighbourhood are
-      // counted apart) and the kerbside cars. A walker or a car in a tile that has streamed out is listed unjudged.
+      // (drawn-streets.ts): the posts a tile planted (street trees, lamps, name signs, signal masts), its street lamps (a
+      // highway mast's lamp is the road under it), its signal masts, the walkers on a walk (those of the pool still
+      // waiting for a neighbourhood are counted apart) and the kerbside cars. A walker or a car in a tile that has streamed out is listed unjudged.
       streetside:()=>{
         const loaded=streamer?.loaded,size=isMetroCity(city)?city.tiles.size:1000;
         const roadway=(x:number,z:number,room:number)=>{const built=loaded?.get(`${Math.floor(x/size)}_${Math.floor(z/size)}`);return built&&drawnStreets(built.tile).near(x,z,room);};
         return {
-          tiles:[...(loaded?.values()??[])].map(built=>({key:built.key,trees:built.stats.trees,lamps:built.stats.lamps,signs:built.stats.signs,posts:built.posts.length,postsInRoadway:built.posts.filter(p=>roadway(p[0],p[1],.3)).length,lampsInRoadway:built.lamps.filter(p=>!p.light&&roadway(p.x,p.z,.3)).length})),
+          tiles:[...(loaded?.values()??[])].map(built=>({key:built.key,trees:built.stats.trees,lamps:built.stats.lamps,signs:built.stats.signs,posts:built.posts.length,postsInRoadway:built.posts.filter(p=>roadway(p[0],p[1],.3)).length,lampsInRoadway:built.lamps.filter(p=>!p.light&&roadway(p.x,p.z,.3)).length,masts:built.signals.length,mastsInRoadway:built.signals.filter(s=>roadway(s.position[0],s.position[1],.3)).length})),
           walkers:streetLife.pedestrians.filter(p=>!p.route.waiting).map(p=>({x:p.position.x,z:p.position.z,road:p.road,park:!!p.route.park,inRoadway:roadway(p.position.x,p.position.z,.2)})),
           waiting:streetLife.pedestrians.filter(p=>p.route.waiting).length,
           parked:streetLife.parked.map(v=>({x:v.x,z:v.z,road:v.road,onRoadway:roadway(v.x,v.z,0),meterInRoadway:v.meter?roadway(v.meter[0],v.meter[1],.2):false})),

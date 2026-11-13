@@ -9,11 +9,12 @@ test('free roam has moving MBTA services, clear controls, and a drivable elevate
   page.on('pageerror',error=>errors.push(error.message));
   page.on('console',message=>{if(message.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)/i.test(message.text()))errors.push(message.text());});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
-  // Signals and exact building colliders arrive with the streamed tiles around the spawn.
-  await expect.poll(async()=>{const s=await snapshot(page);return s.signalCount>180&&s.exactBuildingColliders>=3;},{timeout:60000}).toBe(true);
+  // Signals and exact building colliders arrive with the streamed tiles around the spawn: the six tiles nearest it hold
+  // 148 masts (193 when every tile within 40 m of a signal planned it and those near a border were drawn twice).
+  await expect.poll(async()=>{const s=await snapshot(page);return s.signalCount>140&&s.exactBuildingColliders>=3;},{timeout:60000}).toBe(true);
   let state=await snapshot(page);
   expect(state.transitCount).toBe(48);expect(state.transit.filter(a=>a.kind==='tram')).toHaveLength(10);expect(state.transit.filter(a=>a.kind==='bus')).toHaveLength(38);
-  expect(state.signalCount).toBeGreaterThan(180);expect(state.exactBuildingColliders).toBeGreaterThanOrEqual(3);expect(state.groundCover.puddles).toBeGreaterThan(15);
+  expect(state.signalCount).toBeGreaterThan(140);expect(state.exactBuildingColliders).toBeGreaterThanOrEqual(3);expect(state.groundCover.puddles).toBeGreaterThan(15);
   await destination(page,'huntington-mfa');const initial=(await snapshot(page)).transit;
   // A trolley and a bus serve the Museum of Fine Arts stop; both must be under way (a bus elsewhere may be held at a signal or a terminal).
   await expect.poll(async()=>{const now=await snapshot(page);return ['tram','bus'].every(kind=>now.transit.some((a,i)=>a.kind===kind&&Math.hypot(a.x-now.state.x,a.z-now.state.z)<700&&Math.hypot(a.x-initial[i].x,a.z-initial[i].z)>3));},{timeout:20000}).toBe(true);
