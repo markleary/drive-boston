@@ -68,7 +68,11 @@ Storrow Drive its lane counts, its tunnel and its posted clearances.
   pavements overlap, and land on the graded street vertex (on the deck, where
   the vertex is a bridge's). Ramps ending on a Central Artery tunnel road take
   its height there, so the Turnpike joins I-93 inside the existing tunnel and
-  the bores keep their southern closures. A tunnel record that lands on a
+  the bores keep their southern closures. A ramp out of a tunnel the package
+  does not carry (`cap`: the exit to Congress Street from the tunnel between
+  Interstate 93 North and the Turnpike eastbound) starts at a closed bore end,
+  free in height, at least BORE metres under its roof; its first record
+  carries `tunnel.capStart`. A tunnel record that lands on a
   street has a `surfaceLandings` interval, over which the runtime keeps the
   ground whole and builds no wall: it reaches as far as the road lies on the
   street's roadway and ends where the ground first stands over the road
@@ -148,6 +152,7 @@ PORTAL_REACH=300     # the terrain is a target, not a floor, this far along the 
 TUNNEL_STIFFNESS=4e6
 SUNK=.05             # a deck station whose ground stands this close under its surface is below ground
 MIN_COVERED=6        # shortest covered run recorded
+BORE=25              # a ramp that starts at a closed bore end runs this far under its roof at least: the closure stands out of sight of the portal
 BESIDE=(40,100)      # a ramp keeps its source line this close to its gore, and stands clear of the road it joins from here on
 WALL=.8              # room between the two pavements there
 REMNANT=60           # under a bridge the road follows the lowest ground within this distance: the survey keeps a part of many bridges as a bump
@@ -220,7 +225,8 @@ VIADUCT=7.0          # the Allston viaduct's deck over the rail yard beneath it 
 # A route lists layer 8 OBJECTIDs in travel order; 'w<id>' is an OpenStreetMap way that fills a gap between
 # two segments (cut between their ends). `lanes`: (first segment of a run, lanes). `names`: (first segment, name).
 # `landing`: the reviewed length a ramp runs on the street it lands on before it leaves for its own cut (street_stretch),
-# `width`: its reviewed pavement width.
+# `width`: its reviewed pavement width. `cap`: 'start' for a ramp out of a tunnel the package does not carry, which begins at a
+# closed bore end under its roof (the runtime closes it as it closes the Central Artery's southern ends, and traffic emerges there).
 def R(id,name,parts,lanes=1,kind='motorway_link',bridge='i90',**extra):
  return {'id':id,'name':name,'parts':parts,'lanes':lanes,'kind':kind,'bridge':bridge,**extra}
 
@@ -292,6 +298,23 @@ TURNPIKE=[
  R('i90-eb-exit-135-haul-road-east','I-90 East · Exit 135 to the South Boston Haul Road',[11025]),
  R('i90-wb-entrance-135-congress','I-90 West · Entrance from Congress Street to I-93 North',[17591,17590]),
  R('i90-wb-entrance-135-congress-east','I-90 West · Entrance from B Street to I-93 North',[17584]),
+ # The westbound exit's second turning roadway. The curb survey has one roadway from the gore under 401 Congress Street to Congress
+ # Street, 8 to 17 m wide, that fans out to two vertices there, and layer 8 draws a centre line to each: without this one the ramp
+ # filled the east half of its roadway and reached Congress Street eastbound only. It leaves its sibling down in that ramp's walled
+ # cut and is matched to it while their pavements overlap, so it takes that ramp's grade class.
+ R('i90-wb-exit-135-congress-west','I-90 West · Exit 135 to Congress Street',[17589],grade=TUNNEL_RAMP_GRADE),
+ # D Street's ramp down to the Haul Road, 21 m short of the westbound entrance (11020): a roadway of its own, 6 to 8 m between its
+ # curbs, that leaves D Street on its bridge (level 1) and comes down along the foot of the deck over the Turnpike.
+ R('i90-wb-entrance-135-d-street','I-90 West · Entrance from D Street',[9090]),
+ # The second barrel up to Congress Street, beside the exit from the eastbound carriageway (18017): the exit from the tunnel that
+ # brings Interstate 93 North to the Turnpike eastbound. The package does not carry that tunnel (8451 and the segments before it:
+ # 1.4 km under the South Bay and Fort Point Channel and the viaduct that feeds it; nor 8444, its last 104 m before the carriageway),
+ # so the ramp starts at the tunnel's node as a closed bore end (`cap`). It passes under the two Haul Road ramps and comes out where
+ # layer 8 changes level: the survey has its cut there, 67 m long and deepest at that end, between curbs of its own with nothing
+ # between them. A 6 m grid shows a cut that narrow as a dent 1.4 m deep, so the stretch below level 0 runs on 20 m past the portal
+ # (short of the carriageways the ramp crosses over further on) and the road climbs out of the ground on its own grade.
+ R('i90-eb-exit-135-from-i93','I-90 East · Exit 135 to Congress Street',[11034,8626,18016],cap='start',spans=[{'from':[2264.041,241.358],'to':[2333.8,215.0],'level':-1}]),
+ R('i90-eb-exit-135-from-i93-east','I-90 East · Exit 135 to Congress Street',[18018]),
  # East Boston, Exit 137 and Route 1A
  R('i90-eb-exit-137','I-90 East · Exit 137 Logan Airport',[11065]),
  R('i90-eb-exit-137-terminals','I-90 East · Exit 137 to the Logan Airport terminals',[11023,8516,9777,10411,10410]),
@@ -1470,6 +1493,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
  for plan in plans:plan.ends=[None,None];plan.on_deck=[False,False];plan.junctions=[];plan.joined=[]
  for plan in ramps:
   for e in (0,1):
+   if e==0 and plan.spec.get('cap')=='start':plan.ends[e]=('cap',None,0);continue   # a closed bore end: nothing to meet, no height to take
    p=plan.points[0 if e==0 else -1];kind=classify(p,plan,plans,fixed,streets)
    assert kind,f'{plan.id} {"starts" if e==0 else "ends"} off the network at {p}'
    plan.ends[e]=kind
@@ -1559,7 +1583,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
  def end_height(plan,e):
   kind=plan.ends[e]
   if kind is not None and kind[0]=='street':return plan.fixed.get(0 if e==0 else len(plan.points)-1)   # at grade on its street
-  if kind is None:return None
+  if kind is None or kind[0]=='cap':return None
   return kind[1].y[kind[2]] if kind[1].y is not None else None
  def prepare(plan):
   # Bounds from the existing roads, then the cover (it needs the heights of the roads the plan leaves and joins underground), then the new crossings.
@@ -1583,7 +1607,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
   plan.fixed={};land(plan)
   for e,kind in enumerate(plan.ends):
    i=0 if e==0 else len(plan.points)-1
-   if kind[0]=='street' or (plan,e) in trunks:continue
+   if kind[0] in ('street','cap') or (plan,e) in trunks:continue
    if kind[1].y is not None:
     plan.fixed[i]=round(kind[1].y[kind[2]],4)
     # A ramp ending where its trunk starts shares that one point with it: its last stations lie before the trunk begins, and
@@ -1891,6 +1915,9 @@ def records(plans,neighborhoods):
   closed=plan.spec.get('closed')
   if closed=='end':recs[-1]['closed']='end'
   if closed=='start':recs[0]['closed']='start'
+  if plan.spec.get('cap')=='start':
+   assert recs[0].get('tunnel') and any(a<.01 and b>=BORE for a,b in recs[0]['tunnel']['covered']),f'{plan.id} must start under {BORE} m of roof'
+   recs[0]['tunnel']['capStart']=True
   for rec in recs:(tunnels if rec.get('tunnel') else decks).append(rec)
  return decks,tunnels,ids
 
@@ -2103,6 +2130,7 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  summary={p.id:{'lengthMeters':round(float(p.along[-1]),1),'records':len(ids[p.id]),'tunnelMeters':round(sum(float(p.along[b]-p.along[a]) for a,b in runs(p.tunnel)),1),
   'coveredMeters':round(sum(float(p.along[b]-p.along[a]) for a,b in runs(p.covered)),1),'lanes':sorted(set(p.lanes))} for p in plans}
  record_={'method':METHOD,'routes':summary,'closed':[{'road':r['id'],'end':r['closed'],'point':r['points'][-1 if r['closed']=='end' else 0]} for r in decks+tunnel_records if r.get('closed')],
+  'capped':[{'road':r['id'],'end':'start','point':r['points'][0]} for r in tunnel_records if r['tunnel'].get('capStart')],
   'crossings':report['crossings'],'newCrossings':report['newCrossings'],'atGrade':report['atGrade'],'unresolved':report['unresolved'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'steep':steep,'movedBeside':report['movedBeside'],'narrowed':report['narrowed'],'junctions':report['junctions'],
   'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'twins':twins,'buildings':over,'signs':signs,
@@ -2122,13 +2150,14 @@ def replay(data_dir,city,record,source,installed=None):
  again,out,tunnel_records,result,_=install({**city,'roads':roads},source,heights,load_grid(data_dir/grid['source']),tile_buildings(data_dir,city),central_artery(data_dir,city),removed=record['buildings']['removed'])
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']};sidecar=json.loads((data_dir/SIDECAR).read_text())
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
- return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','overpasses','bridgeSeams','hollows','twins','roadways'))
+ return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','capped','overpasses','bridgeSeams','hollows','twins','roadways'))
 
 
 def validate(data_dir,city,record,ground):
  """Check the installed stage: record fields, the Turnpike's two closed ends, that every record meets the one it
  continues (the pieces of a route each other, a ramp end a carriageway or ramp vertex, a vertex of an existing road
- at that road's height or a vertex of the Central Artery tunnel road it joins), that no ground stands in a deck's
+ at that road's height or a vertex of the Central Artery tunnel road it joins; a closed bore end, `capped`, meets
+ nothing and lies under its roof), that no ground stands in a deck's
  pavement, that every surface street over a tunnel record crosses a covered stretch of it, and that the buildings
  over the roads carry what the stage recorded for them. `ground(x,z)` is the
  graded terrain. Returns counts."""
@@ -2156,6 +2185,10 @@ def validate(data_dir,city,record,ground):
  assert all(r['bridge']['kind']==APPROACH for r in city['roads'] if stage_owned(r) and not r['id'].startswith(PREFIXES)),'a street deck the stage owns must be an overpass approach'
  closed=sorted((r['id'],r['closed']) for r in roads if r.get('closed'));ends=sorted((c['road'],c['end']) for c in record['closed'])
  assert closed==ends and [e for _,e in closed]==['start','end'] and closed[0][0].startswith('i90-eb-') and closed[1][0].startswith('i90-wb-'),f'highway closures: {closed}'
+ # A closed bore end (a ramp whose tunnel the package does not carry) is the start of its route, under its roof, and no record ends closed that way.
+ capped=[r['id'] for r in tunnels if r['tunnel'].get('capStart')];assert capped==[c['road'] for c in record.get('capped',[])] and not any(r['tunnel'].get('capEnd') for r in tunnels),f'highway bore ends: {capped}'
+ for r in tunnels:
+  if r['tunnel'].get('capStart'):assert r['id'] in record['routes'] and any(a<.01 and b>=BORE for a,b in r['tunnel']['covered']),f"{r['id']} must start under {BORE} m of roof"
  routes=defaultdict(list)
  for r in roads:
   m=re.fullmatch(r'(.*?)-(\d+)',r['id']);base,k=(m.group(1),int(m.group(2))) if m and m.group(1) in record['routes'] else (r['id'],1);routes[base].append((k,r))
@@ -2171,7 +2204,7 @@ def validate(data_dir,city,record,ground):
  for base,parts in routes.items():
   chain=[r for _,r in sorted(parts,key=lambda t:t[0])]
   for r,i in ((chain[0],0),(chain[-1],-1)):
-   if r.get('closed')==('start' if i==0 else 'end'):continue
+   if r.get('closed')==('start' if i==0 else 'end') or (i==0 and r.get('tunnel',{}).get('capStart')):continue
    # (a route the stage reports as squeezed between its bounds, `infeasible`, may miss a join by what it reports)
    y=r['elevations'][i];slack=squeezed.get(base,0);own=[o for o in roads if routes_of(o,record)!=base and any(q==r['points'][i] and abs(o['elevations'][j]-y)<=.01+slack for j,q in enumerate(o['points']))]
    if own:joins+=1;continue

@@ -147,6 +147,30 @@ test('a mast\'s night light shines from its luminaire and lights the road beneat
   assert.ok(onRoad(MAST_LIGHT,10)>1.5*onRoad(STREET_LIGHT,10)&&onRoad(MAST_LIGHT,MAST_SPACING/2)>0,'higher up, it lights a wider pool: across three lanes and to the middle between two masts');
 });
 
+test('a cut\'s wall or curb keeps out of the pavement of a deck that runs its way at its level, and is not opened between two carriageways',()=>{
+  // Two ramps of one roadway fork inside a walled cut and run on side by side, 3 m apart; the trunk comes out of the ground
+  // (a deck from x = 30) 30 m before its branch does, so the branch's wall on that side would run down the trunk's lane.
+  const ramp=points=>({kind:'motorway_link',width:7,lanes:1,deckWidths:points.map(()=>7)}),a=line(0,30,0,5),b=line(30,90,0,5),c=line(0,60,3,5);
+  const trunk=cut('i90-wb-exit-9',a,[],ramp(a)),onward=deck('i90-wb-exit-9-2',b,ramp(b)),branch=cut('i90-wb-exit-9-west',c,[],ramp(c));
+  const world=roads=>({bounds:{minX:-200,maxX:300,minZ:-200,maxZ:200},buildings:[],roads,spawn:{x:0,z:0,yaw:0}});
+  const inLane=roads=>{const v=tunnelGeometry(world(roads),branch).walls.vertices;let n=0;for(let i=0;i<v.length;i+=3)if(v[i]>31&&v[i]<59&&Math.abs(v[i+2])<3.1)n++;return n;};
+  assert.equal(inLane([trunk,onward,branch]),0,'no wall of the branch in the lane of the deck its trunk has become');
+  const outer=tunnelGeometry(world([trunk,onward,branch]),branch).walls.vertices;assert.ok(outer.some((v,i)=>i%3===2&&v>6.4),'its outer wall stands');
+  assert.ok(inLane([trunk,branch])>0,'with no deck there the wall stands');
+  assert.ok(inLane([trunk,{...onward,elevations:b.map(()=>3.2)},branch])>0,'a deck a metre higher is another road');
+  // A branch that leaves the seam at 15 degrees: its wall crosses the deck's lanes and is opened across the deck's whole pavement
+  // (opened to the lanes alone, its two ends stood in the pavement's outer half metre, one on each side of the deck).
+  const slant=Array.from({length:13},(_,i)=>[30+i*5*Math.cos(.26),i*5*Math.sin(.26)]),fork=cut('i90-wb-exit-9-east',slant,[],ramp(slant));
+  const crossing=tunnelGeometry(world([trunk,onward,fork]),fork).walls.vertices;let paved=0,clear=0;
+  for(let i=0;i<crossing.length;i+=3){if(crossing[i]>31&&Math.abs(crossing[i+2])<3.45)paved++;if(crossing[i+2]>8)clear++;}
+  assert.equal(paved,0,'no wall of a branch that crosses the deck stands in its pavement');assert.ok(clear>0,'both its walls stand where it has left the deck');
+  // the cut's own walls run up to the deck it carries on as: neither ends short of the seam, although their last metres lie within a lane's reach of the deck's first station
+  const own=tunnelGeometry(world([trunk,onward]),trunk).walls.vertices,reach=side=>{let x=-Infinity;for(let i=0;i<own.length;i+=3)if(Math.sign(own[i+2])===side)x=Math.max(x,own[i]);return x;};
+  assert.ok(reach(1)>29.9&&reach(-1)>29.9,`the trunk's walls reach its seam (${reach(1).toFixed(1)}, ${reach(-1).toFixed(1)} m)`);
+  // (what stands between two carriageways is the cut-wall rule's to decide, a wall where it retains or guards and a curb where they lie level: it is not opened here)
+  assert.ok(inLane([trunk,{...onward,points:[...b].reverse()},branch])>0,'and so is the other carriageway: what stands between the two stays');
+});
+
 // ---- the installed package
 const city=await loadMetroCity({tiles:[]});
 const highway=city.roads.filter(r=>/^(i90|storrow|route1a)-/.test(r.id)),byId=new Map(highway.map(r=>[r.id,r]));
@@ -532,3 +556,55 @@ test('the Dartmouth Street entrance is signed overhead: 90 West, New York, on a 
   }
 });
 
+test('Exit 135 in the Seaport: the ramps Boston draws unnamed are roads, the second barrel to Congress Street starts at a closed bore end',()=>{
+  const route=id=>[byId.get(id),...family(id)],meets=(a,b)=>{assert.deepEqual(a.points.at(-1),b.points[0],`${a.id} meets ${b.id}`);assert.ok(Math.abs(a.elevations.at(-1)-b.elevations[0])<1e-3,`${a.id} and ${b.id} meet at one height`);};
+  const onGround=(road,i,label)=>assert.ok(Math.abs(road.elevations.at(i)-sampleElevation(city,...road.points.at(i)))<.06,`${road.id} ${label} on the ground`);
+  const joins=(road,trunk)=>assert.ok(route(trunk).some(t=>t.points.some((p,i)=>p[0]===road.points[0][0]&&p[1]===road.points[0][1]&&Math.abs(t.elevations[i]-road.elevations[0])<.011)),`${road.id} leaves ${trunk} at its height`);
+  // The second barrel, beside the exit from the eastbound carriageway: out of the tunnel from Interstate 93, which the package does not carry.
+  const barrel=route('i90-eb-exit-135-from-i93'),first=barrel[0];assert.ok(barrel.every(Boolean)&&barrel.length>=3);
+  for(let i=1;i<barrel.length;i++)meets(barrel[i-1],barrel[i]);
+  assert.deepEqual(highway.filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd).map(r=>r.id),[first.id],'the one closed bore end of the stage');
+  assert.ok(first.tunnel.capStart&&!first.closed&&first.tunnel.covered[0][0]===0&&first.tunnel.covered[0][1]>=25,'closed out of sight of its portal, under its roof');
+  assert.ok(first.elevations[0]<sampleElevation(city,...first.points[0])-4.6,'the closure lies under the ground');
+  assert.deepEqual(barrel.at(-1).points.at(-1),[2423.03,92.322],'on Congress Street at Pier 4 Boulevard, where the other barrel lands');onGround(barrel.at(-1),-1,'lands');
+  assert.equal(first.name,byId.get('i90-eb-exit-135-congress').name,'both barrels are signed for Congress Street');
+  const open=barrel.filter(r=>r.tunnel).flatMap(r=>openStretches(r));assert.ok(open.length&&barrel.some(r=>!r.tunnel),'a portal, an open cut and a deck up to the street');
+  const east=route('i90-eb-exit-135-from-i93-east');joins(east[0],'i90-eb-exit-135-from-i93');for(let i=1;i<east.length;i++)meets(east[i-1],east[i]);
+  assert.deepEqual(east.at(-1).points.at(-1),[2467.331,90.099]);onGround(east.at(-1),-1,'lands');
+  // The westbound exit's second turning roadway, to the junction with B Street.
+  const west=route('i90-wb-exit-135-congress-west');joins(west[0],'i90-wb-exit-135-congress');for(let i=1;i<west.length;i++)meets(west[i-1],west[i]);
+  assert.deepEqual(west.at(-1).points.at(-1),[2576.786,81.294]);onGround(west.at(-1),-1,'lands');
+  // D Street's ramp: off the bridge, down to the Haul Road beside the westbound entrance.
+  const ramp=route('i90-wb-entrance-135-d-street'),street=city.roads.find(r=>r.id==='8429-0-0');for(let i=1;i<ramp.length;i++)meets(ramp[i-1],ramp[i]);
+  assert.deepEqual(ramp[0].points[0],street.points.at(-1));assert.ok(Math.abs(ramp[0].elevations[0]-street.elevations.at(-1))<.01&&ramp[0].elevations[0]-sampleElevation(city,...ramp[0].points[0])>.5,'it starts on D Street\'s deck');
+  assert.deepEqual(ramp.at(-1).points.at(-1),[2612.68,244.831]);onGround(ramp.at(-1),-1,'lands');
+  let steepest=0;for(const r of [...barrel,...east,...west,...ramp]){const along=stations(r.points);for(let i=1;i<along.length;i++)if(along[i]-along[i-1]>.7)steepest=Math.max(steepest,Math.abs(r.elevations[i]-r.elevations[i-1])/(along[i]-along[i-1]));}
+  assert.ok(steepest<.125,`no step on the new ramps (${(steepest*100).toFixed(1)}%)`);
+  // Traffic: cars emerge at the closed end and reach Congress Street; D Street reaches the westbound entrance.
+  const {edges}=roadGraph(city),out=new Map();for(const e of edges){const list=out.get(e.start);if(list)list.push(e);else out.set(e.start,[e]);}
+  const reach=(from,goal,hops=40)=>{let frontier=new Set(edges.filter(e=>from.includes(e.road)).map(e=>e.end));for(let k=0;k<hops;k++){const next=new Set();for(const n of frontier)for(const e of out.get(n)??[]){if(goal(e))return true;next.add(e.end);}frontier=next;}return false;};
+  assert.ok(edges.some(e=>e.source&&e.road===first),'traffic emerges from the closed end');
+  assert.ok(reach(barrel,e=>e.road.name==='Congress Street',4)&&reach(east,e=>e.road.name==='Congress Street',4)&&reach(west,e=>e.road.name==='Congress Street'||e.road.name==='B Street',4));
+  assert.ok(reach(ramp,e=>e.road.id==='i90-wb-entrance-135',6),'down the ramp and onto the Turnpike westbound');
+  assert.ok(edges.some(e=>e.road===ramp[0])&&edges.some(e=>e.end===edges.find(x=>x.road===ramp[0]).start&&e.road.name==='D Street'),'D Street leads onto its ramp');
+});
+
+test('no wall of an installed cut stands in a lane of the deck it forks into or carries on as',()=>{
+  // A cut's wall rises to the ground beside it and 0.8 m more: inside the lanes of a deck at the cut's own level that is a wall across a ramp.
+  const decks=highway.filter(isHighwayDeck).map(d=>({d,minX:Math.min(...d.points.map(p=>p[0]))-12,maxX:Math.max(...d.points.map(p=>p[0]))+12,minZ:Math.min(...d.points.map(p=>p[1]))-12,maxZ:Math.max(...d.points.map(p=>p[1]))+12}));
+  const heading=(r,i)=>{const a=r.points[i],b=r.points[Math.min(r.points.length-1,i+1)],l=Math.hypot(b[0]-a[0],b[1]-a[1])||1;return[(b[0]-a[0])/l,(b[1]-a[1])/l];};
+  let cuts=0;const medians=new Set();
+  for(const road of highway.filter(r=>r.tunnel)){
+    const xs=road.points.map(p=>p[0]),zs=road.points.map(p=>p[1]),near=decks.filter(b=>b.minX<=Math.max(...xs)&&b.maxX>=Math.min(...xs)&&b.minZ<=Math.max(...zs)&&b.maxZ>=Math.min(...zs));if(!near.length)continue;
+    const v=tunnelGeometry(city,road).walls.vertices;cuts++;
+    for(let i=0;i<v.length;i+=3)for(const {d} of near){
+      const hit=roadProjection(d,v[i],v[i+2]);if(hit.distance>roadWidthAt(d,v[i],v[i+2])/2-.6)continue;
+      const over=v[i+1]-sampleRoadElevation(city,d,v[i],v[i+2]);if(over<=.3||over>=3)continue;
+      const own=roadProjection(road,v[i],v[i+2]),[tx,tz]=heading(d,hit.index),[ox,oz]=heading(road,own.index),level=Math.abs(sampleRoadElevation(city,road,v[i],v[i+2])-sampleRoadElevation(city,d,v[i],v[i+2]));
+      // the other carriageway runs the other way, and a road at another level is another road: the wall between those is theirs
+      if(tx*ox+tz*oz<.77||level>.75){medians.add(`${road.id} | ${d.id}`);continue;}
+      assert.fail(`a wall of ${road.id} stands ${over.toFixed(2)} m over ${d.id} in its lanes at ${v[i].toFixed(1)}, ${v[i+2].toFixed(1)}`);
+    }
+  }
+  assert.ok(cuts>100,`${cuts} cuts lie beside a deck`);assert.ok(medians.size<=6,`walls between two carriageways or two levels: ${[...medians].join(', ')}`);
+});

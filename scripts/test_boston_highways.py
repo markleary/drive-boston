@@ -354,6 +354,25 @@ class LandingTest(unittest.TestCase):
   self.assertEqual({r['id']:r['width'] for r in H.ROUTES if 'width' in r},{'i90-wb-entrance-copley':6.0},"the survey's slot between Huntington Avenue's carriageways")
 
 
+class CapTest(unittest.TestCase):
+ def ramp(self,roofed):
+  # a ramp out of a tunnel the package does not carry: below ground all along, roofed over its first `roofed` stations
+  p=plan(line(30),[7.0]*30,levels=[-1]*30,main=False,lanes=1);p.id='i90-test';p.spec={'bridge':'i90','kind':'motorway_link','cap':'start'}
+  p.owner=['w']*30;p.ways={'w':{'name':'I-90 East · Exit 1 to Test Street'}};p.lanes=[1]*30;p.tunnel=[True]*30;p.covered=[i<roofed for i in range(30)]
+  p.ends=[('cap',None,0),None];p.junctions=[];p.on_deck=[False,False];return p
+ def test_a_ramp_out_of_a_tunnel_the_package_does_not_carry_starts_at_a_closed_bore_end_under_its_roof(self):
+  decks,tunnels,ids=H.records([self.ramp(12)],[]);self.assertEqual((decks,ids),([],{'i90-test':['i90-test']}))
+  self.assertEqual(tunnels[0]['tunnel'],{'clearance':H.CLEARANCE,'covered':[[0.0,33.0]],'capStart':True},'closed at its start, as the Central Artery bores are at their southern ends')
+  self.assertNotIn('closed',tunnels[0],'the barriers at the Newton line are another closure: a deck in the open at the edge of the map')
+  with self.assertRaises(AssertionError,msg='the closure would stand in sight of the portal'):H.records([self.ramp(6)],[])
+  open_=self.ramp(12);open_.spec={'bridge':'i90','kind':'motorway_link'};self.assertNotIn('capStart',H.records([open_],[])[1][0]['tunnel'])
+ def test_the_closed_end_meets_nothing_and_is_free_in_height(self):
+  self.assertEqual({r['id']:r['cap'] for r in H.ROUTES if 'cap' in r},{'i90-eb-exit-135-from-i93':'start'},'the exit to Congress Street from the Interstate 93 tunnel')
+  spec=next(r for r in H.ROUTES if r.get('cap'));self.assertEqual(spec['parts'][0],11034,'from the node where the tunnel (8451) forks')
+  self.assertEqual([s['level'] for s in spec['spans']],[-1],'below ground as far as its cut is deeper than the survey shows it')
+  self.assertFalse(any(r.get('main') or r.get('closed') for r in H.ROUTES if r.get('cap')),'never a carriageway, never the edge of the map')
+
+
 class SignTest(unittest.TestCase):
  def test_storrow_posts_cars_only_at_its_entrances_and_the_height_ahead_of_each_structure(self):
   p=plan(line(120),main=True,clearance=H.STORROW_CLEARANCE);p.id='storrow-eb';p.spec={'bridge':'storrow'};p.landing=[True,False]
@@ -453,6 +472,15 @@ class RouteTest(unittest.TestCase):
   self.assertEqual(sorted(r['id'] for r in H.ROUTES if r.get('closed')),['i90-eb','i90-wb']);self.assertTrue(all(r['bridge']=='storrow' and r['id'].startswith('storrow-') for r in H.STORROW))
   self.assertEqual(sorted(r['id'] for r in H.ROUTES if r.get('main')),['i90-eb','i90-wb','storrow-eb','storrow-wb'])
   self.assertLess(H.STORROW_CLEARANCE,H.CLEARANCE);self.assertAlmostEqual(H.CLEARANCE,4.2,msg="the Turnpike's posted 13 ft 9 in")
+ def test_the_ramps_of_exit_135_that_layer_eight_draws_unnamed(self):
+  by={r['id']:r for r in H.ROUTES}
+  self.assertEqual(by['i90-wb-exit-135-congress-west']['parts'],[17589]);self.assertEqual(by['i90-wb-exit-135-congress-west']['grade'],H.TUNNEL_RAMP_GRADE,'matched to its sibling in that ramp\'s cut: its grade class')
+  self.assertEqual(by['i90-wb-exit-135-congress-west']['name'],by['i90-wb-exit-135-congress']['name'],'two turning roadways of one exit: one legend')
+  self.assertEqual(by['i90-wb-entrance-135-d-street']['parts'],[9090]);self.assertEqual(by['i90-eb-exit-135-from-i93-east']['parts'],[18018])
+  self.assertEqual(by['i90-eb-exit-135-from-i93']['name'],by['i90-eb-exit-135-congress']['name'],'the two barrels up to Congress Street are signed alike')
+  used={p for r in H.ROUTES for p in r['parts']}
+  # left out: the tunnel from Interstate 93 (and its last piece), the service road's turnouts under World Trade Center Avenue, the lane to the eastbound entrance
+  self.assertFalse(used&{8451,8444,11077,11079,17594},'see the comments in ROUTES and DATA_SOURCES.md')
 
 
 if __name__=='__main__':unittest.main()
