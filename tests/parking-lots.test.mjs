@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {tileStalls,parkedCar,nearestParked,poolSlots,slotType,stallDraw,stallLines,OCCUPANCY,STALL_HALF,STALL_LINE} from '../src/simulation/parking-lots.ts';
 import {NPC_VEHICLES} from '../src/simulation/npc-vehicle-specs.ts';
+import {loadMetroCity} from './helpers/metro-city.mjs';
 
 const tile={tx:2,tz:-3,size:1000,parking:[150,99975,9000,300,99975,27000]};
 
@@ -92,4 +93,32 @@ test('stalls in a row are painted with one line between neighbours, along the ca
   for(const [x0,z0,x1,z1] of lines){assert.ok(Math.abs(Math.hypot(x1-x0,z1-z0)-STALL_LINE)<1e-9);assert.ok(Math.abs(x1-x0)<1e-9,'along the car');}
   assert.deepEqual([...new Set(lines.slice(0,4).map(l=>Math.round(l[0]*10)/10))].sort((a,b)=>a-b),[8.7,11.3,13.9,16.5]);
   assert.deepEqual(stallLines([]),[]);
+});
+
+// ---- the installed package: a stall stands on what its tile draws (scripts/parking_lots.py lays it there, validate-city.py holds every tile to it)
+const city=await loadMetroCity({tiles:['0_2','-7_-3','-7_-2','-3_-2']});
+const within=(p,rings)=>{let hit=false;for(const ring of rings)for(let i=0,j=ring.length-1;i<ring.length;j=i++){const a=ring[i],b=ring[j];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])hit=!hit;}return hit;};
+// the ground a stall and a kerbside bay share, a little inside it: its centre and its four corners
+const ground=s=>{const f=[Math.sin(s.yaw),Math.cos(s.yaw)],r=[f[1],-f[0]];return [[0,0],[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>[s.x+f[0]*a*2.5+r[0]*b*1.1,s.z+f[1]*a*2.5+r[1]*b*1.1]);};
+
+test('a stall stands on the asphalt of its lot, in no street and on no street sidewalk: Newmarket Square, the edge of the coverage and Cambridge',()=>{
+  for(const key of ['0_2','-7_-3','-3_-2']){
+    const tile=city.loadedTiles.get(key),stalls=tileStalls(tile),x0=tile.tx*tile.size,z0=tile.tz*tile.size;assert.ok(stalls.length>150,`${stalls.length} stalls in tile ${key}`);
+    let checked=0;
+    for(const s of stalls)for(const p of ground(s)){
+      if(p[0]<x0||p[0]>=x0+tile.size||p[1]<z0||p[1]>=z0+tile.size)continue;   // (the next tile draws that ground)
+      checked++;
+      assert.ok(!(tile.streetPavement??[]).some(rings=>within(p,rings)),`the stall at ${s.x}, ${s.z} in tile ${key} stands in a street`);
+      assert.ok(tile.driveways.some(rings=>within(p,rings)),`the stall at ${s.x}, ${s.z} in tile ${key} stands off the asphalt of its lot`);
+      // (the band beside a street with no surveyed sidewalk lies under the asphalt of a lot mapped out to the curb: the walkers pace it and the street trees stand in it)
+      assert.ok(!(tile.streetSidewalks??[]).some(rings=>within(p,rings)),`the stall at ${s.x}, ${s.z} in tile ${key} stands on the sidewalk of a street`);
+    }
+    assert.ok(checked>stalls.length*4.5,`${checked} points of ${stalls.length} stalls`);
+  }
+  // Newmarket Square's parking is mapped inside its curbs, so its roadway holds none of it: a row of two dozen stood in the street, the stall
+  // a review named at (710.94, 2583.71) among them
+  const square=tileStalls(city.loadedTiles.get('0_2')).filter(s=>s.x>690&&s.x<760&&s.z>2510&&s.z<2600);
+  assert.ok(square.length<=8&&!square.some(s=>Math.hypot(s.x-710.94,s.z-2583.71)<2),`${square.length} stalls left at the square`);
+  // and beyond the playable coverage no lot is drawn, so none has stalls (2,267 stood on bare ground in this tile)
+  const beyond=city.loadedTiles.get('-7_-2');assert.equal(tileStalls(beyond).length,0);assert.equal((beyond.parking??[]).length,0);
 });
