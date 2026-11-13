@@ -1,5 +1,6 @@
 import type { Road } from '../types';
 import { tunnelCoveredAt, tunnelPointAt, tunnelStations } from './tunnels.ts';
+import type { Roadside } from './highway-signs.ts';
 
 // MassDOT's mileage-based numbers and the Boston MPO ramp diagrams, checked
 // against i93-north-source.json. Exit 22 northbound follows the Medford photo.
@@ -48,10 +49,12 @@ const exits: ExitLegend[] = [
 /** A carriageway record: its family (`i90-eb`) is its id less the piece number. */
 const CARRIAGEWAY = /^(i93-(?:nb|sb)|i90-(?:eb|wb)|storrow-(?:eb|wb))-\d+$/;
 
+/** The pole of an advance exit sign stands this far beyond its road's edge. */
+export const EXIT_SIGN_POST = .85;
 export interface I93ExitSign extends ExitLegend {
   road: Road;
   station: number;
-  approach: ReturnType<typeof tunnelPointAt>;
+  approach: Roadside;
 }
 
 /** The generators split each carriageway (I-93, the Turnpike, Storrow Drive) at

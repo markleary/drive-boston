@@ -1027,18 +1027,8 @@ def install(data_dir,source_dir,xy,log=print):
   if cut_tree is None or n>=len(tile['curbs']):continue
   pieces=cut_curbs(tile['curbs'][n:],cuts,cut_tree);curb_cuts+=len(pieces)-len(tile['curbs'][n:]);tile['curbs']=tile['curbs'][:n]+pieces
  for tile in headers.values():tile['pavements']=[];tile['borderPavements']=[];tile['sidewalks']=[];tile['islands']=[];tile['driveways']=[];tile.pop('reviewedDrivewayParts',None);tile.pop('highwayPavements',None);tile.pop('parking',None);tile.pop('bareCurbs',None)
- # The stalls of the surface lots, clear of the buildings and of every roadway: the runtime parks cars in them (parking_lots.py).
- import parking_lots
- parking=parking_lots.features([elements[k] for k in sorted(elements)],xy)
- roadways=[LineString(r['points']).buffer((records[road_key(r)].get('pavedWidth') or r['width'])/2,cap_style=2) for r in surface]+[LineString(r['points']).buffer(r['width']/2+parking_lots.DECK_ROOM,cap_style=2) for r in highway_roads]
- # (and no stall under or against a deck of that stage, whatever its height: a ramp comes down through the lot it crosses, and its piers and rails stand along it)
- from boston_highways import KIND as HIGHWAY_DECK
- roadways+=[LineString(r['points']).buffer(max(r.get('deckWidths') or [r['width']])/2+parking_lots.DECK_ROOM,cap_style=2) for r in city['roads'] if r.get('elevations') and (r.get('bridge') or {}).get('kind')==HIGHWAY_DECK]
- found=parking_lots.stalls(*parking,[f for f in footprints if not f.is_empty]+roadways);stalls=0
- for (tx,tz),flat in sorted(parking_lots.by_tile(found,size).items()):
-  tile=headers.get(tile_key(tx,tz))
-  if tile is not None:tile['parking']=flat;stalls+=len(flat)//3
- log('Parking stalls',stalls,'in',len(parking[0]),'surface lots',flush=True)
+ # (the stalls are laid further down, once the surfaces they stand on are compiled: their list keeps this place in the header)
+ for tile in headers.values():tile['parking']=[]
  # The roadway the highway stage measured beside the lanes of its decks on the ground: edge pairs like a street's record, in the tile that holds the middle of each.
  aprons=((earlier.get('bostonHighways') or {}).get('roadways') or {}).get('aprons',[])
  for a in aprons:
@@ -1079,6 +1069,22 @@ def install(data_dir,source_dir,xy,log=print):
  from roadway_buildings import prune_package
  contacts,contact_roads=packaged_contacts(city,data_dir)
  mesh_stats=compile_headers(headers,city['roads'],contacts);mesh_stats['deckContactRoads']=len(contact_roads);log('Compiled street polygons',mesh_stats,flush=True)
+ # The stalls of the surface lots, laid on what the tiles draw now that the surfaces are compiled: on the asphalt of the lots and driveways,
+ # off the sidewalk band of every street, clear of the street pavement, of the buildings and of every roadway (parking_lots.py). The runtime
+ # parks cars in them.
+ import parking_lots
+ parking=parking_lots.features([elements[k] for k in sorted(elements)],xy)
+ roadways=[LineString(r['points']).buffer((records[road_key(r)].get('pavedWidth') or r['width'])/2,cap_style=2) for r in surface]+[LineString(r['points']).buffer(r['width']/2+parking_lots.DECK_ROOM,cap_style=2) for r in highway_roads]
+ # (and no stall under or against a deck of that stage, whatever its height: a ramp comes down through the lot it crosses, and its piers and rails stand along it)
+ from boston_highways import KIND as HIGHWAY_DECK
+ roadways+=[LineString(r['points']).buffer(max(r.get('deckWidths') or [r['width']])/2+parking_lots.DECK_ROOM,cap_style=2) for r in city['roads'] if r.get('elevations') and (r.get('bridge') or {}).get('kind')==HIGHWAY_DECK]
+ found=parking_lots.stalls(*parking,[f for f in footprints if not f.is_empty]+roadways+parking_lots.tile_polygons(headers,'streetPavement')+parking_lots.tile_polygons(headers,'streetSidewalks'),parking_lots.tile_polygons(headers,'driveways'));stalls=0
+ by_tile=parking_lots.by_tile(found,size)
+ for tile in headers.values():
+  flat=by_tile.get((tile['tx'],tile['tz']))
+  if flat:tile['parking']=flat;stalls+=len(flat)//3
+  else:del tile['parking']
+ log('Parking stalls',stalls,'in',len(parking[0]),'surface lots',flush=True)
  # A curb with no roadway, sidewalk, island, lot, deck or path beside it is not drawn (bare_curbs): it stays in the tile for the next run's measuring.
  sidecars=[r for name in city.get('tunnels',{}).get('files',[]) or [city['tunnels']['file']] if (data_dir/name).exists() for r in json.loads((data_dir/name).read_text())['roads']] if city.get('tunnels') else []
  bare,bare_length=bare_curbs(headers,[r for r in city['roads'] if r.get('elevations')]+sidecars)

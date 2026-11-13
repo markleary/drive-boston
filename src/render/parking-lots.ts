@@ -4,14 +4,12 @@ import type { CityData } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { createNPCVehicleBatches } from './npc-vehicles.ts';
 import { createNPCVehicleColliders } from '../physics/npc-vehicle.ts';
-import { NPC_BODY_LIFT, type NPCVehicleType } from '../simulation/npc-vehicle-specs.ts';
+import { NPC_BODY_LIFT } from '../simulation/npc-vehicle-specs.ts';
 import { sampleElevation, sampleTerrainNormal, terrainRotation } from '../simulation/terrain.ts';
-import { nearestParked, parkedCar, stallLines, tileStalls, type ParkedCar } from '../simulation/parking-lots.ts';
+import { nearestParked, parkedCar, poolSlots, slotType, stallLines, tileStalls, type ParkedCar } from '../simulation/parking-lots.ts';
 
 /** The resident tiles, as the streamer lists them. */
 export interface ParkingTiles { readonly loaded: ReadonlyMap<string, { tile: { tx: number; tz: number; size: number; parking?: number[] } }>; }
-/** Slot types of the pool in turn: the mix parkedCar draws from, so most cars find a slot of their own type. */
-const SLOT_TYPES: NPCVehicleType[] = ['compact', 'sedan', 'compact', 'sedan', 'minivan', 'pickup'];
 /** Cars within this distance of the player are solid. */
 const SOLID = 70;
 /** Width of a painted stall line and its lift over the lot's asphalt. */
@@ -35,15 +33,18 @@ function stallLineMesh(city: CityData, stalls: ReturnType<typeof tileStalls>, ma
 
 /** Cars standing in the surface lots near the player: the occupied stalls of the resident tiles
  * (src/simulation/parking-lots.ts), the nearest drawn from one pooled fleet of the traffic's models and re-chosen as
- * the player moves. A stall always holds the same car, so a lot looks the same on every visit. */
+ * the player moves. A stall always holds the same car, so a lot looks the same on every visit: a slot of the pool draws
+ * one model (`slotType`), and the pool takes of each model the nearest it has slots for (nearestParked), so no car is
+ * ever drawn as another. */
 export function createParkingLots(scene: THREE.Scene, city: CityData, physics: DrivingPhysics | undefined, options: { tiles?: ParkingTiles; mobile?: boolean } = {}) {
   const group = new THREE.Group(); group.name = 'ParkingLots'; scene.add(group);
   // (a lot reads as one from the air by the cars in it: the desktop pool reaches as far as the helicopter's view of the ground, 220 cars within 520 m)
   const capacity = options.mobile ? 30 : 220, radius = options.mobile ? 150 : 520;
   // Plates at the phone's resolution on every device: the atlas grows with the pool, and nobody reads a plate across a parking lot.
   const fleet = createNPCVehicleBatches(group, capacity, true);
-  for (let i = 0; i < capacity; i++) fleet.bind(i, SLOT_TYPES[i % SLOT_TYPES.length]);
-  const slots: (ParkedCar | undefined)[] = Array(capacity).fill(undefined), bySlot = new Map<string, number>(), bodies: (RAPIER.RigidBody | undefined)[] = Array(capacity).fill(undefined);
+  for (let i = 0; i < capacity; i++) fleet.bind(i, slotType(i));
+  const slots: (ParkedCar | undefined)[] = Array(capacity).fill(undefined), bodies: (RAPIER.RigidBody | undefined)[] = Array(capacity).fill(undefined);
+  let held = new Map<string, number>();
   const colliders = new Set<number>(), handles: number[][] = Array.from({ length: capacity }, () => []);
   const dummy = new THREE.Object3D(), color = new THREE.Color();
   // Painted stalls, a mesh a tile, built one tile a frame as the tiles stream in (not on phones).
@@ -82,17 +83,10 @@ export function createParkingLots(scene: THREE.Scene, city: CityData, physics: D
     // Re-choose the nearest when the player has moved a few car lengths; in between only the solid set follows, twice a second.
     if (!last || Math.hypot(observer.x - last.x, observer.z - last.z) > 12) {
       last = { x: observer.x, z: observer.z };
-      const wanted = nearestParked(cars, observer.x, observer.z, capacity, radius), keep = new Set(wanted.map(car => car.key));
-      for (let slot = 0; slot < capacity; slot++) { const car = slots[slot]; if (car && !keep.has(car.key)) { unsolid(slot); fleet.hide(slot); bySlot.delete(car.key); slots[slot] = undefined; } }
-      for (const car of wanted) {
-        let slot = bySlot.get(car.key);
-        if (slot === undefined) {
-          // its own type's slot where one is free, else whichever is
-          slot = slots.findIndex((taken, i) => !taken && SLOT_TYPES[i % SLOT_TYPES.length] === car.spec.type); if (slot < 0) slot = slots.findIndex(taken => !taken); if (slot < 0) continue;
-          slots[slot] = car; bySlot.set(car.key, slot);
-        }
-        place(slot, car, observer);
-      }
+      const wanted = nearestParked(cars, observer.x, observer.z, capacity, radius), next = poolSlots(slots, wanted);
+      for (const slot of next.freed) { unsolid(slot); fleet.hide(slot); }
+      held = next.held;
+      for (const car of wanted) { const slot = held.get(car.key); if (slot !== undefined) place(slot, car, observer); }
       fleet.flush(); elapsed = 1;
     }
     if (elapsed >= .5) {
@@ -102,11 +96,13 @@ export function createParkingLots(scene: THREE.Scene, city: CityData, physics: D
   }
   return {
     group, update,
+    /** Headlamps and tail lamps glow at night as the traffic's and the kerbside cars' do. */
+    setNight: fleet.setNight,
     /** Collider handles of the parked cars that are solid now, so an impact can be classified as a vehicle. */
     colliders,
-    get count() { return bySlot.size; },
-    /** Diagnostics: the cars drawn now. */
-    get cars() { return slots.filter((car): car is ParkedCar => !!car).map(car => ({ x: car.x, z: car.z, yaw: car.yaw, type: car.spec.type })); },
+    get count() { return held.size; },
+    /** Diagnostics: the cars drawn now, each with the model its slot draws. */
+    get cars() { return slots.flatMap((car, slot) => car ? [{ x: car.x, z: car.z, yaw: car.yaw, type: car.spec.type, model: slotType(slot) }] : []); },
     get stalls() { return cars.length; },
     /** Diagnostics: the tiles whose stall lines are drawn. */
     get striped() { return [...striped].filter(([, mesh]) => mesh).length; },

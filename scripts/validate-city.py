@@ -133,7 +133,7 @@ pavements=0;borders=0;sidewalks=0;bricks=0;islands=0;driveways=0;aprons=0;stalls
 clearance_index=RoadClearanceIndex(city['roads']);surface_headers={}
 for key in keys:
  tx,tz=map(int,key.split('_'));reproducible(f'{tiles["directory"]}/{tileformat.tile_name(tx,tz)}');header,entries=tileformat.read_tile(tile_dir/tileformat.tile_name(tx,tz))
- surface_headers[key]={k:header[k] for k in ('tx','tz','size','streetPavement','streetSidewalks','deckPavement','sidewalks','islands','driveways','buildings')}
+ surface_headers[key]={k:header[k] for k in ('tx','tz','size','streetPavement','streetSidewalks','deckPavement','sidewalks','islands','driveways','buildings')};surface_headers[key]['parking']=header.get('parking',[])
  assert (header['tx'],header['tz'],header['size'])==(tx,tz,size) and len(entries)==far_counts.get(key,0)
  curbs+=len(header['curbs']);park_paths+=len(header['parkPaths']);assert all(isinstance(r,str) for r in header['roads'])
  # Curb-bounded roadways, inventory sidewalks and islands (build-street-surfaces.py).
@@ -219,6 +219,15 @@ assert pavements==len(surface_roads),f'{pavements} roadway records for {len(surf
 assert all(1.5<=r['pavedWidth']<=45 for r in city['roads'] if r.get('pavedWidth')) and len(measured_roads)>len(surface_roads)*.7,'measured paved widths'
 assert sidewalks>20000 and bricks>500 and islands>100 and driveways>100,'sidewalk inventory, curb islands and driveway fills were not installed'
 street_surfaces=provenance.get('streetSurfaces');assert street_surfaces and street_surfaces['pavements']==pavements and street_surfaces.get('borderPavements',borders)==borders and street_surfaces['sidewalkParts']==sidewalks and street_surfaces['islandParts']==islands and street_surfaces['drivewayParts']==driveways and street_surfaces.get('highwayAprons',0)==aprons==len(((provenance.get('bostonHighways') or {}).get('roadways') or {}).get('aprons',[])) and street_surfaces.get('parkingStalls',0)==stalls and street_surfaces.get('bareCurbs',0)==bare,'provenance must describe the installed street surfaces'
+# A stall stands on the asphalt its package draws for a lot, off the street sidewalks, and touches no street pavement (parking_lots.misplaced):
+# cars parked in a roadway are fixed colliders in the travel surface, a lot beyond the coverage has no asphalt to stand on, and the sidewalk band
+# of a street is where its walkers pace and its trees stand.
+import parking_lots
+misplaced_stalls=parking_lots.misplaced(parking_lots.in_world(surface_headers),parking_lots.tile_polygons(surface_headers,'streetPavement'),parking_lots.tile_polygons(surface_headers,'driveways'),parking_lots.tile_polygons(surface_headers,'streetSidewalks'))
+assert not misplaced_stalls,f'{len(misplaced_stalls)} parking stalls stand in a street, on a sidewalk or off the asphalt of their lot, the first at {misplaced_stalls[0]}; run build-street-surfaces.py'
+# and no two stalls share ground (a lot OpenStreetMap maps twice is laid out once: parking_lots.merged)
+crowded_stalls=parking_lots.crowded(parking_lots.in_world(surface_headers))
+assert not crowded_stalls,f'{len(crowded_stalls)} pairs of parking stalls share ground, the first at {crowded_stalls[0]}; run build-street-surfaces.py'
 
 def point_in_polygon(x,z,poly):
  inside=False
