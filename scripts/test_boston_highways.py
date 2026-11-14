@@ -441,6 +441,40 @@ class OnStreetTest(unittest.TestCase):
   self.assertEqual(H.on_street([self.deck(self.away(30))],[self.street([[-60,0],[0,1.5],[120,0]])],self.flat),[])
 
 
+class LandedTest(unittest.TestCase):
+ """An earlier stage's deck that lands on a vertex of one of the stage's records (landed_decks)."""
+ def setUp(self):
+  # the road: a record along x riding TERRAIN_FLOOR over flat ground at 1 m; the ramp leaves it at x 30 at 10 degrees, laid from the ground up to a deck at 6.4 m
+  self.record={'id':'storrow-eb-01','points':[[i*3.0,0.0] for i in range(41)],'elevations':[1.2]*41,'deckWidths':[6.0]*41}
+  c,s_=math.cos(math.radians(10)),math.sin(math.radians(10));pts=[[30+c*3*i,s_*3*i] for i in range(35)];total=3*34
+  self.ramp={'id':'1-0-bridge','points':pts,'width':7.0,'startLevel':0,'endLevel':1,'bridge':{'id':'bowker'},'elevations':[round(1.0+5.4*(lambda f:f*f*(3-2*f))(3*i/total),4) for i in range(35)]}
+  self.ground=lambda x,z:1.0
+
+ def test_the_deck_takes_the_road_s_height_while_it_lies_in_its_pavement_and_never_runs_under_the_ground(self):
+  out,report=H.landed_decks([self.ramp],[self.record],self.ground);y=out[0]['elevations'];orig=self.ramp['elevations']
+  self.assertEqual(y[0],1.2,'it starts at the height of the road it leaves');self.assertLess(orig[0],y[0])
+  held=[i for i in range(35) if 3*i*math.sin(math.radians(10))<=3.0]
+  self.assertTrue(all(abs(y[i]-1.2)<1e-9 for i in held),'held to the road while its centre line lies in its pavement')
+  self.assertTrue(all(v>=1.0+H.W.RAMP_RISE-1e-9 for v in y),'never under the ground across its pavement')
+  j=report[0]['stations'];self.assertEqual(y[j:],orig[j:],'its own profile from where that climbs back over the height it left the road at')
+  self.assertGreaterEqual(orig[j],1.2);grade=lambda v:max(abs(b-a)/3 for a,b in zip(v,v[1:]))
+  self.assertLessEqual(grade(y),grade(orig)+1e-9,'and no steeper than it ever was, where it is held down to the road beside its own climb')
+  self.assertTrue(all(b-a>=-1e-9 for a,b in zip(y,y[1:])),'pulled taut: no dip between the road and its own climb')
+  self.assertEqual({k:report[0][k] for k in ('road','end','record','held')},{'road':'1-0-bridge','end':'start','record':'storrow-eb-01','held':held[-1]})
+  self.assertIsNot(out[0],self.ramp,'the changed deck is a copy');self.assertEqual(self.ramp['elevations'],orig)
+
+ def test_a_deck_joining_at_its_end_is_walked_from_that_end(self):
+  back={**self.ramp,'points':self.ramp['points'][::-1],'elevations':self.ramp['elevations'][::-1],'startLevel':1,'endLevel':0}
+  out,report=H.landed_decks([back],[self.record],self.ground);self.assertEqual(report[0]['end'],'end')
+  self.assertEqual(out[0]['elevations'][::-1],H.landed_decks([self.ramp],[self.record],self.ground)[0][0]['elevations'])
+
+ def test_a_deck_off_the_road_s_vertices_or_the_stage_s_own_is_left_alone(self):
+  off={**self.ramp,'points':[[p[0]+1.5,p[1]] for p in self.ramp['points']]};own={**self.ramp,'id':'storrow-eb-exit-x'};lifted={**self.ramp,'startLevel':1}
+  out,report=H.landed_decks([off,own,lifted],[self.record],self.ground);self.assertEqual(report,[]);self.assertEqual([o is r for o,r in zip(out,[off,own,lifted])],[True]*3)
+  once=H.landed_decks([self.ramp],[self.record],self.ground)[0][0];out,report=H.landed_decks([once],[self.record],self.ground)
+  self.assertIs(out[0],once,'a deck that lands on the road as the rule lays it stays');self.assertEqual((report[0]['maxRaise'],report[0]['maxLower']),(0,0))
+
+
 class CapTest(unittest.TestCase):
  def ramp(self,roofed):
   # a ramp out of a tunnel the package does not carry: below ground all along, roofed over its first `roofed` stations

@@ -200,6 +200,8 @@ WATER_CLEAR=.4       # under the slab over a culverted stream (the Muddy River a
 BLEND=40             # an OpenStreetMap filler's ends shift onto the layer 8 segment ends over this distance
 SLIVER=.6            # source vertices closer than this are one vertex
 SHORT=12             # no record shorter than this unless ramps meet the road at both its ends
+LANDED_ALONG=.9     # ... and is held to that road where it runs along it within this cosine
+LANDED_STEP=.01      # an earlier stage's deck landing on a vertex of a record meets the record's height within this (landed_decks)
 LANDING_LIP=.15      # ground this far over a ramp inside its street landing's taper is no longer the street it meets
 LANDING_STEP=.05     # and a landing that ends for it ends where the ground first stood this far over the road: the step the runtime leaves there
 SIGN_IN=25           # a CARS ONLY sign stands this far along Storrow Drive from where traffic comes onto it
@@ -1993,6 +1995,60 @@ def before_road_stages(roads,heights,provenance,scale=.01):
  roads,heights=before_stage(roads,heights,provenance.get('bostonHighways'),scale);return I.before_stage(roads,heights,provenance.get('i93North'),scale)
 
 
+def landed_decks(roads,records,ground):
+ """An earlier stage's deck that starts or ends on the ground at a vertex of one of the stage's records lands on that
+ road. Its builder laid it from the survey's ground at that end, before the road was there: the Bowker Overpass's ramp
+ off Storrow Drive East (19896-0-bridge, a smoothstep from the ground up to its deck) started 0.19 m under the road,
+ whose deck rides TERRAIN_FLOOR over its ground, and ran up to 0.44 m under the ground beside it and 0.65 m under the
+ road it shares for its first 22 m, where a car rode the road and the ground instead and met the ramp in a bump. Such
+ a deck that misses the road's height at that end by more than LANDED_STEP is laid again (one that meets it stays as
+ its builder laid it: a ramp of the stage that starts or ends on such a deck takes that deck's height, and how the two
+ share their pavement beyond is the stage's own matter, as at Airport Road's end on the Exit 137 ramp). From that end inward the deck takes the road's height while its centre line lies in the road's pavement (`records`, the
+ stage's records as installed: the nearest one there) and runs along it (LANDED_ALONG: a street leaving a ramp's mouth
+ at an angle shares its pavement for a metre or two as the two grade apart, which is no defect), is then pulled taut (land_approaches.taut) over the ground
+ across its own pavement (RAMP_RISE over the highest of it, `ground` the graded grid) to the first station where its
+ own profile stands over both and can be reached at no more than its own steepest grade, and keeps its own profile
+ from there. Returns (the road list with each changed deck
+ copied in, [{road, end, record, stations, held, maxRaise, maxLower}] for every such end, changed or not)."""
+ from land_approaches import taut
+ at={};lines=[LineString(r['points']) for r in records];tree=STRtree(lines);along=[stations(r['points']) for r in records]
+ for k,r in enumerate(records):
+  for i,q in enumerate(r['points']):at.setdefault(key(q),[]).append((k,i))
+ def surface(q):
+  # the height of the road under q and whether q lies in its pavement (the nearest record)
+  best=None
+  for k in tree.query(Point(q),predicate='dwithin',distance=30).tolist():
+   d=lines[k].distance(Point(q));s=lines[k].project(Point(q))
+   if best is None or d<best[0]:
+    pts=records[k]['points'];i=min(len(pts)-2,max(0,int(np.searchsorted(along[k],s,'right'))-1));a,b=pts[i],pts[i+1];L=math.dist(a,b) or 1
+    best=(d,float(np.interp(s,along[k],records[k]['elevations'])),float(np.interp(s,along[k],records[k]['deckWidths']))/2,((b[0]-a[0])/L,(b[1]-a[1])/L))
+  return best
+ out=list(roads);report=[]
+ for n,r in enumerate(roads):
+  if stage_owned(r) or not r.get('elevations') or r.get('tunnel'):continue
+  for e,level in ((0,'startLevel'),(1,'endLevel')):
+   if r.get(level)!=0 or key(r['points'][-e])not in at:continue
+   k,i=at[key(r['points'][-e])][0];road=out[n];order=list(range(len(r['points'])))[::-1 if e else 1];pts=[road['points'][j] for j in order];orig=[road['elevations'][j] for j in order]
+   t=I.tangents(pts);half=road.get('width',7)/2-.3;s=stations(pts)
+   floor=[max(ground(p[0]-t[j][1]*o,p[1]+t[j][0]*o) for o in np.linspace(-half,half,9).tolist())+W.RAMP_RISE for j,p in enumerate(pts)]
+   held=[records[k]['elevations'][i]]
+   for j,p in enumerate(pts[1:],1):
+    near=surface(p)
+    if near is None or near[0]>near[2] or abs(t[j][0]*near[3][0]+t[j][1]*near[3][1])<LANDED_ALONG:break
+    held.append(near[1])
+   m=len(held)-1
+   if abs(orig[0]-held[0])<=LANDED_STEP:   # (it meets the road: as its builder laid it)
+    report.append({'road':r['id'],'end':'start' if e==0 else 'end','record':records[k]['id'],'stations':0,'held':m,'maxRaise':0,'maxLower':0});continue
+   y=held+orig[m+1:];steep=max(abs(b-a)/max(1e-6,s[q+1]-s[q]) for q,(a,b) in enumerate(zip(orig,orig[1:])))
+   j=next((q for q in range(m+1,len(pts)) if orig[q]>=max(held[-1],floor[q]) and orig[q]-held[-1]<=steep*(s[q]-s[m])),None)
+   assert j is not None,f"{r['id']} never climbs back from {records[k]['id']}"
+   if j>m+1:y[m:j+1]=taut(s[m:j+1],[held[-1],*floor[m+1:j],orig[j]])
+   new=[y[order.index(q)] for q in range(len(order))];change=[a-b for a,b in zip(new,road['elevations'])]
+   report.append({'road':r['id'],'end':'start' if e==0 else 'end','record':records[k]['id'],'stations':j,'held':m,'maxRaise':round(max(0,*change),3),'maxLower':round(max(0,*(-c for c in change)),3)})
+   if max(abs(c) for c in change)>5e-4:out[n]={**road,'elevations':[round(v,4) for v in new]}
+ return out,report
+
+
 def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,removed=()):
  """Build the stage on a package without it: (provenance record, the package roads with the stage's decks,
  the tunnel sidecar roads, the cut grid, the solved plans). `buildings` is the package's TileBuildings and
@@ -2067,6 +2123,8 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  vertices=np.flatnonzero(result!=heights);originals=heights[vertices].astype(int).tolist();vertices=vertices.tolist()
  hoods=[{'name':n['name'],'shape':Polygon(n['rings'][0],n['rings'][1:])} for n in city['neighborhoods']]
  decks,tunnel_records,ids=records(plans,hoods);signs=warning_signs(plans,report,source);pieces=[x for k in sorted(replaced) for x in replaced[k] if x.get('elevations')]
+ # (an earlier stage's deck landing on a vertex of a record lands on that road: landed_decks)
+ roads,landed=landed_decks(roads,decks+tunnel_records,I.Terrain(grid,result));relaid={x['road'] for x in landed if x['maxRaise'] or x['maxLower']}
  # (what the twins left apart, by record: stations of the record and the most its twin stands over it there)
  twins={**report['twins'],'pairs':[{**pair,'apart':[{'road':rid,'stations':[max(i,a)-a,min(j,b)-a],'by':by} for k in pair['roads'] for i,j,by in pair['apart'][k] for a,b,rid in by_id[k].pieces if max(i,a)<=min(j,b)]} for pair in report['twins']['pairs']]}
  scale=grid.get('scale',.01);delta=(result.astype(np.int64)-heights.astype(np.int64))*scale
@@ -2077,12 +2135,12 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   'capped':[{'road':r['id'],'end':'start','point':r['points'][0]} for r in tunnel_records if r['tunnel'].get('capStart')],
   'crossings':report['crossings'],'newCrossings':report['newCrossings'],'atGrade':report['atGrade'],'unresolved':report['unresolved'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'steep':steep,'movedBeside':report['movedBeside'],'narrowed':report['narrowed'],'junctions':report['junctions'],
-  'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'twins':twins,'buildings':over,'signs':signs,
+  'landedDecks':landed,'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'twins':twins,'buildings':over,'signs':signs,
   'roadways':{'method':HR.METHOD,'routes':surveyed,'trimmedMeters':trimmed,'aprons':[{k:a[k] for k in ('road','left','right')} for _,a in pairs],
    # (the medians, with what stays narrower than its lanes' least width by record: stations of the record and the most it is short there)
    'medians':[{**m,'parted':{k:{**v,'tight':[{'road':rid,'stations':[max(i,a)-a,min(j,b)-a],'by':by} for i,j,by in v['tight'] for a,b,rid in by_id[k].pieces if max(i,a)<=min(j,b)]} for k,v in m['parted'].items()}} for m in medians]},
   'deckMeters':length(decks),'tunnelMeters':length(tunnel_records),
-  'roads':{'added':[r['id'] for r in decks]+seam_pieces+[p['id'] for p in pieces if p['id'] not in replaced],'tunnels':[r['id'] for r in tunnel_records],'sources':flattened+[copy.deepcopy(r) for r in source_roads if r['id'] in replaced and r['id'] not in {f['id'] for f in flattened}],'removed':copies},
+  'roads':{'added':[r['id'] for r in decks]+seam_pieces+[p['id'] for p in pieces if p['id'] not in replaced],'tunnels':[r['id'] for r in tunnel_records],'sources':flattened+[copy.deepcopy(r) for r in source_roads if (r['id'] in replaced or r['id'] in relaid) and r['id'] not in {f['id'] for f in flattened}],'removed':copies},
   'terrain':{'vertices':[int(v) for v in vertices],'heights':[int(h) for h in originals],'maxCutMeters':round(float(-delta.min()),3) if len(vertices) else 0,'maxFillMeters':round(float(delta.max()),3) if len(vertices) else 0,
    'cutCubicMeters':round(float(-delta[delta<0].sum())*grid['cellSize']**2),'fillCubicMeters':round(float(delta[delta>0].sum())*grid['cellSize']**2)}}
  return record_,roads+decks,tunnel_records,result,plans
@@ -2096,7 +2154,7 @@ def replay(data_dir,city,record,source,installed=None):
  again,out,tunnel_records,result,_=install({**city,'roads':roads},source,heights,load_grid(data_dir/grid['source']),tile_buildings(data_dir,city),central_artery(data_dir,city),removed=record['buildings']['removed'])
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']};sidecar=json.loads((data_dir/SIDECAR).read_text())
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
- return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','capped','overpasses','bridgeSeams','hollows','twins','roadways'))
+ return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','capped','overpasses','bridgeSeams','hollows','twins','roadways','landedDecks'))
 
 
 def validate(data_dir,city,record,ground):
@@ -2156,6 +2214,17 @@ def validate(data_dir,city,record,ground):
    if own:joins+=1;continue
    there=[(o,j) for o,j in vertices.get(key(r['points'][i]),()) if abs((o['elevations'][j] if o.get('elevations') else ground(*o['points'][j]))-y)<=.1+slack]
    assert there,f"{r['id']} {'starts' if i==0 else 'ends'} at {r['points'][i]} on no carriageway, ramp or street vertex at its height";landings+=1
+ # an earlier stage's deck that starts or ends on the ground at a vertex of a record meets that record's height there (landed_decks)
+ at=defaultdict(list);landed=0
+ for r in roads:
+  for i,q in enumerate(r['points']):at[key(q)].append((r,i))
+ for r in city['roads']:
+  if stage_owned(r) or not r.get('elevations') or r.get('tunnel'):continue
+  for i,level in ((0,'startLevel'),(-1,'endLevel')):
+   if r.get(level)!=0:continue
+   for o,j in at.get(key(r['points'][i]),()):
+    step=r['elevations'][i]-o['elevations'][j];landed+=1
+    assert abs(step)<=LANDED_STEP,f"{r['id']} {'starts' if i==0 else 'ends'} {step:+.3f} m off {o['id']}, on whose vertex it lands at {r['points'][i]}; rerun build-boston-highways.py"
  # no ground in a deck's pavement, but for a landing on its street
  for r in decks:
   line=LineString(r['points']);along=np.asarray(stations(r['points']));w=np.asarray(r['deckWidths'],float);t=I.tangents(r['points'])
@@ -2217,7 +2286,7 @@ def validate(data_dir,city,record,ground):
   for v in m['parted'].values():
    for e in v['tight']:listed[e['road']].append(e['stations'])
  surveyed={**surveyed,**HR.median_check(twins,listed)}
- return {**surveyed,'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'twinStations':level,'joins':joins,'streetLandings':landings,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
+ return {**surveyed,'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'twinStations':level,'joins':joins,'streetLandings':landings,'landedDecks':landed,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
 
 
 def routes_of(road,record):
