@@ -34,6 +34,8 @@ export const CROSSWALK_SETBACK = 1, STRIPE_LENGTH = 3, MIN_SPACING = 12, COMPARA
 /** How far beyond a widened crosswalk's end the roadway must have ended, and how deep two crosswalks' stripes must lie in each other to count as one over the other. */
 const BEYOND = 1, OVERLAP = .3;
 export const NO_CROSSWALK = /alley|unnamed/i;
+/** How near two vertices are one junction (`legsAt`), and so the least length of a leg that leaves it. */
+const NODE = 1;
 
 export interface Leg { road: Road; tx: number; tz: number }
 export interface JunctionIndex { legsAt(p: Point2): Leg[]; signalNear(p: Point2): boolean }
@@ -41,29 +43,41 @@ export interface Edges { left: Point2[]; right: Point2[] }
 export interface Crosswalk { road: Road; /** The junction vertex the crosswalk belongs to. */ node: Point2; at: Point2; tx: number; tz: number; span: [number, number]; priority: number }
 
 const cell = (x: number, z: number) => `${Math.round(x)}:${Math.round(z)}`;
-/** The unit direction from vertex `i` toward the vertex 4 m along the line (or the line's end) in direction `step`. */
+/** The unit direction from vertex `i` toward the vertex 4 m along the line (or the line's end) in direction `step`:
+ * none where the line ends within the junction's own radius. A vertex 0.6 m from the end of its road gave the node
+ * at that end a leg pointing back at it, by which a street's own continuation counted as a street crossing it:
+ * 30 crosswalks stood where no street crosses, and Wadsworth Street's at Ashford Terrace 31 m from its junction. */
 function bearing(points: Point2[], i: number, step: 1 | -1): [number, number] | undefined {
   const [x0, z0] = points[i]; let j = i + step, walked = 0;
   while (j >= 0 && j < points.length) { walked += Math.hypot(points[j][0] - points[j - step][0], points[j][1] - points[j - step][1]); if (walked >= 4) break; j += step; }
   j = Math.max(0, Math.min(points.length - 1, j)); const l = Math.hypot(points[j][0] - x0, points[j][1] - z0);
-  return l < .5 ? undefined : [(points[j][0] - x0) / l, (points[j][1] - z0) / l];
+  return l < NODE ? undefined : [(points[j][0] - x0) / l, (points[j][1] - z0) / l];
 }
 
-/** Whether `p` lies between a record's edges at the station of `line` nearest to it. */
-function insideRecord(edges: Edges, line: Point2[], p: Point2): boolean {
-  let best = Infinity, at: Point2 = line[0], tx = 1, tz = 0;
+/** Whether `p` lies on a crossing street's roadway: 1 between a record's edges at the station of `line` nearest to
+ * it, 2 beyond an end of the line within the width of that end, 0 off it. Beyond its end a record has no edges: its
+ * width there is the street's kerb line carried straight on across the junction, which stands in for the road that
+ * runs on from it (a street split at the node into two roads is one strip, and the half whose record is not at hand
+ * is known only so). With `ends` the roadway ends with the line, and a point beyond is on it only until it has passed
+ * the corner of the record's end on its side, seen from the end: inside the circle on the half of the end from the
+ * line to that corner. */
+function insideRecord(edges: Edges, line: Point2[], p: Point2, ends = false): 0 | 1 | 2 {
+  let best = Infinity, at: Point2 = line[0], tx = 1, tz = 0, seg = 0, along = 0, first = 0, last = 0;
   for (let i = 1; i < line.length; i++) {
     const [x0, z0] = line[i - 1], dx = line[i][0] - x0, dz = line[i][1] - z0, l2 = dx * dx + dz * dz; if (!l2) continue;
-    const u = Math.max(0, Math.min(1, ((p[0] - x0) * dx + (p[1] - z0) * dz) / l2)), x = x0 + dx * u, z = z0 + dz * u, d = Math.hypot(p[0] - x, p[1] - z);
-    if (d < best) { best = d; at = [x, z]; const l = Math.sqrt(l2); tx = dx / l; tz = dz / l; }
+    first ||= i; last = i;
+    const raw = ((p[0] - x0) * dx + (p[1] - z0) * dz) / l2, u = Math.max(0, Math.min(1, raw)), x = x0 + dx * u, z = z0 + dz * u, d = Math.hypot(p[0] - x, p[1] - z);
+    if (d < best) { best = d; at = [x, z]; const l = Math.sqrt(l2); tx = dx / l; tz = dz / l; seg = i; along = raw; }
   }
+  const past = (seg === first && along < 0) || (seg === last && along > 1);
   let span = pavementSpan(edges, at, tx, tz);
   if (!span) {
     // At an end of the line the edges may begin a little in: take the station 1.5 m inside the nearer end.
     const s = [stationAlong(line, 1.5), stationAlong([...line].reverse(), 1.5)].filter(s => s !== undefined).sort((a, b) => Math.hypot(a.at[0] - p[0], a.at[1] - p[1]) - Math.hypot(b.at[0] - p[0], b.at[1] - p[1]))[0];
-    if (!s) return false; ({ at, tx, tz } = s); span = pavementSpan(edges, at, tx, tz); if (!span) return false;
+    if (!s) return 0; ({ at, tx, tz } = s); span = pavementSpan(edges, at, tx, tz); if (!span) return 0;
   }
-  const off = (p[1] - at[1]) * tx - (p[0] - at[0]) * tz; return off > span[0] - .3 && off < span[1] + .3;
+  const off = (p[1] - at[1]) * tx - (p[0] - at[0]) * tz; if (off <= span[0] - .3 || off >= span[1] + .3) return 0;
+  return !past ? 1 : !ends || best * best <= off * (off < 0 ? span[0] - .3 : span[1] + .3) ? 2 : 0;
 }
 
 /** Whether `p` lies on a record's pavement: inside the ring of its left edge and its right edge back. */
@@ -87,7 +101,7 @@ export function* junctionIndexSteps(roads: Road[], signals: Point2[]): Generator
   }
   for (const s of signals) { const k = cell(s[0] / SIGNAL_REACH, s[1] / SIGNAL_REACH); let list = lights.get(k); if (!list) lights.set(k, list = []); list.push(s); }
   return {
-    legsAt(p) { const out: Leg[] = []; for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const n of legs.get(cell(p[0] + dx, p[1] + dz)) ?? []) if (Math.hypot(n.p[0] - p[0], n.p[1] - p[1]) < 1) out.push(...n.legs); return out; },
+    legsAt(p) { const out: Leg[] = []; for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const n of legs.get(cell(p[0] + dx, p[1] + dz)) ?? []) if (Math.hypot(n.p[0] - p[0], n.p[1] - p[1]) < NODE) out.push(...n.legs); return out; },
     signalNear(p) { for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const s of lights.get(cell(p[0] / SIGNAL_REACH + dx, p[1] / SIGNAL_REACH + dz)) ?? []) if (Math.hypot(s[0] - p[0], s[1] - p[1]) <= SIGNAL_REACH) return true; return false; },
   };
 }
@@ -107,22 +121,64 @@ function roadEnd(road: Road, points: Point2[], index: JunctionIndex, edgesOf: (r
   let through = legs.filter((_, i) => dots[i] < -.866);
   if (!through.length) { const i = dots.indexOf(Math.min(...dots)); if (dots[i] < -.5 && legs.length > 1) through = [legs[i]]; }
   const crossing = legs.filter(l => !through.includes(l)); if (!crossing.length) return undefined;
-  let reach = 0;
-  for (const b of crossing) {
-    // A connector shorter than a block (the stub joining twin carriageways) measures its width to the roadway it lies in.
-    const edges = polylineLength(b.road.points) >= MIN_ROAD ? edgesOf(b.road) : undefined;
-    if (edges) {
-      // Walk out along the road until it has left the crossing record: a fork's asphalt widens past the node
-      // (Washington Street splitting at Marginal Road), so the span at the node alone would stop short.
-      let d = 0, outside = 0;
-      for (let s = .5; s < 30 && outside < 3; s += 1) { const st = stationAlong(points, s); if (!st) break; if (insideRecord(edges, b.road.points, st.at)) { d = s + .5; outside = 0; } else outside++; }
-      reach = Math.max(reach, d);
-    } else {
-      const c = -t[0] * b.tz + t[1] * b.tx; if (Math.abs(c) < .1) continue;
-      reach = Math.max(reach, Math.min(30, (b.road.pavedWidth ?? b.road.width) / 2 / Math.abs(c)));
+  // How far a crossing record reaches along the road, walked out of from the node: a fork's asphalt widens past it
+  // (Washington Street splitting at Marginal Road), so the span at the node alone would stop short. `past` where the
+  // last point on the record lay beyond the end of its line.
+  const walk = (b: Leg, edges: Edges, ends = false) => {
+    let d = 0, outside = 0, past = false;
+    for (let s = .5; s < 30 && outside < 3; s += 1) { const st = stationAlong(points, s); if (!st) break; const on = insideRecord(edges, b.road.points, st.at, ends); if (on) { d = s + .5; outside = 0; past = on === 2; } else outside++; }
+    return { d, past };
+  };
+  const reaches = crossing.map(b => {
+    // A connector shorter than a block (the stub joining twin carriageways) measures its width to the roadway it lies
+    // in, and so does a leg of the road itself (a loop closing on its own line, a bend where another road carries
+    // straight on): a road is never walked out of its own record, and New Whitney Street's crosswalk stood at the
+    // 30 m the walk gives up at.
+    const edges = b.road !== road && polylineLength(b.road.points) >= MIN_ROAD ? edgesOf(b.road) : undefined;
+    if (edges) return { b, edges, ...walk(b, edges) };
+    const c = -t[0] * b.tz + t[1] * b.tx;
+    return { b, edges, d: Math.abs(c) < .1 ? 0 : Math.min(30, (b.road.pavedWidth ?? b.road.width) / 2 / Math.abs(c)), past: false };
+  });
+  // The reach by the records as they are, and with the corners taken (below).
+  let reach = 0, cornered = 0;
+  const own = edgesOf(road), width = road.pavedWidth ?? road.width;
+  const across = (s: number) => { const st = stationAlong(points, s); return st && { st, span: (own && pavementSpan(own, st.at, st.tx, st.tz)) || [-width / 2, width / 2] as [number, number] }; };
+  for (const r of reaches) {
+    let d = r.d;
+    if (r.edges && r.past) {
+      // The width of this record's end, carried on, stands in for the roads that run on from it beyond the node:
+      // those within 60 degrees of straight on. Where each has its own record at hand, walked between its edges,
+      // that record says where the street's far corner on this roadway is: where its edge, taken straight on from
+      // the point at which this road's line leaves it, meets this roadway's edge. The stand-in gives way to that
+      // corner (and to the corner of its own end) where it would put the stripes wholly beyond the stripes the corner
+      // allows. Neptune Road's record ends 21 m wide on the node where the Route 1A exit lands on it and leaves that
+      // node 141 degrees from Vienna Street; carried on straight, that width took in Vienna Street 25 m up, though the
+      // road it runs on as bends 41 degrees away and its record ends 5 m up Vienna Street (whose crosswalk now stands
+      // 15 m up, a metre beyond a third leg of that junction). Within a stripes' length the stand-in stays: it is the
+      // kerb on its own side of the mouth, which the road that runs on does not know.
+      const on = legs.filter(l => l.road !== road && l.road !== r.b.road && l.tx * r.b.tx + l.tz * r.b.tz < -.5), known = on.map(l => reaches.find(k => k.b === l && k.edges && !k.past));
+      if (on.length && known.every(k => k)) {
+        const corner = Math.max(walk(r.b, r.edges, true).d, ...known.map(k => {
+          const c = k!.b, lean = c.tx * t[0] + c.tz * t[1], side = -t[0] * c.tz + t[1] * c.tx, at = across(Math.max(.5, k!.d));
+          return k!.d + (!at || Math.abs(side) < .1 ? 0 : Math.max(0, lean / Math.abs(side)) * (side < 0 ? at.span[1] : -at.span[0]));
+        }));
+        if (d - corner >= STRIPE_LENGTH) d = corner;
+      }
     }
+    reach = Math.max(reach, r.d); cornered = Math.max(cornered, d);
   }
-  const streets = crossing.filter(b => !NO_CROSSWALK.test(b.road.name) && !b.road.kind?.endsWith('_link') && !b.road.elevations && b.road.width >= 5);
+  // The corners are taken only if the stripes they allow lie on no crossing record, sampled every 2 m across on their
+  // first and last line: Winter Street's record lies in Bowdoin Street's roadway in Dorchester for 9 m from their node,
+  // leaving it at an angle, where the walk out of that record along Bowdoin Street's line, 4 m long, would have put
+  // Bowdoin Street's crosswalk across Winter Street's mouth.
+  if (cornered < reach && [cornered + CROSSWALK_SETBACK, cornered + CROSSWALK_SETBACK + STRIPE_LENGTH].every(s => {
+    const at = across(s); if (!at) return false;
+    for (let o = at.span[0] + .8; o < at.span[1] - .5 + 2; o += 2) { const q = Math.min(o, at.span[1] - .5), p: Point2 = [at.st.at[0] - at.st.tz * q, at.st.at[1] + at.st.tx * q]; if (reaches.some(k => k.edges && onRecord(k.edges, p))) return false; }
+    return true;
+  })) reach = cornered;
+  // The streets that justify a crosswalk here: not the road's own legs. Where only those meet (a turning loop closing on
+  // its line, a bend that another road's twin happens to touch) no street crosses, and 85 crosswalks stood there.
+  const streets = crossing.filter(b => b.road !== road && !NO_CROSSWALK.test(b.road.name) && !b.road.kind?.endsWith('_link') && !b.road.elevations && b.road.width >= 5);
   const signal = index.signalNear(n), widest = Math.max(0, ...streets.map(b => b.road.width));
   const stripe = streets.length > 0 && (!through.length || signal || widest >= COMPARABLE * road.width);
   return { reach, offset: reach + CROSSWALK_SETBACK, stripe, priority: (signal ? 100 : 0) + (through.length ? 0 : 10) + widest };

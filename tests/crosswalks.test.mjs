@@ -124,6 +124,58 @@ test('such a crosswalk grows only to the edge of the roadway, and over no other 
   assert.equal(on(out,'north').length,2);assert.deepEqual(east(out),[-4,4],'not over another crosswalk');
 });
 
+test('a vertex within a metre of a node gives it no leg: a street\'s own continuation is no street crossing it',()=>{
+  // Main Street is split at x 100 and its eastern half has a vertex 0.6 m from the split. The leg from that vertex back to the
+  // node pointed along the western half, which so met "another street" as wide as itself at every such split.
+  const west=road('west',[[0,0],[100,0]],16,'Main Street'),east=road('east',[[100,0],[100.6,0],[200,0]],16,'Main Street'),lane=road('lane',[[100,0],[100,60]],9,'Narrow Lane');
+  assert.deepEqual(on(plan([west,east,lane]),'west'),[],'a 9 m lane does not stripe the 16 m street, with or without the stray vertex');
+  assert.deepEqual(on(plan([west,east,lane]),'east'),[]);
+  assert.equal(plan([west,east]).length,0,'and a split with nothing but that vertex is no junction');
+  // Beside a comparable street the crosswalk stands at the side street's edge. Counted as a crossing street, the eastern half's
+  // record, which ends on the node, held it at the 30 m where the walk out of a record gives up.
+  const side=road('side',[[100,0],[100,60]],12.2,'Side Street'),records=new Map([['east',{left:[[100,-8],[200,-8]],right:[[100,8],[200,8]]}]]);
+  const [w]=on(plan([west,east,side],{edges:records,others:[...records.values()]}),'west');
+  assert.ok(w&&near(w.at[0],92.9),`7.1 m from the node, not 31 (${w?.at[0].toFixed(1)})`);
+});
+
+test('a road\'s own legs justify no crosswalk on it, and are measured by their width, not walked out of its own record',()=>{
+  // Elm Road turns 45 degrees at x 100, where Oak Road carries straight on. Seen from its western part, the road that runs on is
+  // Oak Road and its own eastern part is the street that meets it.
+  const elm=road('elm',[[0,0],[100,0],[160,60]],12.2,'Elm Road'),oak=road('oak',[[100,0],[200,0]],12.2,'Oak Road');
+  const records=new Map([['elm',{left:[[0,-6.1],[100,-6.1],[160,53.9]],right:[[0,6.1],[100,6.1],[160,66.1]]}],['oak',{left:[[100,-6.1],[200,-6.1]],right:[[100,6.1],[200,6.1]]}]]);
+  const out=plan([elm,oak],{edges:records,others:[...records.values()]});
+  assert.deepEqual(on(out,'elm').filter(c=>c.at[0]<100),[],'no crosswalk west of the bend: only the road itself meets its western part there');
+  const [east]=on(out,'elm').filter(c=>c.at[0]>100);assert.ok(east&&Math.hypot(east.at[0]-100,east.at[1])<12,`its eastern part is striped where it leaves Oak Road (${east&&Math.hypot(east.at[0]-100,east.at[1]).toFixed(1)} m from the bend)`);
+  // With a third street on the bend the western part is striped too, and its own eastern part counts by its width (6.1 m
+  // across at 45 degrees is 8.6 m along): walked out of its own record it never left it.
+  const ash=road('ash',[[100,0],[100,-60]],12.2,'Ash Street'),all=plan([elm,oak,ash],{edges:records,others:[...records.values()]}),[west]=on(all,'elm').filter(c=>c.at[0]<100);
+  assert.ok(west&&near(west.at[0],100-8.6-1,.2),`9.6 m from the bend (${west&&(100-west.at[0]).toFixed(1)}), not 31`);
+});
+
+test('beyond its end a record stands in for the road that runs on from it, and gives way to that road\'s own record',()=>{
+  // Vine Street leaves a node eastward; a ramp carries its line back west. Dock Road comes in 140 degrees off its way, 16 m wide
+  // on Vine Street's side where the ramp lands on it, and runs on as another road that bends 21 degrees away and is 12.5 m
+  // wide on that side. Carried straight on, the width of the first record holds Vine Street 25 m up; the second record, the
+  // roadway that is really there, ends 15 m up, and its edge meets Vine Street's far kerb 2.5 m further.
+  const a=Math.PI*140/180,b=-Math.PI*61/180,ray=(angle,l)=>[Math.cos(angle)*l,Math.sin(angle)*l],off=(p,angle,o)=>[p[0]-Math.sin(angle)*o,p[1]+Math.cos(angle)*o];
+  const vine=road('vine',[[0,0],[100,0]],9,'Vine Street'),ramp=road('ramp',[[-100,0],[0,0]],7,'Exit',{kind:'motorway_link'});
+  const dockIn=road('in',[ray(a,80),[0,0]],12,'Dock Road'),dockOn=road('on',[[0,0],ray(b,100)],12,'Dock Road');
+  // Offsets across each line by its own direction of travel; Vine Street lies on the positive side of the first, the negative of the second.
+  const strip=(from,to,angle,lo,hi)=>({left:[off(from,angle,lo),off(to,angle,lo)],right:[off(from,angle,hi),off(to,angle,hi)]});
+  const wide=strip(ray(a,80),[0,0],a+Math.PI,-5,16),onward=strip([0,0],ray(b,100),b,-5,12.5),at=out=>on(out,'vine')[0]?.at[0];
+  const records=new Map([['in',wide],['on',onward]]);
+  assert.ok(near(at(plan([vine,ramp,dockIn,dockOn],{edges:records,others:[...records.values()]})),18.5,.1),`a metre beyond the far corner of the road that runs on (${at(plan([vine,ramp,dockIn,dockOn],{edges:records,others:[...records.values()]}))?.toFixed(1)} m)`);
+  const alone=new Map([['in',wide]]);
+  assert.ok(near(at(plan([vine,ramp,dockIn,dockOn],{edges:alone,others:[...alone.values()]})),26,.1),`where that road's record is not at hand, the stand-in is all there is: 26 m (${at(plan([vine,ramp,dockIn,dockOn],{edges:alone,others:[...alone.values()]}))?.toFixed(1)})`);
+  // Within a stripes' length of each other the two agree, and the stand-in stays: it is the kerb on its own side of the mouth.
+  const close=new Map([['in',strip(ray(a,80),[0,0],a+Math.PI,-5,11.5)],['on',onward]]),near18=at(plan([vine,ramp,dockIn,dockOn],{edges:close,others:[...close.values()]}));
+  assert.ok(near(near18,19,.1),`a record 11.5 m wide holds Vine Street 18 m up, under 3 m beyond the corner: it stays (${near18?.toFixed(1)} m)`);
+  // Where the road that runs on leaves square to Vine Street and is narrow, its corner lies 4 m up; the first record's own
+  // end still reaches 10 m up Vine Street at its corner, and the stripes start a metre beyond that.
+  const north=road('north',[[0,0],[0,-80]],8,'Dock Road'),square=new Map([['in',wide],['north',strip([0,0],[0,-80],-Math.PI/2,-4,4)]]);
+  assert.ok(near(at(plan([vine,ramp,dockIn,north],{edges:square,others:[...square.values()]})),11,.1),`never nearer than the corner of the record's own end (${at(plan([vine,ramp,dockIn,north],{edges:square,others:[...square.values()]}))?.toFixed(1)} m)`);
+});
+
 test('Hathorn Street at Broadway in Somerville is striped beyond the south carriageway, and no crosswalk on the tile lies inside a crossing roadway record',{skip:!hasMetroData()},async()=>{
   const key='-1_-5',city=await loadMetroCity({tiles:[key]}),tile=city.loadedTiles.get(key),x0=tile.tx*tile.size,z0=tile.tz*tile.size;
   const owned=city.roads.filter(r=>{const m=roadMidpoint(r);return m[0]>=x0&&m[0]<x0+tile.size&&m[1]>=z0&&m[1]<z0+tile.size;});
@@ -206,6 +258,38 @@ test('Lincoln Street\'s crosswalk at Cambridge Street in Allston does not grow i
   const {crosswalks}=await tileCrosswalks('5_-4'),bayswater=crosswalks.find(c=>c.road.id==='477-0-0'&&Math.hypot(c.at[0]-5708.6,c.at[1]+3944)<2);
   assert.ok(bayswater&&near(bayswater.span[1]-bayswater.span[0],16.7,.3),`Bayswater Street's is ${bayswater&&(bayswater.span[1]-bayswater.span[0]).toFixed(1)} m`);
   assert.ok(crosswalks.some(c=>c.road.id==='5808-0-0'&&Math.hypot(c.at[0]-bayswater.at[0],c.at[1]-bayswater.at[1])<25),'beside the crosswalk of the street that forks off');
+});
+
+test('Vienna Street, Wadsworth Street and New Whitney Street are striped at their junctions, not 27 to 31 m up the street',{skip:!hasMetroData()},async()=>{
+  const from=c=>Math.hypot(c.at[0]-c.node[0],c.at[1]-c.node[1]),at=(list,id,x,z)=>list.find(c=>c.road.id===id&&Math.hypot(c.node[0]-x,c.node[1]-z)<2);
+  // Neptune Road's record ends 21 m wide on this node, where the Route 1A exit lands on it, and leaves it 141 degrees from Vienna
+  // Street. Carried straight on, that width took in Vienna Street 25 m up; the road Neptune Road runs on as bends 41 degrees away, has
+  // its own record, and that one ends 5 m up. A third leg of the junction reaches 14 m, and the stripes start a metre beyond.
+  const vienna=at((await tileCrosswalks('4_-4')).crosswalks,'13366-0-0',4098.5,-3301.2);
+  assert.ok(vienna&&near(from(vienna),15,.6)&&near(vienna.span[1]-vienna.span[0],11.2,.5),`Vienna Street, across its mouth: ${vienna&&from(vienna).toFixed(1)} m from the node, ${vienna&&(vienna.span[1]-vienna.span[0]).toFixed(1)} m long`);
+  // Wadsworth Street runs on east of Ashford Terrace as another road with a vertex 0.59 m from the node. The leg from that vertex
+  // back to the node made the continuation a crossing street, and its record, ending on the node, held the walk to its limit.
+  const {crosswalks:allston}=await tileCrosswalks('-5_-1'),wadsworth=at(allston,'6201-0-0',-4237.1,-531.3);
+  assert.ok(wadsworth&&near(from(wadsworth),4,.6),`Wadsworth Street, beside Ashford Terrace: ${wadsworth&&from(wadsworth).toFixed(1)} m from the node`);
+  // New Whitney Street turns a corner on this node, where another street carries straight on: its own other part is the street
+  // that meets it, and it was walked out of its own record, which it never leaves.
+  const {crosswalks:mission}=await tileCrosswalks('-3_1'),whitney=mission.filter(c=>c.road.id==='18122-0-0');
+  assert.equal(whitney.length,1,'one crosswalk on New Whitney Street');
+  assert.ok(near(from(whitney[0]),6,.6)&&whitney[0].at[1]<1810,`on its western part, at the corner: ${from(whitney[0]).toFixed(1)} m from the node`);
+  // Brighton Avenue's crosswalk across both carriageways and the median strip, in the middle of the block east of Saint Lukes
+  // Road, was there for a stray vertex alone: a 7 m side street does not stripe a 12 m avenue.
+  assert.deepEqual(allston.filter(c=>c.road.id==='12374-0-0').map(c=>c.at.map(v=>+v.toFixed(0))),[],'none on Brighton Avenue in mid block');
+});
+
+test('no crosswalk stands where only the road itself meets its line, and Bowdoin Street keeps clear of Winter Street\'s mouth',{skip:!hasMetroData()},async()=>{
+  // Johnson Avenue bends through a vertex that another piece of it touches: 30 m beyond, in mid curve, it was striped.
+  const {crosswalks:north}=await tileCrosswalks('-6_-8'),johnson=north.filter(c=>c.road.id==='osm-9039110-0');
+  assert.ok(johnson.length>0&&johnson.every(c=>Math.hypot(c.at[0]-c.node[0],c.at[1]-c.node[1])<15),`Johnson Avenue is striped at its junctions only (${johnson.map(c=>Math.hypot(c.at[0]-c.node[0],c.at[1]-c.node[1]).toFixed(1))} m from their nodes)`);
+  // Winter Street's record lies in Bowdoin Street's roadway for 9 m from their node, leaving it at an angle; the walk out of that
+  // record along Bowdoin Street's line ends after 4 m. The corner it allows would put Bowdoin Street's stripes across Winter
+  // Street's mouth, on its record: not taken.
+  const {crosswalks:dorchester}=await tileCrosswalks('1_4'),bowdoin=dorchester.find(c=>c.road.id==='9561-0-0'&&Math.hypot(c.node[0]-1028.9,c.node[1]-4414.2)<2);
+  assert.ok(bowdoin&&near(Math.hypot(bowdoin.at[0]-bowdoin.node[0],bowdoin.at[1]-bowdoin.node[1]),16,.6)&&near(bowdoin.span[1]-bowdoin.span[0],13.2,.5),`Bowdoin Street's stays 16 m from the node, 13.2 m long (${bowdoin&&Math.hypot(bowdoin.at[0]-bowdoin.node[0],bowdoin.at[1]-bowdoin.node[1]).toFixed(1)} m, ${bowdoin&&(bowdoin.span[1]-bowdoin.span[0]).toFixed(1)} m)`);
 });
 
 test('Boylston Street\'s carriageways split between tiles -4_2 and -5_2 keep one crosswalk per side of the junction when each tile plans the roads near it',{skip:!hasMetroData()},async()=>{
