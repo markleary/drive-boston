@@ -121,7 +121,14 @@ export function pavementSpan(edges: { left: Point2[]; right: Point2[] }, at: Poi
  * the record then counts as far as the nearer of its two offsets, so the stripes stay on its pavement. The far edge
  * of a twin carriageway steps like that where a ramp's landing begins: the segment under the line is a 1.9 m jog at
  * 52 degrees, the edge itself has moved 7 cm where the stripes end, and without this Congress Street's crosswalk at
- * the eastbound landings of Exit 135 ended in the middle of its roadway. */
+ * the eastbound landings of Exit 135 ended in the middle of its roadway.
+ *
+ * This is the same alignment judged over the stripes instead of on one segment, so it admits what that admits: any
+ * record running within 37 degrees of the road that shares its asphalt, a fork's leg as well as a twin (by the
+ * segment alone 100 crosswalks of the package cross a record of another street). Bow Street's leg leaves Main
+ * Street in Medford at 24 degrees and the two share one sheet of asphalt for 40 m; its far edge runs 40 degrees off
+ * under the line and 14 where the stripes end, and Main Street's crosswalk had ended in the middle of the leg's lane.
+ * Whether the stripes may then reach that far is the planner's to decide (`planCrosswalkSteps`): only to open ground. */
 export function roadwaySpan(own: [number, number], others: { left: Point2[]; right: Point2[] }[], at: Point2, tx: number, tz: number, along = 0): [number, number] {
   let [lo, hi] = own;
   const allowance = own[1] - own[0] + 2, end: Point2 = [at[0] + tx * along, at[1] + tz * along], drift = along * Math.sqrt(1 - WITH_ROAD * WITH_ROAD) / WITH_ROAD;

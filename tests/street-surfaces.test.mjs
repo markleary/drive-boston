@@ -45,6 +45,12 @@ test('a twin carriageway whose edge only steps under the crosswalk\'s line share
   assert.deepEqual(roadwaySpan(own,[slant],[20,0],1,0,3),own,'an edge that leaves at 45 degrees moves 3 m across the stripes, more than a road running with this one may');
   assert.deepEqual(roadwaySpan(own,[cut],[20,0],1,0,3),own,'a stepped record that ends before the stripes do is not measured at their end');
   assert.deepEqual(roadwaySpan(own,[jog],[20,0],1,0,3),own,'and a 6 m jog still has 3 m to go under the line');
+  // A fork's leg that shares this roadway (its near edge 3 m inside it) leaves at 13 degrees; its far edge bends at 41 degrees
+  // for 2.5 m beside the corner, under the line. It is a record the alignment has always admitted, judged here over the stripes.
+  const leg={left:[[0,5],[18,9],[20.5,11.2],[40,16]],right:[[0,0],[40,6]]};
+  assert.deepEqual(roadwaySpan(own,[leg],[20,0],1,0),own,'by the bend under the line alone the leg does not run with the road');
+  assert.deepEqual(roadwaySpan(own,[leg],[20,0],1,0,3).map(v=>+v.toFixed(2)),[-5,10.76],'over the stripes its far edge moves 1.1 m, as a leg leaving at 19 degrees would');
+  assert.deepEqual(roadwaySpan(own,[leg],[30,0],1,0).map(v=>+v.toFixed(2)),[-5,13.54],'as it is taken in by the segment under the line wherever that runs straight');
 });
 
 test('a crosswalk station follows the centerline, not the bearing of a short first segment',()=>{

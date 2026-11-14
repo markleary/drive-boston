@@ -182,6 +182,21 @@ test('Newton Street in Brookline keeps a crosswalk on each of its two roadways w
   assert.ok(near(upper.span[1]-upper.span[0],18.2,.3)&&near(lower.span[1]-lower.span[0],15.6,.3),`each across its own roadway (${(upper.span[1]-upper.span[0]).toFixed(1)} and ${(lower.span[1]-lower.span[0]).toFixed(1)} m)`);
 });
 
+test('Main Street\'s crosswalk in Medford crosses the leg of Bow Street that shares its asphalt, to the kerb at Albion Street\'s corner',{skip:!hasMetroData()},async()=>{
+  // Bow Street's one-way leg (osm-1317231437-0) leaves Main Street at 24 degrees from the Hicks Avenue junction, and 22 m on,
+  // at this station, the two records still overlap: one sheet of asphalt from Main Street's east kerb to the leg's west kerb.
+  // Main Street's own record ends 16.7 m out, in the middle of the leg's lane, where the crosswalk ended; the leg's far edge
+  // bends 40 degrees off under the line (14 where the stripes end), so by that one segment its record did not count. A leg
+  // that shares the roadway is crossed like a twin (the segment test crosses 100 records of another street on the package).
+  const {edgesOf,crosswalks}=await tileCrosswalks('-3_-6'),c=crosswalks.find(c=>c.road.id==='osm-9038738-0'&&Math.hypot(c.at[0]+2451.5,c.at[1]+5588.3)<2);
+  assert.ok(c,'the crosswalk of Main Street north of Hicks Avenue');
+  const own=pavementSpan(edgesOf(c.road),c.at,c.tx,c.tz),leg=pavementSpan(edgesOf({id:'osm-1317231437-0'}),c.at,c.tx,c.tz);
+  assert.ok(leg[0]<own[1]-8&&leg[1]>own[1]+5,`the leg's record (${leg.map(v=>v.toFixed(1))}) overlaps Main Street's (${own.map(v=>v.toFixed(1))}) and reaches 6.5 m beyond it`);
+  assert.ok(near(c.span[0],own[0])&&near(c.span[1],leg[1]),`from Main Street's east kerb to the leg's west kerb (${c.span.map(v=>v.toFixed(1))}), ${(c.span[1]-c.span[0]).toFixed(1)} m`);
+  const albion=crosswalks.find(o=>o.road.name==='Albion Street'&&Math.hypot(o.at[0]-c.at[0],o.at[1]-c.at[1])<35);
+  assert.ok(albion,'where Albion Street\'s crosswalk begins at the same corner');
+});
+
 test('Lincoln Street\'s crosswalk at Cambridge Street in Allston does not grow into the junction, nor Bayswater Street\'s over the next street\'s',{skip:!hasMetroData()},async()=>{
   // Lincoln Street's stripes leave its east kerb and end 9 m out, in the junction; the record of the slip lane beside them
   // (17699-0-0) steps under their line like a twin's and would take them 18 m out, onto Cambridge Street's asphalt.

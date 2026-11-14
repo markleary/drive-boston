@@ -19,8 +19,9 @@ import { pavementSpan, polylineLength, roadwaySpan, stationAlong } from './tile-
  * would stripe the shared asphalt twice; the two sides of one junction are never thinned against each other.
  *
  * The stripes span the road's own record at their station, widened across a twin carriageway's record that shares
- * the asphalt there (`roadwaySpan`). A record whose edge only steps under the station's line (a twin's far edge where
- * a ramp's landing begins) is taken in after the thinning, so every crosswalk the thinning keeps stays: thinned with
+ * the asphalt there (`roadwaySpan`). A record whose edge is out of line only under the station's line (a twin's far
+ * edge stepping where a ramp's landing begins, the edge of a fork's leg bending beside its corner) is taken in after
+ * the thinning, so every crosswalk the thinning keeps stays: thinned with
  * the wider span, one carriageway's crosswalk crowded out its twin's 9 m along, which crossed a roadway the wider
  * one does not reach at its own station (Newton Street in Brookline). And it is taken in only where that brings the
  * stripes to the roadway's edge and onto no other crosswalk. The edges of a slip lane's record step like a twin's,
