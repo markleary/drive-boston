@@ -670,6 +670,108 @@ def street_stretch(plan,e):
    plan.street[i]=True;plan.terrain[i]=plan.mid[i];plan.allowance[i]=0.;plan.fixed.setdefault(i,round(plan.mid[i],4))
 
 
+def street_surface(plan,e,streets):
+ """The stations of a road from its street landing at end `e` inward that lie on a street it lands on (`streets`, the
+ (road, vertex) pairs there) and that measure_ground gave the survey under that street's fill: {station: (the street's
+ surface there, plan.mid; the distance from the end; e)}, and the length of the road's landing, from the end to the first
+ station beyond them (LANDING_TAPER at least). A station lies on the street while its pavement crosses the street's class
+ ribbon, flat at the street's own ends (a street carried on in line from the landing has no roadway beside the road: the
+ round ends of pavement_reach put the last 10 m of Storrow Drive East on the street that carries it on), and lies at or
+ above source level 0 (the segments take a road below the ground in a slot of its own beside the street, as the Dartmouth
+ Street entrance runs along Huntington Avenue). The fill exception is for another street's fill: under the street the
+ road lands on, the grader's fill is the road's own ground (the Longfellow exit at Charles Circle followed the survey 0.7
+ to 1.6 m under Cambridge Street's surface, and was solved up to 0.8 m into that street's roadway). The end station itself is
+ not among them: the landing fixes its height (land)."""
+ n=len(plan.points);k=0 if e==0 else n-1;step=1 if e==0 else -1;out={};last=None
+ ribbons=[LineString(r['points']).buffer(r['width']/2,cap_style='flat') for r,_ in streets];p=np.asarray(plan.points,float);t=np.asarray(plan.tangents,float)
+ for i in range(k,n if e==0 else -1,step):
+  o=np.array([-t[i][1],t[i][0]])*plan.widths[i]/2
+  if plan.level[i]<0 or not (i==k or any(LineString([p[i]+o,p[i]-o]).intersects(rb) for rb in ribbons)):break
+  if i!=k and plan.terrain[i]<plan.mid[i]-1e-6:out[i]=(round(plan.mid[i],4),abs(float(plan.along[i]-plan.along[k])),e);last=i
+ if last is None:return {},float(I.LANDING_TAPER)
+ j=last+step;beyond=abs(float(plan.along[j]-plan.along[k])) if 0<=j<n else abs(float(plan.along[last]-plan.along[k]))+1.
+ return out,max(float(I.LANDING_TAPER),beyond)
+
+
+def excess(plan):
+ """How far the hard bounds a plan is solved within (i93_north.hard_bounds) stand from holding a profile that keeps under
+ 96% of the plan's grade from station to station, as the rounding of those bounds does: 0 or less where they hold one."""
+ low,high,_,_=I.hard_bounds(plan);g=plan.grade*.96;lo=list(low);hi=list(high);a=plan.along;n=len(lo)
+ for i in range(1,n):s=g*float(a[i]-a[i-1]);lo[i]=max(lo[i],lo[i-1]-s);hi[i]=min(hi[i],hi[i-1]+s)
+ for i in range(n-2,-1,-1):s=g*float(a[i+1]-a[i]);lo[i]=max(lo[i],lo[i+1]-s);hi[i]=min(hi[i],hi[i+1]+s)
+ return max(l-h for l,h in zip(lo,hi))
+
+
+def hold_surface(plan):
+ """Floor the stations of plan.surface (street_surface) at the street's surface: the road lies on the street it lands
+ on, in a trench too (a trench station has no terrain floor). Where the road cannot reach them at its grade from its
+ fixed heights and under its ceilings (excess), the stations farthest from the landing are given up first; plan.held
+ marks those held."""
+ n=len(plan.points);plan.held=[False]*n
+ if not getattr(plan,'surface',None):return
+ floor=list(plan.floor);base=max(0.,excess(plan));want=sorted(plan.surface,key=lambda i:plan.surface[i][1])
+ for k in range(len(want),0,-1):
+  keep=set(want[:k]);plan.floor=[max(f,plan.surface[i][0]) if i in keep else f for i,f in enumerate(floor)]
+  if excess(plan)<=base+.01:
+   for i in keep:plan.held[i]=True
+   return
+ plan.floor=floor
+
+
+def branch_lift(trunk,ramps):
+ """{station of `trunk`: least height} for the ramps that leave or join it at a vertex of its own (a 'node' end) and have
+ a street surface to lie on (street_surface): where a ramp is held to the trunk (their overlap, i93_north.overlap) it must
+ stand high enough to reach every station of that surface at 90% of its grade, as a trunk end stays as high as its
+ branches must be on their way to it (bind_ramp). The Longfellow exit leaves the exit to Charles Circle where that ramp
+ has come down off its overpass to the ground, 2.4 m under Cambridge Street, which it meets 49 m on."""
+ out={};ids=set()
+ for b in ramps:
+  if b is trunk or not getattr(b,'surface',None):continue
+  for f,kind in enumerate(b.ends):
+   if not kind or kind[0]!='node' or kind[1] is not trunk:continue
+   g=b.grade*.9;j=0 if f==0 else len(b.points)-1;rows=I.overlap_stations(b,f,trunk) or [(j,trunk.line.project(Point(b.points[j])))];ids.add(b.id)
+   for j,d in rows:
+    need=max(v-g*abs(float(b.along[q]-b.along[j])) for q,(v,_,_) in b.surface.items());k=int(np.searchsorted(trunk.along,d))
+    for s in {max(0,k-1),min(len(trunk.points)-1,k)}:out[s]=max(out.get(s,-math.inf),round(need,4))
+ return out,sorted(ids)
+
+
+def raise_floor(plan,lift):
+ """Raise the plan's floor to the heights of `lift` ({station: height}), all short by one amount where its own bounds do not
+ hold them (excess): returns that amount (0 when they hold them all)."""
+ floor=list(plan.floor);base=max(0.,excess(plan))
+ def at(short):
+  plan.floor=list(floor)
+  for s,v in lift.items():plan.floor[s]=max(floor[s],v-short)
+  return excess(plan)<=base+.01
+ if at(0.):return 0.
+ lo,hi=0.,20.
+ for _ in range(16):
+  mid=(lo+hi)/2
+  if at(mid):hi=mid
+  else:lo=mid
+ short=math.ceil(hi*1000)/1000;at(short);return short   # (to the millimetre, up: the floors the record names)
+
+
+def held_landings(plans):
+ """What hold_surface held, per road end with a street surface: the streets it lands on, the length wanted (from the end to
+ its farthest station on the street's fill) and held, the length of its landing (street_surface: the stage judges the road
+ by its street landing that far from the end, and validate does too, landing_reach), and the floor a trunk keeps for it
+ (branch_lift: how far short of what the ramp needs its own bounds left it)."""
+ out=[]
+ for plan in plans:
+  for e in (0,1):
+   rows=[(i,d) for i,(_,d,f) in (getattr(plan,'surface',None) or {}).items() if f==e]
+   if not rows:continue
+   kind=plan.ends[e];held=[d for i,d in rows if plan.held[i]];entry={'road':plan.id,'end':'start' if e==0 else 'end','streets':sorted({r['id'] for r,_ in kind[1]}),
+    'wantedMeters':round(max(d for _,d in rows),1),'heldMeters':round(max(held,default=0.),1),'stations':len(rows),'heldStations':len(held),
+    'landingMeters':round(getattr(plan,'taper',[float(I.LANDING_TAPER)]*2)[e],1)}
+   for f,other in enumerate(plan.ends):
+    if other and other[0]=='node' and getattr(other[1],'raised',None) and plan.id in other[1].raised['for']:entry['trunk']={'road':other[1].id,'shortMeters':other[1].raised['short']}
+   out.append(entry)
+ return out
+
+
 def overhead(plan,streets,lines,tree,buildings,water):
  """What stands over every station: mapped water (`wet`), surface streets (`over`, {street index: lowest street
  surface over the station}) and buildings (`built`, the indices in plan.buildings of every building whose outline
@@ -1536,7 +1638,8 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
  def prepare(plan):
   # Bounds from the existing roads, then the cover (it needs the heights of the roads the plan leaves and joins underground), then the new crossings.
   plan.floor,plan.lift,plan.ceiling,plan.drop=(list(v) for v in plan.base);plan.hold=[None]*len(plan.points)
-  cover(plan,(end_height(plan,0),end_height(plan,1)));add_pairs(plan)
+  # (and last, the street a road lands on as its floor where it lies on that street's fill: hold_surface)
+  cover(plan,(end_height(plan,0),end_height(plan,1)));add_pairs(plan);hold_surface(plan)
  for plan in plans:plan.base=(list(plan.floor),list(plan.lift),list(plan.ceiling),list(plan.drop))
  def land(plan):
   for e,kind in enumerate(plan.ends):
@@ -1549,6 +1652,16 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
     r,j=kind[1][k];plan.fixed[i]=round(heights[k],4)
     plan.on_deck[e]=bool(r.get('elevations')) and not ((j==0 and r.get('startLevel')==0) or (j==len(r['points'])-1 and r.get('endLevel')==0)) and heights[k]-ground(*r['points'][j])>.5
     if 'landing' in plan.spec and not plan.on_deck[e]:street_stretch(plan,e)
+ # Where a road's landing lies on the street's fill (street_surface), the street is its ground: those stations are inside its
+ # landing (its terrain allowance fades out over them, LANDING_TAPER at least) and the street's surface is its floor (hold_surface).
+ for plan in plans:
+  plan.fixed={};land(plan);plan.surface={};plan.raised=None;plan.taper=[float(I.LANDING_TAPER)]*2
+  for e,kind in enumerate(plan.ends):
+   if not kind or kind[0]!='street' or plan.on_deck[e] or 'landing' in plan.spec:continue
+   rows,taper=street_surface(plan,e,kind[1]);plan.surface.update(rows);plan.taper[e]=taper
+   for i,s in enumerate(plan.along):
+    dist=s if e==0 else plan.along[-1]-s
+    if taper>I.LANDING_TAPER and dist<taper:plan.allowance[i]=min(plan.allowance[i],dist/taper)
  leads=defaultdict(list)
  def bind_ramp(plan):
   # What a ramp is solved between: its ends, the stations held to the roads it leaves, joins or follows, and its bounds.
@@ -1579,6 +1692,8 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
      if other is plan or not kind or kind[0]!='node' or kind[1] is not plan or key(other.points[j])!=key(plan.points[i]) or not hasattr(other,'floors'):continue
      need=max(v-other.grade*.9*abs(float(other.along[q]-other.along[j])) for q,v in enumerate(other.floors))
      if need>-math.inf:plan.floor[i]=max(plan.floor[i],need)
+  # It stays as high where a ramp leaves it at a vertex of its own as that ramp must be to lie on the street it lands on.
+  lift,ids=branch_lift(plan,ramps);plan.raised={'for':ids,'short':raise_floor(plan,lift)} if lift else None
  def settle_ramp(plan):
   I.solve(plan,report)
   # Held to the road it follows at the stations beside its end as well, or squeezed between its bounds further on, the spline
@@ -1618,7 +1733,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
   closed=close_gaps(plans,surface,surface_lines,city['elevation'],lidded,buildings)
   if closed is not None:lidded=closed;read(lidded)
   return lidded
- lidded=finish();report['twins']={'pairs':[],'ramps':[]};pairs_=twin_pairs(plans) if twins else []
+ lidded=finish();report['twins']={'pairs':[],'ramps':[]};pairs_=twin_pairs(plans) if twins else [];report['heldLandings']=held_landings(plans)
  if not pairs_:return plans,fixed,report,lidded
  # The two carriageways of a road, each solved on its own ground, come out a step apart where that ground differs across the
  # median (a street's graded corridor reaching under one, a crossfall, two bridge approaches a few stations apart), and the 6 m
@@ -1642,7 +1757,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
  def reads(plan):bind_ramp(plan);return (tuple(sorted(plan.fixed.items())),*(tuple(v) for v in (plan.floor,plan.lift,plan.ceiling,plan.drop,plan.hold,plan.trench,plan.stiff)))
  for plan in I.ordered(ramps,leads,trunks):bind_ramp(plan)   # (a trunk reads the floors its branches were last bound with)
  known={plan.id:reads(plan) for plan in I.ordered(ramps,leads,trunks)}
- report['twins']['pairs']=[couple(a,b) for a,b in pairs_];again=set()
+ report['twins']['pairs']=[couple(a,b) for a,b in pairs_];again=set();report['heldLandings']=held_landings(plans)
  if all(max(v['max'] for v in pair['lifted'].values())<=LIFTED for pair in report['twins']['pairs']):return plans,fixed,report,lidded
  for _ in range(8):
   late=False
@@ -1654,7 +1769,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
     plan.y=[max(y,u) for y,u in zip(plan.y,plan.solo)]
   if not late:break
  else:raise AssertionError('the ramps of the lifted carriageways did not settle')
- report['twins']['ramps']=sorted(again)
+ report['twins']['ramps']=sorted(again);report['heldLandings']=held_landings(plans)
  # the lids again under the roads as they now lie (the classification reads plan.solo)
  lidded=finish()
  return plans,fixed,report,lidded
@@ -2077,7 +2192,7 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   'capped':[{'road':r['id'],'end':'start','point':r['points'][0]} for r in tunnel_records if r['tunnel'].get('capStart')],
   'crossings':report['crossings'],'newCrossings':report['newCrossings'],'atGrade':report['atGrade'],'unresolved':report['unresolved'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'steep':steep,'movedBeside':report['movedBeside'],'narrowed':report['narrowed'],'junctions':report['junctions'],
-  'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'twins':twins,'buildings':over,'signs':signs,
+  'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'twins':twins,'heldLandings':report['heldLandings'],'buildings':over,'signs':signs,
   'roadways':{'method':HR.METHOD,'routes':surveyed,'trimmedMeters':trimmed,'aprons':[{k:a[k] for k in ('road','left','right')} for _,a in pairs],
    # (the medians, with what stays narrower than its lanes' least width by record: stations of the record and the most it is short there)
    'medians':[{**m,'parted':{k:{**v,'tight':[{'road':rid,'stations':[max(i,a)-a,min(j,b)-a],'by':by} for i,j,by in v['tight'] for a,b,rid in by_id[k].pieces if max(i,a)<=min(j,b)]} for k,v in m['parted'].items()}} for m in medians]},
@@ -2096,7 +2211,7 @@ def replay(data_dir,city,record,source,installed=None):
  again,out,tunnel_records,result,_=install({**city,'roads':roads},source,heights,load_grid(data_dir/grid['source']),tile_buildings(data_dir,city),central_artery(data_dir,city),removed=record['buildings']['removed'])
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']};sidecar=json.loads((data_dir/SIDECAR).read_text())
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
- return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','capped','overpasses','bridgeSeams','hollows','twins','roadways'))
+ return same and tunnel_records==sidecar['roads'] and again['signs']==sidecar['signs'] and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','buildings','signs','closed','capped','overpasses','bridgeSeams','hollows','twins','heldLandings','roadways'))
 
 
 def validate(data_dir,city,record,ground):
@@ -2157,12 +2272,13 @@ def validate(data_dir,city,record,ground):
    there=[(o,j) for o,j in vertices.get(key(r['points'][i]),()) if abs((o['elevations'][j] if o.get('elevations') else ground(*o['points'][j]))-y)<=.1+slack]
    assert there,f"{r['id']} {'starts' if i==0 else 'ends'} at {r['points'][i]} on no carriageway, ramp or street vertex at its height";landings+=1
  # no ground in a deck's pavement, but for a landing on its street
+ reach=landing_reach(record)
  for r in decks:
   line=LineString(r['points']);along=np.asarray(stations(r['points']));w=np.asarray(r['deckWidths'],float);t=I.tangents(r['points'])
-  chain=[x for _,x in sorted(routes[routes_of(r,record)],key=lambda q:q[0])]
+  base=routes_of(r,record);chain=[x for _,x in sorted(routes[base],key=lambda q:q[0])]
   for i,(p,y) in enumerate(zip(r['points'],r['elevations'])):
-   # a route's own ends meet a street or another road on shared ground
-   meeting=(r is chain[0] and along[i]<I.LANDING_TAPER+3) or (r is chain[-1] and along[-1]-along[i]<I.LANDING_TAPER+3)
+   # a route's own ends meet a street or another road on shared ground (over a held street surface, its whole landing)
+   meeting=(r is chain[0] and along[i]<reach.get((base,'start'),I.LANDING_TAPER)+3) or (r is chain[-1] and along[-1]-along[i]<reach.get((base,'end'),I.LANDING_TAPER)+3)
    half=w[i]/2-.3;assert max(ground(p[0]-t[i][1]*o,p[1]+t[i][0]*o) for o in np.linspace(-half,half,9).tolist())<=y+(LANDING_LIP+.03 if meeting else .01),f"the ground stands in the pavement of {r['id']} at {p}"
  # no surface street passes over an open stretch of a tunnel record (the runtime clips the ground over one), but for the street a record lands on
  surface=[x for x in city['roads'] if not stage_owned(x) and not x.get('elevations') and not x.get('tunnel')];slines=[LineString(x['points']) for x in surface];stree=STRtree(slines);under=0
@@ -2217,7 +2333,70 @@ def validate(data_dir,city,record,ground):
   for v in m['parted'].values():
    for e in v['tight']:listed[e['road']].append(e['stations'])
  surveyed={**surveyed,**HR.median_check(twins,listed)}
+ # a road on the street it lands on lies on that street's surface (hold_surface)
+ surveyed['landingStations']=landing_surfaces(routes,record,vertices,ground)
+ # a deck of another stage that lands on the ground meets it where the stage left the ground (HR.grade keeps the corners of its cell; an
+ # end on a vertex of the stage's own roads lands on that road and is held here all the same, as tests/bridges.test.mjs holds every landing)
+ from north_overpasses import load_grid
+ grid=city['elevation'];surveyed['groundLandings']=landings_kept(city['roads'],ground,I.Terrain(grid,I.staged_heights(load_grid(data_dir/grid['file']),record,grid.get('scale',.01))))
  return {**surveyed,'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'twinStations':level,'joins':joins,'streetLandings':landings,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
+
+
+def landing_reach(record):
+ """{(route, 'start'|'end'): metres} for the route ends whose landing a held street surface lengthens (heldLandings): the
+ stage judges a road by its street landing that far from the end (a deck may lie on the street's crossfall there, within
+ LANDING_LIP, and is not cut into the ground); any other end, LANDING_TAPER."""
+ return {(h['road'],h['end']):max(float(I.LANDING_TAPER),float(h['landingMeters'])) for h in record.get('heldLandings',[])}
+
+
+def landing_surfaces(routes,record,vertices,ground):
+ """The roads as hold_surface laid them (build): no route lies under the surface of a street it lands on, while its pavement
+ crosses that street's class roadway (flat at the street's own ends, as street_surface walks it) from its landing inward,
+ by more than a landing's lip: the ground across its lanes (the middle two thirds) stands no more than LANDING_LIP and 5 cm
+ over it, to the first roofed station, within its reviewed `landing` where it has one (beyond it the segments take it down
+ in a slot of its own), and as far as the stage held it where `heldLandings` lists a landing held short of the street.
+ `routes` maps a route to its (piece number, record) pairs, `vertices` a vertex key to the (road, index) pairs of the
+ streets there. Returns the stations checked."""
+ specs={s['id']:s for s in ROUTES};short={(h['road'],h['end']):h['heldMeters'] for h in record.get('heldLandings',[]) if h['heldMeters']<h['wantedMeters']};count=0
+ for base,parts in routes.items():
+  chain=[r for _,r in sorted(parts,key=lambda q:q[0])];pts=[];ys=[];ws=[];roof=[]
+  for r in chain:
+   a=stations(r['points']);cov=(r.get('tunnel') or {}).get('covered',[])
+   for i,q in enumerate(r['points']):
+    if pts and i==0:continue   # (a seam: the point the record before ends on)
+    pts.append(q);ys.append(r['elevations'][i]);ws.append(r['deckWidths'][i]);roof.append(any(lo-.01<=a[i]<=hi+.01 for lo,hi in cov))
+  along=stations(pts);t=I.tangents(pts);n=len(pts)
+  for e in (0,1):
+   r=chain[0 if e==0 else -1];k=0 if e==0 else n-1;end='start' if e==0 else 'end'
+   if r.get('closed')==end or (e==0 and (r.get('tunnel') or {}).get('capStart')):continue
+   streets=[o for o,j in vertices.get(key(pts[k]),()) if not o.get('tunnel') and abs((o['elevations'][j] if o.get('elevations') else ground(*o['points'][j]))-ys[k])<=.1]
+   if not streets:continue
+   ribbons=[LineString(o['points']).buffer(o['width']/2,cap_style='flat') for o in streets]
+   reach=float(specs[base]['landing']) if 'landing' in specs.get(base,{}) else math.inf;held=short.get((base,end),math.inf)
+   for i in (range(n) if e==0 else range(n-1,-1,-1)):
+    d=abs(float(along[i]-along[k]));nx,nz=-t[i][1],t[i][0];half=ws[i]/2;x,z=pts[i]
+    if roof[i] or d>reach+.01 or not (i==k or any(LineString([(x+nx*half,z+nz*half),(x-nx*half,z-nz*half)]).intersects(rb) for rb in ribbons)):break
+    if d>held+.01:continue
+    over=float(np.median([ground(x+nx*o,z+nz*o) for o in np.linspace(-ws[i]/3,ws[i]/3,5).tolist()]))-ys[i];count+=1
+    assert over<=LANDING_LIP+.05,f"{base} lies {over:.2f} m under the surface of the street it lands on ({streets[0]['id']}), {d:.1f} m from its {end}"
+ return count
+
+
+def landings_kept(roads,ground,before,tolerance=.005):
+ """No deck of another stage that lands on the ground (a level-0 end) is left off it by this one's grid: an end that meets
+ the ground the stages before this one left (`before`, within `tolerance`, as tests/bridges.test.mjs holds a landing) meets
+ the installed ground (`ground`) as closely. (An end the stage moved together with its ground, on a bridge over the cut it
+ levels or at a landing in a hollow it raises, does not meet the ground before it: the replay holds those.) Returns the
+ ends checked."""
+ count=0
+ for r in roads:
+  if not r.get('elevations') or r.get('tunnel') or stage_owned(r):continue
+  for e,level in ((0,r.get('startLevel')),(-1,r.get('endLevel'))):
+   q=r['points'][e];y=r['elevations'][e]
+   if level!=0 or abs(y-before(*q))>tolerance:continue
+   assert abs(y-ground(*q))<=tolerance,f"{r['id']} lands on the ground at {q}, and the stage has moved that ground {ground(*q)-y:+.3f} m"
+   count+=1
+ return count
 
 
 def routes_of(road,record):

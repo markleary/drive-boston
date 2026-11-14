@@ -649,8 +649,9 @@ def grade(plans,strips,grid,heights,streets,joined,footprints,water,decks,existi
  (`strips`: (plan, apron) pairs), as the grader levels a street corridor: DROP under the deck. Under a deck inside
  its street landing (an apron that is not `graded`) the ground is only raised to that, never lowered: it is the street's.
  A vertex keeps its height in the corridor of a surface street that does not join the road, under a building, in
- mapped water and under a road of another stage (`existing`; a bridge passing over a lifted road, `fills`, is none),
- with two exceptions the survey decides:
+ mapped water, under a road of another stage (`existing`; a bridge passing over a lifted road, `fills`, is none) and at
+ a corner of the cell where a deck of another stage lands on the ground (a level-0 end that is no vertex of the stage's
+ own roads), with two exceptions the survey decides:
 
  - the deck's own surveyed roadway (a vertex within its paved edges) is the deck's ground whatever street's class
    width reaches across it, and
@@ -726,6 +727,16 @@ def grade(plans,strips,grid,heights,streets,joined,footprints,water,decks,existi
   for e,kind in enumerate(getattr(plan,'ends',None) or ()):
    if kind and kind[0]=='street':
     q=(getattr(plan,'solved_points',None) or plan.points)[0 if e==0 else -1];i=int((q[0]-ox)//C);j=int((q[1]-oz)//C);pinned|={(j+b)*W+i+a for a in (0,1) for b in (0,1)}
+ # (and so does the cell a deck of another stage lands in on the ground, at a level-0 end: that deck meets the ground there to the
+ # centimetre, and the corners of its cell can lie further from its line than the corridor kept below reaches; the fill under the
+ # Charlesgate entrance from Beacon Street had raised the ground 10 cm over the landing of the Bowker Overpass beside it. An end on
+ # a vertex of the stage's own roads lands on that road, whose ground this lays: the ramp from Storrow Drive East up to the Bowker
+ # Overpass leaves it at one, and keeping that cell had only lowered the ground under the roadside beyond Storrow Drive's lanes.)
+ joints={(round(x*100),round(z*100)) for plan in plans for pts_ in (plan.points,getattr(plan,'solved_points',None) or ()) for x,z in pts_}
+ for r in existing:
+  for e,level in ((0,r.get('startLevel')),(-1,r.get('endLevel'))):
+   q=r['points'][e];kx,kz=round(q[0]*100),round(q[1]*100)
+   if level==0 and not any((kx+a,kz+b) in joints for a in (-1,0,1) for b in (-1,0,1)):i=int((q[0]-ox)//C);j=int((q[1]-oz)//C);pinned|={(j+b)*W+i+a for a in (0,1) for b in (0,1)}
  if pinned:keep|=np.isin(vs,np.fromiter(sorted(pinned),dtype=np.int64))
  houses=[Polygon(f).buffer(I.BUILDING) for f in footprints(win.bounds) if len(f)>=3]
  if houses:

@@ -155,6 +155,25 @@ class GradeTest(unittest.TestCase):
   p=plan();p.allowance=[min(1.0,i/5) for i in range(61)];p.ends=[('street',None),None];_,pairs,_=survey([p],[curb(3.4),curb(-8.5)]);W=self.grid['width']
   out=HR.grade([p],pairs,self.grid,np.zeros(60*30,dtype='<i2'),[],set(),none,[],H.deck_runs([p]),[],H.LANDING_LIP);g=self.ground(out)
   self.assertEqual([int(out[(15+b)*W+10+a]) for a in (0,1) for b in (0,1)],[0]*4,'the four corners round the landing vertex');self.assertEqual(g(0.0,0.0),0.0);self.assertAlmostEqual(g(18.0,0.0),.35-HR.DROP,delta=.011)
+ def test_the_cell_a_deck_of_another_stage_lands_in_keeps_its_ground(self):
+  # a bridge of another stage comes down from the south and lands on the ground at (63, -17), in a cell whose two northern corners
+  # the deck's roadway (its curb 8.5 m out) reaches, 5.8 m from the bridge's line: further than the corridor kept under that line
+  bridge={'id':'b','name':'Overpass','points':[[63.0,-60.0],[63.0,-17.0]],'width':7.0,'elevations':[3.0,0.0],'startLevel':1,'endLevel':0}
+  p=plan();p.allowance=[1.0]*61;_,pairs,_=survey([p],[curb(3.4),curb(-8.5)]);W=self.grid['width']
+  def graded(existing):return HR.grade([p],pairs,self.grid,np.zeros(60*30,dtype='<i2'),[],set(),none,[],H.deck_runs([p]),existing,H.LANDING_LIP)
+  out=graded([bridge]);g=self.ground(out)
+  self.assertEqual([int(out[(12+b)*W+20+a]) for a in (0,1) for b in (0,1)],[0]*4,'the four corners round the landing');self.assertEqual(g(63.0,-17.0),0.0,'the landing meets its ground')
+  self.assertAlmostEqual(g(90.0,-12.0),.35-HR.DROP,delta=.011,msg='the roadway beyond that cell is set as before')
+  self.assertGreater(self.ground(graded([{**bridge,'endLevel':1}]))(63.0,-17.0),.04,'an end in the air keeps nothing: the corners rise with the roadway')
+ def test_an_end_on_a_vertex_of_the_stages_road_lands_on_that_road(self):
+  # a ramp of another stage leaves the deck at its vertex (63, 0) and climbs away to the north-east: its end is on the deck, whose ground the stage lays
+  ramp={'id':'r','name':'Overpass','points':[[63.0,0.0],[100.0,-30.0]],'width':7.0,'elevations':[.35,5.0],'startLevel':0,'endLevel':1}
+  p=plan();p.allowance=[1.0]*61;_,pairs,_=survey([p],[curb(3.4),curb(-8.5)]);W=self.grid['width']
+  def graded(existing):return HR.grade([p],pairs,self.grid,np.zeros(60*30,dtype='<i2'),[],set(),none,[],H.deck_runs([p]),existing,H.LANDING_LIP)
+  out=graded([ramp])
+  for a in (0,1):self.assertAlmostEqual(out[16*W+20+a]*.01,.35-HR.DROP,delta=.011,msg="the corners of its cell beyond the ramp's corridor rise with the roadway")
+  moved=graded([{**ramp,'points':[[64.5,0.0],[100.0,-30.0]]}])
+  self.assertEqual([int(moved[16*W+20+a]) for a in (0,1)],[0,0],'an end between two vertices lands on the ground and keeps its cell')
  def test_a_deck_in_its_street_landing_has_its_ground_raised_to_it(self):
   p,out=self.run_(landing=5);g=self.ground(out)
   self.assertAlmostEqual(g(6.0,0.0),.35-HR.DROP,delta=.011,msg='two stations into a landing of five');self.assertAlmostEqual(g(90.0,0.0),.35-HR.DROP,delta=.011)
