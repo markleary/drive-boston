@@ -102,6 +102,15 @@ Storrow Drive its lane counts, its tunnel and its posted clearances.
   them is paved (`roadways.aprons` of the provenance, compiled by build-street-surfaces.py) and the ground set
   under them. The lane-count widths remain where the survey shows nothing: under a roof, on a viaduct, and
   along a side with no curb in reach.
+- Median: each carriageway is fitted to its own curbs, and where the survey shows no median (or a roadway
+  narrower than the lanes and what the stage keeps beside them) the two pavements of the Turnpike lay in each
+  other, by up to 1.95 m, or closer than the barrier the runtime stands between the two directions is wide. The
+  two carriageways of a railed road (highway_roadways.railed: not the parkway, whose roadways are paved to their
+  curbs) are therefore parted once all roads are corrected (highway_roadways.part, in apply): each gives up half
+  of what is missing on its median side, first the room the survey shows beyond its outer edge, then its
+  shoulders down to least_width, then its centre line. `roadways.medians` of the provenance records it, and
+  validate holds the installed records to it (highway_roadways.median_check: no carriageway pavements in each
+  other, the barrier's footprint between those of a railed road, every inner lane LANE_ROOM from its face).
 - Signs: the sidecar lists Storrow Drive's warnings (`signs`): CARS ONLY where
   traffic comes onto it and LOW CLEARANCE, with the height the OpenStreetMap way
   posts, ahead of every structure it passes under (warning_signs).
@@ -459,8 +468,9 @@ def assemble(source,spec):
 
 
 def least_width(plan,i):
- """The narrowest pavement a station's lanes take: the runtime keeps each outer lane's centre 1.2 m inside the edge."""
- return (plan.lanes[i]-1)*LANE+2.4 if plan.main else 4.6
+ """The narrowest pavement a station's lanes take: the runtime keeps each outer lane's centre HR.LANE_ROOM (1.2 m) inside the
+ edge, which is also the room an inner lane keeps to the face of the median barrier (highway_roadways.part)."""
+ return (plan.lanes[i]-1)*LANE+2*HR.LANE_ROOM if plan.main else 4.6
 
 
 def twin_cap(plan,other):
@@ -1826,7 +1836,8 @@ def records(plans,neighborhoods):
   for k,(a,b) in enumerate(zip(marks,marks[1:])):
    way=plan.ways[plan.owner[a]];name=way['name']
    if plan.main:
-    place=I.place_name(plan.points[(a+b)//2],neighborhoods);name=name+(f' · {place}' if place else '');rid=f'{plan.id}-{k+1:02d}'
+    # (named for the place its middle lies in by its own curbs: highway_roadways.apply keeps that line of a carriageway its median then moved)
+    place=I.place_name((getattr(plan,'fitted',None) or plan.points)[(a+b)//2],neighborhoods);name=name+(f' · {place}' if place else '');rid=f'{plan.id}-{k+1:02d}'
    else:rid=plan.id if k==0 else f'{plan.id}-{k+1}'
    tunnel=piece_is_tunnel(plan,a,b);ground=0;lifted=-1 if tunnel else 1
    # A landing on a street is on the ground; one on a bridge's vertex (the ramp up to the Harvard Bridge) ends lifted like the deck it meets.
@@ -2027,8 +2038,10 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   for kind in r.ends:
    if kind and kind[0] in ('gore','node') and isinstance(kind[1],I.Plan):gores[kind[1].id].add(kind[2])
  measured=HR.survey(plans,source.get('curbs',[]),paved,I.Terrain(grid,lidded),raw,standing_buildings,least_width);hold={};before=I.Terrain(grid,lidded)
+ # (and the two carriageways of a railed road are parted where their pavements, each fitted to its own curbs, leave less than the median barrier is wide)
+ railed=[pair for pair in twin_pairs(plans) if all(HR.railed(p) for p in pair)]
  for _ in range(16):
-  pairs,surveyed=HR.apply(plans,measured,gores,least_width,hold)
+  pairs,surveyed,medians=HR.apply(plans,measured,gores,least_width,hold,railed)
   for plan in plans:
    x=cross_sections(plan,.5);g=np.array([[before(float(a),float(b)) for a,b in row] for row in x]);plan.edge=g.max(1).tolist()
   # the cut again, under the roads as they now lie, then the ground set under the decks that ride it and brought up under every other road its twin has lifted
@@ -2063,7 +2076,9 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   'crossings':report['crossings'],'newCrossings':report['newCrossings'],'atGrade':report['atGrade'],'unresolved':report['unresolved'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'steep':steep,'movedBeside':report['movedBeside'],'narrowed':report['narrowed'],'junctions':report['junctions'],
   'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':seam_notes+notes,'bridgeSeams':{'changed':[{'road':r['id'],'name':r['name']} for r in seams],'pieces':seam_pieces},'overpasses':overpasses,'hollows':hollows,'twins':twins,'buildings':over,'signs':signs,
-  'roadways':{'method':HR.METHOD,'routes':surveyed,'trimmedMeters':trimmed,'aprons':[{k:a[k] for k in ('road','left','right')} for _,a in pairs]},
+  'roadways':{'method':HR.METHOD,'routes':surveyed,'trimmedMeters':trimmed,'aprons':[{k:a[k] for k in ('road','left','right')} for _,a in pairs],
+   # (the medians, with what stays narrower than its lanes' least width by record: stations of the record and the most it is short there)
+   'medians':[{**m,'parted':{k:{**v,'tight':[{'road':rid,'stations':[max(i,a)-a,min(j,b)-a],'by':by} for i,j,by in v['tight'] for a,b,rid in by_id[k].pieces if max(i,a)<=min(j,b)]} for k,v in m['parted'].items()}} for m in medians]},
   'deckMeters':length(decks),'tunnelMeters':length(tunnel_records),
   'roads':{'added':[r['id'] for r in decks]+seam_pieces+[p['id'] for p in pieces if p['id'] not in replaced],'tunnels':[r['id'] for r in tunnel_records],'sources':flattened+[copy.deepcopy(r) for r in source_roads if r['id'] in replaced and r['id'] not in {f['id'] for f in flattened}],'removed':copies},
   'terrain':{'vertices':[int(v) for v in vertices],'heights':[int(h) for h in originals],'maxCutMeters':round(float(-delta.min()),3) if len(vertices) else 0,'maxFillMeters':round(float(delta.max()),3) if len(vertices) else 0,
@@ -2190,6 +2205,16 @@ def validate(data_dir,city,record,ground):
      assert low<=TWIN_STEP+slack or any(lo-2<=int(i)<=hi+2 for lo,hi in listed[r['id']]),f"{r['id']} lies {low:.2f} m under its twin {o['id']} at {r['points'][int(i)]} with only a median between them"
  # the surveyed roadways (highway_roadways.py): no pavement steps along a route, every paved roadway a surface over ground set under its deck
  surveyed=HR.check({base:[x for _,x in sorted(parts,key=lambda q:q[0])] for base,parts in routes.items()},(record.get('roadways') or {}).get('aprons',[]),{r['id']:r for r in decks},ground)
+ # the medians (highway_roadways.part): no two carriageways of a road with their pavements in each other, and between those of a railed road
+ # (every one but the parkway, whose decks are paved to their curbs and carry no barrier) the median barrier's footprint and room for both inner lanes
+ chain=lambda k:[x for _,x in sorted(routes[k],key=lambda q:q[0])];parted={tuple(m['roads']):m for m in (record.get('roadways') or {}).get('medians',[])};listed=defaultdict(list);twins=[]
+ for a,b in (pair['roads'] for pair in (record.get('twins') or {}).get('pairs',[])):
+  rails=not any((r.get('highway') or r['bridge']['id'])=='storrow' for r in chain(a)+chain(b));twins.append((chain(a),chain(b),rails))
+  assert rails==((a,b) in parted),f'the median between {a} and {b} must be listed as parted exactly when the road is railed'
+ for m in parted.values():
+  for v in m['parted'].values():
+   for e in v['tight']:listed[e['road']].append(e['stations'])
+ surveyed={**surveyed,**HR.median_check(twins,listed)}
  return {**surveyed,'decks':len(decks),'tunnels':len(tunnels),'routes':len(routes),'twinStations':level,'joins':joins,'streetLandings':landings,'streetsOverTunnels':under,'signs':len(sidecar['signs']),'meshBuildings':len(mesh),'passages':len(over['passages']),'removedBuildings':len(gone)}
 
 

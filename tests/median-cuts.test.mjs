@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {loadMetroCity} from './helpers/metro-city.mjs';
-import {medianBarriers,medianBarrierBoxes,medianSpans,MEDIAN_REACH,MEDIAN_LEVEL,MEDIAN_STEP,MEDIAN_FOOT,MEDIAN_COVER,MEDIAN_LAP} from '../src/simulation/median-barriers.ts';
+import {medianBarriers,medianBarrierBoxes,medianSpans,MEDIAN_REACH,MEDIAN_LEVEL,MEDIAN_STEP,MEDIAN_SLOT,MEDIAN_FOOT,MEDIAN_COVER,MEDIAN_LAP} from '../src/simulation/median-barriers.ts';
 import {bridgeBarriers,deckEdge,roadProjection,roadWidthAt,sampleRoadElevation,JERSEY,RAIL_LIP,RAIL_RUN} from '../src/simulation/road-surfaces.ts';
 import {tunnelCoveredAt,tunnelGeometry,tunnelStations} from '../src/simulation/tunnels.ts';
+import {sampleElevation} from '../src/simulation/terrain.ts';
 import {motorwayLanes} from '../src/simulation/motorway.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 
@@ -99,6 +100,25 @@ test('where ground stands between two cuts their walls hold it as before, and th
   assert.equal(spans(strip([[20,40,1],[70,90,1]])).length,3);
 });
 
+test('ground left between two cuts parted by the barrier\'s footprint stands inside the barrier and does not break the row',()=>{
+  // The Turnpike's stage parts its two carriageways by the barrier's footprint, 0.62 m and a slack (`part` in scripts/highway_roadways.py). The
+  // terrain is cut away 0.3 m beyond each cut's pavement, so 2 to 4 cm of it are left between the two excavations, about the row's middle line.
+  const gap=.64,ca=east(cut),cb=west(gap,cut),bump=height=>world([ca,cb],(x,z)=>z===-6&&x>=40&&x<=80?height:0);
+  const walled=(city,road)=>meshTop(tunnelGeometry(city,road).walls,42,78,road===ca?-W/2-.3:-W/2-gap-.3,road===ca?-W/2+.3:-W/2-gap+.3);
+  // a bump that stands half a metre over the pavements in that sliver (over RAIL_LIP, which a foot may cover) is inside the barrier's own profile
+  const low=bump(.9),rise=sampleElevation(low,60,-W/2-gap/2)-LEVEL,run=medianBarriers(low,ca);
+  assert.ok(rise>RAIL_LIP+.1&&rise<JERSEY.height-MEDIAN_COVER,`${rise.toFixed(2)} m of ground in the sliver`);
+  assert.equal(run.length,1);assert.ok(Math.abs(metres(run)-120)<.2,'the row runs on over it');assert.ok(run[0].every(s=>s.foot===undefined),'and its foot is not raised for it');
+  assert.deepEqual(medianSpans(low,ca,-1).map(([a,b])=>[Math.round(a),Math.round(b)]),[[0,120]]);for(const road of [ca,cb])assert.equal(walled(low,road),-Infinity,'neither cut walls it');
+  // ground that stands higher than the barrier there (the survey's remnant of a bridge over the road) would show over it: the cuts' walls hold it as before
+  const high=bump(3),open=medianSpans(high,ca,-1);
+  assert.ok(sampleElevation(high,60,-W/2-gap/2)-LEVEL>JERSEY.height);assert.equal(open.length,2,'the row gives way');assert.ok(Math.abs(open[0][1]-39)<2.5&&Math.abs(open[1][0]-81)<2.5);
+  for(const road of [ca,cb])assert.ok(walled(high,road)>1.5,'both cuts wall it');
+  // a strip wider than the barrier's top is ground beside the barrier, not inside it: two cuts 0.9 m apart with the same half metre between them
+  const wide=world([ca,west(.9,cut)],(x,z)=>z===-6&&x>=40&&x<=80?.9:0),row=medianBarriers(wide,ca);
+  assert.ok(row.length>1||row[0].some(s=>s.foot!==undefined),'a wider strip keeps the rule for ground beside the barrier');
+});
+
 test('two cuts that overlap a step apart: the row stands on the higher road\'s edge and reaches down to the lower',()=>{
   // The Turnpike west of the Prudential tunnel: the westbound road up to a metre over the eastbound one, their pavements 1.8 m into each other.
   const step=.9,overlap=1.2,ca=east(cut),cb=west(-overlap,cut,{elevations:line(120,0).map(()=>LEVEL+step)}),city=world([ca,cb]);
@@ -118,6 +138,35 @@ test('two cuts that overlap a step apart: the row stands on the higher road\'s e
   // more than MEDIAN_STEP apart they are two levels, and two decks a step apart keep the rule of the decks
   assert.equal(medianBarriers(world([ca,west(-overlap,cut,{elevations:line(120,0).map(()=>LEVEL+MEDIAN_STEP+.3)})]),ca).length,0);
   const da=east(),db=west(-overlap,deck,{elevations:line(120,0).map(()=>LEVEL+step)});assert.equal(medianBarriers(world([da,db]),da).length,0,'two decks 0.9 m apart have their own rails');
+});
+
+test('two cuts a step apart with only the barrier\'s footprint between them share the row: it stands on the higher road, its foot the face of the step',()=>{
+  // The Turnpike west of the Prudential tunnel once its stage has parted the two roads: 0.64 m between the pavements, the westbound road up to
+  // a metre higher. A cut's wall is 0.4 m thick about a line 8 cm beyond its pavement, so each cut's own wall left a slot of 8 cm between the two.
+  const step=.9,gap=.64,high=make=>west(gap,make,{elevations:line(120,0).map(()=>LEVEL+step)}),ground=(x,z)=>z<=-6?step:0,ca=east(cut),cb=high(cut),city=world([ca,cb],ground),mid=-W/2-gap/2;
+  assert.ok(step>MEDIAN_LEVEL&&step<MEDIAN_STEP&&gap<=MEDIAN_SLOT&&Math.abs(MEDIAN_SLOT-JERSEY.base-.1)<1e-9,'the slot is the barrier\'s footprint and a hand\'s width');
+  const rows=medianBarriers(city,ca);assert.equal(rows.length,1);assert.ok(Math.abs(metres(rows)-120)<.2,`${metres(rows).toFixed(1)} m of row`);
+  for(const s of rows[0]){
+    assert.ok(Math.abs(s.z-mid)<.01&&Math.abs(s.y-(LEVEL+step))<.01,`on the middle of the strip, on the higher pavement: z ${s.z.toFixed(2)}, y ${s.y.toFixed(2)}`);
+    assert.ok(Math.abs(s.drop[0]-step)<.01&&Math.abs(s.drop[1])<.01&&Math.abs(s.half-(gap/2+MEDIAN_LAP))<.01&&s.foot===undefined,'the lower road a step under it, the foot across the strip and a lap onto each pavement');
+  }
+  // the solid: the profile from the lower pavement to the barrier's top, and the foot, which the lower road meets as the face of the step
+  const [profile,foot]=medianBarrierBoxes(rows);
+  assert.ok(Math.abs(profile.height-(H+step))<.01&&Math.abs(profile.y-profile.height/2-LEVEL)<.01&&Math.abs(profile.width-JERSEY.base)<1e-9);
+  assert.ok(Math.abs(foot.width-(gap+2*MEDIAN_LAP))<.01&&foot.y+foot.height/2>LEVEL+step&&foot.y-foot.height/2<LEVEL-.5,'the foot reaches from under the lower pavement to over the higher one');
+  // neither cut walls that side, the row is in the lower id's shell, and both outer walls stand
+  const sa=tunnelGeometry(city,ca),sb=tunnelGeometry(city,cb);
+  for(const shell of [sa,sb])assert.equal(meshTop(shell.walls,2,118,-W/2-gap-.3,-W/2+.3),-Infinity,'no wall of either between the two roads');
+  assert.ok(Math.abs(meshTop(sa.median,1,119,mid-.4,mid+.4)-(step+H))<.01&&sb.median.indices.length===0,'the row in the lower id\'s shell, a barrier\'s height over the higher road');
+  assert.ok(meshTop(sa.walls,2,118,W/2-.3,W/2+.6)>.79&&meshTop(sb.walls,2,118,-W-gap-W/2-.6,-W-gap-W/2+.3)>step+.79,'both outer walls stand');
+  assert.deepEqual([ca,cb].map(road=>medianSpans(city,road,-1).map(([a,b])=>[Math.round(a),Math.round(b)])),[[[0,120]],[[0,120]]]);
+  // More between the pavements than the slot and the two are two levels, each with its wall, as before; so are two cuts more than MEDIAN_STEP
+  // apart in height, and a deck beside a cut keeps the rule of the decks whatever lies between them.
+  const wide=1.2,apart=world([ca,west(wide,cut,{elevations:line(120,0).map(()=>LEVEL+step)})],ground);
+  assert.ok(wide>MEDIAN_SLOT);assert.equal(medianBarriers(apart,ca).length,0,'1.2 m apart');
+  assert.ok(meshTop(tunnelGeometry(apart,apart.roads[0]).walls,2,118,-W/2-.3,-W/2+.3)>.79&&meshTop(tunnelGeometry(apart,apart.roads[1]).walls,2,118,-W/2-wide-.3,-W/2-wide+.3)>step+.79,'each cut walls its own side');
+  assert.equal(medianBarriers(world([ca,west(gap,cut,{elevations:line(120,0).map(()=>LEVEL+MEDIAN_STEP+.3)})],(x,z)=>z<=-6?MEDIAN_STEP+.3:0),ca).length,0,'more than MEDIAN_STEP apart');
+  const da=east(),mixed=world([da,high(cut)],ground);assert.equal(medianBarriers(mixed,da).length,0,'a deck beside a cut 0.9 m higher');assert.ok(railed(mixed,da,-1)>119,'has its rail');
 });
 
 test('a car driven at the median of a cut stays on its own carriageway, whichever record carries the row',async()=>{
@@ -206,6 +255,7 @@ test('along the Turnpike\'s and Interstate 93\'s medians something stands betwee
     // (at a station where the row begins, the two edge barriers it takes over from may still be met beside its end)
     assert.ok(!p.row||p.barriers===1||p.barriers===2&&p.gap>.3,`${road.id}: ${p.barriers} barriers on the median at station ${p.s.toFixed(0)} (${p.x.toFixed(0)}, ${p.z.toFixed(0)}), the row among them`);
   }
+  console.log(`the Turnpike: the row at ${count.i90[1]} of ${count.i90[0]} metres of median side, ${count.i90[2]} of them with a cut on one side or both; Interstate 93: ${count.i93[1]} of ${count.i93[0]}`);
   assert.ok(count.i90[0]>15000&&count.i90[1]>count.i90[0]*.95,`the Turnpike: the row at ${count.i90[1]} of ${count.i90[0]} stations`);
   assert.ok(count.i90[2]>4500,`${count.i90[2]} of them with a cut on one side or both`);
   assert.ok(count.i93[0]>7500&&count.i93[1]===count.i93[0],`Interstate 93: the row at ${count.i93[1]} of ${count.i93[0]} stations`);
@@ -231,6 +281,7 @@ test('the Turnpike\'s row runs through its cuts: a few long runs, joined across 
   for(const c of chains){assert.ok(c.length>=RAIL_RUN,`a run of ${c.length.toFixed(1)} m at (${c.first.x.toFixed(0)}, ${c.first.z.toFixed(0)})`);assert.ok(c.joint<.05,`a joint ${c.joint.toFixed(2)} m apart in a run from (${c.first.x.toFixed(0)}, ${c.first.z.toFixed(0)})`);}
   // the row's foot stands over what ground there is in the strip, and never higher than a kerb
   const feet=pieces.flatMap(p=>p.run).filter(s=>s.foot!==undefined).map(s=>s.foot);
+  console.log(`the Turnpike's row: ${total.toFixed(0)} m in ${chains.length} runs (${chains.map(c=>c.length.toFixed(0)).join(', ')} m), ${feet.length} sections with a raised foot, ${Math.max(...feet).toFixed(2)} m at most`);
   assert.ok(feet.length>0&&feet.length<200&&Math.max(...feet)<=RAIL_LIP+MEDIAN_COVER+1e-9,`${feet.length} sections with a raised foot, ${Math.max(...feet).toFixed(2)} m at most`);
 });
 
@@ -248,6 +299,7 @@ test('a cut on the median has the row or its wall, never both and never neither;
       else if(own>y+.45)walled++;
     }
   }
+  console.log(`the Turnpike's cuts: ${onMedian} metres of their median sides with the row, ${walled} with the cut's own wall`);
   assert.ok(onMedian>2500&&walled>250,`${onMedian} stations of a cut's median with the row, ${walled} with the cut's own wall`);
   // ramps, Storrow Drive and the Central Artery: no span, no row in any shell
   for(const road of city.roads)if(road.tunnel&&road.elevations&&!shells.has(road)){assert.deepEqual([medianSpans(city,road,-1),medianSpans(city,road,1)],[[],[]],road.id);assert.equal(tunnelGeometry(city,road).median.indices.length,0,road.id);}

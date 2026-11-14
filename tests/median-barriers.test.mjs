@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
-import {bridgeBarriers,deckEdge,deckEdgeElevation,roadProjection,sampleRoadElevation,JERSEY,MOUTH_REACH} from '../src/simulation/road-surfaces.ts';
+import {bridgeBarriers,deckEdge,deckEdgeElevation,laneMarkings,roadProjection,sampleRoadElevation,JERSEY,MOUTH_REACH,RAIL_LIP} from '../src/simulation/road-surfaces.ts';
+import {tunnelCoveredAt,tunnelStations} from '../src/simulation/tunnels.ts';
 import {medianBarriers,medianBarrierMesh,medianBarrierBoxes,MEDIAN_REACH,MEDIAN_WIDENING,MEDIAN_LAP,MEDIAN_FOOT,MEDIAN_UNDER,MEDIAN_PROBE} from '../src/simulation/median-barriers.ts';
 import {LANE_WIDTH,isHighwayDeck,motorwayLanes} from '../src/simulation/motorway.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
@@ -245,7 +246,8 @@ for(const [name,first,second]of HIGHWAYS)test(`${name}: wherever the decks of it
     }
   }
   console.log(`${name}: ${within} deck stations with the other carriageway's deck within ${MEDIAN_REACH} m (${close} within 0.5 m), ${apart} with it 3.3 to 6 m off`);
-  assert.ok(within>2000&&close>500,`${within} stations on a median, ${close} of them with half a metre or less between the pavements`);
+  // (Interstate 93's inner shoulders overlap through Medford; the Turnpike's stage parts its carriageways by the barrier's footprint, so none of its pavements lie that close)
+  assert.ok(within>2000&&(first==='i90-eb'?close===0:close>500),`${within} stations on a median, ${close} of them with half a metre or less between the pavements`);
 });
 
 // (Interstate 93 has one unbroken median from the Somerville line to Roosevelt Circle; the Turnpike's runs on through its walled cuts and is parted by its
@@ -310,17 +312,77 @@ test('the rows are the same on a tile\'s road view as on the whole city, and the
   for(const road of carrying)for(const run of medianBarriers(city,road))for(const s of run)assert.ok(!landings.some(l=>Math.hypot(l[0]-s.x,l[1]-s.z)<MOUTH_REACH-1),`${road.id}: a row at a street landing`);
 });
 
-test('the rows keep off the lanes: a car in the lane next to the median passes clear of the barrier',()=>{
-  // The innermost lane's centre to the barrier's face. Interstate 93 keeps a shoulder's width; the Turnpike's decks through Allston are
-  // 13.3 m wide for four lanes (1.2 m from a lane's centre to the pavement edge), and where two of those overlap the row takes 0.4 m of it.
-  for(const [name,first,second,least]of [['Interstate 93','i93-nb','i93-sb',1.6],['the Turnpike','i90-eb','i90-wb',.8]]){
-    const decks=[...series(first),...series(second)].filter(isHighwayDeck);let worst=Infinity,where='';
-    for(const road of series(first))for(const run of medianBarriers(city,road))for(const s of run)for(const deck of decks){
-      const hit=roadProjection(deck,s.x,s.z);if(hit.distance>(deck.deckWidths?.[hit.index]??deck.width)/2+MEDIAN_REACH||hit.t<=0&&hit.index===0||hit.t>=1&&hit.index===deck.points.length-2)continue;
-      const room=hit.distance-Math.max(...motorwayLanes(deck).map(Math.abs))-JERSEY.base/2;if(room<worst){worst=room;where=`${deck.id} at ${s.x.toFixed(0)}, ${s.z.toFixed(0)}`;}
+// ---- the two pavements of a road (the generator's rule: `part` in scripts/highway_roadways.py, held on the records by its `median_check`)
+const LANE_ROOM=1.2,STOREY=4.15;   // (motorwayLanes keeps a lane's centre 1.2 m inside its pavement; a slab and the room under it: a road that far over another passes over it)
+const stationAt=(road,hit)=>{const a=road.points[hit.index],b=road.points[hit.index+1]??a;return tunnelStations(road)[hit.index]+Math.hypot(b[0]-a[0],b[1]-a[1])*hit.t;};
+const roofed=(road,hit)=>!!road.tunnel&&tunnelCoveredAt(road,stationAt(road,hit));
+/** Every metre of both carriageways, deck or walled cut, in the open: what lies between its pavement and the other carriageway's beside it at its level. */
+function pavementGaps(first,second){
+  const sides=[series(first),series(second)].map(list=>list.filter(r=>r.lanes!==undefined&&r.elevations));const out={metres:0,least:Infinity,where:'',shared:0,tight:0};
+  for(const [mine,theirs]of [sides,[...sides].reverse()]){
+    const others=boxed(theirs);
+    for(const road of mine){
+      const along=tunnelStations(road);
+      for(let i=1;i<road.points.length;i++){
+        const a=road.points[i-1],b=road.points[i],length=along[i]-along[i-1],count=Math.max(1,Math.round(length)),tx=(b[0]-a[0])/(length||1),tz=(b[1]-a[1])/(length||1);
+        for(let k=i===1?0:1;k<=count;k++){
+          const t=k/count,x=a[0]+(b[0]-a[0])*t,z=a[1]+(b[1]-a[1])*t;if(road.tunnel&&tunnelCoveredAt(road,along[i-1]+length*t))continue;
+          const half=((road.deckWidths?.[i-1]??road.width)*(1-t)+(road.deckWidths?.[i]??road.width)*t)/2,y=road.elevations[i-1]*(1-t)+road.elevations[i]*t;
+          // (the other carriageway lies to the left of travel: `across` reads from an edge point, so from the left edge, the pavement beyond it)
+          const twin=across(others,x+tz*half,z-tx*half,tx,tz,tz,-tx);if(!twin||Math.abs(twin.height-y)>=STOREY||roofed(twin.road,roadProjection(twin.road,x,z)))continue;
+          out.metres+=length/count;if(twin.gap<-.005)out.shared+=length/count;if(twin.gap<JERSEY.base-.005)out.tight+=length/count;
+          if(twin.gap<out.least){out.least=twin.gap;out.where=`${road.id} at ${x.toFixed(0)}, ${z.toFixed(0)} beside ${twin.road.id}`;}
+        }
+      }
     }
-    console.log(`${name}: least room from an innermost lane's centre to the barrier's face ${worst.toFixed(2)} m (${where})`);
-    assert.ok(worst>=least,`${name}: ${worst.toFixed(2)} m from a lane's centre to the barrier at ${where}`);
+  }
+  return out;
+}
+
+test('the Turnpike\'s two carriageways never share pavement: the barrier\'s footprint lies between them at every metre, deck or cut',()=>{
+  // Each carriageway was fitted to its own curbs alone, and where the survey shows no median their pavements lay in each other (1.2 km of
+  // median, by up to 1.95 m in Brighton) or closer than the barrier is wide (0.8 km more). The stage now parts them: each ends half the
+  // barrier's footprint short of the middle line between the two.
+  const i90=pavementGaps('i90-eb','i90-wb');console.log(`the Turnpike: ${i90.metres.toFixed(0)} m of carriageway beside the other in the open, at least ${i90.least.toFixed(2)} m between the pavements (${i90.where})`);
+  assert.ok(i90.metres>15000);assert.equal(i90.shared,0,`${i90.shared.toFixed(0)} m of pavement in the other carriageway's, ${(-i90.least).toFixed(2)} m at ${i90.where}`);
+  assert.equal(i90.tight,0,`${i90.tight.toFixed(0)} m with less than the barrier's ${JERSEY.base} m between the pavements, ${i90.least.toFixed(2)} m at ${i90.where}`);
+  // Interstate 93's inner shoulders overlap across its narrow median by design (MEDIAN_SLACK in scripts/i93_north.py, up to 1 m): its decks are
+  // 18.8 m and more for four lanes, the overlap lies under the barrier and beside it on the shoulders, and the lanes keep their room (next test).
+  const i93=pavementGaps('i93-nb','i93-sb');console.log(`Interstate 93: ${i93.metres.toFixed(0)} m beside the other, ${i93.shared.toFixed(0)} m of it with the shoulders in each other, by ${(-i93.least).toFixed(2)} m at most (${i93.where})`);
+  assert.ok(i93.metres>7000&&i93.least>=-1.0,`${(-i93.least).toFixed(2)} m of overlap at ${i93.where}`);
+});
+
+test('the rows keep off the lanes: a car in the lane next to the median passes clear of the barrier',()=>{
+  // The innermost lane's centre to the barrier's face, at every section of every row, for every record of both carriageways beside it, deck or
+  // walled cut. Interstate 93 keeps a shoulder's width. The Turnpike's pavements leave the barrier's footprint between them (the test above) and
+  // none is narrower than its lanes take with their centres 1.2 m inside its edges, so the barrier's face comes no closer to a lane's centre than
+  // that: 1.21 m on the Allston viaduct, whose decks carry four lanes on 13.35 m (the face stood 0.84 m from a lane's centre there while the two
+  // decks overlapped; the widest traffic vehicle, the box truck, is 2.17 m wide). The face is the profile's base and, for a road that lies more
+  // than a kerb's height (`RAIL_LIP`) under the row, the side of the foot the row stands on, which laps 5 cm onto its pavement: the two cuts west
+  // of the Prudential tunnel stand up to a metre apart in height with the barrier's footprint between them. A lower foot is a kerb at the edge.
+  for(const [name,first,second,least]of [['Interstate 93','i93-nb','i93-sb',1.6],['the Turnpike','i90-eb','i90-wb',LANE_ROOM]]){
+    const records=[...series(first),...series(second)].filter(r=>r.lanes!==undefined&&r.elevations);let worst=Infinity,where='',sections=0,stepped=0;
+    for(const road of series(first))for(const run of medianBarriers(city,road))for(const s of run){
+      sections++;
+      for(const record of records){
+        const hit=roadProjection(record,s.x,s.z);if(hit.distance>(record.deckWidths?.[hit.index]??record.width)/2+MEDIAN_REACH||hit.t<=0&&hit.index===0||hit.t>=1&&hit.index===record.points.length-2||roofed(record,hit))continue;
+        const face=s.y-sampleRoadElevation(city,record,s.x,s.z)>RAIL_LIP?Math.max(s.half,JERSEY.base/2):JERSEY.base/2;if(face>JERSEY.base/2)stepped++;
+        const room=hit.distance-Math.max(...motorwayLanes(record).map(Math.abs))-face;if(room<worst){worst=room;where=`${record.id} at ${s.x.toFixed(0)}, ${s.z.toFixed(0)}`;}
+      }
+    }
+    console.log(`${name}: least room from an innermost lane's centre to the barrier's face ${worst.toFixed(2)} m (${where}), over ${sections} sections (${stepped} times the face of a step)`);
+    assert.ok(sections>1000&&worst>=least,`${name}: ${worst.toFixed(2)} m from a lane's centre to the barrier at ${where}`);
+  }
+});
+
+test('no deck of either highway loses its yellow edge line to the other carriageway',()=>{
+  // A lane line is cut where another deck covers it, so inside an overlap of the two pavements wider than the shoulder neither road had its
+  // yellow line: 406 m of the Turnpike's decks, most of it in Brighton. Each deck's left edge line is as long with the other carriageway there as without.
+  const left=(view,road)=>laneMarkings(view,road,city).filter(l=>l.kind==='left').reduce((sum,l)=>sum+l.points.slice(1).reduce((d,p,i)=>d+Math.hypot(p[0]-l.points[i][0],p[1]-l.points[i][1]),0),0);
+  for(const [name,first,second]of HIGHWAYS)for(const [mine,theirs]of [[first,second],[second,first]]){
+    const other=new Set(series(theirs)),alone={...city,roads:city.roads.filter(r=>!other.has(r))};let hidden=0,worst='';
+    for(const road of series(mine).filter(isHighwayDeck)){const lost=left(alone,road)-left(city,road);if(lost>hidden){hidden=lost;worst=road.id;}}
+    assert.ok(hidden<1,`${name}: ${hidden.toFixed(0)} m of the yellow line of ${worst} lie under the other carriageway's deck`);
   }
 });
 

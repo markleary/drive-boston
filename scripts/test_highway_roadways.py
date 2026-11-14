@@ -18,7 +18,7 @@ def flat(x,z):return 0.0
 def none(bounds):return []
 def survey(plans,curbs,streets=(),hold=None,buildings=none):
  """Measure and correct `plans`; +z is a plan's left here (its normal is (-tz, tx) = (0, 1))."""
- m=HR.survey(plans,curbs,list(streets),flat,flat,buildings,H.least_width);pairs,summary=HR.apply(plans,m,{},H.least_width,hold or {});return m,pairs,summary
+ m=HR.survey(plans,curbs,list(streets),flat,flat,buildings,H.least_width);pairs,summary,_=HR.apply(plans,m,{},H.least_width,hold or {});return m,pairs,summary
 
 
 class MeasureTest(unittest.TestCase):
@@ -193,6 +193,101 @@ class LiftTest(unittest.TestCase):
   v=self.lifted();v.solo=[y+2.0 for y in v.solo];v.y=[y+2.0 for y in v.y];self.assertEqual(HR.fills([v],[]),[],'a deck that stood over its ground alone')
   c=self.lifted(cut=True);c.covered=[True]*61;self.assertEqual(HR.fills([c],[]),[],'under a roof');c.covered=[False]*61;self.assertEqual(len(HR.fills([c],[])),1,'an open cut takes its ground up like a deck')
   self.assertEqual(HR.fills([plan()],[]),[],'a road no twin has lifted has none')
+
+
+def carriageways(apart,width=15.8,lanes=4,n=61,y=.35,**extra):
+ """The two carriageways of a railed road `apart` metres from centre line to centre line: `a` runs along +x at z = 0, `b` back along -x beside it."""
+ a=plan('i90-a',n=n,width=width,lanes=lanes,bridge='i90',y=y,**extra);b=plan('i90-b',n=n,width=width,lanes=lanes,bridge='i90',y=y,**extra)
+ b.points=[[(n-1-i)*3.0,-float(apart)] for i in range(n)];b.tangents=I.tangents(b.points);b.line=LineString(b.points);return a,b
+def parted(a,b,curbs=(),hold=None):
+ m=HR.survey([a,b],list(curbs),[],flat,flat,none,H.least_width);_,_,medians=HR.apply([a,b],m,{},H.least_width,hold or {},[(a,b)]);return medians[0]
+def between(a,b):
+ """Metres between the two pavements at each station of `a` (the carriageways lie along x)."""
+ return [abs(p[1]-q[1])-(w+v)/2 for p,w,q,v in zip(a.points,a.widths,b.points[::-1],b.widths[::-1])]
+def edges(p):return [(q[1]-w/2,q[1]+w/2) for q,w in zip(p.points,p.widths)]
+
+
+class MedianTest(unittest.TestCase):
+ def test_two_pavements_in_each_other_each_end_half_the_barrier_short_of_the_middle(self):
+  # two pavements of four lanes and 0.6 m beside them, their centre lines 14.6 m apart: 1.2 m in each other
+  a,b=carriageways(14.6);self.assertAlmostEqual(between(*carriageways(14.6))[30],-1.2,places=6);out=parted(a,b);gap=between(a,b)
+  self.assertGreaterEqual(min(gap[1:-1]),HR.BARRIER);self.assertLessEqual(max(gap[2:-2]),HR.BARRIER+2*HR.MEDIAN_SLACK,"no more is taken than the barrier's footprint")
+  # the middle of the overlap lay 7.3 m from either centre line: each median edge ends 0.31 m short of it, and the outer edges stay
+  self.assertAlmostEqual(edges(a)[30][0],-7.3+HR.BARRIER/2,delta=.02);self.assertAlmostEqual(edges(b)[30][1],-7.3-HR.BARRIER/2,delta=.02);self.assertAlmostEqual(edges(a)[30][1],7.9,delta=.002);self.assertAlmostEqual(edges(b)[30][0],-14.6-7.9,delta=.002)
+  self.assertGreaterEqual(min(a.widths),H.least_width(a,0));self.assertGreater(a.shift[30],.4,'its centre line, and its lanes with it, move out by half of what the pavement lost')
+  self.assertEqual(out['roads'],['i90-a','i90-b']);self.assertEqual(out['parted']['i90-a']['tight'],[]);self.assertGreaterEqual(out['leastBetween'],HR.BARRIER);self.assertAlmostEqual(out['parted']['i90-a']['maxBack'],.92,delta=.02)
+  self.assertEqual((a.shift[0],a.shift[-1],b.shift[0]),(0.0,0.0,0.0),'the ends, where other records meet, do not move')
+
+ def test_pavements_closer_than_the_barrier_is_wide_are_parted_and_wider_medians_left(self):
+  a,b=carriageways(16.1);parted(a,b);self.assertGreaterEqual(min(between(a,b)[1:-1]),HR.BARRIER);self.assertAlmostEqual(a.widths[30],15.8-(HR.BARRIER+HR.MEDIAN_SLACK-.3)/2,delta=.02)
+  c,d=carriageways(16.6);out=parted(c,d);self.assertEqual((c.widths,c.shift,d.widths),([15.8]*61,[0.0]*61,[15.8]*61),'0.8 m between the two: nothing to mend');self.assertEqual(out['passes'],0)
+
+ def test_the_room_the_survey_shows_beyond_the_outer_edge_goes_first(self):
+  # each outer curb stands 1 m beyond its pavement: the carriageways move out to them and keep their shoulders
+  a,b=carriageways(14.6);parted(a,b,[curb(8.9),curb(-14.6-8.9)]);self.assertGreaterEqual(min(between(a,b)[1:-1]),HR.BARRIER)
+  self.assertEqual(a.widths[30],15.8);self.assertAlmostEqual(a.shift[30],.92,delta=.02);self.assertLessEqual(edges(a)[30][1],8.9+1e-6)
+  # with 0.5 m there, the pavement takes that and narrows for the rest, its outer edge at the curb
+  c,d=carriageways(14.6);parted(c,d,[curb(8.4),curb(-14.6-8.4)]);self.assertAlmostEqual(edges(c)[30][1],8.4,delta=.002);self.assertAlmostEqual(c.widths[30],15.8-.42,delta=.03);self.assertGreaterEqual(min(between(c,d)[1:-1]),HR.BARRIER)
+
+ def test_a_pavement_at_its_least_width_moves_out_and_keeps_its_lanes(self):
+  # two viaducts of four lanes at their least width (the lane centres 1.2 m inside), 13.2 m apart: nothing to narrow
+  least=3*I.LANE+2*HR.LANE_ROOM;a,b=carriageways(13.2,width=least,y=7.35);self.assertFalse(any(HR.station_state(a,H.least_width)[0]),'no curb is measured on a viaduct');out=parted(a,b)
+  self.assertEqual(a.widths[5:-5],[least]*51);self.assertGreaterEqual(min(between(a,b)),HR.BARRIER);self.assertAlmostEqual(a.shift[30],(least+HR.BARRIER+HR.MEDIAN_SLACK-13.2)/2,delta=.01);self.assertAlmostEqual(b.shift[30],a.shift[30],delta=.01)
+  self.assertAlmostEqual(out['parted']['i90-a']['maxPast'],a.shift[30],delta=.01,msg='the outer edge passes where it lay by as much')
+  # an inner lane's centre keeps LANE_ROOM to the barrier's face
+  inner=1.5*I.LANE;self.assertGreaterEqual(min(w/2-inner+(g-HR.BARRIER)/2 for w,g in list(zip(a.widths,between(a,b)))[10:-10]),HR.LANE_ROOM)
+  self.assertLessEqual(max(abs(p-q) for p,q in zip(a.shift,a.shift[1:])),HR.SHIFT_RATE*3+.002,'the centre line leaves its ends no faster than a curb moves it')
+  # both roads end abreast here, and neither end moves: only there, where neither can give with its lanes kept, do the pavements come narrower, by the same on both
+  tight=out['parted']['i90-a']['tight'];self.assertEqual([t[:2] for t in tight],[[0,1],[59,60]]);self.assertAlmostEqual(tight[0][2],(least+HR.BARRIER+HR.MEDIAN_SLACK-13.2)/2,delta=.01);self.assertEqual(a.widths[0],b.widths[-1])
+
+ def test_a_pinned_station_does_not_move_and_narrows(self):
+  a,b=carriageways(14.6);out=parted(a,b,hold={'i90-a':{30}});gap=between(a,b)
+  self.assertEqual(a.shift[30],0.0);self.assertEqual(a.points[30],[90.0,0.0]);self.assertAlmostEqual(a.widths[30],15.8-2*.92,delta=.05,msg='what the move cannot give, the width does: both edges come in')
+  self.assertGreaterEqual(min(gap[1:-1]),HR.BARRIER);self.assertLessEqual(max(abs(p-q) for p,q in zip(a.shift,a.shift[1:])),HR.SHIFT_RATE*3+.002);self.assertLessEqual(max(abs(p-q)/2 for p,q in zip(a.widths,a.widths[1:])),HR.WIDTH_RATE*3+.002)
+  # at its least width a pinned station cannot give: it is listed, with what it is short
+  self.assertEqual(out['parted']['i90-a']['tight'],[],'13.96 m still hold four lanes')
+  # at its least width a pinned station cannot give: its twin takes what is left, and it keeps its lanes
+  least=3*I.LANE+2*HR.LANE_ROOM;need=least+HR.BARRIER+HR.MEDIAN_SLACK-13.2;c,d=carriageways(13.2,width=least,y=7.35);out=parted(c,d,hold={'i90-a':{30}});self.assertGreaterEqual(min(between(c,d)),HR.BARRIER)
+  self.assertEqual((c.shift[30],c.widths[30]),(0.0,least));self.assertAlmostEqual(d.shift[30],need,delta=.06,msg='all of it');self.assertEqual(d.widths[30],least);self.assertAlmostEqual(d.shift[20],need/2,delta=.01,msg='and half again where the other can give its own')
+  self.assertFalse(any(i<=30<=j for i,j,_ in out['parted']['i90-a']['tight']+out['parted']['i90-b']['tight']))
+  # pinned on both sides, each comes narrower than its lanes take by half of what is missing, and the stretch is listed
+  e,f=carriageways(13.2,width=least,y=7.35);out=parted(e,f,hold={'i90-a':{30},'i90-b':{30}});self.assertGreaterEqual(min(between(e,f)),HR.BARRIER);self.assertAlmostEqual(e.widths[30],least-need,delta=.02);self.assertAlmostEqual(f.widths[30],least-need,delta=.02)
+  tight=[t for t in out['parted']['i90-a']['tight'] if t[0]<=30<=t[1]];self.assertEqual(len(tight),1);self.assertAlmostEqual(tight[0][2],need/2,delta=.01)
+
+ def test_no_median_under_a_roof_between_two_levels_or_beside_a_road_running_the_same_way(self):
+  a,b=carriageways(14.6,cut=True);b.covered=[True]*61;out=parted(a,b);self.assertEqual((a.widths,b.widths,out['passes']),([15.8]*61,[15.8]*61,0),'a bore keeps its walls')
+  c,d=carriageways(14.6);d.y=[.35+HR.STOREY]*61;parted(c,d);self.assertEqual(c.widths,[15.8]*61,'a road a storey overhead passes over')
+  e=plan('i90-a',width=15.8,lanes=4,bridge='i90');f=plan('i90-b',z=-14.6,width=15.8,lanes=4,bridge='i90');parted(e,f);self.assertEqual(e.widths,[15.8]*61,'a road running the same way is no twin across a median')
+  g,h=carriageways(14.6);h.y=[.35+1.0]*61;parted(g,h);self.assertGreaterEqual(min(between(g,h)[1:-1]),HR.BARRIER,'a step of a metre is a median with a ledge: the two are parted')
+
+ def test_at_a_portal_the_pavements_are_parted_as_far_as_the_first_roofed_station(self):
+  # the eastbound road goes under a roof at station 30: its pavement lies in the open up to that station, which keeps its place and narrows
+  a,b=carriageways(14.6,cut=True);a.covered=[i>=30 for i in range(61)];out=parted(a,b);gap=between(a,b)
+  self.assertGreaterEqual(min(gap[:31]),HR.BARRIER);self.assertEqual(a.shift[30],0.0);self.assertLess(a.widths[30],15.8);self.assertGreaterEqual(a.widths[30],H.least_width(a,30))
+  self.assertEqual(a.widths[36:],[15.8]*25,'and inside, the bore is as it was solved');self.assertEqual(a.shift[30:],[0.0]*31);self.assertLessEqual(max(abs(p-q)/2 for p,q in zip(a.widths,a.widths[1:])),HR.WIDTH_RATE*3+.002)
+  self.assertEqual(b.widths[:24],[15.8]*24,'the road beside the bore keeps its pavement there');self.assertLess(b.widths[30],15.8,'and gives its half at the portal');self.assertLessEqual(out['passes'],6)
+
+ def test_only_a_railed_road_has_a_median_barrier(self):
+  self.assertTrue(HR.railed(plan('i90-t',bridge='i90')));self.assertFalse(HR.railed(plan()),'a parkway is paved to its curbs');self.assertFalse(HR.railed(plan('i90-ramp',bridge='i90',main=False)))
+
+ def record(self,id,z,width=15.8,lanes=4,back=False,y=5.0,bridge='i90',n=21,**extra):
+  xs=[(n-1-i)*3.0 if back else i*3.0 for i in range(n)];return {'id':id,'points':[[x,z] for x in xs],'deckWidths':[width]*n,'width':width,'lanes':lanes,'elevations':[y]*n,'bridge':{'id':bridge},**extra}
+ def test_the_installed_records_are_held_to_it(self):
+  ok=HR.median_check([([self.record('a-01',0.0)],[self.record('b-01',-16.5,back=True)],True)]);self.assertEqual(ok['medianStations'],42);self.assertAlmostEqual(ok['leastBetween'],.7,places=3);self.assertAlmostEqual(ok['leastLaneRoom'],7.9-1.5*I.LANE+.04,places=3)
+  with self.assertRaisesRegex(AssertionError,'in each other'):HR.median_check([([self.record('a-01',0.0)],[self.record('b-01',-15.0,back=True)],True)])
+  with self.assertRaisesRegex(AssertionError,'less than the median barrier is wide'):HR.median_check([([self.record('a-01',0.0)],[self.record('b-01',-16.2,back=True)],True)])
+  # a parkway's two roadways only keep out of each other
+  self.assertEqual(HR.median_check([([self.record('a-01',0.0)],[self.record('b-01',-16.2,back=True)],False)])['medianStations'],0)
+  with self.assertRaisesRegex(AssertionError,'in each other'):HR.median_check([([self.record('a-01',0.0)],[self.record('b-01',-15.0,back=True)],False)])
+  # four lanes on 12.6 m: the lanes close up to keep 1.2 m inside (the runtime's rule), but a record 13.35 m wide at its widest that narrows to 12.6 m does not
+  HR.median_check([([self.record('a-01',0.0,width=12.6)],[self.record('b-01',-13.3,width=12.6,back=True)],True)])
+  narrow={**self.record('a-01',0.0,width=12.6),'width':13.35}
+  with self.assertRaisesRegex(AssertionError,'inner lane'):HR.median_check([([narrow],[self.record('b-01',-13.3,width=12.6,back=True)],True)])
+  HR.median_check([([narrow],[self.record('b-01',-13.3,width=12.6,back=True)],True)],{'a-01':[[0,20]]})
+  # under a roof, a storey apart, or running the same way: no median
+  roofed={**self.record('b-01',-15.0,back=True),'tunnel':{'covered':[[0,60]]}};del roofed['bridge'];roofed['highway']='i90'
+  self.assertEqual(HR.median_check([([self.record('a-01',0.0)],[roofed],True)])['medianStations'],0);self.assertEqual(HR.median_check([([self.record('a-01',0.0)],[self.record('b-01',-15.0,back=True,y=5.0+HR.STOREY)],True)])['medianStations'],0)
+  self.assertEqual(HR.median_check([([self.record('a-01',0.0)],[self.record('b-01',-15.0)],True)])['medianStations'],0)
 
 
 class CheckTest(unittest.TestCase):
