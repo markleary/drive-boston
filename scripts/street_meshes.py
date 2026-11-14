@@ -123,26 +123,34 @@ def compile_surfaces(roads, records, road_key, obstacles=(), aprons=()):
  return asphalt+junctions+[e for e in extra if not e.is_empty],walks,{'foldedStrips':folded,'junctionParts':len(junctions),'highwayAprons':len(extra)}
 
 
-def install_surfaces(headers, roads, records, road_key, obstacles=(), contacts=(), aprons=()):
- """One global solve, then exact tile clipping; no tile-local endpoint guesses."""
+def install_surfaces(headers, roads, records, road_key, obstacles=(), contacts=(), aprons=(), highways=()):
+ """One global solve, then exact tile clipping; no tile-local endpoint guesses. The fallback sidewalk band is not
+ drawn on the pavement of a highway record that runs in the open at or under the ground (`highways`: polygons,
+ street_surfaces.highway_pavements): a street's edge measured to such a pavement's edge has the road beyond it,
+ not a sidewalk."""
  asphalt,walks,stats=compile_surfaces(roads,records,road_key,obstacles,aprons)
- asphalt_tree=STRtree(asphalt);walk_tree=STRtree(walks);contact_tree=STRtree(contacts)
+ asphalt_tree=STRtree(asphalt);walk_tree=STRtree(walks);contact_tree=STRtree(contacts);highway_tree=STRtree(list(highways));cut=0.
  for key,tile in headers.items():
   size=tile['size'];x=tile['tx']*size;z=tile['tz']*size;area=box(x,z,x+size,z+size)
   road_ids=asphalt_tree.query(area,predicate='intersects');walk_ids=walk_tree.query(area,predicate='intersects')
   road=unary_union(asphalt_tree.geometries[road_ids]).intersection(area)
   walk=unary_union(walk_tree.geometries[walk_ids]).intersection(area).difference(road)
+  highway_ids=highway_tree.query(area,predicate='intersects')
+  if len(highway_ids) and not walk.is_empty:
+   before=walk.area;walk=walk.difference(unary_union(highway_tree.geometries[highway_ids]));cut+=before-walk.area
   tile['streetPavement']=encoded_polygons(road);tile['streetSidewalks']=encoded_polygons(walk)
   contact_ids=contact_tree.query(area,predicate='intersects')
   tile['deckPavement']=encoded_polygons(unary_union(contact_tree.geometries[contact_ids]).intersection(area))
+ stats['highwayBandArea']=round(cut)   # (square metres of band left off that pavement)
  stats['pavementParts']=sum(len(t['streetPavement']) for t in headers.values())
  stats['fallbackSidewalkParts']=sum(len(t['streetSidewalks']) for t in headers.values())
  stats['deckContactParts']=sum(len(t['deckPavement']) for t in headers.values())
  return stats
 
 
-def compile_headers(headers,roads,contacts=()):
- """Use the serialized measurement precision for fresh builds and rebuilds."""
+def compile_headers(headers,roads,contacts=(),highways=()):
+ """Use the serialized measurement precision for fresh builds and rebuilds. `highways`: the pavement of the
+ highway records in the open, which no fallback sidewalk band covers (install_surfaces)."""
  from street_surfaces import road_key
  from reviewed_road_inputs import reviewed_pavement,reviewed_streets,reviewed_parking_edges,restore_street_sources,source_hash
  restore_street_sources(headers)
@@ -165,7 +173,7 @@ def compile_headers(headers,roads,contacts=()):
   for building in tile['buildings']:
    if not building.get('structure'):obstacles.append(Polygon(building['footprint']).buffer(0))
  surface.sort(key=road_key)
- stats=install_surfaces(headers,surface,records,road_key,obstacles,contacts,aprons)
+ stats=install_surfaces(headers,surface,records,road_key,obstacles,contacts,aprons,highways)
  parking_tiles=reviewed_parking_edges(headers)
  stats['fallbackSidewalkParts']=sum(len(t['streetSidewalks']) for t in headers.values())
  return {**stats,'reviewedPavementTiles':reviewed_tiles,'reviewedStreetTiles':reviewed_street_tiles,'reviewedParkingTiles':parking_tiles,'reviewedSourceSHA256':source_hash()}
