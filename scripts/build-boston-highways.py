@@ -54,6 +54,7 @@ def main():
  for median in record['roadways']['medians']:
   one,other=median['roads'];parted=median['parted'];print(f"{one} and {other} parted along {parted[one]['meters']:.0f} and {parted[other]['meters']:.0f} m in {median['passes']} passes (a median edge taken back by up to {max(v['maxBack'] for v in parted.values()):.2f} m, a centre line moved by up to {max(v['maxShift'] for v in parted.values()):.2f} m, an outer edge past its bound by up to {max(v['maxPast'] for v in parted.values()):.2f} m): at least {median['leastBetween']:.2f} m between the two pavements; {sum(len(v['tight']) for v in parted.values())} stretches narrower than their lanes take")
  seams=record['bridgeSeams'];print(f"{len(seams['changed'])} records changed where a bridge stopped over the cut ({', '.join(sorted({c['name'] for c in seams['changed']})) or 'none'}); ramp pieces added: {', '.join(seams['pieces']) or 'none'}")
+ for h in record['heldLandings']:print(f"  on its street's fill: {h['road']} {h['end']} ({', '.join(h['streets'])}), {h['heldMeters']} of {h['wantedMeters']} m held"+(f"; {h['trunk']['road']} raised for it, {h['trunk']['shortMeters']} m short" if 'trunk' in h else ''))
  for i in record['infeasible']:print(f"  tight: {i['road']} {i['at']} by {i['worst']} m")
  for u in record['unresolved']:print(f"  unresolved crossing: {u['road']} and {u['other']} at {u['point']}")
  for g in record['atGrade']:print(f"  at grade: {g['road']} crosses {g['other']} {g['name']} at {g['point']}")

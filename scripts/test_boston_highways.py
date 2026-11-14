@@ -475,6 +475,99 @@ class LandedTest(unittest.TestCase):
   self.assertIs(out[0],once,'a deck that lands on the road as the rule lays it stays');self.assertEqual((report[0]['maxRaise'],report[0]['maxLower']),(0,0))
 
 
+class SurfaceTest(unittest.TestCase):
+ """A road lies on the street it lands on where that street's fill is its ground (street_surface, hold_surface, branch_lift,
+ raise_floor, held_landings), and validate checks it on the installed records (landing_surfaces)."""
+ street=staticmethod(lambda points,width=10:{'id':'s','name':'Landing Street','points':points,'width':width})
+ @staticmethod
+ def ramp(points,mid,terrain,levels=None):
+  n=len(points);p=plan(points,[7.0]*n,levels=levels,main=False,lanes=1);p.mid=list(mid);p.terrain=list(terrain);return p
+ @staticmethod
+ def climb(start,surface=range(10,30)):
+  """A ramp on trench stations (no terrain floor) fixed at `start` where it leaves its road and at 3 m where it lands at its
+  end on a street, whose fill lies under the stations `surface` at 3 m."""
+  p=plan(line(30),[7.0]*30,main=False,lanes=1);p.grade=I.RAMP_GRADE;p.radius=I.RAMP_RADIUS;p.trench=[True]*30;p.fixed={0:start,29:3.0}
+  p.surface={i:(3.0,round(87-3.0*i,3),1) for i in surface};return p
+ def test_the_stations_on_the_street_s_fill_from_its_landing_inward(self):
+  # a 7 m ramp off a class 10 street at 1 in 5 (OnStreetTest): its pavement crosses the street's roadway for 15 stations, and
+  # measure_ground gave the survey 1 m under the street's fill to the first 11 of them (the next 4 lie on ground the grader left)
+  pts=OnStreetTest.away(30);mid=[2.0]*15+[1.0]*15;terrain=[1.0]*11+[2.0]*4+[1.0]*15;streets=[(self.street([[-60,0],[0,0],[120,0]]),1)]
+  rows,taper=H.street_surface(self.ramp(pts,mid,terrain),0,streets)
+  self.assertEqual(sorted(rows),list(range(1,11)),'the stations on the fill, beyond the end the landing fixes');self.assertEqual({v[0] for v in rows.values()},{2.0},"held at the street's surface")
+  self.assertAlmostEqual(rows[10][1],30.0,places=2);self.assertAlmostEqual(taper,33.0,places=2,msg='the landing reaches to the first station beyond them')
+  # the same ramp landing at its end
+  rows,taper=H.street_surface(self.ramp(pts[::-1],mid[::-1],terrain[::-1]),1,[(streets[0][0],1)]);self.assertEqual(sorted(rows),list(range(19,29)));self.assertAlmostEqual(taper,33.0,places=2)
+  self.assertEqual({v[2] for v in rows.values()},{1})
+  # no fill under it: no stations, and the landing keeps LANDING_TAPER
+  self.assertEqual(H.street_surface(self.ramp(pts,mid,mid),0,streets),({},float(I.LANDING_TAPER)))
+  # the segments take it below the ground in a slot of its own after 6 stations
+  rows,taper=H.street_surface(self.ramp(pts,mid,terrain,[0]*6+[-1]*24),0,streets);self.assertEqual(sorted(rows),list(range(1,6)));self.assertAlmostEqual(taper,18.0,places=2)
+ def test_a_street_carried_on_in_line_has_no_roadway_beside_the_road(self):
+  # the road arrives along the x axis and lands on the vertex where the street begins and runs on in line
+  p=self.ramp(line(30),[2.0]*30,[1.0]*30);rows,taper=H.street_surface(p,1,[(self.street([[87,0],[200,0]],12),0)])
+  self.assertEqual((rows,taper),({},float(I.LANDING_TAPER)),'its own vertex alone, which the landing fixes: the round ends of pavement_reach would put 10 m of it on the street')
+  rows,taper=H.street_surface(p,1,[(self.street([[-60,0.5],[87,0],[200,0]],12),1)]);self.assertEqual(sorted(rows),list(range(29)),'a street that runs on through the vertex has the road on it all along')
+ def test_the_street_is_held_as_far_as_the_road_can_reach_it(self):
+  p=self.climb(0.0);H.hold_surface(p);held=[i for i in range(30) if p.held[i]]
+  self.assertEqual(held,list(range(held[0],30)),'from the landing inward');self.assertGreater(held[0],10,'the fill 57 m from the landing is out of reach of a ramp leaving its road at 0')
+  self.assertEqual({p.floor[i] for i in held},{3.0});self.assertEqual(p.floor[10],-math.inf,'a station given up keeps its floor')
+  self.assertLessEqual(H.excess(p),.01,'what is held can be reached');p.floor[held[0]-1]=3.0;self.assertGreater(H.excess(p),.01,'and one station more cannot')
+  q=self.climb(1.5);H.hold_surface(q);self.assertTrue(all(q.held[10:]),'leaving its road at 1.5 m it reaches all of it');self.assertFalse(any(q.held[:10]))
+  r=self.climb(0.0,());H.hold_surface(r);self.assertEqual(r.floor,[-math.inf]*30,'nothing to hold');self.assertFalse(any(r.held))
+ def test_a_road_stays_as_high_where_a_ramp_leaves_it_as_the_ramp_needs_to_lie_on_its_street(self):
+  # a road 10 m wide along the x axis; a ramp 7 m wide leaves it at its vertex at x = 30 at 1 in 5, and lands 57 m on on a street 4 m up
+  trunk=plan(line(40));trunk.id='road';trunk.trench=[True]*40;trunk.fixed={0:0.0,39:0.0};b=plan(OnStreetTest.away(20,origin=(30.0,0.0)),[7.0]*20,main=False,lanes=1)
+  b.id='ramp';b.grade=I.RAMP_GRADE;b.ends=[('node',trunk,10),None];b.surface={18:(4.0,3.0,1),19:(4.0,0.,1)}
+  lift,ids=H.branch_lift(trunk,[trunk,b]);rows=I.overlap_stations(b,0,trunk);self.assertEqual(ids,['ramp']);self.assertGreater(len(rows),1)
+  j,d=rows[-1];need=4.0-b.grade*.9*float(b.along[18]-b.along[j]);k=int(np.searchsorted(trunk.along,d))
+  self.assertAlmostEqual(max(lift.values()),need,places=3,msg='as high as the ramp must start where it is last held to the road');self.assertEqual(lift[k],max(lift.values()))
+  self.assertEqual(sorted(lift),list(range(min(lift),max(lift)+1)),'the stations of the road beside the ramp where the two are held together')
+  free=plan(line(40));free.trench=[True]*40;free.fixed={0:0.0,39:0.0};free.grade=I.RAMP_GRADE;free.radius=I.RAMP_RADIUS
+  self.assertEqual(H.raise_floor(free,lift),0.);self.assertEqual({s:free.floor[s] for s in lift},lift,'where it can, it stands as high as that')
+  # held at the ground 6 m on, it can rise only so far: the floor is short of the ramp's need by one amount, the least the road allows
+  shut=plan(line(40));shut.trench=[True]*40;shut.fixed={0:0.0,39:0.0,k+2:0.0};shut.grade=I.RAMP_GRADE;shut.radius=I.RAMP_RADIUS;short=H.raise_floor(shut,lift)
+  self.assertGreater(short,0.);self.assertEqual({s:round(shut.floor[s],4) for s in lift},{s:round(v-short,4) for s,v in lift.items()});self.assertLessEqual(H.excess(shut),.01)
+  shut.floor=[-math.inf]*40;shut.floor[k]=lift[k]-short+.05;self.assertGreater(H.excess(shut),.01,'and no less')
+  # what the record keeps of it
+  b.held=[False]*18+[True,True];b.ends[1]=('street',[(self.street([[60,10],[90,10]]),0)]);trunk.raised={'for':['ramp'],'short':short}
+  b.taper=[float(I.LANDING_TAPER),21.46];entry={'road':'ramp','end':'end','streets':['s'],'wantedMeters':3.0,'heldMeters':3.0,'stations':2,'heldStations':2,'landingMeters':21.5,'trunk':{'road':'road','shortMeters':short}}
+  self.assertEqual(H.held_landings([trunk,b]),[entry])
+  # validate judges a deck by its street landing as far as the stage did (the Longfellow exit's deck lies on Cambridge
+  # Street's crossfall 22 m from its end); any other end within LANDING_TAPER
+  self.assertEqual(H.landing_reach({'heldLandings':[entry,{**entry,'road':'short','landingMeters':9.0}]}),{('ramp','end'):21.5,('short','end'):float(I.LANDING_TAPER)})
+  self.assertEqual(H.landing_reach({}),{})
+ def test_validate_finds_a_road_under_the_street_it_lands_on(self):
+  # a ramp that lands at its end on the street's vertex, 1 in 5 off the street's line; the street's ground at 1 m
+  pts=OnStreetTest.away(30)[::-1];street=self.street([[-60,0],[0,0],[120,0]]);vertices={H.key(q):[(street,i)] for i,q in enumerate(street['points'])};ground=lambda x,z:1.0
+  def routes(y,id='r',points=pts,covered=()):
+   r={'id':id,'points':points,'elevations':y,'deckWidths':[7.0]*len(points)}
+   if covered:r['tunnel']={'covered':[list(c) for c in covered]}
+   return {id:[(1,r)]}
+  self.assertEqual(H.landing_surfaces(routes([1.0]*30),{},vertices,ground),15,'the 15 stations on its roadway');sunk=[.5]*27+[1.0]*3   # (on the street for its last 6 m)
+  with self.assertRaisesRegex(AssertionError,'lies 0.50 m under the surface of the street it lands on'):H.landing_surfaces(routes(sunk),{},vertices,ground)
+  self.assertEqual(H.landing_surfaces(routes([.9]*29+[1.0]),{},vertices,ground),15,'within a lip of it')
+  # held short of the street by the stage and listed so: checked as far as it was held
+  listed={'heldLandings':[{'road':'r','end':'end','wantedMeters':42.0,'heldMeters':6.0}]};self.assertEqual(H.landing_surfaces(routes(sunk),listed,vertices,ground),3)
+  # under a roof from 18 m on: walked to there
+  self.assertEqual(H.landing_surfaces(routes([1.0]*30,covered=[[0,69.0]]),{},vertices,ground),6)
+  # a reviewed landing is walked within its length (the Dartmouth Street entrance's 12 m); it starts on the vertex
+  self.assertEqual(H.landing_surfaces(routes([1.0]*30,'i90-wb-entrance-copley',pts[::-1]),{},vertices,ground),5)
+  self.assertEqual(H.landing_surfaces(routes([2.0]*30),{},vertices,ground),0,'a ramp that ends a metre over the vertex lands on no street there')
+
+
+class LandingsKeptTest(unittest.TestCase):
+ """validate: a deck of another stage that lands on the ground still meets it where the stage changed the grid (landings_kept)."""
+ deck=staticmethod(lambda id,y,level=0,**extra:{'id':id,'name':'Overpass','points':[[0.0,0.0],[30.0,0.0]],'width':7.0,'elevations':[3.0,y],'startLevel':1,'endLevel':level,**extra})
+ def test_a_landing_the_stage_raised_the_ground_under_fails(self):
+  before=lambda x,z:0.0;raised=lambda x,z:.1 if x>20 else 0.0
+  self.assertEqual(H.landings_kept([self.deck('a',0.0)],before,before),1)
+  with self.assertRaisesRegex(AssertionError,r'a lands on the ground at \[30.0, 0.0\], and the stage has moved that ground \+0.100 m'):H.landings_kept([self.deck('a',0.0)],raised,before)
+  self.assertEqual(H.landings_kept([self.deck('a',0.0,1)],raised,before),0,'an end in the air')
+  self.assertEqual(H.landings_kept([self.deck('a',.5)],raised,before),0,'an end that stood off the ground before the stage')
+  self.assertEqual(H.landings_kept([self.deck('i90-eb-01',0.0)],raised,before),0,"the stage's own records (their own checks hold them)")
+  self.assertEqual(H.landings_kept([self.deck('a',0.0,tunnel={'covered':[]})],raised,before),0,'a tunnel record')
+
+
 class CapTest(unittest.TestCase):
  def ramp(self,roofed):
   # a ramp out of a tunnel the package does not carry: below ground all along, roofed over its first `roofed` stations
