@@ -83,6 +83,9 @@ export function pavementEdges(tile: Pick<CityTile, 'tx' | 'tz' | 'size'>, paveme
   return { left, right };
 }
 
+/** How closely an edge must run with a road (|cos|) for its record to share that road's roadway (roadwaySpan). */
+const WITH_ROAD = .8;
+
 /** The crossing of an edge polyline with the perpendicular through `at`, a station along the unit direction (tx, tz),
  * nearest to `at`: its signed offset across that direction and how closely the edge runs with the road there (|cos|). */
 function edgeCrossing(edge: Point2[], at: Point2, tx: number, tz: number): [number, number] | undefined {
@@ -111,14 +114,27 @@ export function pavementSpan(edges: { left: Point2[]; right: Point2[] }, at: Poi
  * Huntington Avenue off the reservation, Edwin H. Land Boulevard) a crosswalk stripes the whole asphalt instead of
  * stopping at the record of the road that owns it. A reservation or median wider than .5 m keeps the spans apart; a
  * cross street's junction mouth, a much wider street running alongside, or a record touching only a widened span
- * (Bothwell Road's start beside Faneuil and Arlington Streets) does not stretch the stripes. */
-export function roadwaySpan(own: [number, number], others: { left: Point2[]; right: Point2[] }[], at: Point2, tx: number, tz: number): [number, number] {
+ * (Bothwell Road's start beside Faneuil and Arlington Streets) does not stretch the stripes.
+ *
+ * With `along`, the length of the stripes, an edge that only steps where the station's line meets it still runs with
+ * the road if its offset has moved by less than that alignment allows where the stripes end (2.25 m over 3 m), and
+ * the record then counts as far as the nearer of its two offsets, so the stripes stay on its pavement. The far edge
+ * of a twin carriageway steps like that where a ramp's landing begins: the segment under the line is a 1.9 m jog at
+ * 52 degrees, the edge itself has moved 7 cm where the stripes end, and without this Congress Street's crosswalk at
+ * the eastbound landings of Exit 135 ended in the middle of its roadway. */
+export function roadwaySpan(own: [number, number], others: { left: Point2[]; right: Point2[] }[], at: Point2, tx: number, tz: number, along = 0): [number, number] {
   let [lo, hi] = own;
-  const allowance = own[1] - own[0] + 2;
+  const allowance = own[1] - own[0] + 2, end: Point2 = [at[0] + tx * along, at[1] + tz * along], drift = along * Math.sqrt(1 - WITH_ROAD * WITH_ROAD) / WITH_ROAD;
   for (const e of others) {
     const l = edgeCrossing(e.left, at, tx, tz), r = edgeCrossing(e.right, at, tx, tz);
-    if (!l || !r || l[1] < .8 || r[1] < .8 || Math.abs(l[0] - r[0]) > 40) continue;
-    const s0 = Math.min(l[0], r[0]), s1 = Math.max(l[0], r[0]);
+    if (!l || !r || Math.abs(l[0] - r[0]) > 40) continue;
+    let s0 = Math.min(l[0], r[0]), s1 = Math.max(l[0], r[0]);
+    if (l[1] < WITH_ROAD || r[1] < WITH_ROAD) {
+      if (!along) continue;
+      const l2 = edgeCrossing(e.left, end, tx, tz), r2 = edgeCrossing(e.right, end, tx, tz);
+      if (!l2 || !r2 || (l[1] < WITH_ROAD && Math.abs(l2[0] - l[0]) > drift) || (r[1] < WITH_ROAD && Math.abs(r2[0] - r[0]) > drift)) continue;
+      s0 = Math.max(s0, Math.min(l2[0], r2[0])); s1 = Math.min(s1, Math.max(l2[0], r2[0]));
+    }
     if (s0 > own[1] + .5 || s1 < own[0] - .5 || Math.max(0, own[0] - s0) + Math.max(0, s1 - own[1]) > allowance) continue;
     lo = Math.min(lo, s0); hi = Math.max(hi, s1);
   }

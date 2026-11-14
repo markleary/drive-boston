@@ -16,8 +16,22 @@ import { pavementSpan, polylineLength, roadwaySpan, stationAlong } from './tile-
  * meets it or a traffic signal stands within `SIGNAL_REACH`. Alleys, unnamed ways and ramps never justify a
  * crosswalk and are never striped. Crosswalks on one roadway closer than `MIN_SPACING` keep the one at the signal,
  * then the stem, then the wider cross street: the two carriageways of a divided street split at different nodes and
- * would stripe the shared asphalt twice; the two sides of one junction are never thinned against each other. */
+ * would stripe the shared asphalt twice; the two sides of one junction are never thinned against each other.
+ *
+ * The stripes span the road's own record at their station, widened across a twin carriageway's record that shares
+ * the asphalt there (`roadwaySpan`). A record whose edge only steps under the station's line (a twin's far edge where
+ * a ramp's landing begins) is taken in after the thinning, so every crosswalk the thinning keeps stays: thinned with
+ * the wider span, one carriageway's crosswalk crowded out its twin's 9 m along, which crossed a roadway the wider
+ * one does not reach at its own station (Newton Street in Brookline). And it is taken in only where that brings the
+ * stripes to the roadway's edge and onto no other crosswalk. The edges of a slip lane's record step like a twin's,
+ * in the middle of a junction: with it Lincoln Street's crosswalk at Cambridge Street in Allston, 9 m from its kerb
+ * into the junction, ran 18 m into it. So open ground must lie `BEYOND` the new end on one of the stripes' lines
+ * (their start, middle and end: a kerb at an angle leaves the other two on the roadway), which is ground inside no
+ * record the tile holds, and the added part may lie over no other crosswalk's stripes whichever way that one runs
+ * (`over`), nor crowd one that runs its way (`crowds`). */
 export const CROSSWALK_SETBACK = 1, STRIPE_LENGTH = 3, MIN_SPACING = 12, COMPARABLE = .75, SIGNAL_REACH = 25, MIN_ROAD = 18, MIN_WIDTH = 7;
+/** How far beyond a widened crosswalk's end the roadway must have ended, and how deep two crosswalks' stripes must lie in each other to count as one over the other. */
+const BEYOND = 1, OVERLAP = .3;
 export const NO_CROSSWALK = /alley|unnamed/i;
 
 export interface Leg { road: Road; tx: number; tz: number }
@@ -49,6 +63,16 @@ function insideRecord(edges: Edges, line: Point2[], p: Point2): boolean {
     if (!s) return false; ({ at, tx, tz } = s); span = pavementSpan(edges, at, tx, tz); if (!span) return false;
   }
   const off = (p[1] - at[1]) * tx - (p[0] - at[0]) * tz; return off > span[0] - .3 && off < span[1] + .3;
+}
+
+/** Whether `p` lies on a record's pavement: inside the ring of its left edge and its right edge back. */
+function onRecord({ left, right }: Edges, p: Point2): boolean {
+  const n = left.length, m = right.length; if (n < 2 || m < 2) return false;
+  let inside = false;
+  const side = (a: Point2, b: Point2) => { if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < a[0] + (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1])) inside = !inside; };
+  for (let i = 1; i < n; i++) side(left[i - 1], left[i]);
+  side(left[n - 1], right[m - 1]); for (let i = m - 1; i > 0; i--) side(right[i], right[i - 1]); side(right[0], left[0]);
+  return inside;
 }
 
 /** Every road vertex, so a street that ends on another's mid-vertex (half the T junctions are not split) still finds it.
@@ -109,7 +133,7 @@ function roadEnd(road: Road, points: Point2[], index: JunctionIndex, edgesOf: (r
  * those, so the thinning sees the other carriageway's candidate across a tile border (Boylston Street between tiles
  * -4_2 and -5_2) and both tiles keep the same one; the caller then draws the owned roads' crosswalks. */
 export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[]): Generator<void, Crosswalk[]> {
-  const candidates: Crosswalk[] = [];
+  const candidates: Crosswalk[] = [], wider = new Map<Crosswalk, [number, number]>();
   for (const [i, road] of roads.entries()) {
     if (i % 50 === 49) yield;
     if (road.elevations || road.kind?.endsWith('_link') || road.width < MIN_WIDTH || NO_CROSSWALK.test(road.name)) continue;
@@ -125,8 +149,10 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
       if (end.offset + STRIPE_LENGTH + far > block) continue;
       const station = stationAlong(seq, end.offset); if (!station) continue;
       const { at, tx, tz } = station, edges = edgesOf(road), width = road.pavedWidth ?? road.width;
-      const span = roadwaySpan((edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2], others, at, tx, tz);
-      candidates.push({ road, node: points[ends[j].i], at, tx, tz, span, priority: end.priority });
+      const own: [number, number] = (edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2], span = roadwaySpan(own, others, at, tx, tz);
+      const candidate: Crosswalk = { road, node: points[ends[j].i], at, tx, tz, span, priority: end.priority }; candidates.push(candidate);
+      // What it would span with the twins whose edge steps under its line, for the ones the thinning keeps.
+      const reach = roadwaySpan(own, others, at, tx, tz, STRIPE_LENGTH); if (reach[0] < span[0] - .01 || reach[1] > span[1] + .01) wider.set(candidate, reach);
     }
   }
   // Deterministic whatever order the roads came in and whichever tile holds a road's record (a neighbour sees only its
@@ -135,18 +161,38 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
   candidates.sort((a, b) => b.priority - a.priority || breadth(b) - breadth(a) || (b.span[1] - b.span[0]) - (a.span[1] - a.span[0]) || (a.road.id < b.road.id ? -1 : a.road.id > b.road.id ? 1 : 0) || a.at[0] - b.at[0] || a.at[1] - b.at[1]);
   const kept: Crosswalk[] = [];
   const center = (c: Crosswalk): Point2 => [c.at[0] + c.tx * STRIPE_LENGTH / 2, c.at[1] + c.tz * STRIPE_LENGTH / 2];
-  for (const c of candidates) {
-    const cc = center(c), crowded = kept.some(k => {
-      const dot = k.tx * c.tx + k.tz * c.tz; if (Math.abs(dot) < .8) return false;
-      // Opposite sides of one junction are both wanted, even at a narrow lane.
-      // Twin carriageways can also share that node before diverging: those
-      // point the same way and must still compete for their shared pavement.
-      if (dot < 0 && Math.hypot(k.node[0] - c.node[0], k.node[1] - c.node[1]) < 1) return false;
-      const kc = center(k), dx = kc[0] - cc[0], dz = kc[1] - cc[1]; if (Math.abs(dx * c.tx + dz * c.tz) >= MIN_SPACING) return false;
-      const n = -dx * c.tz + dz * c.tx, lo = dot > 0 ? n + k.span[0] : n - k.span[1], hi = dot > 0 ? n + k.span[1] : n - k.span[0];
-      return Math.min(hi, c.span[1]) - Math.max(lo, c.span[0]) > 2;
-    });
-    if (!crowded) kept.push(c);
+  /** Whether `k` crosses the roadway `c` crosses, within the minimum spacing along it. */
+  const crowds = (k: Crosswalk, c: Crosswalk) => {
+    const dot = k.tx * c.tx + k.tz * c.tz; if (Math.abs(dot) < .8) return false;
+    // Opposite sides of one junction are both wanted, even at a narrow lane.
+    // Twin carriageways can also share that node before diverging: those
+    // point the same way and must still compete for their shared pavement.
+    if (dot < 0 && Math.hypot(k.node[0] - c.node[0], k.node[1] - c.node[1]) < 1) return false;
+    const cc = center(c), kc = center(k), dx = kc[0] - cc[0], dz = kc[1] - cc[1]; if (Math.abs(dx * c.tx + dz * c.tz) >= MIN_SPACING) return false;
+    const n = -dx * c.tz + dz * c.tx, lo = dot > 0 ? n + k.span[0] : n - k.span[1], hi = dot > 0 ? n + k.span[1] : n - k.span[0];
+    return Math.min(hi, c.span[1]) - Math.max(lo, c.span[0]) > 2;
+  };
+  for (const c of candidates) if (!kept.some(k => crowds(k, c))) kept.push(c);
+  /** Whether open ground, inside no record, lies at offset `o` across `c` on one of its stripes' three lines. */
+  const open = (c: Crosswalk, o: number) => [0, STRIPE_LENGTH / 2, STRIPE_LENGTH].some(a => { const p: Point2 = [c.at[0] + c.tx * a - c.tz * o, c.at[1] + c.tz * a + c.tx * o]; return !others.some(e => onRecord(e, p)); });
+  /** Whether the stripes of `c` between two offsets of its span lie over those of `k`: two rectangles, on their four axes. */
+  const over = (c: Crosswalk, lo: number, hi: number, k: Crosswalk) => {
+    const h = STRIPE_LENGTH / 2, a = (hi - lo) / 2, b = (k.span[1] - k.span[0]) / 2, mid = (lo + hi) / 2, km = (k.span[0] + k.span[1]) / 2;
+    const dx = k.at[0] + k.tx * h - k.tz * km - (c.at[0] + c.tx * h - c.tz * mid), dz = k.at[1] + k.tz * h + k.tx * km - (c.at[1] + c.tz * h + c.tx * mid);
+    const dot = Math.abs(c.tx * k.tx + c.tz * k.tz), cross = Math.abs(c.tx * k.tz - c.tz * k.tx);
+    return Math.abs(dx * c.tx + dz * c.tz) < h + h * dot + b * cross - OVERLAP && Math.abs(dz * c.tx - dx * c.tz) < a + h * cross + b * dot - OVERLAP
+      && Math.abs(dx * k.tx + dz * k.tz) < h + h * dot + a * cross - OVERLAP && Math.abs(dz * k.tx - dx * k.tz) < b + h * cross + a * dot - OVERLAP;
+  };
+  // The ones that stay reach across a record whose edge steps under their line, on each side where that brings them
+  // to the roadway's edge and onto no other crosswalk, and if they then crowd none.
+  for (let i = 0; i < kept.length; i++) {
+    const reach = wider.get(kept[i]); if (!reach) continue;
+    const c = kept[i], rest = kept.filter((_, j) => j !== i);
+    const takes = (lo: number, hi: number, end: number, side: 1 | -1) => hi - lo > .01 && open(c, end + side * BEYOND) && !rest.some(k => over(c, lo, hi, k));
+    const span: [number, number] = [takes(reach[0], c.span[0], reach[0], -1) ? reach[0] : c.span[0], takes(c.span[1], reach[1], reach[1], 1) ? reach[1] : c.span[1]];
+    if (span[0] === c.span[0] && span[1] === c.span[1]) continue;
+    const wide: Crosswalk = { ...c, span };
+    if (!rest.some(o => crowds(o, wide) || crowds(wide, o))) kept[i] = wide;
   }
   return kept;
 }
