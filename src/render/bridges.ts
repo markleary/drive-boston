@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type {CityData,Point2} from '../types';
 import {roadDeckGeometry,roadSlabGeometry,sampleRoadElevation,bridgeSupports,bridgeBarriers,bridgeEdgeSections,closedEndBarriers,laneMarkings,JERSEY,type ClosureUnit} from '../simulation/road-surfaces.ts';
+import {medianBarriers,medianBarrierMesh} from '../simulation/median-barriers.ts';
 import {drapedRibbon} from './terrain-ground.ts';
 import {mergeSpatialGeometries} from './spatial-batches.ts';
 import {TriangleWriter} from './geometry-writer.ts';
@@ -8,10 +9,11 @@ import {signMaterial} from './tunnels.ts';
 import {drain,due,type Pace} from './pacing.ts';
 import {inheritRoadHeadlights} from './road-headlights.ts';
 
-/** Materials of the highway closures, shared by every tile. */
-let shared:{barrier:THREE.Material;amber:THREE.Material;metal:THREE.Material;sign:THREE.Material}|undefined;
+/** The precast barriers' concrete (a closure's row, a median's), and the other materials of the highway closures, shared by every tile. */
+let precast:THREE.Material|undefined,shared:{barrier:THREE.Material;amber:THREE.Material;metal:THREE.Material;sign:THREE.Material}|undefined;
+export const precastMaterial=()=>precast??=new THREE.MeshStandardMaterial({color:'#b4b2a6',roughness:.93});
 const closureMaterials=()=>shared??={
-  barrier:new THREE.MeshStandardMaterial({color:'#b4b2a6',roughness:.93}),
+  barrier:precastMaterial(),
   amber:new THREE.MeshBasicMaterial({color:'#f0b23c'}),metal:new THREE.MeshStandardMaterial({color:'#394342',roughness:.8,metalness:.3}),sign:signMaterial(['ROAD CLOSED','DO NOT ENTER'],true),
 };
 /** A 15 cm line along `points`, 4 cm over the deck, its corners on the deck. */
@@ -41,7 +43,7 @@ export function* roadStructureSteps(scene:THREE.Object3D,city:CityData,asphalt?:
   const paint=new THREE.MeshStandardMaterial({color:'#dbd9bc',roughness:.87});
   asphalt??=new THREE.MeshStandardMaterial({color:'#50565a',roughness:.94});
   const decks:THREE.BufferGeometry[]=[],slabs:THREE.BufferGeometry[]=[],markings:THREE.BufferGeometry[]=[],rails:THREE.BufferGeometry[]=[],piers:THREE.BufferGeometry[]=[];
-  const yellow:THREE.BufferGeometry[]=[],jerseys:THREE.BufferGeometry[]=[],glints:THREE.BufferGeometry[]=[];let closures=0;
+  const yellow:THREE.BufferGeometry[]=[],jerseys:THREE.BufferGeometry[]=[],glints:THREE.BufferGeometry[]=[];let closures=0,medians=0;
   for(const road of structures){
     if(!road.elevations||road.tunnel)continue;
     if(due(pace))yield;
@@ -84,8 +86,16 @@ export function* roadStructureSteps(scene:THREE.Object3D,city:CityData,asphalt?:
       if(Math.floor(distance/5)%2===0)markings.push(drapedRibbon(city,[a,b],.12,.04,surface));distance+=length;
     }
     if(due(pace))yield;
-    for(const p of bridgeBarriers(city,road)){
+    for(const p of bridgeBarriers(city,road,continuationCity)){
       const g=new THREE.BoxGeometry(.27,.76,p.length).rotateX(-p.slope).rotateY(p.yaw).translate(p.x,p.y,p.z);rails.push(g);
+    }
+    // The median barrier this deck carries between itself and the deck running the opposite way (reckoned, like the rails
+    // it replaces, on the whole city: a tile's view may not hold the other deck): the closures' precast profile as one row.
+    const median=medianBarrierMesh(medianBarriers(continuationCity,road),road.bridge?.thickness);
+    if(median.length){
+      const row=new TriangleWriter(median.length/3);
+      for(let i=0;i<median.length;i+=9)row.triangle(median[i],median[i+1],median[i+2],median[i+3],median[i+4],median[i+5],median[i+6],median[i+7],median[i+8]);
+      jerseys.push(row.geometry());medians++;
     }
     if(due(pace))yield;
     for(const p of bridgeSupports(city,road)){
@@ -96,10 +106,10 @@ export function* roadStructureSteps(scene:THREE.Object3D,city:CityData,asphalt?:
   const lanePaint=yellow.length?new THREE.MeshStandardMaterial({color:'#d9b443',roughness:.87}):paint;
   inheritRoadHeadlights(asphalt,paint);
   if(lanePaint!==paint)inheritRoadHeadlights(asphalt,lanePaint);
-  const {barrier,amber}=closures?closureMaterials():{barrier:concrete,amber:paint};
+  const {barrier,amber}=closures?closureMaterials():{barrier:medians?precastMaterial():concrete,amber:paint};
   for(const [geometries,material]of [[decks,asphalt],[slabs,steel],[markings,paint],[yellow,lanePaint],[rails,concrete],[piers,concrete],[jerseys,barrier],[glints,amber]]as const){
     for(const mesh of mergeSpatialGeometries(geometries,material)){mesh.castShadow=geometries!==markings&&geometries!==yellow&&geometries!==glints;mesh.receiveShadow=true;group.add(mesh);}
   }
-  group.userData={roads:structures.length,closures,deckHeight:'Estimated profile on official source alignments',collision:'Independent closed decks; clear mapped underpasses'};
+  group.userData={roads:structures.length,closures,medians,deckHeight:'Estimated profile on official source alignments',collision:'Independent closed decks; clear mapped underpasses'};
   scene.add(group);return group;
 }

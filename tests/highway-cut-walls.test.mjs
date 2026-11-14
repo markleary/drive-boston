@@ -3,12 +3,14 @@ import test from 'node:test';
 import {loadMetroCity} from './helpers/metro-city.mjs';
 import {bareStretches,openCutFloorAt,tunnelCoveredAt,tunnelGeometry,tunnelStations,tunnelSurfaceLandingAt,WALL_CURB,WALL_GAP,WALL_LEVEL} from '../src/simulation/tunnels.ts';
 import {bridgeBarriers,deckEdge,deckEdgeElevation,deckEdgeGrounded,deckUndersideAt,roadProjection,roadWidthAt,RAIL_LIP,RAIL_RUN,SHELF_DROP} from '../src/simulation/road-surfaces.ts';
+import {medianBarriers,medianSpans,MEDIAN_REACH} from '../src/simulation/median-barriers.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 
 // A cut's side gets a wall only where it has ground to retain or a drop to guard (`bareStretches` in tunnels.ts): elsewhere it
 // keeps the curb that closes the slot between its pavement and the ground, on a road whose decks lie open on their surveyed
 // roadway (Storrow Drive, the ramps). The Turnpike's carriageways are railed along the ground, and their cuts' walls carry that
-// rail on. Synthetic records first, shaped like the installed ones, on a terrain grid of 2 m cells; then the package.
+// rail on, but along the median, where one barrier row stands between the two roads (tests/median-barriers.test.mjs for two decks,
+// tests/median-cuts.test.mjs for the cuts). Synthetic records first, shaped like the installed ones, on a terrain grid of 2 m cells; then the package.
 const LEVEL=.06,W=10,line=(x0,x1,z=0,step=3)=>{const n=Math.max(1,Math.round(Math.abs(x1-x0)/step));return Array.from({length:n+1},(_,i)=>[x0+(x1-x0)*i/n,z]);};
 const deck=(id,points,highway='storrow',extra={})=>({id,name:'Test',kind:'motorway',points,width:W,oneway:1,lanes:3,elevations:points.map(()=>LEVEL),deckWidths:points.map(()=>W),startLevel:1,endLevel:1,bridge:{id:highway,kind:'boston-highway',thickness:.75},...extra});
 const cut=(id,points,highway='storrow',extra={})=>({...deck(id,points,highway),bridge:undefined,highway,startLevel:-1,endLevel:-1,tunnel:{clearance:3.2,covered:[]},...extra});
@@ -223,20 +225,36 @@ test('a wall that retains ground or guards a drop stands as before, whatever the
   assert.ok(retained>1500&&guarded>100,`${retained} stations of retained ground, ${guarded} of guarded drop`);
 });
 
-test('the Turnpike\'s carriageways keep a barrier along the ground: their cuts\' walls carry on the rail of their decks',()=>{
-  // Its decks carry no surveyed roadway and are railed along embankments and cuts alike (`bridgeBarriers`), so a cut of the same carriageway
-  // on level ground keeps its 0.8 m wall: one barrier along the road, whichever kind of record a stretch happens to be.
-  let level=0,walled=0;
-  for(const road of cuts.filter(carriageway))for(const side of [-1,1]){assert.deepEqual(bareStretches(city,road,side),[]);for(const p of sideSamples(road,side))if(p.level&&!p.otherCut&&!p.slab){level++;if(p.rise>PARAPET)walled++;}}
-  assert.ok(level>2000&&walled>level*.97,`${walled} of ${level} level stations of the carriageways' cuts are walled`);
-  // Interstate 90 West just west of the Bowker Overpass: 153 m of cut between two decks, its median level with the eastbound deck.
+test('the Turnpike\'s carriageways keep a barrier along the ground: their cuts\' walls carry on the rail or the median barrier of their decks',()=>{
+  // Its decks carry no surveyed roadway and are railed along embankments and cuts alike (`bridgeBarriers`; along the median one barrier row
+  // stands for the two decks' rails), so a cut of the same carriageway on level ground keeps its 0.8 m wall: one barrier along the road,
+  // whichever kind of record a stretch happens to be. Along the median a cut takes part like a deck: the row runs on between the two
+  // roads and the cut has no wall of its own there (`medianSpans`).
+  let level=0,walled=0,shared=0;
+  for(const road of cuts.filter(carriageway))for(const side of [-1,1]){
+    assert.deepEqual(bareStretches(city,road,side),[]);const spans=medianSpans(city,road,side);
+    for(const p of sideSamples(road,side))if(p.level&&!p.otherCut&&!p.slab){
+      level++;
+      if(spans.some(([a,b])=>p.s>=a&&p.s<=b)){shared++;assert.ok(!(p.over>.1),`${road.id}: a wall of its own on the median at station ${p.s.toFixed(0)}`);}else if(p.rise>PARAPET)walled++;
+    }
+  }
+  assert.ok(level>2000&&walled+shared>level*.97&&shared>800&&walled>800,`${walled} of ${level} level stations of the carriageways' cuts are walled, ${shared} have the row between the two roads`);
+  // Interstate 90 West just west of the Bowker Overpass: 153 m of cut between two decks, its median level with the eastbound deck,
+  // whose pavement its own overlaps. Its wall stood up to 0.6 m inside that deck's pavement; the eastbound deck carries the row past it.
   const road=byId.get('i90-wb-26'),median=sideSamples(road,-1);
   assert.ok(median.length>140&&median.every(p=>p.level),'its median side has nothing to retain');
-  assert.ok(median.filter(p=>p.s>1&&p.s<152).every(p=>p.over>.75),'and is walled all along');
-  // (the decks either side of it: railed along the median but where the two carriageways' pavements touch)
-  for(const id of ['i90-wb-25','i90-wb-27']){const metres=bridgeBarriers(city,byId.get(id)).filter(p=>p.side===-1).reduce((sum,p)=>sum+p.length,0);assert.ok(metres>150,`${id} has ${metres.toFixed(0)} m of rail on its median side`);}
-  const after=byId.get('i90-wb-27'),joint=after.points[0];assert.ok(bridgeBarriers(city,after).some(p=>p.side===-1&&Math.hypot(p.x-joint[0],p.z-joint[1])<8),'the rail takes over from the wall at the joint');
-  assert.ok(decks.filter(carriageway).every(r=>!r.roadway),'no carriageway deck has a surveyed roadway');
+  assert.ok(median.every(p=>!(p.over>.1)),'and no wall of its own');
+  assert.ok(sideSamples(road,1).filter(p=>p.s>1&&p.s<152&&!p.slab).every(p=>p.over>.75),'its outer side is walled all along');
+  // (the row on the median between the eastbound deck, which carries it, and what runs the other way beside it, cut or deck:
+  // src/simulation/median-barriers.ts)
+  const rows=decks.flatMap(r=>medianBarriers(city,r)),beside=(road,s)=>{const hit=roadProjection(road,s.x,s.z);return hit.distance<roadWidthAt(road,s.x,s.z)/2+MEDIAN_REACH&&!(hit.index===0&&hit.t<=0)&&!(hit.index===road.points.length-2&&hit.t>=1);};
+  for(const [id,least]of [['i90-wb-25',150],['i90-wb-26',140],['i90-wb-27',150]]){
+    const deck=byId.get(id),metres=rows.reduce((sum,run)=>sum+run.slice(1).reduce((m,s,i)=>m+(beside(deck,s)&&beside(deck,run[i])?Math.hypot(s.x-run[i].x,s.z-run[i].z):0),0),0);
+    assert.ok(metres>least,`${id} has ${metres.toFixed(0)} m of barrier row on its median`);
+  }
+  const after=byId.get('i90-wb-27'),joint=deckEdge(after,0,-1);assert.ok(rows.some(run=>run.some(s=>Math.hypot(s.x-joint[0],s.z-joint[1])<3)),'the row runs through the joint of the cut and the deck');
+  // (a deck names its road in `bridge.id`, a cut in `highway`)
+  const pike=decks.filter(r=>r.bridge.id==='i90'&&r.kind==='motorway');assert.ok(pike.length>50&&pike.every(r=>!r.roadway),'no carriageway deck has a surveyed roadway');
   assert.ok(decks.filter(r=>r.bridge.id==='storrow'&&r.kind==='motorway').every(r=>r.roadway?.some(Boolean)),'every Storrow Drive deck has one');
 });
 

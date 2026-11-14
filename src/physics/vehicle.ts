@@ -6,6 +6,7 @@ import type { CityData, DriveInput, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
 import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, sampleVehicleSurface, registerDriveSurface, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
 import {footbridgeRoad,footbridgeSupports,FOOTBRIDGE_COLUMN} from '../simulation/footbridges.ts';
+import {medianBarriers,medianBarrierBoxes} from '../simulation/median-barriers.ts';
 import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
 import {tireSlipIntensity,type TireContact} from '../simulation/tire-tracks.ts';
 
@@ -217,11 +218,14 @@ export class DrivingPhysics {
       for(const mesh of Object.values(shell))if(mesh.indices.length)colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices,mesh.indices,RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(.5).setRestitution(.02)));
       return colliders;
     }
-    for (const p of bridgeBarriers(city, road)) {
+    // (rails and the median row are reckoned on the whole city: a tile's view may not hold the deck across the median)
+    for (const p of bridgeBarriers(city, road, this.city)) {
       // Same yaw/pitch transform as the visible parapet.
       const sx = Math.sin(-p.slope / 2), cx = Math.cos(-p.slope / 2), sy = Math.sin(p.yaw / 2), cy = Math.cos(p.yaw / 2);
       colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.cuboid(.135, .38, p.length / 2).setTranslation(p.x, p.y, p.z).setRotation({ x: cy * sx, y: sy * cx, z: -sy * sx, w: cy * cx }).setFriction(.4)));
     }
+    // The median barrier this deck carries between itself and the deck running the opposite way: its profile and its foot, as drawn.
+    colliders.push(...this.addParapets(medianBarrierBoxes(medianBarriers(this.city, road), road.bridge?.thickness)));
     // A closed end's barrier units, solid boxes of the full profile, set like the rendered row.
     for (const u of closedEndBarriers(city, road)?.units ?? []) {
       const sy = Math.sin(u.yaw / 2), cy = Math.cos(u.yaw / 2), sz = Math.sin(u.roll / 2), cz = Math.cos(u.roll / 2), h = JERSEY.height / 2;

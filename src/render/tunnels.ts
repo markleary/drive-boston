@@ -7,6 +7,7 @@ import {createTunnelCeilingMaterial,tiledTunnelCeiling} from './tunnel-ceiling.t
 import {tunnelContinuation,TUNNEL_CONTINUATION_LENGTH} from './tunnel-continuation.ts';
 import {LANE_WIDTH} from '../simulation/motorway.ts';
 import {inheritRoadHeadlights} from './road-headlights.ts';
+import {precastMaterial} from './bridges.ts';
 
 /** Procedural wall tilework is shared by every bore. Metre UVs keep the tile
  * joints and the green guidance band aligned to the local, sloping floor. */
@@ -192,6 +193,8 @@ export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false,headl
     mesh(tiledTunnelCeiling(geometry.roof,road),ceiling,`${road.name} ceiling`);
     if(cut?.indices.length)mesh(buffer(cut),cutConcrete,`${road.name} cut walls`);
     mesh(buffer(geometry.barriers),concrete,`${road.name} concrete closure`);
+    // (the median barrier row a cut carries between itself and the carriageway that runs the other way, in the precast concrete of a deck's)
+    if(geometry.median.indices.length)mesh(buffer(geometry.median),precastMaterial(),`${road.name} median barrier`);
     // A generated highway record carries its lane count: 3.65 m lanes centred on the centre line, as its traffic runs.
     const lanes=road.lanes??Math.max(1,Math.round((road.width-1.4)/3.5));
     // An edge inside a joined carriageway is no longer a road border. Retain

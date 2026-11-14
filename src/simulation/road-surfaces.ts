@@ -4,6 +4,7 @@ import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.
 import {inTransitClearance} from './transit-corridors.ts';
 import {inTunnelPortal,openCutFloorAt,tunnelAt,tunnelsNear} from './tunnels.ts';
 import {CLOSURE_SETBACK,LANE_WIDTH,isHighwayDeck,motorwayLanes,pointAtDistance,speedClass,stations} from './motorway.ts';
+import {medianStretches} from './median-barriers.ts';
 
 /** Bounding boxes of 16-segment runs of a long polyline (a highway deck has
  * hundreds of points and is projected for every car on it every step). */
@@ -361,8 +362,10 @@ function coveredDeckInterval(a:Point2,b:Point2,ya:number,yb:number,triangle:Deck
 }
 
 /** Exposed edge intervals at the requested inset. Markings test their actual
- * centerline; rails probe outside the deck to retain coincident outer edges. */
-export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset=inset,levelTolerance=.8){
+ * centerline; rails probe outside the deck to retain coincident outer edges.
+ * `hidden` names further stretches to leave out, as fractions of the edge from
+ * station `index - 1` to `index` (a median: `medianStretches`). */
+export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset=inset,levelTolerance=.8,hidden?:(index:number,side:number)=>readonly [number,number][]|undefined){
   if(!road.elevations)return[];
   const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number;side:number;index:number}[]=[];
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
@@ -371,7 +374,7 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
     const probeYa=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideA):ya,probeYb=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideB):yb;
     const candidates=new Set<DeckTriangle>();
     for(let x=Math.floor(Math.min(outsideA[0],outsideB[0])/DECK_CELL);x<=Math.floor(Math.max(outsideA[0],outsideB[0])/DECK_CELL);x++)for(let z=Math.floor(Math.min(outsideA[1],outsideB[1])/DECK_CELL);z<=Math.floor(Math.max(outsideA[1],outsideB[1])/DECK_CELL);z++)for(const triangle of cells.get(`${x},${z}`)??[])if(triangle.road!==road)candidates.add(triangle);
-    const covered:[number,number][]=[];
+    const covered:[number,number][]=[...hidden?.(i,side)??[]];
     for(const triangle of candidates){const interval=coveredDeckInterval(outsideA,outsideB,probeYa,probeYb,triangle,levelTolerance);if(interval)covered.push(interval);}
     covered.sort((a,b)=>a[0]-b[0]);
     const exposed:[number,number][]=[];let cursor=0;
@@ -442,8 +445,12 @@ export function junctionMouths(city:CityData,road:Road){
  * outside the rail, 1.5 m further out and up to 7 m out, so an edge beside a
  * drop, over water or on a narrow shelf above an embankment keeps its rail, while
  * the first `MOUTH_REACH` metres from a junction (`junctionMouths`) stay open
- * whatever lies beyond the cross street. */
-export function bridgeBarriers(city:CityData,road:Road){
+ * whatever lies beyond the cross street. Along a median, where a highway deck
+ * running the opposite way lies within `MEDIAN_REACH` of the edge at its level,
+ * neither deck has a rail of its own: one barrier row stands between the two
+ * (`medianBarriers` in median-barriers.ts). `whole` is the whole city where
+ * `city` is a tile's road view, which may not hold the deck across the median. */
+export function bridgeBarriers(city:CityData,road:Road,whole=city){
   if(isHarvardBridgeRoad(road))return[]; // Outer sidewalk parapets are built in harvard-bridge.ts.
   const interstate=isHighwayDeck(road);
   const mouths=interstate
@@ -459,7 +466,7 @@ export function bridgeBarriers(city:CityData,road:Road){
     if(road.roadway[i-1]&&j<road.roadway.length-1&&along[j+1]-along[i-1]<RAIL_RUN)for(let k=i+1;k<=j;k++)breaks.add(k);
     i=j;
   }
-  const rails=bridgeEdgeSections(city,road,.18,-.06).flatMap(({a,b,ya,yb,side,index})=>{
+  const rails=bridgeEdgeSections(city,road,.18,-.06,.8,interstate?medianStretches(whole,road):undefined).flatMap(({a,b,ya,yb,side,index})=>{
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),ox=-dz/(distance||1)*side,oz=dx/(distance||1)*side;
     // A highway deck on the ground with a surveyed roadway (`Road.roadway`: Storrow Drive, a ramp between its curbs) is a street's pavement there, not a railed carriageway.
     // Where that roadway begins or ends (a `seam`: one station of the two has none, the deck carries on as a walled cut there or goes under a bridge)

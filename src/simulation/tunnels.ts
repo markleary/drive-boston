@@ -2,6 +2,7 @@ import type {CityData,Point2,Road} from '../types';
 import {DECK_LANES,deckEdge,deckEdgeElevation,deckUndersideAt,highwayDeckNear,highwayDecksBeside,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
 import {sampleElevation,terrainGrid} from './terrain.ts';
 import {RAIL_LIP,RAIL_RUN,SHELF_DROP,highwayDeckAt} from './road-surfaces.ts';
+import {medianBarrierMesh,medianBarriers,medianSpans} from './median-barriers.ts';
 
 export interface TunnelMesh {vertices:Float32Array;indices:Uint32Array;}
 type Vertex=[number,number,number];
@@ -397,11 +398,13 @@ export const WALL_LEVEL=.25;
 export const WALL_GAP=6;
 /** What stands along a cut's side that has no wall: the curb that closes the slot between the pavement and the ground it was cut out of. */
 export const WALL_CURB=.08;
+/** The slab under a tunnel record's pavement (`roadSlabGeometry` gives a record without a `bridge` this thickness). */
+const SLAB=.75;
 const openDecks=new WeakMap<Road[],Set<string>>();
 /** Whether the decks of a cut's own road lie open on the ground: the decks of its highway and kind (carriageway or ramp) carry a
  * surveyed roadway (`Road.roadway`), beside which `bridgeBarriers` stands no rail where the deck lies on its ground. Storrow Drive's
  * and the ramps' do. The Turnpike's carriageways are railed along the ground as well, and their cuts' walls carry that rail on. */
-function decksLieOpen(city:CityData,road:Road){
+export function decksLieOpen(city:CityData,road:Road){
   let open=openDecks.get(city.roads);
   if(!open){open=new Set();for(const r of city.roads)if(r.bridge&&!r.tunnel&&r.roadway?.some(Boolean))open.add(`${r.bridge.id} ${r.kind}`);openDecks.set(city.roads,open);}
   return !!road.highway&&open.has(`${road.highway} ${road.kind}`);
@@ -561,7 +564,7 @@ const WALL_REACH=24,WALL_PROBE=.5,WALL_STEP=1;
  * guarded portal headers, terminal Jersey barriers and sealed black backwalls. */
 export function tunnelGeometry(city:CityData,road:Road){
   const walls=meshBuilder(),roof=meshBuilder(),barriers=meshBuilder(),headers=meshBuilder(),caps=meshBuilder();
-  if(!road.tunnel||!road.elevations)return{walls:walls.result(),roof:roof.result(),barriers:barriers.result(),caps:caps.result()};
+  if(!road.tunnel||!road.elevations)return{walls:walls.result(),roof:roof.result(),barriers:barriers.result(),caps:caps.result(),median:meshBuilder().result()};
   const clearance=road.tunnel.clearance,stations=tunnelStations(road),total=stations.at(-1)!;
   const surfaceTerminal=(s:number)=>{const p=tunnelPointAt(road,s);return !tunnelCoveredAt(road,s)&&Math.abs(p.y-sampleElevation(city,p.x,p.z))<.6;};
   // A highway's walled cut meets a deck with its own barrier at each end, not a street: its walls keep their height there.
@@ -584,9 +587,13 @@ export function tunnelGeometry(city:CityData,road:Road){
   // A street bridge over a highway's walled cut: the wall stops under the bridge's slab instead of standing across the street
   // (its top is the ground beside the cut plus a parapet, which is where a level bridge's deck lies).
   const slab=road.highway?(x:number,z:number,y:number)=>deckUndersideAt(city,x,z,y+BRIDGE_HEADROOM):undefined;
+  // Along a median (median-barriers.ts: the carriageway that runs the opposite way lies within reach at this level, deck or cut) one
+  // barrier row stands between the two roads and the cut has no wall of its own on that side, as a deck there has no rail. Its wall
+  // stood in the other road's pavement where the two overlap, or was taken out of the other cut's excavation and left nothing.
+  const spans=new Map([-1,1].map(side=>[side,road.highway?medianSpans(city,road,side):[]]));
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
     const start=deckEdge(road,i-1,side,-.08),end=deckEdge(road,i,side,-.08),ya=deckEdgeElevation(road,i-1,side),yb=deckEdgeElevation(road,i,side),lo=stations[i-1],hi=stations[i];
-    const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...new Set([...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(s=>s>lo&&s<hi),...profiles.get(side)!.flat().map(p=>p.station).filter(s=>s>lo&&s<hi)])].sort((a,b)=>a-b);
+    const steps=Math.max(1,Math.ceil((hi-lo)/4)),breaks=[...new Set([...Array.from({length:steps+1},(_,j)=>lo+(hi-lo)*j/steps),...[...(road.tunnel.covered??[]),...(road.tunnel.surfaceLandings??[])].flat().filter(s=>s>lo&&s<hi),...profiles.get(side)!.flat().map(p=>p.station).filter(s=>s>lo&&s<hi),...spans.get(side)!.flat().filter(s=>s>lo&&s<hi)])].sort((a,b)=>a-b);
     const under=(s:number)=>{const t=(s-lo)/(hi-lo);return slab!(start[0]+(end[0]-start[0])*t,start[1]+(end[1]-start[1])*t,ya+(yb-ya)*t);};
     // Split where the wall line passes under a deck's edge, so the wall steps down there and not a few metres either side.
     if(slab)for(let j=breaks.length-1;j>0;j--){
@@ -632,7 +639,7 @@ export function tunnelGeometry(city:CityData,road:Road){
         const span=breaks[j]-breaks[j-1],m=under(midpoint);
         if(m<Infinity){const la=under(breaks[j-1]+span*.02),lb=under(breaks[j]-span*.02);a.top=Math.min(a.top,la<Infinity?la:m);b.top=Math.min(b.top,lb<Infinity?lb:m);if(a.top<=a.y+.05&&b.top<=b.y+.05)continue;}
       }
-      if(breaks[j]-breaks[j-1]>.001)box(walls,[a.x,a.z],[b.x,b.z],a.y-.3,b.y-.3,a.top,b.top,.4);
+      if(breaks[j]-breaks[j-1]>.001&&(covered||!spans.get(side)!.some(([from,to])=>midpoint>=from&&midpoint<=to)))box(walls,[a.x,a.z],[b.x,b.z],a.y-.3,b.y-.3,a.top,b.top,.4);
     }
   }
   for(const [lo,hi]of road.tunnel.covered??[[0,total]]){
@@ -656,5 +663,8 @@ export function tunnelGeometry(city:CityData,road:Road){
     const c=tunnelPointAt(road,atStart?0:total),cx=Math.cos(c.yaw),cz=-Math.sin(c.yaw);
     box(caps,[c.x-cx*c.width/2,c.z-cz*c.width/2],[c.x+cx*c.width/2,c.z+cz*c.width/2],c.y-.3,c.y-.3,c.y+clearance+.45,c.y+clearance+.45,.6);
   }
-  return{walls:unionWalls(city,road,walls.result()),roof:roof.result(),barriers:barriers.result(),caps:caps.result()};
+  // The row itself, where this record carries it (one of the two does): the precast profile on its foot, as a deck's (not through
+  // `unionWalls`: it stands between the two pavements, which is the other cut's excavation too where they overlap).
+  const row=road.highway?medianBarrierMesh(medianBarriers(city,road),SLAB):new Float32Array(0);
+  return{walls:unionWalls(city,road,walls.result()),roof:roof.result(),barriers:barriers.result(),caps:caps.result(),median:{vertices:row,indices:Uint32Array.from({length:row.length/3},(_,i)=>i)}};
 }
