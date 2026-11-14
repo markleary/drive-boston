@@ -227,7 +227,8 @@ for(const [name,first,second]of HIGHWAYS)test(`${name}: wherever the decks of it
   assert.ok(within>2000&&close>500,`${within} stations on a median, ${close} of them with half a metre or less between the pavements`);
 });
 
-// (Interstate 93 has one unbroken median from the Somerville line to Roosevelt Circle; the Turnpike's is parted by its walled cuts, twelve stretches on this package)
+// (Interstate 93 has one unbroken median from the Somerville line to Roosevelt Circle; the Turnpike's runs on through its walled cuts and is parted by its
+// tunnels, by the stretches where the two roads part or lie on two levels, and by ground standing between two cuts: nine rows on this package)
 for(const [name,first,second,least,most]of [['Interstate 93','i93-nb','i93-sb',1,1],['the Turnpike','i90-eb','i90-wb',6,12]])test(`${name}: no two rails stand side by side on its median, and a row ends only where the two decks part or one of them ends`,()=>{
   const [a,b]=[series(first),series(second)].map(list=>list.filter(isHighwayDeck)),theirs=grid(railSegments(b));
   for(const rail of railSegments(a)){
@@ -241,10 +242,18 @@ for(const [name,first,second,least,most]of [['Interstate 93','i93-nb','i93-sb',1
   // A run ends where the next record's begins (the same section) or in the open: there the two decks have parted beyond
   // the reach, or one of them has ended (it carries on as a walled cut, whose wall is the barrier, or the road is closed).
   const sides=[boxed(a),boxed(b)];let open=0;
+  const meets=(end,run)=>[run[0],run.at(-1)].some(s=>Math.hypot(s.x-end.x,s.z-end.z)<.05&&Math.abs(s.y-end.y)<.05&&Math.abs(s.half-end.half)<.05);
+  // A record's piece of a row may be short, a row may not: the pieces that meet end to end are measured as one row.
+  const rows=[],placed=new Set();
+  for(const seed of runs){
+    if(placed.has(seed))continue;
+    const row=[seed];placed.add(seed);
+    for(let k=0;k<row.length;k++)for(const o of runs)if(!placed.has(o)&&[row[k].run[0],row[k].run.at(-1)].some(end=>meets(end,o.run))){placed.add(o);row.push(o);}
+    rows.push({pieces:row,length:row.reduce((sum,r)=>sum+metres(r.run),0)});
+  }
+  for(const row of rows)assert.ok(row.length>=10,`a row of ${row.length.toFixed(1)} m on ${row.pieces.map(r=>r.road.id).join(', ')}`);
   for(const {road,run}of runs){
-    const joined=end=>runs.some(o=>o.run!==run&&[o.run[0],o.run.at(-1)].some(s=>Math.hypot(s.x-end.x,s.z-end.z)<.05&&Math.abs(s.y-end.y)<.05&&Math.abs(s.half-end.half)<.05));
-    // (a record's piece of a longer row may be short; one that stands alone is a run of its own)
-    if(!joined(run[0])&&!joined(run.at(-1)))assert.ok(metres(run)>=10,`a run of ${metres(run).toFixed(1)} m on ${road.id}`);
+    const joined=end=>runs.some(o=>o.run!==run&&meets(end,o.run));
     for(const [end,inner]of [[run[0],run[1]],[run.at(-1),run.at(-2)]]){
       if(joined(end))continue;
       open++;
@@ -255,8 +264,9 @@ for(const [name,first,second,least,most]of [['Interstate 93','i93-nb','i93-sb',1
       assert.ok(!still,`the row on ${road.id} ends at ${end.x.toFixed(0)}, ${end.z.toFixed(0)} with ${still?(own.gap+other.gap).toFixed(2):''} m between the two decks beyond it`);
     }
   }
-  console.log(`${name}: ${runs.length} runs, ${runs.reduce((sum,r)=>sum+metres(r.run),0).toFixed(0)} m, ${open} ends in the open`);
+  console.log(`${name}: ${runs.length} runs in ${rows.length} rows of ${Math.min(...rows.map(r=>r.length)).toFixed(0)} to ${Math.max(...rows.map(r=>r.length)).toFixed(0)} m, ${runs.reduce((sum,r)=>sum+metres(r.run),0).toFixed(0)} m, ${open} ends in the open`);
   assert.ok(open%2===0&&open/2>=least&&open/2<=most,`${open/2} unbroken stretches of median (${least===most?least:`${least} to ${most}`} expected)`);
+  assert.equal(rows.length,open/2,'every row is a chain of pieces with two ends in the open');
 });
 
 test('the rows are the same on a tile\'s road view as on the whole city, and the classes the rule leaves alone carry none',()=>{
