@@ -11,6 +11,7 @@ import { addTileBuildings, removeTileBuildings, type CityTile, type MetroCity } 
 import { addBuildingPlan, removeBuildingPlans } from '../simulation/building-plans.ts';
 import { bareCurbStretches, pavementEdges, type TilePavement } from '../simulation/tile-format.ts';
 import { junctionIndexSteps, planCrosswalkSteps, STRIPE_LENGTH, type JunctionIndex } from '../simulation/crosswalks.ts';
+import { drawnStreets } from '../simulation/drawn-streets.ts';
 import { curbRoadClearance } from '../simulation/road-curbs.ts';
 import { WALK } from '../simulation/road-grading.ts';
 import { roadMidpoint } from '../simulation/road-tile-coverage.ts';
@@ -376,7 +377,8 @@ export function createTileBuilder(ctx: TileContext) {
         // into the next tile), so the thinning sees the candidates across the tile border; drawn for the owned ones.
         const reach: Bounds = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
         for (const road of ownedRoads) { const b = roadBounds.get(road)!; reach.minX = Math.min(reach.minX, b.minX); reach.maxX = Math.max(reach.maxX, b.maxX); reach.minZ = Math.min(reach.minZ, b.minZ); reach.maxZ = Math.max(reach.maxZ, b.maxZ); }
-        const ownedSet = new Set(ownedRoads), planning = planCrosswalkSteps(ownedRoads.length ? roadsNear(grow(reach, 40)) : [], junctions, edgesOf, allEdges);
+        // The asphalt this tile draws, as far as its border, tells a crosswalk in mid block where its roadway ends.
+        const ownedSet = new Set(ownedRoads), planning = planCrosswalkSteps(ownedRoads.length ? roadsNear(grow(reach, 40)) : [], junctions, edgesOf, allEdges, tile.streetPavement ? drawnStreets(tile) : undefined);
         let planned = planning.next(); while (!planned.done) { if (due(pace)) yield 'roads'; planned = planning.next(); }
         for (const { road, at, tx, tz, span: [lo, hi] } of planned.value) {
           if (!ownedSet.has(road)) continue;
