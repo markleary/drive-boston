@@ -364,6 +364,83 @@ class LandingTest(unittest.TestCase):
   self.assertEqual({r['id']:r['width'] for r in H.ROUTES if 'width' in r},{'i90-wb-entrance-copley':6.0},"the survey's slot between Huntington Avenue's carriageways")
 
 
+class OnStreetTest(unittest.TestCase):
+ """Where a record lies on the street it lands on (on_street), and the curb lines the streets are then measured to (landing_edges)."""
+ flat=staticmethod(lambda x,z:0.0)
+ @staticmethod
+ def away(n,origin=(0.,0.),rise=.2,step=3.0):
+  """n stations 3 m apart from `origin`, drawing away from the x axis by `rise` in 1."""
+  l=math.hypot(1,rise);return [[round(origin[0]+i*step/l,3),round(origin[1]+i*step*rise/l,3)] for i in range(n)]
+ @staticmethod
+ def deck(points,y=None,width=7.0):return {'id':'ramp','points':points,'width':width,'deckWidths':[width]*len(points),'elevations':y or [.06]*len(points),'bridge':{'kind':H.KIND}}
+ @staticmethod
+ def cut(points,landings=(),covered=(),width=7.0):return {'id':'slot','points':points,'width':width,'deckWidths':[width]*len(points),'elevations':[-.5*i for i in range(len(points))],'tunnel':{'clearance':4.2,'covered':[list(c) for c in covered],'surfaceLandings':[list(l) for l in landings]}}
+ street=staticmethod(lambda points,width=10:{'id':'s','name':'Landing Street','points':points,'width':width})
+ def test_a_ramp_lies_on_its_street_until_their_pavements_part(self):
+  # a 7 m ramp off a class 10 street at 1 in 5: its centre line is 8.5 m from the street's (half of each) 43.3 m along
+  ramp=self.deck(self.away(30));streets=[self.street([[-60,0],[0,0],[120,0]]),self.street([[-60,-30],[120,-30]])]
+  found=H.on_street([ramp],streets,self.flat);self.assertEqual(len(found),1);self.assertEqual(found[0]['vertex'],[0,0]);self.assertEqual(found[0]['streets'],[0],'the street that holds the vertex, not the one a block away')
+  self.assertEqual(found[0]['stations'],{0:list(range(15))});self.assertEqual(found[0]['lips'],[],'it runs on beside the street on the ground: nothing to close')
+  lines,skip,last,summary=H.landing_edges([ramp],streets,self.flat);self.assertEqual((skip,last),({0:{0,1}},{}));self.assertEqual(summary,{'landings':1,'streets':1,'carried':0,'metres':42,'lips':0})
+  self.assertEqual([len(l.coords) for l in lines],[15,15,16,16],'both edges, cut where the ramp has drawn clear');self.assertEqual(lines[0].coords[-1],lines[2].coords[0])
+  whole=[l for r,a,b in H.open_stretches(None,None,[ramp],self.flat) for l in H.edge_lines(r,a,b)];self.assertAlmostEqual(sum(l.length for l in lines),sum(l.length for l in whole),6,'the same edges as before, in pieces')
+  # a wider street keeps the ramp on it longer, a narrower ramp leaves it sooner
+  self.assertEqual(H.on_street([ramp],[self.street([[-60,0],[0,0],[120,0]],15)],self.flat)[0]['stations'],{0:list(range(19))})
+  self.assertEqual(H.on_street([self.deck(self.away(30),width=5.0)],streets,self.flat)[0]['stations'],{0:list(range(13))})
+ def test_a_ramp_that_leaves_the_ground_bounds_its_street_from_there(self):
+  # a deck that climbs: flush for five stations, 0.6 m up at the sixth
+  ramp=self.deck(self.away(30),[.06]*5+[.6+.1*i for i in range(25)]);streets=[self.street([[-60,0],[0,0],[120,0]])];found=H.on_street([ramp],streets,self.flat)
+  self.assertEqual(found[0]['stations'],{0:[0,1,2,3,4]});self.assertEqual(found[0]['lips'],[[0,4,0,5]])
+  lines,skip,last,summary=H.landing_edges([ramp],streets,self.flat);self.assertEqual(skip,{0:{0,1}});self.assertEqual(summary['lips'],1)
+  left,right=H.edge_points(ramp);self.assertEqual([list(c) for c in lines[-1].coords],[list(left[4]),list(right[4])],'the foot of the structure, across the pavement')
+  # a slot: on the street over its landing interval, a cut from there on
+  slot=self.cut(self.away(30),[[0,12.0]]);found=H.on_street([slot],streets,self.flat);self.assertEqual(found[0]['stations'],{0:[0,1,2,3,4]},'the stations of its 12 m landing');self.assertEqual(found[0]['lips'],[[0,4,0,5]])
+  self.assertEqual(H.landing_edges([slot],streets,self.flat)[3],{'landings':1,'streets':1,'carried':0,'metres':12,'lips':1},'the lip of the slot')
+  # under a roof from the end of its landing there is no open mouth to close
+  self.assertEqual(H.landing_edges([self.cut(self.away(30),[[0,12.0]],[[12.0,87.0]])],streets,self.flat)[3]['lips'],0)
+  # a cut from the street's vertex on lies on nothing: its one station frees no edge, and no lip is laid across the street's own vertex
+  lines,skip,last,summary=H.landing_edges([self.cut(self.away(30),[[0,.5]])],streets,self.flat);self.assertEqual((len(lines),skip,last,summary['metres'],summary['lips']),(2,{},{},0,0))
+ def test_a_record_that_passes_under_a_street_vertex_lands_on_nothing(self):
+  streets=[self.street([[-60,0],[0,0],[120,0]])]
+  self.assertEqual(H.on_street([self.deck(self.away(30),[-8.9]*30)],streets,self.flat),[],'the Turnpike 8.9 m under Fid Kennedy Avenue')
+  self.assertEqual(H.on_street([self.deck(self.away(30),[6.4]*30)],streets,self.flat),[],'a viaduct over it')
+  self.assertEqual(H.on_street([self.cut(self.away(30),covered=[[0,87.0]])],streets,self.flat),[],'a roofed tunnel')
+ def test_a_road_that_carries_on_through_the_vertex_is_no_landing(self):
+  # the street leaves a road that runs on: Charlesgate off Storrow Drive East
+  before={**self.deck([[-30,0],[-27,0],[-24,0]]+[[3.0*i,0] for i in range(-7,1)]),'id':'road-1'};after={**self.deck([[3.0*i,0] for i in range(20)]),'id':'road-2'};exit=[self.street(self.away(30,rise=.25),7)]
+  self.assertTrue(H.through([before,after],[(0,len(before['points'])-1),(1,0)]));self.assertEqual(H.on_street([before,after],exit,self.flat),[])
+  whole=self.deck([[3.0*i,0] for i in range(-10,20)]);self.assertTrue(H.through([whole],[(0,10)]));self.assertEqual(H.on_street([whole],exit,self.flat),[],'a vertex inside one record')
+  # two ramps on one vertex that do not carry each other on: one ends, the other starts off at a right angle
+  inbound=self.deck([[-3.0*i,3.0*i] for i in range(10,-1,-1)]);out=self.deck([[3.0*i,3.0*i] for i in range(11)]);self.assertFalse(H.through([inbound,out],[(0,10),(1,0)]))
+  found=H.on_street([inbound,out],[self.street([[0,-40],[0,0],[0,40]])],self.flat);self.assertEqual(len(found),1);self.assertEqual(sorted(found[0]['stations']),[0,1],'both lie on the street they meet on')
+  self.assertFalse(H.through([inbound,inbound],[(0,10),(1,10)]),'two ramps that end on one vertex')
+ def test_the_walk_follows_the_street_through_its_pieces(self):
+  # the street is cut 6 m from the vertex (University Road between the Storrow Drive ramps and Bay State Road)
+  ramp=self.deck(self.away(30));stub=self.street([[0,0],[6,0]]);rest=self.street([[6,0],[120,0]]);cross=self.street([[6,-40],[6,0],[6,40]]);far=self.street([[120,0],[200,0]])
+  self.assertEqual(H.on_street([ramp],[stub],self.flat)[0]['stations'],{0:list(range(5))},'alone, the stub is all the street there is: the ramp is 8.5 m from its end 12 m on')
+  found=H.on_street([ramp],[stub,rest,cross,far],self.flat)[0];self.assertEqual(found['streets'],[0,1,2],'the pieces that hold the end the ramp passes, not the one a block on');self.assertEqual(found['stations'],{0:list(range(15))})
+  self.assertEqual(sorted(H.landing_edges([ramp],[stub,rest,cross,far],self.flat)[1]),[0,1,2])
+  # and through the pieces of the ramp itself
+  first=self.deck(self.away(4));second=self.deck(self.away(27,origin=first['points'][-1]));found=H.on_street([first,second],[self.street([[-60,0],[0,0],[120,0]])],self.flat)[0]
+  self.assertEqual(found['stations'],{0:[0,1,2,3],1:list(range(12))},'15 stations, the shared one in both')
+ def test_a_street_that_only_carries_the_ramp_on_keeps_its_ends_as_a_last_resort(self):
+  # the ramp arrives along the x axis and ends on the vertex; Airport Way begins there and runs on in line, a side street leaves at a right angle
+  ramp=self.deck([[3.0*i,0] for i in range(-20,1)]);on=self.street([[0,0],[120,0]]);side=self.street([[0,0],[0,60]],7);through=self.street([[-60,0],[0,0],[120,0]])
+  found=H.on_street([ramp],[on,side],self.flat)[0];self.assertEqual(found['carried'],[0],'the street beyond the vertex, in line with the ramp');self.assertEqual(found['streets'],[0,1])
+  lines,skip,last,summary=H.landing_edges([ramp],[on,side],self.flat);self.assertEqual(sorted(skip),[1],'the side street is measured through the ramp');self.assertEqual(sorted(last),[0])
+  self.assertEqual(last[0],skip[1],'the same pieces of the two edges');self.assertEqual((summary['streets'],summary['carried']),(1,1))
+  self.assertEqual(H.on_street([ramp],[through],self.flat)[0]['carried'],[],'a street that runs on through the vertex has the ramp on it')
+  # 1 in 5 off the ramp's line it still carries it on (cosine 0.98), at 45 degrees it does not
+  self.assertEqual(H.on_street([ramp],[self.street(self.away(30))],self.flat)[0]['carried'],[0]);self.assertEqual(H.on_street([ramp],[self.street([[0,0],[40,40]])],self.flat)[0]['carried'],[])
+  # two ramps on the vertex, one of them at an angle to the street: the street lies beside that one
+  other=self.deck([[-3.0*i,3.0*i] for i in range(10,-1,-1)]);self.assertEqual(H.on_street([ramp,other],[on],self.flat)[0]['carried'],[])
+  # an entrance that starts where the street ends is carried on by it the same way
+  entrance=self.deck([[3.0*i,0] for i in range(20)]);self.assertEqual(H.on_street([entrance],[self.street([[-80,0],[0,0]])],self.flat)[0]['carried'],[0])
+ def test_a_street_vertex_is_matched_on_its_source_line(self):
+  moved={**self.street([[-60,0],[0,1.5],[120,0]]),'sourcePoints':[[-60,0],[0,0],[120,0]]};self.assertEqual(len(H.on_street([self.deck(self.away(30))],[moved],self.flat)),1)
+  self.assertEqual(H.on_street([self.deck(self.away(30))],[self.street([[-60,0],[0,1.5],[120,0]])],self.flat),[])
+
+
 class CapTest(unittest.TestCase):
  def ramp(self,roofed):
   # a ramp out of a tunnel the package does not carry: below ground all along, roofed over its first `roofed` stations

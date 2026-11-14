@@ -50,6 +50,57 @@ class MeasurementTest(unittest.TestCase):
   self.assertEqual(rec['pavedWidth'],13);self.assertEqual(rec['walk'],[1,0]);np.testing.assert_allclose(rec['left'][:,1],7);np.testing.assert_allclose(rec['right'][:,1],-6)
 
 
+class LandingTest(unittest.TestCase):
+ """A highway ramp is no curb for the street it lies on (cast_edges `skip`), and a street still measured to one is caught (landing_pinch)."""
+ def setUp(self):
+  # a class 10 street between curbs 8 m out; a 7 m ramp lies on its left half for 20 m: its edges 2 m and 9 m from the centre line
+  self.road=road('a',[[0,0],[60,0]]);self.curbs=[LineString([[-5,-8],[65,-8]]),LineString([[-5,8],[65,8]])];self.ramp=[LineString([[10,2],[30,2]]),LineString([[10,9],[30,9]])]
+ def record(self,left):
+  x=np.arange(61.);return np.stack([x,np.array([left(v) for v in x])],1),np.stack([x,np.full(61,-8.)],1)
+ def test_a_ray_passes_the_lines_that_are_no_curb_for_its_road(self):
+  key=ss.road_key(self.road);beside=road('b',[[0,5],[60,5]]);lines=self.curbs+self.ramp
+  L,R,L2=(ss.cast_edges([self.road],lines)[key][k] for k in (3,4,5));np.testing.assert_allclose(L[10:31],2);np.testing.assert_allclose(L2[10:31],8);np.testing.assert_allclose(L[:10],8);np.testing.assert_allclose(R,8)
+  free=ss.cast_edges([self.road,beside],lines,skip={key:{2,3}})
+  np.testing.assert_allclose(free[key][3],8,err_msg='measured through the ramp to its own curb');self.assertTrue(np.isnan(free[key][5]).all(),'nor is a passed line the next curb')
+  np.testing.assert_allclose(free[ss.road_key(beside)][4][10:31],3,err_msg='the same edge still bounds the street beside it');np.testing.assert_allclose(free[ss.road_key(beside)][3][10:31],3)
+  self.assertEqual(ss.cast_edges([self.road],lines,skip={key:{2}})[key][3][20],8,'one freed edge: the other, beyond the curb here, was never first')
+  np.testing.assert_allclose(ss.cast_edges([self.road],lines,skip={('other',0,0):{2,3}})[key][3][10:31],2)
+ def test_the_far_side_of_a_ramp_bounds_its_street_where_no_curb_lies_beyond(self):
+  # the same ramp, and no curb at all on its side of the street: the street's roadway reaches the ramp's far edge, 9 m out, not its near one
+  key=ss.road_key(self.road);lines=self.curbs[:1]+self.ramp;L=ss.cast_edges([self.road],lines,skip={key:{1,2}})[key][3]
+  np.testing.assert_allclose(L[10:31],9,err_msg='the pavement the ray crossed lies on the street');self.assertTrue(np.isnan(L[:10]).all() and np.isnan(L[31:]).all())
+  np.testing.assert_allclose(ss.cast_edges([self.road],lines)[key][3][10:31],2,err_msg='as curbs, the near edge came first')
+  # a curb beyond the ramp is the edge, however far; and a freed edge inside the class half width (5 m) is no edge of the street at all
+  self.assertEqual(ss.cast_edges([self.road],lines+[LineString([[-5,14],[65,14]])],skip={key:{1,2}})[key][3][20],14)
+  inside=self.curbs[:1]+[LineString([[10,1],[30,1]]),LineString([[10,4],[30,4]])];self.assertTrue(np.isnan(ss.cast_edges([self.road],inside,skip={key:{1,2}})[key][3]).all(),'left to the class width')
+  # the record then covers the ramp and nothing pinches it
+  left,right=self.record(lambda x:9. if 10<=x<=30 else 5.);self.assertEqual(ss.landing_pinch(self.road,left,right,self.curbs[:1],self.ramp,{0,1}),[])
+ def test_a_line_of_last_resort_counts_where_the_ray_meets_nothing_else(self):
+  # a ramp ends on the street's first station: the ends of its two edges lie 3.5 m either side of it. A curb runs along the left from x=20 on.
+  street=road('c',[[0,0],[40,0]]);key=ss.road_key(street);lines=[LineString([[20,8],[45,8]]),LineString([[-30,3.5],[0,3.5]]),LineString([[-30,-3.5],[0,-3.5]])]
+  L,R=ss.cast_edges([street],lines,last={key:{1,2}})[key][3:5];self.assertEqual((L[0],R[0]),(3.5,3.5),'the pavement is one across the seam');self.assertTrue(np.isnan(L[1:20]).all() and np.isnan(R[1:]).all());np.testing.assert_allclose(L[20:],8)
+  free=ss.cast_edges([street],lines,skip={key:{1,2}})[key];self.assertTrue(np.isnan(free[3][0]) and np.isnan(free[4][0]),'freed, the same ends are nothing')
+  # with a curb at the seam itself the curb is the edge, however far beyond the ramp's end it lies
+  curbed=lines+[LineString([[-5,6],[5,6]])];L,R=ss.cast_edges([street],curbed,last={key:{1,2}})[key][3:5];self.assertEqual((L[0],R[0]),(6.0,3.5))
+  self.assertEqual(ss.cast_edges([street],curbed)[key][3][0],3.5,'as a curb the end of the ramp came first')
+ def test_a_street_standing_on_its_ramps_edge_is_pinched(self):
+  left,right=self.record(lambda x:2. if 10<=x<=30 else 8.);found=ss.landing_pinch(self.road,left,right,self.curbs,self.ramp,{0,1})
+  self.assertEqual([side for _,side in found],[0]*21);self.assertEqual((found[0][0],found[-1][0]),(10.,30.))
+  self.assertEqual(ss.landing_pinch(self.road,*self.record(lambda x:8.),self.curbs,self.ramp,{0,1}),[],'measured to its curb')
+  self.assertEqual(ss.landing_pinch(self.road,left,right,self.curbs,self.ramp,set()),[],'an edge that is a curb for this street (a ramp beside it) pinches nothing')
+  # nominal where no curb is in reach: the class width, not a pinch
+  self.assertEqual(ss.landing_pinch(self.road,*self.record(lambda x:5.),self.curbs[:1],self.ramp,{0,1}),[])
+ def test_the_measuring_floor_counts_as_standing_on_the_edge(self):
+  inside=[LineString([[10,.4],[30,.4]]),LineString([[10,7.4],[30,7.4]])];left,right=self.record(lambda x:ss.FLOOR if 10<=x<=30 else 8.)
+  self.assertEqual(len(ss.landing_pinch(self.road,left,right,self.curbs,inside,{0,1})),21)
+ def test_a_curb_along_the_ramps_edge_is_the_streets_own(self):
+  curbs=self.curbs+[LineString([[10,2.1],[30,2.1]])];left,right=self.record(lambda x:2.1 if 10<=x<=30 else 8.)
+  self.assertEqual(ss.landing_pinch(self.road,left,right,curbs,self.ramp,{0,1}),[],'the survey has a curb there: the street is as narrow as that')
+ def test_a_ramp_edge_beyond_the_class_width_is_no_pinch(self):
+  wide=[LineString([[10,6],[30,6]]),LineString([[10,13],[30,13]])];left,right=self.record(lambda x:6. if 10<=x<=30 else 8.)
+  self.assertEqual(ss.landing_pinch(self.road,left,right,self.curbs,wide,{0,1}),[],'the street keeps more than its class width')
+
+
 class TownCurbTest(unittest.TestCase):
  def setUp(self):
   self.roads=[road('osm-1-0',[[-50,0],[50,0]]),road('osm-2-0',[[0,-50],[0,50]],8)];self.towns={'Town':Polygon([[-100,-100],[100,-100],[100,100],[-100,100]])}
@@ -415,6 +466,33 @@ class InstallTest(unittest.TestCase):
    self.assertEqual(first['townCurbs'],len(town['curbs'])+len([c for c in header['curbs'] if min(x for x,z in c)>=940]),'the west end of the second carriageway puts its fillets in the Boston tile');self.assertGreater(len(town['curbs']),0)
    self.assertEqual(first['surveyCurbs']+first['townCurbs'],len(header['curbs'])+len(town['curbs']),'the two counts partition the curbs in the tiles')
    provenance=json.loads((data/'provenance.json').read_text());self.assertEqual(provenance['streetSurfaces']['measuredRoads'],5,'the two Boston streets and the three town streets')
+
+ def test_a_street_is_measured_through_the_ramp_that_lands_on_it(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   data=pathlib.Path(temporary);source=data/'source';source.mkdir();(data/'tiles').mkdir()
+   # A 7 m ramp of the Turnpike stage lands on Landing Street's vertex at (500, 500) and draws away at 1 in 5. The roadway widens with it: the
+   # left curb follows the ramp's far side from x=514.7 on, and the survey has no curb between the two until the nose of the gore at x=600.
+   l=math.hypot(1,.2);points=[[round(500+3*i/l,3),round(500+.6*i/l,3)] for i in range(60)]
+   ramp={'id':'i90-test','name':'Ramp','points':points,'width':7.0,'oneway':1,'lanes':1,'deckWidths':[7.0]*60,'elevations':[.06]*60,'startLevel':0,'endLevel':1,'bridge':{'id':'i90','kind':'boston-highway','thickness':.75}}
+   roads=[road('b-1',[[100,500],[500,500],[900,500]],10,'Landing Street'),ramp]
+   city={'roads':roads,'neighborhoods':[{'name':'Boston','rings':[[[0,0],[1000,0],[1000,1000],[0,1000]]],'town':False}],'coverage':[[[0,0],[1000,0],[1000,1000],[0,1000]]],'parks':[],'sources':[],'tiles':{'size':1000,'directory':'tiles','keys':['0_0']}}
+   city['elevation']={'width':3,'height':2,'cellSize':1000,'originX':0,'originZ':0,'file':'elevation.bin','scale':.01}
+   (data/'elevation.bin').write_bytes(gzip.compress(np.zeros(6,dtype='<i2').tobytes(),mtime=0))
+   (data/'city.json').write_text(json.dumps(city));(data/'provenance.json').write_text('{}')
+   curbs=[[[0,493],[1000,493]],[[0,507],[514.7,507],[690,542.06]],[[600,507],[1000,507]]]
+   write_tile(data/'tiles/t_0_0.bin',{'tx':0,'tz':0,'size':1000,'buildings':[],'curbs':curbs,'parkPaths':[],'roads':['b-1','i90-test']},[])
+   (source/'layer-0.json').write_text(json.dumps({'features':[]}));(source/'layer-6.json').write_text(json.dumps({'features':[{'attributes':{'TYPE':'CURB'},'geometry':{'paths':curbs}}]}));(source/'osm-metro-driveways.json').write_text(json.dumps({'elements':[]}))
+   first=ss.install(data,source,lambda x,y:(x,y),log=lambda *a,**k:None)
+   self.assertEqual((first['streetLandings'],first['landedStreets'],first['carriedStreets'],first['landingMetres'],first['landingLips']),(1,1,0,42,0),'it lies on the street for 42 m: until its centre line is half of each width from the street\'s')
+   header=ss.unpack(data/'tiles/t_0_0.bin')[0];record=next(e for e in header['pavements'] if e['road']=='b-1');left=LineString(ss.decode_edges(record['edges'],0,0,1000)[0])
+   at=lambda x:left.intersection(LineString([[x,480],[x,560]])).y-500
+   self.assertGreaterEqual(min(at(x) for x in range(440,541)),6.99,'never narrower than its curb makes it, where every station used to stand on the ramp');self.assertAlmostEqual(at(530),7+15.3*.2,delta=.05,msg='measured through the ramp to the curb beyond it')
+   self.assertAlmostEqual(at(570),14-3.5*l,delta=.1,msg='and to the ramp from where it runs on lanes of its own');self.assertAlmostEqual(at(650),7,delta=.02,msg='then to the gore')
+   installed=json.loads((data/'city.json').read_text());self.assertEqual(ss.pinched_streets(data,installed),[]);self.assertEqual(ss.pinched_streets(data,installed,run=0),[],'nor at a single station')
+   # the record as it was measured before the rule: on the ramp's near edge through the landing
+   mine,right=ss.decode_edges(record['edges'],0,0,1000);x=np.arange(100.,901.);z=np.where((x>=520)&(x<=541),np.maximum(ss.FLOOR,(x-500)*.2-3.5*l),7.)+500
+   record['edges']=ss.encode_edges(np.stack([x,z],1),np.stack([x,np.full(len(x),493.)],1),0,0,1000);ss.write_header(data/'tiles/t_0_0.bin',header,ss.unpack(data/'tiles/t_0_0.bin')[1])
+   found=ss.pinched_streets(data,installed);self.assertEqual([(i,name) for i,name,_,_ in found],[('b-1','Landing Street')]);self.assertEqual(found[0][2],22);self.assertEqual(found[0][3],[520.0,500.0])
 
  def test_a_street_the_town_record_gave_up_to_bostons_gets_the_surveyed_curbs(self):
   with tempfile.TemporaryDirectory() as temporary:
