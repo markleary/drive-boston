@@ -463,6 +463,12 @@ class LandedTest(unittest.TestCase):
   self.assertEqual({k:report[0][k] for k in ('road','end','record','held')},{'road':'1-0-bridge','end':'start','record':'storrow-eb-01','held':held[-1]})
   self.assertIsNot(out[0],self.ramp,'the changed deck is a copy');self.assertEqual(self.ramp['elevations'],orig)
 
+ def test_a_banked_deck_s_edges_move_with_its_centre_line(self):
+  # the runtime draws and collides a deck by its deckEdgeElevations where it has them: they keep their crossfall about the new profile
+  banked={**self.ramp,'deckEdgeElevations':[[y-.1,y+.1] for y in self.ramp['elevations']]};out,_=H.landed_decks([banked],[self.record],self.ground);y=out[0]['elevations']
+  self.assertEqual(len(out[0]['deckEdgeElevations']),35);self.assertTrue(all(abs(l-(c-.1))<1e-3 and abs(r-(c+.1))<1e-3 for (l,r),c in zip(out[0]['deckEdgeElevations'],y)))
+  self.assertEqual(banked['deckEdgeElevations'][0],[round(self.ramp['elevations'][0]-.1,4),round(self.ramp['elevations'][0]+.1,4)],'the original is not touched')
+
  def test_a_deck_joining_at_its_end_is_walked_from_that_end(self):
   back={**self.ramp,'points':self.ramp['points'][::-1],'elevations':self.ramp['elevations'][::-1],'startLevel':1,'endLevel':0}
   out,report=H.landed_decks([back],[self.record],self.ground);self.assertEqual(report[0]['end'],'end')

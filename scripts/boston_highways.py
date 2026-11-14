@@ -2123,7 +2123,7 @@ def landed_decks(roads,records,ground):
  at an angle shares its pavement for a metre or two as the two grade apart, which is no defect), is then pulled taut (land_approaches.taut) over the ground
  across its own pavement (RAMP_RISE over the highest of it, `ground` the graded grid) to the first station where its
  own profile stands over both and can be reached at no more than its own steepest grade, and keeps its own profile
- from there. Returns (the road list with each changed deck
+ from there; the edges of a banked deck (`deckEdgeElevations`) move with its centre line. Returns (the road list with each changed deck
  copied in, [{road, end, record, stations, held, maxRaise, maxLower}] for every such end, changed or not)."""
  from land_approaches import taut
  at={};lines=[LineString(r['points']) for r in records];tree=STRtree(lines);along=[stations(r['points']) for r in records]
@@ -2160,7 +2160,10 @@ def landed_decks(roads,records,ground):
    if j>m+1:y[m:j+1]=taut(s[m:j+1],[held[-1],*floor[m+1:j],orig[j]])
    new=[y[order.index(q)] for q in range(len(order))];change=[a-b for a,b in zip(new,road['elevations'])]
    report.append({'road':r['id'],'end':'start' if e==0 else 'end','record':records[k]['id'],'stations':j,'held':m,'maxRaise':round(max(0,*change),3),'maxLower':round(max(0,*(-c for c in change)),3)})
-   if max(abs(c) for c in change)>5e-4:out[n]={**road,'elevations':[round(v,4) for v in new]}
+   if max(abs(c) for c in change)>5e-4:
+    out[n]={**road,'elevations':[round(v,4) for v in new]}
+    # a banked deck's edges (deckEdgeElevations, which the runtime draws and collides in preference to the centre line) move with it
+    if road.get('deckEdgeElevations'):out[n]['deckEdgeElevations']=[[round(e+c,4) for e in pair] for pair,c in zip(road['deckEdgeElevations'],change)]
  return out,report
 
 
