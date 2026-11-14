@@ -35,6 +35,24 @@ test('a crosswalk completes across a twin carriageway that adjoins its roadway, 
   assert.deepEqual(roadwaySpan(own,[twin],[20,0],1,0),[-16.5,5],'a record adding up to the own width plus 2 m is a twin carriageway');
 });
 
+test('a twin carriageway whose edge only steps under the crosswalk\'s line shares the roadway over the length of the stripes',()=>{
+  // The twin touches this roadway at 5 m; its far edge jogs from 12 to 14 m between x 19.5 and 20.5, under the station's line at x 20.
+  const own=[-5,5],stepped={left:[[0,12],[19.5,12],[20.5,14],[40,14]],right:[[0,5],[40,5]]};
+  assert.deepEqual(roadwaySpan(own,[stepped],[20,0],1,0),own,'by the segment under the line alone its far edge runs at 63 degrees to the road, and the record is no twin');
+  assert.deepEqual(roadwaySpan(own,[stepped],[20,0],1,0,3),[-5,13],'over the 3 m of the stripes that edge moves 1 m: a twin, as far as the nearer of its two offsets, so the stripes stay on its pavement');
+  assert.deepEqual(roadwaySpan(own,[stepped],[23,0],-1,0,3),[-14,5],'where the line meets the edge on a straight piece the record counts by that line alone, as it always did');
+  const slant={left:[[0,-6],[40,34]],right:[[0,5],[40,5]]},cut={left:[[0,12],[19.5,12],[20.5,14],[22,14]],right:[[0,5],[22,5]]},jog={left:[[0,12],[19.5,12],[20.5,18],[40,18]],right:[[0,5],[40,5]]};
+  assert.deepEqual(roadwaySpan(own,[slant],[20,0],1,0,3),own,'an edge that leaves at 45 degrees moves 3 m across the stripes, more than a road running with this one may');
+  assert.deepEqual(roadwaySpan(own,[cut],[20,0],1,0,3),own,'a stepped record that ends before the stripes do is not measured at their end');
+  assert.deepEqual(roadwaySpan(own,[jog],[20,0],1,0,3),own,'and a 6 m jog still has 3 m to go under the line');
+  // A fork's leg that shares this roadway (its near edge 3 m inside it) leaves at 13 degrees; its far edge bends at 41 degrees
+  // for 2.5 m beside the corner, under the line. It is a record the alignment has always admitted, judged here over the stripes.
+  const leg={left:[[0,5],[18,9],[20.5,11.2],[40,16]],right:[[0,0],[40,6]]};
+  assert.deepEqual(roadwaySpan(own,[leg],[20,0],1,0),own,'by the bend under the line alone the leg does not run with the road');
+  assert.deepEqual(roadwaySpan(own,[leg],[20,0],1,0,3).map(v=>+v.toFixed(2)),[-5,10.76],'over the stripes its far edge moves 1.1 m, as a leg leaving at 19 degrees would');
+  assert.deepEqual(roadwaySpan(own,[leg],[30,0],1,0).map(v=>+v.toFixed(2)),[-5,13.54],'as it is taken in by the segment under the line wherever that runs straight');
+});
+
 test('a crosswalk station follows the centerline, not the bearing of a short first segment',()=>{
   const line=[[0,0],[1,0],[2,.3],[3,.9],[4,1.8],[14,11.8],[30,27.8]];
   assert.equal(polylineLength(line).toFixed(2),'41.33');
