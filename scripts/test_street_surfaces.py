@@ -271,6 +271,15 @@ class BareCurbTest(unittest.TestCase):
  def test_a_deck_on_the_ground_holds_its_curb_and_a_short_gap_is_no_stretch(self):
   deck={'points':[[0,-3],[40,-3]],'width':6,'elevations':[0,0]};self.assertEqual(ss.bare_curbs({'0_0':self.tile(curbs=[[[0,0],[40,0]]])},[deck])[0],{})
   parts=[[[[0,0],[19,0],[19,-6],[0,-6]]],[[[20.5,0],[40,0],[40,-6],[20.5,-6]]]];self.assertEqual(ss.bare_curbs({'0_0':self.tile(curbs=[[[0,0],[40,0]]],streetPavement=parts)},[])[0],{},'a metre and a half between two roadways')
+ def test_a_tunnel_record_holds_a_curb_only_where_it_runs_in_the_open(self):
+  tile=lambda:{'0_0':self.tile(curbs=[[[0,0],[40,0]]])};cut={'points':[[0,-3],[10,-3],[20,-3],[30,-3],[40,-3]],'width':6,'elevations':[-5]*5}
+  self.assertEqual(ss.bare_curbs(tile(),[{**cut,'tunnel':{'clearance':4.2,'covered':[]}}])[0],{},'a walled cut open to the sky: the curb is its edge')
+  self.assertEqual(ss.bare_curbs(tile(),[{**cut,'tunnel':{'clearance':4.2,'covered':[[0,40]]}}])[0],{'0_0':[0,0,4000]},'under its roof the road is not the ground the curb stands on')
+  self.assertEqual(ss.bare_curbs(tile(),[{**cut,'tunnel':{'clearance':4.2}}])[0],{'0_0':[0,0,4000]},'no covered ranges: roofed all along')
+  out,_=ss.bare_curbs(tile(),[{**cut,'tunnel':{'clearance':4.2,'covered':[[0,20]]}}]);self.assertEqual(out,{'0_0':[0,0,1900]},'roofed for its first 20 m: the curb beside the open part (and ATTACH before it) stays')
+  self.assertEqual(ss.open_parts({**cut,'deckWidths':[6,6,8,6,6],'tunnel':{'covered':[[0,15]]}}),[([[15,-3],[20,-3],[30,-3],[40,-3]],8)],'cut where the roof ends, at the widest pavement of the stretch')
+  self.assertEqual(ss.open_parts({**cut,'tunnel':{'covered':[[5,15],[25,40]]}}),[([[0,-3],[5,-3]],6),([[15,-3],[20,-3],[25,-3]],6)])
+  self.assertEqual(ss.open_parts(cut),[(cut['points'],6)],'a deck counts whole')
  def test_a_surface_in_the_next_tile_counts(self):
   out,_=ss.bare_curbs({'0_0':self.tile(curbs=[[[990,0],[1000,0]]]),'1_0':{'curbs':[],'sidewalks':[],'parkPaths':[],'streetSidewalks':[[[[985,0],[1010,0],[1010,3],[985,3]]]]}},[]);self.assertEqual(out,{})
 

@@ -1,5 +1,5 @@
 import type {CityData,Point2,Road} from '../types';
-import {deckEdge,deckEdgeElevation,deckUndersideAt,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
+import {DECK_LANES,deckEdge,deckEdgeElevation,deckUndersideAt,highwayDeckNear,highwayDecksBeside,roadProjection,roadSlabGeometry,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
 import {sampleElevation,terrainGrid} from './terrain.ts';
 import {RAIL_LIP,RAIL_RUN,SHELF_DROP,highwayDeckAt} from './road-surfaces.ts';
 import {medianBarrierMesh,medianBarriers,medianSpans} from './median-barriers.ts';
@@ -556,6 +556,10 @@ function openWallProfiles(city:CityData,road:Road,side:number,required:(station:
   }
   return profiles;
 }
+/** A cut's wall is 0.4 m thick about its line: within this of a deck's pavement edge its inner face stands in that pavement. */
+const WALL_IN_PAVEMENT=.2;
+/** How far along a wall, and in what steps, its line is followed through a deck's pavement to see whether it enters the lanes; how closely a wall is probed for such a deck. */
+const WALL_REACH=24,WALL_PROBE=.5,WALL_STEP=1;
 /** Collision and visual shell share identical walls, covered ceiling slabs,
  * guarded portal headers, terminal Jersey barriers and sealed black backwalls. */
 export function tunnelGeometry(city:CityData,road:Road){
@@ -597,8 +601,33 @@ export function tunnelGeometry(city:CityData,road:Road){
       for(let k=0;k<10;k++){const m=(a+b)/2;if(under(m)<Infinity===inside)a=m;else b=m;}
       breaks.splice(j,0,(a+b)/2);
     }
+    // A highway's cut that forks, or carries on as a deck beside a branch still in the cut: no wall stands in the pavement of a
+    // deck at its own level whose lanes the wall line crosses (two ramps of one roadway come out of the ground a few metres
+    // apart, and each one's wall would otherwise cross the other's pavement). The wall is opened as far as it lies in that
+    // pavement (WALL_IN_PAVEMENT), not in the lanes alone: the two ends of a wall that crosses a ramp at a small angle then
+    // stood half a metre inside its pavement, one on each side of it. A wall that runs along a deck's edge and never enters
+    // its lanes stays. Split where the wall line enters that pavement.
+    const edgeAt=(s:number)=>{if(s<lo||s>hi)return tunnelEdgeAt(road,Math.max(0,Math.min(total,s)),side,-.08);const t=(s-lo)/(hi-lo||1);return{x:start[0]+(end[0]-start[0])*t,z:start[1]+(end[1]-start[1])*t,y:ya+(yb-ya)*t};};
+    const decksAt=(s:number,margin:number)=>{const p=edgeAt(s);return highwayDecksBeside(city,p.x,p.z,p.y,end[0]-start[0],end[1]-start[1],margin,road);};
+    const lanes=road.highway&&[lo,(lo+hi)/2,hi].some(s=>{const p=edgeAt(s);return highwayDeckNear(city,p.x,p.z);})?(s:number)=>decksAt(s,WALL_IN_PAVEMENT).some(deck=>{
+      const holds=(q:number,margin:number)=>decksAt(q,margin).includes(deck);
+      if(holds(s,DECK_LANES))return true;
+      for(const step of [WALL_PROBE,-WALL_PROBE])for(let q=s+step,k=0;k<WALL_REACH/WALL_PROBE&&q>=0&&q<=total&&holds(q,WALL_IN_PAVEMENT);q+=step,k++)if(holds(q,DECK_LANES))return true;
+      return false;
+    }):undefined;
+    // (probed every metre, not at the breaks alone: a wall's end can reach into a deck's pavement between two of them)
+    if(lanes)for(let j=breaks.length-1;j>0;j--){
+      const from=breaks[j-1],to=breaks[j],count=Math.max(1,Math.ceil((to-from)/WALL_STEP)),found:number[]=[];let before=from,inside=lanes(from);
+      for(let k=1;k<=count;k++){
+        const s=from+(to-from)*k/count;if(lanes(s)===inside){before=s;continue;}
+        let a=before,b=s;for(let i=0;i<10;i++){const m=(a+b)/2;if(lanes(m)===inside)a=m;else b=m;}
+        found.push((a+b)/2);inside=!inside;before=s;
+      }
+      breaks.splice(j,0,...found);
+    }
     for(let j=1;j<breaks.length;j++){
       if(tunnelSurfaceLandingAt(road,(breaks[j-1]+breaks[j])/2))continue;
+      if(lanes&&!tunnelCoveredAt(road,(breaks[j-1]+breaks[j])/2)&&lanes((breaks[j-1]+breaks[j])/2))continue;
       const midpoint=(breaks[j-1]+breaks[j])/2,covered=tunnelCoveredAt(road,midpoint),profile=profiles.get(side)!.find(p=>midpoint>=p[0].station&&midpoint<=p.at(-1)!.station),at=(s:number)=>{
         const t=(s-lo)/(hi-lo),x=start[0]+(end[0]-start[0])*t,z=start[1]+(end[1]-start[1])*t,y=ya+(yb-ya)*t,ground=sampleElevation(city,x,z);
         let top=covered?y+clearance+.45:Math.max(y+.8,ground+.8);

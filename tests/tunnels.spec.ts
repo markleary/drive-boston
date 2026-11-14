@@ -176,9 +176,11 @@ test('North Street exit continues onto its surface street beyond the ramp endpoi
 });
 
 test('southern tunnel closures have tiled ceilings, a falling-tile warning and dark depth beyond intact barriers',async({page,request},testInfo)=>{
-  test.setTimeout(180000);await page.setViewportSize({width:1600,height:1000});const errors:string[]=[];
+  test.setTimeout(240000);await page.setViewportSize({width:1600,height:1000});const errors:string[]=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(m.text()))errors.push(m.text());});
   const roads=((await(await request.get('/data/central-artery.json')).json()).roads as Road[]).filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd);
+  // A ramp out of a tunnel the package does not carry ends the same way: the second barrel of the Turnpike's Exit 135, under the Haul Road.
+  const bores=((await(await request.get('/data/boston-highways.json')).json()).roads as Road[]).filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd);
   const reported={x:1168.76,z:328.89,yaw:-.2685,roadId:'central-artery-southbound'};
   await page.addInitScript(s=>localStorage.setItem('backbay-drive-v1',JSON.stringify(s)),reported);
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
@@ -194,10 +196,12 @@ test('southern tunnel closures have tiled ceilings, a falling-tile warning and d
     })};
   },roads.map(r=>{const p=tunnelPointAt(r,r.tunnel!.capStart?0:tunnelStations(r).at(-1)!),yaw=p.yaw+(r.tunnel!.capStart?Math.PI:0);return{name:r.name,x:p.x,z:p.z,dx:Math.sin(yaw),dz:Math.cos(yaw)};}));
   expect(appearance.signs.some(name=>/BOSTON LURE/i.test(name)),'the old plaque is replaced').toBe(false);
-  expect(appearance.signs.filter(name=>/FALLING CEILING TILES/i.test(name))).toHaveLength(2);
+  expect(roads).toHaveLength(2);expect(appearance.signs.filter(name=>/FALLING CEILING TILES/i.test(name))).toHaveLength(roads.length+bores.length);
+  const boreEnds=await page.evaluate(()=>{const ends:{id:string;length:number}[]=[];(window as any).__backbay.scene.traverse((o:any)=>{if(o.userData?.terminalRoadId&&/unlit continuation$/.test(o.name))ends.push({id:o.userData.terminalRoadId,length:o.userData.length});});return ends;});
+  for(const bore of bores)expect(boreEnds.find(end=>end.id===bore.id)?.length,`${bore.id}: darkness beyond its closed end`).toBeGreaterThan(80);
   for(const ceiling of appearance.ceilings){expect(ceiling.textured,`${ceiling.name} has visible tilework`).toBe(true);expect(ceiling.uvCount).toBeGreaterThan(0);}
   for(const extension of appearance.extensions){expect(extension.roadId).toBeTruthy();expect(extension.depth,'darkness has real tunnel depth beyond the barrier').toBeGreaterThan(80);expect(extension.darknessDistance).toBeLessThan(extension.depth);expect(extension.lights).toBe(0);expect(extension.oldFlatCap).toBe(false);}
-  for(const road of roads){
+  for(const road of [...roads,...bores]){
     const total=tunnelStations(road).at(-1)!,atStart=!!road.tunnel!.capStart,station=(distance:number)=>atStart?distance:total-distance;
     await arrive(page,road,station(35),atStart);await page.screenshot({path:testInfo.outputPath(`${road.id}-dark-closure-approach.png`)});
     await arrive(page,road,station(12),atStart);await page.keyboard.press('c');await page.waitForTimeout(500);await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);
@@ -217,9 +221,11 @@ test.describe('mobile terminal atmosphere',()=>{
   test('dark southern continuation remains visible in portrait',async({page,request},testInfo)=>{
     test.setTimeout(120000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(m.text()))errors.push(m.text());});
     const data=await(await request.get('/data/central-artery.json')).json(),roads=data.roads as Road[],road=roads.find(r=>r.id==='central-artery-southbound')!,p=tunnelPointAt(road,tunnelStations(road).at(-1)!-22);
+    // (the Turnpike stage's closed bore ends, one at Exit 135, are dressed like the artery's two)
+    const bores=((await(await request.get('/data/boston-highways.json')).json()).roads as Road[]).filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd).length;
     await page.addInitScript(s=>localStorage.setItem('backbay-drive-v1',JSON.stringify(s)),{x:p.x,z:p.z,yaw:p.yaw,roadId:road.id});
     await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').tap();await page.waitForTimeout(1800);await page.locator('#cycle-camera').tap();await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);
-    const state=await snapshot(page);expect(state.mobile).toBe(true);expect(state.camera).toBe('hood');expect(state.bridges.tunnels.darkContinuations).toBe(2);expect(state.graphicsContext.losses).toBe(0);expect(state.state.y).toBeLessThan(-10);
+    const state=await snapshot(page);expect(state.mobile).toBe(true);expect(state.camera).toBe('hood');expect(state.bridges.tunnels.darkContinuations).toBe(roads.filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd).length+bores);expect(state.graphicsContext.losses).toBe(0);expect(state.state.y).toBeLessThan(-10);
     await page.screenshot({path:testInfo.outputPath('southbound-dark-closure-mobile.png')});expect(errors).toEqual([]);
   });
 });

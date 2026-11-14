@@ -130,6 +130,49 @@ export function sampleVehicleSurface(city:CityData,x:number,z:number,yReference=
   return best;
 }
 
+/** The generated highway decks that hold a point at about height `y` (within `reach`) and run the way (`dx`, `dz`) runs:
+ * the deck a walled cut carries on as, or a sibling that forks from it and comes out of the ground a few metres earlier.
+ * `margin` is how far beyond the deck's pavement edge the point may lie (negative: that far inside it, `DECK_LANES` for its
+ * lanes). A cut's wall or curb that crosses such a deck's lanes does not stand in its pavement. The other carriageway
+ * alongside runs the other way and is none of them: this test leaves alone what stands between the two, which is for
+ * `bareStretches` in tunnels.ts to decide (a wall where it retains ground or guards a drop, a curb where the two lie level).
+ * `cut` is the record the point belongs to: the deck that carries it on, or that it carries on, is none of them beyond
+ * their common end. */
+export function highwayDecksBeside(city:CityData,x:number,z:number,y:number,dx:number,dz:number,margin=DECK_LANES,cut?:Road,reach=.75){
+  const decks:Road[]=[],same=(p:Point2,q:Point2)=>p[0]===q[0]&&p[1]===q[1];
+  for(const road of elevatedNear(city,x,z)){
+    if(!isHighwayDeck(road)||!road.elevations)continue;
+    const hit=roadProjection(road,x,z),a=road.points[hit.index],b=road.points[Math.min(road.points.length-1,hit.index+1)],tx=b[0]-a[0],tz=b[1]-a[1],length=Math.hypot(tx,tz)||1;
+    // Across the deck's line, also a lane's length before its first station or beyond its last: a sibling's wall ends in the
+    // deck's mouth there. The walls of the cut the deck carries on from run up to it, though: where that cut is the
+    // narrower of the two, the deck's width held back over its last metres would open them (Interstate 90 West in Allston).
+    let across=hit.distance;
+    if((hit.index===0&&hit.t<=1e-6)||(hit.index>=road.points.length-2&&hit.t>=1-1e-6)){
+      const first=hit.t<=1e-6,end=first?a:b;
+      if(cut&&same(end,first?cut.points[cut.points.length-1]:cut.points[0]))continue;
+      if(Math.abs((x-end[0])*tx+(z-end[1])*tz)/length>LANE_WIDTH)continue;
+      across=Math.abs((x-end[0])*tz-(z-end[1])*tx)/length;
+    }
+    if(across>roadWidthAt(road,x,z)/2+margin)continue;
+    if(tx*dx+tz*dz<SAME_WAY*length*Math.hypot(dx,dz))continue;
+    if(Math.abs(sampleRoadElevation(city,road,x,z)-y)<=reach)decks.push(road);
+  }
+  return decks;
+}
+/** A point in a deck's lanes lies this far inside its pavement edge at least (`highwayDecksBeside`). */
+export const DECK_LANES=-.3;
+/** Whether the line of any generated highway deck passes within `reach` of a point, by the boxes of its runs: the cheap
+ * test before `highwayDecksBeside` is asked all along a wall (12 m covers the widest deck's pavement and its mouth). */
+export function highwayDeckNear(city:CityData,x:number,z:number,reach=12){
+  for(const road of elevatedNear(city,x,z)){
+    if(!isHighwayDeck(road))continue;
+    const boxes=boxesOf(road.points);
+    for(let r=0;r<boxes.length/4;r++)if(boxGap(boxes,r,x,z)<reach)return true;
+  }
+  return false;
+}
+/** Cosine between two roads that run the same way (40 degrees). */
+const SAME_WAY=.77;
 /** The slab under a footbridge's deck (footbridges.py reckons the room under it with the same number). */
 export const FOOTBRIDGE_SLAB=.22;
 const footbridgeDecks=new WeakMap<object,{points:Point2[];elevations:number[];width:number;minX:number;maxX:number;minZ:number;maxZ:number}[]>();

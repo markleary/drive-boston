@@ -43,7 +43,7 @@ def main():
  for name,c in record['routes'].items():
   if c['lengthMeters']>1500:print(f"{name}: {c['lengthMeters']:.0f} m in {c['records']} records, {c['tunnelMeters']:.0f} m below ground ({c['coveredMeters']:.0f} m covered), {min(c['lanes'])} to {max(c['lanes'])} lanes")
  print(f"{len(record['routes'])} routes: {record['deckMeters']:.0f} m of deck in {len(record['roads']['added'])} records, {record['tunnelMeters']:.0f} m of tunnel in {len(record['roads']['tunnels'])} records")
- print(f"{len(record['crossings'])} crossings with existing roads, {len(record['newCrossings'])} between new roads; closed ends {', '.join(c['road']+' '+c['end'] for c in record['closed'])}")
+ print(f"{len(record['crossings'])} crossings with existing roads, {len(record['newCrossings'])} between new roads; closed ends {', '.join(c['road']+' '+c['end'] for c in record['closed'])}; closed bore ends {', '.join(c['road'] for c in record['capped']) or 'none'}")
  print(f"{len(record['terrain']['vertices'])} grid vertices changed (cut up to {record['terrain']['maxCutMeters']} m, filled up to {record['terrain']['maxFillMeters']} m); {len(record['approachPieces'])} street approach pieces")
  print(f"{len(record['overpasses'])} bridges levelled over the cut ({sum(len(c['changed']) for c in record['overpasses'])} deck pieces)")
  for c in record['overpasses']:print(f"  {', '.join(c['names'])}: deck {c['deck'][0]} to {c['deck'][1]} m between landings at {c['landings']}")
