@@ -38,7 +38,7 @@ import gzip,json,math,re,struct,warnings
 from collections import Counter,defaultdict
 import numpy as np,shapely
 from shapely.geometry import LineString,LinearRing,Polygon,Point,box
-from shapely.ops import unary_union,polygonize
+from shapely.ops import unary_union,polygonize,substring
 from shapely.prepared import prep
 from shapely.strtree import STRtree
 from building_clearance import MIN_OVERLAP
@@ -868,6 +868,22 @@ def sidewalk_polygons(features,xy,coverage,parks=(),stats=None,stale=None):
  return out
 
 
+def open_parts(road):
+ """The stretches of a record with stored heights that lie at the ground's own level as (points, widest pavement):
+ the whole of a deck, and of a tunnel record the stretches no roof covers (one without `covered` is roofed all along)."""
+ points=road['points'];widths=road.get('deckWidths') or [road['width']]*len(points)
+ if not road.get('tunnel'):return [(points,max(widths))]
+ covered=road['tunnel'].get('covered')
+ if covered is None:return []
+ along=[0.0]
+ for a,b in zip(points,points[1:]):along.append(along[-1]+math.dist(a,b))
+ line=LineString(points);out=[];at=0.0
+ for lo,hi in sorted(map(tuple,covered))+[(along[-1],along[-1])]:
+  if lo-at>.5:out.append(([[round(x,3),round(z,3)] for x,z in substring(line,at,lo).coords],max(w for s,w in zip(along,widths) if at-3<=s<=lo+3)))
+  at=max(at,hi)
+ return out
+
+
 def bare_curbs(headers,decks,step=1.0):
  """The stretches of every tile's curbs with nothing attached: {tile key: flat [curb, from, to, ...]}, the curb's
  place in the tile's list and centimetres along it, and their total length in metres.
@@ -878,14 +894,16 @@ def bare_curbs(headers,decks,step=1.0):
  elsewhere), the curb would be drawn as a kerb standing alone in the grass. Those stretches, BARE_RUN or longer,
  are listed so the runtime leaves them out; the curbs themselves stay in the tile, as measured, since every run
  of this script measures the roadways to them. `decks` are the roads with stored heights and the tunnel records
- (their pavement is no polygon of the tiles)."""
+ (their pavement is no polygon of the tiles). A tunnel record holds a curb only where it runs in the open (open_parts):
+ under a roof its pavement is not the ground the curb stands on, and a curb over a tunnel was drawn alone on the
+ grass above it."""
  surfaces=[]
  for tile in headers.values():
   for field in ('streetPavement','streetSidewalks','deckPavement','islands','driveways'):
    surfaces+=[Polygon(rings[0],rings[1:]) for rings in tile.get(field) or [] if len(rings[0])>=3]
   surfaces+=[Polygon(w['rings'][0],w['rings'][1:]) for w in tile['sidewalks'] if len(w['rings'][0])>=3]
   surfaces+=[LineString(q['points']).buffer(q.get('width',2)/2,cap_style=2) for q in tile.get('parkPaths',[]) if len(q.get('points',[]))>=2]
- surfaces+=[LineString(r['points']).buffer(max(r.get('deckWidths') or [r['width']])/2,cap_style=2) for r in decks if len(r['points'])>=2]
+ surfaces+=[LineString(q).buffer(w/2,cap_style=2) for r in decks if len(r['points'])>=2 for q,w in open_parts(r)]
  tree=STRtree(surfaces);out={};total=0.0
  for key,tile in headers.items():
   flat=[]
