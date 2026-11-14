@@ -249,6 +249,34 @@ def highway_curbs(data_dir,city,surface,base=0):
  return lines,keyed(skip),keyed(last),summary
 
 
+def highway_pavements(data_dir,city):
+ """The pavement of the Turnpike stage's records where they run in the open at or under the ground
+ (boston_highways.open_stretches), as polygons: no fallback sidewalk band is drawn on it (street_meshes.install_surfaces).
+ A street measured to such a pavement's edge has the road beyond it, and its band lay on a ramp's lanes or over a cut."""
+ from boston_highways import open_stretches,edge_points
+ from street_meshes import strip
+ out=[]
+ for r,a,b in open_stretches(data_dir,city):
+  left,right=edge_points(r);shape=strip(left[a:b+1],right[a:b+1])
+  if not shape.is_empty:out.append(shape)
+ return out
+
+
+def banded_highways(data_dir,city,headers,tol=.25):
+ """The pieces of fallback sidewalk band (the tiles' `streetSidewalks`) that lie on that pavement (highway_pavements),
+ over `tol` m2: [(tile key, square metres, [x, z])]. validate-city.py fails on any: 4,056 m2 of band in 14 tiles lay
+ there before the compiler left it off (1,485 m2 beside Back Street over Storrow Drive East west of Charlesgate), next
+ to none of it in sight: over open cuts, which the runtime cuts out of every draped layer, or under the road's surface."""
+ pavements=highway_pavements(data_dir,city);tree=STRtree(pavements);out=[]
+ for key in sorted(headers):
+  for rings in headers[key].get('streetSidewalks') or []:
+   band=Polygon(rings[0],rings[1:]).buffer(0)
+   for i in tree.query(band,predicate='intersects').tolist():
+    piece=band.intersection(pavements[i])
+    if piece.area>tol:p=piece.representative_point();out.append((key,round(piece.area,2),[round(p.x,1),round(p.y,1)]))
+ return out
+
+
 def runs(mask):
  """(start, end) index runs where mask holds, end exclusive."""
  if not len(mask):return []
@@ -1187,7 +1215,7 @@ def install(data_dir,source_dir,xy,log=print):
  from deck_contacts import packaged_contacts
  from roadway_buildings import prune_package
  contacts,contact_roads=packaged_contacts(city,data_dir)
- mesh_stats=compile_headers(headers,city['roads'],contacts);mesh_stats['deckContactRoads']=len(contact_roads);log('Compiled street polygons',mesh_stats,flush=True)
+ mesh_stats=compile_headers(headers,city['roads'],contacts,highway_pavements(data_dir,city));mesh_stats['deckContactRoads']=len(contact_roads);log('Compiled street polygons',mesh_stats,flush=True)
  # The stalls of the surface lots, laid on what the tiles draw now that the surfaces are compiled: on the asphalt of the lots and driveways,
  # off the sidewalk band of every street, clear of the street pavement, of the buildings and of every roadway (parking_lots.py). The runtime
  # parks cars in them.
