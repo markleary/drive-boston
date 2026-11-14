@@ -467,6 +467,7 @@ class LandedTest(unittest.TestCase):
   # the runtime draws and collides a deck by its deckEdgeElevations where it has them: they keep their crossfall about the new profile
   banked={**self.ramp,'deckEdgeElevations':[[y-.1,y+.1] for y in self.ramp['elevations']]};out,_=H.landed_decks([banked],[self.record],self.ground);y=out[0]['elevations']
   self.assertEqual(len(out[0]['deckEdgeElevations']),35);self.assertTrue(all(abs(l-(c-.1))<1e-3 and abs(r-(c+.1))<1e-3 for (l,r),c in zip(out[0]['deckEdgeElevations'],y)))
+  self.assertIn('deckEdgeElevations',H.FIELDS,"and replay compares them, since the runtime draws the deck by them")
   self.assertEqual(banked['deckEdgeElevations'][0],[round(self.ramp['elevations'][0]-.1,4),round(self.ramp['elevations'][0]+.1,4)],'the original is not touched')
 
  def test_a_deck_joining_at_its_end_is_walked_from_that_end(self):

@@ -2081,7 +2081,7 @@ def standing_ground(plans,ground,alone=False):
  return {k:sorted(v) for k,v in out.items()}
 
 
-FIELDS=('name','points','width','oneway','kind','lanes','closed','elevations','startLevel','endLevel','deckWidths','deckTangents','bridge','tunnel','highway','roadway')
+FIELDS=('name','points','width','oneway','kind','lanes','closed','elevations','deckEdgeElevations','startLevel','endLevel','deckWidths','deckTangents','bridge','tunnel','highway','roadway')
 
 
 def stage_owned(road):
