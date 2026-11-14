@@ -210,6 +210,8 @@ TWIN_APART=I.TWIN_APART
 TWIN_RATE=I.TWIN_RATE
 TWIN_STEP=I.TWIN_STEP
 LIFTED=I.LIFTED
+THROUGH=.9            # cosine between a record that ends on a vertex and one that starts there, when the two carry one road through it
+STREET_FLUSH=HR.FLUSH  # a deck this close to the terrain at a station lies on the ground there: where it shares a vertex with a street it is that street's own pavement (on_street), as highway_roadways.py keeps the paving beside a deck by the same step
 TO_FEET=Transformer.from_crs(4326,2249,always_xy=True)
 FT=1200/3937
 METHOD=('Boston GIS layer 8 segments of the Massachusetts Turnpike, Storrow Drive and their ramps in travel order, resampled with source vertices kept; '
@@ -2224,12 +2226,21 @@ def routes_of(road,record):
  m=re.fullmatch(r'(.*?)-(\d+)',road['id']);return m.group(1) if m and m.group(1) in record['routes'] else road['id']
 
 
-def open_stretches(data_dir,city):
+def stage_records(data_dir,city):
+ """The stage's records in the package: its decks among city.roads, then the tunnel records of its sidecar."""
+ side=data_dir/SIDECAR;return [r for r in city['roads'] if r.get('bridge',{}).get('kind')==KIND]+(json.loads(side.read_text())['roads'] if side.exists() else [])
+
+
+def package_ground(data_dir,city):
+ """The graded terrain of the package: ground(x, z)."""
+ from north_overpasses import load_grid
+ grid=city['elevation'];return I.Terrain(grid,load_grid(data_dir/grid['file']))
+
+
+def open_stretches(data_dir,city,records=None,ground=None):
  """The stretches of the stage's records that run in the open at or under the ground: (points, widths) arrays.
  A deck more than 1.5 m over the ground is a viaduct the streets pass beneath, and a roofed stretch lies under them."""
- from north_overpasses import load_grid
- grid=city['elevation'];ground=I.Terrain(grid,load_grid(data_dir/grid['file']));side=data_dir/SIDECAR;out=[]
- records=[r for r in city['roads'] if r.get('bridge',{}).get('kind')==KIND]+(json.loads(side.read_text())['roads'] if side.exists() else [])
+ ground=ground or package_ground(data_dir,city);records=stage_records(data_dir,city) if records is None else records;out=[]
  for r in records:
   p=np.asarray(r['points'],float);y=r['elevations'];w=np.asarray(r.get('deckWidths') or [r['width']]*len(p),float);s=stations(r['points'])
   covered=(r.get('tunnel') or {}).get('covered',[])
@@ -2242,11 +2253,162 @@ def roadway_edges(data_dir,city):
  """Both pavement edges of the stage's records where they run in the open at or under the ground, as lines.
  build-street-surfaces.py measures a street's roadway up to them as it does up to a surveyed curb: the survey
  has no curb between Back Street and Storrow Drive, whose lanes the street's roadway otherwise takes in."""
+ return [line for r,a,b in open_stretches(data_dir,city) for line in edge_lines(r,a,b)]
+
+
+def edge_points(r):
+ """The left and the right pavement edge of a record: a point of each at every station."""
+ p=np.asarray(r['points'],float);w=np.asarray(r.get('deckWidths') or [r['width']]*len(p),float);t=np.asarray(I.tangents(r['points']));normal=np.stack([-t[:,1],t[:,0]],1)
+ return [p+normal*(sign*w[:,None]/2) for sign in (1,-1)]
+
+
+def edge_lines(r,a,b):
+ """Those edges between the record's stations a and b, as lines."""
+ return [LineString(side[a:b+1]) for side in edge_points(r)]
+
+
+def on_street(records,streets,ground):
+ """Where a record of the stage lies on a street instead of beside it: [{'vertex', 'streets', 'stations', 'lips',
+ 'carried'}], one entry for each vertex on which the stage's road ends at a street's surface (a ramp's landing, or
+ the end of Storrow Drive on the street that carries it on), with the indices of its streets in `streets` and {index
+ of a record: its stations there}.
+
+ roadway_edges hands both pavement edges of every open stretch to build-street-surfaces.py as curbs, which is right
+ beside a highway and wrong for the street a ramp ends on: layer 8 lands a ramp on the vertex of its street, so near
+ that vertex the ramp's pavement is the street's own, the survey has no curb between the two, and where the ramp
+ merges at a small angle its edges lie inside the street's roadway for tens of metres. Measured to them, 13 of the 86
+ streets a record of the stage ends on were under 5 m wide at their narrowest and six at the measuring floor of 2.4 m
+ (Frontage Road at the South Station exit, Cambridge Street at the Allston entrance, Congress Street between the
+ Exit 135 landings, the Haul Road where D Street's ramp merges), a gap in the curbs beyond such a station was bridged
+ from it (clean_side: the Haul Road tapered to the ramp over 33 m), the sidewalk band of such a street was drawn
+ along the ramp's edge, in the asphalt, and its crosswalk stopped at the ramp.
+
+ A record lies on a street from their common vertex on for as long as both of these hold, station by station:
+ - it is flush with the ground, with nothing of its own between its lanes and the street's: a tunnel record inside a
+   `surfaceLandings` interval (landing_interval: the runtime keeps the ground whole over it and builds no wall), a deck
+   within STREET_FLUSH of the terrain (the runtime rails a deck that stands higher). An open cut is a slot in the
+   street and a deck that has left the ground is a structure beside it: their edges bound the street, however close
+   to its centre line they lie (the Dartmouth Street entrance beyond its 12 m landing, the Haul Road entrance's slot
+   2.8 m from the street's line);
+ - its pavement overlaps the street's own roadway: its centre line runs within half the street's class width and half
+   its own width of the street's line (the measure pavement_reach lands a ramp by). A ramp that has drawn clear of
+   that runs beside the street on lanes of its own, and bounds it there as any highway does, also where the survey
+   shows no curb between the two (the South Station exit shares 150 m of roadway with Frontage Road, the Allston
+   entrance 130 m with Cambridge Street).
+ The walk carries on through the records that share an end with the one it is on (a ramp is cut at every gore and
+ level change), and along the street through the records that carry it on (a street is cut at every junction:
+ University Road's piece between the Storrow Drive ramps and Bay State Road is 6 m long): the streets of a vertex
+ are those that hold it, with those that hold an end of one of them which the walk comes within that same reach of.
+ A street vertex is matched on its source line too (`sourcePoints`: build-street-surfaces.py moves a few centre
+ lines).
+
+ A vertex the road carries on through (through) is no landing. There the street is the one that leaves or joins
+ (Charlesgate off Storrow Drive East, and onto the Bowker entrance): the pavement is the road's, the street has no
+ roadway of its own until it has drawn clear of the road's lanes, and its record is the wedge between the road's
+ edge and its own curb, which comes to a point where the two part. Measured through the road instead, such a street
+ took the carriageway whole and laid its sidewalk band along the median beyond it.
+
+ `lips` lists the stations ([record, station, record and station beyond]) at which the walk ended because the record
+ stops being flush: the mouth of a slot or the foot of a structure, which a ray along the landing would enter
+ between the record's two edges (the Dartmouth Street entrance's 12 m landing leads straight into its cut).
+
+ `carried` lists the streets that only carry the road on: one that ends on the vertex in line with every record that
+ ends there (within THROUGH). Such a street lies wholly beyond the vertex, where the road's edges cannot reach into
+ its roadway; its rays meet them at the seam alone, on the ends of the two edges, and there they are the street's own
+ edge wherever the survey shows no curb: the pavement is one across the seam (landing_edges keeps them for it as a
+ last resort). Airport Way begins that way at the Logan hotel exit, with no curb in reach across the mouth of Hotel
+ Drive for 15 m, and with the ramp's edges simply left out a 43 m2 hole opened in that junction's asphalt."""
+ vertex=lambda p:(round(p[0],3),round(p[1],3));held=defaultdict(list);at=defaultdict(list);flush={};widths={};lines={}
+ for j,s in enumerate(streets):
+  for v in sorted({vertex(p) for p in list(s['points'])+list(s.get('sourcePoints') or [])}):held[v].append(j)
+ for q,r in enumerate(records):
+  for i,p in enumerate(r['points']):at[vertex(p)].append((q,i))
+ def level(q):
+  if q not in flush:
+   r=records[q];p=r['points'];widths[q]=r.get('deckWidths') or [r['width']]*len(p)
+   if r.get('tunnel'):s=stations(p);landed=r['tunnel'].get('surfaceLandings',[]);flush[q]=[any(a-.01<=s[i]<=b+.01 for a,b in landed) for i in range(len(p))]
+   else:flush[q]=[abs(r['elevations'][i]-ground(float(p[i][0]),float(p[i][1])))<=STREET_FLUSH for i in range(len(p))]
+  return flush[q]
+ def line(j):
+  if j not in lines:lines[j]=LineString(streets[j]['points'])
+  return lines[j]
  out=[]
- for r,a,b in open_stretches(data_dir,city):
-  p=np.asarray(r['points'],float);w=np.asarray(r.get('deckWidths') or [r['width']]*len(p),float);t=np.asarray(I.tangents(r['points']));normal=np.stack([-t[:,1],t[:,0]],1)
-  out+=[LineString(p[a:b+1]+normal[a:b+1]*(sign*w[a:b+1,None]/2)) for sign in (1,-1)]
+ for v in sorted(set(held)&set(at)):
+  start=[step for step in at[v] if level(step[0])[step[1]]]
+  if not start or through(records,at[v]):continue
+  on=set(held[v]);seen=set(start);queue=list(start);taken=defaultdict(set);lips=[]
+  while queue:
+   q,i=queue.pop(0);p=records[q]['points'][i];point=Point(p);half=widths[q][i]/2
+   if not any(line(j).distance(point)<streets[j]['width']/2+half for j in sorted(on)):continue
+   taken[q].add(i)
+   for j in sorted(on):
+    for e in (streets[j]['points'][0],streets[j]['points'][-1]):
+     if math.dist(p,e)<streets[j]['width']/2+half:on|=set(held[vertex(e)])
+   for step in [(q,i-1),(q,i+1)]+at[vertex(p)]:
+    if not 0<=step[1]<len(records[step[0]]['points']) or step==(q,i):continue
+    if not level(step[0])[step[1]]:lips.append([q,i,*step])
+    elif step not in seen:seen.add(step);queue.append(step)
+  arms=[];carried=[]
+  for q,i in at[v]:
+   if i in taken.get(q,()):t=I.tangents(records[q]['points'])[i];arms.append(t if i==0 else (-t[0],-t[1]))   # from the vertex along the record
+  for j in sorted(held[v]):
+   p=streets[j]['points'];first,last=vertex(p[0])==v,vertex(p[-1])==v
+   if first==last or any(vertex(x)==v for x in p[1:-1]):continue
+   # (its direction over its first 5 m from the vertex: a source vertex can lie a few centimetres from the end)
+   end=line(j).interpolate(min(5.,line(j).length) if first else max(0.,line(j).length-5.));a=(end.x-v[0],end.y-v[1]);l=math.hypot(*a) or 1
+   if arms and all((t[0]*a[0]+t[1]*a[1])/l<=-THROUGH for t in arms):carried.append(j)
+  out.append({'vertex':list(v),'streets':sorted(on),'stations':{q:sorted(k) for q,k in sorted(taken.items())},'lips':sorted(lips),'carried':carried})
  return out
+
+
+def through(records,steps):
+ """Whether the stage's road carries on through a vertex: the vertex lies inside a record, or a record ends there and
+ another starts there in line with it (within THROUGH: two pieces of one route). Two ramps that end on one street
+ vertex, or one that ends where another starts off at an angle (the Storrow Drive ramps at University Road), do not."""
+ ends=[];starts=[]
+ for q,i in steps:
+  n=len(records[q]['points'])
+  if 0<i<n-1:return True
+  (starts if i==0 else ends).append(I.tangents(records[q]['points'])[i])
+ return any(a[0]*b[0]+a[1]*b[1]>=THROUGH for a in ends for b in starts)
+
+
+def street_edges(data_dir,city,streets):
+ """roadway_edges for the measuring of `streets` (the surface roads, as build-street-surfaces.py measures them): the
+ same pavement edges, cut where a record stops lying on a street (landing_edges)."""
+ return landing_edges(stage_records(data_dir,city),streets,package_ground(data_dir,city))
+
+
+def landing_edges(records,streets,ground):
+ """The pavement edges of the records' open stretches as curb lines for `streets`: (lines, skip, last, summary), with
+ {index of a street: the indices of the lines that are no curb for it} (`skip`), the same for the lines that are one
+ only where its ray meets nothing else (`last`), and a summary for the provenance. A piece of an edge is no curb for
+ the streets its record lies on (on_street) between two stations that both lie on them; for a street that only
+ carries the record on it is the last resort (`carried`); for every other street it bounds the roadway as before.
+ Where a landing ends because the record leaves the ground in the open, the line across its pavement there is one
+ more curb, for every street: the lip of the slot, or the foot of the structure."""
+ found=on_street(records,streets,ground);free=defaultdict(set);resort=defaultdict(set)
+ for entry in found:
+  for q,rows in entry['stations'].items():
+   for i in rows:
+    if i+1 in rows:free[(q,i)]|=set(entry['streets'])-set(entry['carried']);resort[(q,i)]|=set(entry['carried'])
+ index={id(r):q for q,r in enumerate(records)};lines=[];skip=defaultdict(set);last=defaultdict(set);length=0.;stretches=open_stretches(None,None,records,ground)
+ for r,a,b in stretches:
+  # (a street two landings reach is free of an edge if either frees it)
+  q=index[id(r)];sets=[(frozenset(free.get((q,i),())),frozenset(resort.get((q,i),set())-free.get((q,i),set()))) for i in range(a,b)];i=0
+  while i<len(sets):
+   k=i
+   while k+1<len(sets) and sets[k+1]==sets[i]:k+=1
+   for j in sorted(sets[i][0]):skip[j]|={len(lines),len(lines)+1}
+   for j in sorted(sets[i][1]):last[j]|={len(lines),len(lines)+1}
+   if sets[i][0] or sets[i][1]:length+=sum(math.dist(r['points'][m],r['points'][m+1]) for m in range(a+i,a+k+1))
+   lines+=edge_lines(r,a+i,a+k+1);i=k+1
+ # (a lip closes what a freed edge opens: a landing of a single station frees none, and its lip would lie across the street's own vertex)
+ vertex=lambda q,i:(round(records[q]['points'][i][0],3),round(records[q]['points'][i][1],3));freed={vertex(q,k) for q,i in list(free)+list(resort) for k in (i,i+1)}
+ in_the_open={(index[id(r)],i) for r,a,b in stretches for i in range(a,b+1)};lips=sorted({(q,i) for entry in found for q,i,q2,i2 in entry['lips'] if (q2,i2) in in_the_open and vertex(q,i) in freed})
+ for q,i in lips:
+  left,right=edge_points(records[q]);lines.append(LineString([left[i],right[i]]))
+ return lines,dict(skip),dict(last),{'landings':len(found),'streets':len(skip),'carried':len(last),'metres':round(length),'lips':len(lips)}
 
 
 def open_roads(data_dir,city):

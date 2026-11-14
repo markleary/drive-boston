@@ -114,6 +114,12 @@ ATTACH=.6
 """A curb with no roadway, driveway, lot, island, sidewalk, deck or park path within this distance has nothing attached to it."""
 BARE_RUN=2.0
 """The shortest such stretch that is left undrawn (a shorter one is a gap between two surfaces along one curb)."""
+FLOOR=1.2
+"""No measured roadway edge lies closer to its centre line than this (clean_side)."""
+PINCH=.3
+"""A street's edge this close to the pavement edge of a ramp that lies on it stands on that edge (landing_pinch)."""
+PINCH_RUN=3.0
+"""and a street that does so along this much of one side is measured to its ramp, not to its curb."""
 
 
 def unpack(path):
@@ -174,27 +180,54 @@ def road_stations(points,step=STEP):
  tangent=np.vstack(normals);return np.vstack(out),np.stack([-tangent[:,1],tangent[:,0]],axis=1),np.concatenate(along)
 
 
-def cast_edges(roads,curb_lines,cap_extra=CAP_EXTRA,tree=None):
+def cast_edges(roads,curb_lines,cap_extra=CAP_EXTRA,tree=None,skip=None,last=None):
  """Per road key: (stations, normals, along, left hit, right hit, second left hit,
  second right hit), distances to the nearest and next curb each way, NaN where
  none lies within reach. `tree` is the STRtree of `curb_lines` when the caller
- already has it."""
- tree=tree or STRtree(curb_lines);curbs=np.array(curb_lines,dtype=object);rays,meta,per_road=[],[],{}
+ already has it. `skip` ({road key: indices into curb_lines}) names the lines
+ that are no curb for one road, whose rays pass them: the pavement edges of a
+ highway ramp where it lies on that street (boston_highways.on_street). Where
+ such a ray then meets nothing at all, the farthest line it passed is the
+ road's edge if it lies beyond the road's class half width: the far side of
+ the pavement that lies on the street, with no curb behind it. `last` names
+ the lines that are a curb for a road only where its ray meets nothing else,
+ the nearest of them: the ends of a ramp's edges, for the street that carries
+ the ramp on."""
+ tree=tree or STRtree(curb_lines);curbs=np.array(curb_lines,dtype=object);rays,meta,per_road,half=[],[],{},{}
  for r in roads:
-  cap=r['width']/2+cap_extra;pts,nrm,along=road_stations(r['points']);key=road_key(r);per_road[key]=(pts,nrm,along)
+  cap=r['width']/2+cap_extra;pts,nrm,along=road_stations(r['points']);key=road_key(r);per_road[key]=(pts,nrm,along);half[key]=r['width']/2
   for k in range(len(pts)):
    for side,sign in ((0,1),(1,-1)):rays.append(LineString([pts[k],pts[k]+nrm[k]*cap*sign]));meta.append((key,k,side))
- rays=np.array(rays,dtype=object);ri,ci=tree.query(rays,predicate='intersects')
- coords,idx=shapely.get_coordinates(shapely.intersection(rays[ri],curbs[ci]),return_index=True)
- origins=np.array([per_road[meta[i][0]][0][meta[i][1]] for i in ri[idx]]).reshape(-1,2)
- dist=np.hypot(coords[:,0]-origins[:,0],coords[:,1]-origins[:,1]);best={}
- for d,i in zip(dist,ri[idx]):
-  key=meta[i];pair=best.get(key)
-  if pair is None:best[key]=[d,np.nan]
-  elif d<pair[0]:
-   if d<pair[0]-1e-6:pair[1]=pair[0]
-   pair[0]=d
-  elif d>pair[0]+1e-6 and (np.isnan(pair[1]) or d<pair[1]):pair[1]=d
+ rays=np.array(rays,dtype=object);ri,ci=tree.query(rays,predicate='intersects');passed=held=()
+ if skip or last:
+  out={key:set(rows) for key,rows in (skip or {}).items()}
+  for key,rows in (last or {}).items():out[key]=out.get(key,set())|set(rows)
+  mine=np.array([m[0] in out for m in meta],dtype=bool);keep=np.ones(len(ri),dtype=bool)
+  for n in np.flatnonzero(mine[ri]).tolist():keep[n]=int(ci[n]) not in out[meta[ri[n]][0]]
+  off=np.flatnonzero(~keep).tolist();held=[n for n in off if int(ci[n]) in (last or {}).get(meta[ri[n]][0],())];passed=[n for n in off if int(ci[n]) in (skip or {}).get(meta[ri[n]][0],())]
+  passed=(ri[passed],ci[passed]);held=(ri[held],ci[held]);ri,ci=ri[keep],ci[keep]
+ def distances(ri,ci):
+  coords,idx=shapely.get_coordinates(shapely.intersection(rays[ri],curbs[ci]),return_index=True)
+  origins=np.array([per_road[meta[i][0]][0][meta[i][1]] for i in ri[idx]]).reshape(-1,2)
+  return zip(np.hypot(coords[:,0]-origins[:,0],coords[:,1]-origins[:,1]),ri[idx])
+ def nearest(ri,ci):
+  found={}
+  for d,i in distances(ri,ci):
+   key=meta[i];pair=found.get(key)
+   if pair is None:found[key]=[d,np.nan]
+   elif d<pair[0]:
+    if d<pair[0]-1e-6:pair[1]=pair[0]
+    pair[0]=d
+   elif d>pair[0]+1e-6 and (np.isnan(pair[1]) or d<pair[1]):pair[1]=d
+  return found
+ best=nearest(ri,ci)
+ if len(held) and len(held[0]):
+  for key,pair in nearest(*held).items():best.setdefault(key,pair)
+ if len(passed) and len(passed[0]):
+  far={}
+  for d,i in distances(*passed):far[meta[i]]=max(d,far.get(meta[i],0.))
+  for key,d in far.items():
+   if key not in best and d>=half[key[0]]:best[key]=[d,np.nan]
  edges={}
  for r in roads:
   key=road_key(r);pts,nrm,along=per_road[key];n=len(pts);hits=np.full((4,n),np.nan)
@@ -206,13 +239,23 @@ def cast_edges(roads,curb_lines,cap_extra=CAP_EXTRA,tree=None):
  return edges
 
 
+def highway_curbs(data_dir,city,surface,base=0):
+ """The pavement edges of the Turnpike stage's open roads as curb lines for the streets: (lines, skip, last, summary),
+ with {road key: the indices (counted from `base`, where the caller appends them to its curbs) of the lines that are
+ no curb for that street}, the same for the lines that are one only as a last resort, and the summary of the street
+ landings (boston_highways.street_edges; cast_edges takes the two as `skip` and `last`)."""
+ from boston_highways import street_edges
+ lines,skip,last,summary=street_edges(data_dir,city,surface);keyed=lambda found:{road_key(surface[j]):{base+i for i in rows} for j,rows in found.items()}
+ return lines,keyed(skip),keyed(last),summary
+
+
 def runs(mask):
  """(start, end) index runs where mask holds, end exclusive."""
  if not len(mask):return []
  edge=np.diff(np.concatenate([[0],mask.astype(np.int8),[0]]));return list(zip(np.flatnonzero(edge==1),np.flatnonzero(edge==-1)))
 
 
-def clean_side(d,along,half,forced=None,tongue=7.0,gap=40.0,ramp=6.0,lift=1.5,window=4,floor=1.2):
+def clean_side(d,along,half,forced=None,tongue=7.0,gap=40.0,ramp=6.0,lift=1.5,window=4,floor=FLOOR):
  """Suppress short excursions from the local median (driveway tongues outward,
  a median curb crossed at a junction inward), interpolate gaps up to `gap` m,
  and ramp long unmeasured stretches to the nominal half width. Never narrower
@@ -950,6 +993,64 @@ def tiles_touching(geometry,size):
   for tz in range(math.floor(minz/size),math.floor(maxz/size)+1):yield tx,tz
 
 
+def decode_edges(flat,tx,tz,size):
+ """encode_edges back in world metres: (left, right) point arrays."""
+ e=np.asarray(flat,dtype=float).reshape(-1,4)/100+np.array([tx*size,tz*size]*2);return e[:,:2],e[:,2:]
+
+
+def landing_pinch(road,left,right,curb_lines,highway,free,tol=PINCH):
+ """The stations of one street at which its roadway (`left`, `right`: its record's edges) is still measured to a ramp
+ that lies on it: [(distance along, side 0 left or 1 right)]. `highway` are the pavement edges of the Turnpike stage's
+ open roads and `free` the indices of those that are no curb for this street (boston_highways.street_edges). A station
+ is pinched on a side when the first of those freed edges lies nearer than every curb and every other highway edge
+ there, the street's own edge stands on it (on the measuring floor where the freed edge lies inside that), and the
+ street is narrower there than its class makes it: what the stage wrote before it knew a landing (38 of the 63
+ streets a ramp lies on, 19 of them along 3 m or more). The test is on the record alone, so it holds for any package."""
+ free=set(free)
+ if not free:return []
+ kept=[l for i,l in enumerate(highway) if i not in free];key=road_key(road);half=road['width']/2
+ pts,nrm,along,L,R=cast_edges([road],list(curb_lines)+kept)[key][:5];Lf,Rf=cast_edges([road],[highway[i] for i in sorted(free)])[key][3:5]
+ cap=half+CAP_EXTRA;out=[]
+ for side,(sign,real,ramp,edge) in enumerate(((1,L,Lf,left),(-1,R,Rf,right))):
+  rows=np.flatnonzero(~np.isnan(ramp)&(np.isnan(real)|(ramp<real-tol)))
+  if not len(rows):continue
+  line=LineString(edge);rays=shapely.linestrings(np.stack([pts[rows]-nrm[rows]*sign*cap,pts[rows]+nrm[rows]*sign*cap],1))
+  for k,hit in zip(rows.tolist(),shapely.intersection(rays,line).tolist()):
+   if hit.is_empty:continue
+   # (signed along the normal: an edge of a station in a curbed park edge may lie across the centre line)
+   stood=min(((x-pts[k][0])*nrm[k][0]+(z-pts[k][1])*nrm[k][1])*sign for x,z in shapely.get_coordinates(hit))
+   if stood<half-tol and abs(stood-max(float(ramp[k]),FLOOR))<=tol:out.append((float(along[k]),side))
+ return sorted(out)
+
+
+def pinched_streets(data_dir,city,run=PINCH_RUN):
+ """The streets of a package that are still measured to a ramp where that ramp lies on them (landing_pinch) along
+ `run` metres or more of one side: [(road id, name, stations, [x, z] of the first)]. validate-city.py fails on any."""
+ size=city['tiles']['size'];tile_dir=data_dir/city['tiles']['directory'];keys=set(city['tiles']['keys']);headers={}
+ def header(key):
+  if key not in headers:headers[key]=unpack(tile_dir/f't_{key}.bin')[0]
+  return headers[key]
+ surface=[r for r in city['roads'] if not r.get('elevations') and not r.get('tunnel')];highway,landed,_,_=highway_curbs(data_dir,city,surface);out=[]
+ for r in surface:
+  free=landed.get(road_key(r))
+  if not free:continue
+  m=road_midpoint(r['points']);owner=tile_key(math.floor(m[0]/size),math.floor(m[1]/size))
+  if owner not in keys:continue
+  tile=header(owner);records=[decode_edges(e['edges'],tile['tx'],tile['tz'],size) for e in tile['pavements'] if e['road']==r['id']]
+  assert records,f"{r['id']} has no roadway record in tile {owner}; run build-street-surfaces.py"
+  # (several roads can share one id: the record that starts on this road's first station is its own)
+  left,right=min(records,key=lambda e:math.dist((e[0][0]+e[1][0])/2,r['points'][0]))
+  reach=LineString(r['points']).buffer(r['width']/2+CAP_EXTRA+1);curbs=[LineString(c) for tx,tz in tiles_touching(reach,size) if tile_key(tx,tz) in keys for c in header(tile_key(tx,tz))['curbs'] if len(c)>=2]
+  found=landing_pinch(r,left,right,curbs,highway,free);longest=0
+  for side in (0,1):
+   rows=[a for a,s_ in found if s_==side];start=0
+   for k in range(1,len(rows)+1):
+    if k==len(rows) or rows[k]-rows[k-1]>1.5*STEP:longest=max(longest,rows[k-1]-rows[start]+STEP);start=k
+  if found and longest>=run:
+   a=found[0][0];pts,_,along=road_stations(r['points']);k=int(np.argmin(np.abs(along-a)));out.append((r['id'],r.get('name') or '',len(found),[round(float(pts[k][0]),1),round(float(pts[k][1]),1)]))
+ return out
+
+
 def encode_edges(left,right,tx,tz,size):
  """Flat [lx, lz, rx, rz, ...] in centimetres relative to the tile origin."""
  ox,oz=tx*size,tz*size;out=[]
@@ -1027,9 +1128,9 @@ def install(data_dir,source_dir,xy,log=print):
    tile=headers.get(tile_key(tx,tz))
    if tile is not None and r['id'] not in tile['roads'] and line.intersects(box(tx*size,tz*size,(tx+1)*size,(tz+1)*size)):tile['roads'].append(r['id']);relisted+=1
  # The Turnpike and Storrow Drive (build-boston-highways.py) bound the streets beside them like a curb: the survey has no curb line there.
- from boston_highways import roadway_edges
- highway=roadway_edges(data_dir,city);log('Highway pavement edges measured to like curbs',len(highway),flush=True)
- edges=cast_edges(surface,curb_lines+highway,tree=STRtree(curb_lines+highway)) if highway else cast_edges(surface,curb_lines,tree=curb_tree);forced=mask_park_edges(edges,surface,city['parks']);masked=sum(int(m.sum()) for m in forced.values());log('Cast',len(edges),'roads; stations still inside curbed park edges paved beyond the curb',masked,'; roads listed in a further tile',relisted,flush=True)
+ # Not where one of them lies on the street itself: a ramp is no curb for the street it lands on as far as its pavement is that street's own (boston_highways.on_street).
+ highway,landed,carried,landings=highway_curbs(data_dir,city,surface,len(curb_lines));log('Highway pavement edges measured to like curbs',len(highway),'; street landings',landings,flush=True)
+ edges=cast_edges(surface,curb_lines+highway,tree=STRtree(curb_lines+highway),skip=landed,last=carried) if highway else cast_edges(surface,curb_lines,tree=curb_tree);forced=mask_park_edges(edges,surface,city['parks']);masked=sum(int(m.sum()) for m in forced.values());log('Cast',len(edges),'roads; stations still inside curbed park edges paved beyond the curb',masked,'; roads listed in a further tile',relisted,flush=True)
  records=pavement_records(surface,edges,walks_tree,forced);log('Pavement records',len(records),flush=True)
  from street_meshes import weld_records
  welded=weld_records(surface,records,road_key);log('Welded aligned street ends',welded,flush=True)
@@ -1123,9 +1224,10 @@ def install(data_dir,source_dir,xy,log=print):
  pp=data_dir/'provenance.json';provenance=json.loads(pp.read_text())
  removed=prune_package(data_dir,city,headers,provenance)
  city_path.write_text(json.dumps(city,separators=(',',':'))+'\n')
- summary={'surveyCurbs':survey,'townCurbs':added,'copyCurbMetres':round(copy_cut),'townSideSurveyCurbs':copy_survey,'staleCurbs':len(stale),'staleCurbMetres':round(stale_length),'movedCenterlines':moved_roads,'movedStations':moved,'parkEdgeStations':masked,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'staleSidewalks':walk_stats['stale'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'borderPavements':borders,'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'houseDriveways':len(lanes),'curbCuts':len(cuts),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'highwayAprons':len(aprons),'parkingStalls':stalls,'bareCurbs':sum(len(v)//3 for v in bare.values()),'bareCurbMetres':round(bare_length),'faces':stats}
+ summary={'surveyCurbs':survey,'townCurbs':added,'copyCurbMetres':round(copy_cut),'townSideSurveyCurbs':copy_survey,'staleCurbs':len(stale),'staleCurbMetres':round(stale_length),'movedCenterlines':moved_roads,'movedStations':moved,'parkEdgeStations':masked,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'staleSidewalks':walk_stats['stale'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'borderPavements':borders,'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'houseDriveways':len(lanes),'curbCuts':len(cuts),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'highwayAprons':len(aprons),'streetLandings':landings['landings'],'landedStreets':landings['streets'],'carriedStreets':landings['carried'],'landingMetres':landings['metres'],'landingLips':landings['lips'],'parkingStalls':stalls,'bareCurbs':sum(len(v)//3 for v in bare.values()),'bareCurbMetres':round(bare_length),'faces':stats}
  provenance['streetMeshes']={'version':1,**mesh_stats}
  import house_driveways
- provenance['streetSurfaces']={**summary,'source':source['url'],'method':f'Roadway edges measured every {STEP:g} m from each surface centerline to the nearest curb within half the nominal width plus {CAP_EXTRA:g} m, driveway tongues under 7 m suppressed, gaps to 40 m interpolated, unmeasured stretches ramped to the nominal width; sidewalk inventory polygons grown {SIDEWALK_TUCK} m and clipped to tiles, a polygon mostly in parkland that holds a disc {OUTLINE_DIAMETER:g} m across (wider than four declared widths) reduced to its declared width ({WALK_FALLBACK} m when blank) along the boundary; OpenStreetMap service roads measured to the surveyed curbs within half their tagged or class width ({SERVICE_WIDTH:g} m default) plus {DRIVEWAY_REACH:g} m, an unmeasured side completed to the median curb-to-curb width of that line, with surface parking lots and the closed curb faces a service road enters or a lot covers (up to {DRIVEWAY_AREA:g} m2), dissolved and cut around inventory sidewalks; other closed curb faces without a centerline or building filled with concrete when outside parks and inventory sidewalks and under {ISLAND_AREA:g} m2 or {ISLAND_WIDTH} m wide; town curbs regenerated from one pavement union across the towns with {FILLET:g} m fillets, and cut along a street that a town record gave up to a Boston one (provenance.sourceCopies) on each side where Boston\'s survey has a curb at {COPY_SURVEYED:.0%} or more of the record\'s stations within its pavement grown by the fillet radius, the surveyed curbs there kept though they lie inside the town; in Everett, Medford, Malden and Melrose a driveway lane laid out from the assessor parcel of each generated house (house_driveways.py: the wider side yard, {house_driveways.NARROWEST:g} to {house_driveways.WIDEST:g} m wide, {house_driveways.GAP:g} m off the wall, from behind the {house_driveways.WALK:g} m sidewalk band to the garage door or the back corner of the house, on the parcel and clear of other buildings, none where an OpenStreetMap service road reaches the parcel) joins the driveway fills, the town curb cut across its mouth; Boston curb stretches of {STALE_LENGTH:g} m or more lying in parkland (parks grown 3 m) beyond the measuring reach of every street, service road (8 m) and lot (4 m) dropped as remnants of removed roadways, with the inventory sidewalk parts beyond that reach, in parkland and mostly within {STALE_WALK:g} m of such a stretch; a centerline running inside a park with a curb within {PARK_EDGE:g} m on the park boundary moved onto the roadway {PARK_EDGE_LANE:g} m beyond that curb (or to the middle of a narrower roadway ending at the next curb), tapering over {PARK_EDGE_RAMP:g} m with its endpoints fixed, before measuring, where that leaves fewer such stations (the source line kept as sourcePoints); a station such a move cannot take out of the park paved between that curb and the next curb beyond it on the same side (the nominal width past the curb without one), never interpolated from or floored by its neighbours; records of other tiles sharing the roadway at a crosswalk station ({CROSSWALK_STATION:g} m along the line from each end of a road tile-builder.ts stripes, {CROSSWALK_ROAD:g} m or longer, {CROSSWALK_WIDTH:g} m wide, not an alley: an edge crossing the station\'s across line within {BORDER_REACH:g} m, running within cosine {SHARED_ALIGNMENT:g} of the road) copied into that tile as border records.'}
+ from boston_highways import STREET_FLUSH
+ provenance['streetSurfaces']={**summary,'source':source['url'],'method':f'Roadway edges measured every {STEP:g} m from each surface centerline to the nearest curb within half the nominal width plus {CAP_EXTRA:g} m, driveway tongues under 7 m suppressed, gaps to 40 m interpolated, unmeasured stretches ramped to the nominal width; sidewalk inventory polygons grown {SIDEWALK_TUCK} m and clipped to tiles, a polygon mostly in parkland that holds a disc {OUTLINE_DIAMETER:g} m across (wider than four declared widths) reduced to its declared width ({WALK_FALLBACK} m when blank) along the boundary; OpenStreetMap service roads measured to the surveyed curbs within half their tagged or class width ({SERVICE_WIDTH:g} m default) plus {DRIVEWAY_REACH:g} m, an unmeasured side completed to the median curb-to-curb width of that line, with surface parking lots and the closed curb faces a service road enters or a lot covers (up to {DRIVEWAY_AREA:g} m2), dissolved and cut around inventory sidewalks; other closed curb faces without a centerline or building filled with concrete when outside parks and inventory sidewalks and under {ISLAND_AREA:g} m2 or {ISLAND_WIDTH} m wide; town curbs regenerated from one pavement union across the towns with {FILLET:g} m fillets, and cut along a street that a town record gave up to a Boston one (provenance.sourceCopies) on each side where Boston\'s survey has a curb at {COPY_SURVEYED:.0%} or more of the record\'s stations within its pavement grown by the fillet radius, the surveyed curbs there kept though they lie inside the town; in Everett, Medford, Malden and Melrose a driveway lane laid out from the assessor parcel of each generated house (house_driveways.py: the wider side yard, {house_driveways.NARROWEST:g} to {house_driveways.WIDEST:g} m wide, {house_driveways.GAP:g} m off the wall, from behind the {house_driveways.WALK:g} m sidewalk band to the garage door or the back corner of the house, on the parcel and clear of other buildings, none where an OpenStreetMap service road reaches the parcel) joins the driveway fills, the town curb cut across its mouth; Boston curb stretches of {STALE_LENGTH:g} m or more lying in parkland (parks grown 3 m) beyond the measuring reach of every street, service road (8 m) and lot (4 m) dropped as remnants of removed roadways, with the inventory sidewalk parts beyond that reach, in parkland and mostly within {STALE_WALK:g} m of such a stretch; a centerline running inside a park with a curb within {PARK_EDGE:g} m on the park boundary moved onto the roadway {PARK_EDGE_LANE:g} m beyond that curb (or to the middle of a narrower roadway ending at the next curb), tapering over {PARK_EDGE_RAMP:g} m with its endpoints fixed, before measuring, where that leaves fewer such stations (the source line kept as sourcePoints); a station such a move cannot take out of the park paved between that curb and the next curb beyond it on the same side (the nominal width past the curb without one), never interpolated from or floored by its neighbours; records of other tiles sharing the roadway at a crosswalk station ({CROSSWALK_STATION:g} m along the line from each end of a road tile-builder.ts stripes, {CROSSWALK_ROAD:g} m or longer, {CROSSWALK_WIDTH:g} m wide, not an alley: an edge crossing the station\'s across line within {BORDER_REACH:g} m, running within cosine {SHARED_ALIGNMENT:g} of the road) copied into that tile as border records; the pavement edges of the Turnpike stage\'s open roads measured to like curbs, except by the streets such a road ends on, along the stretch where it lies on them: flush with the ground (a tunnel record\'s surface landing, a deck within {STREET_FLUSH:g} m of the terrain) and within half the street\'s class width and half its own width of the street\'s line (such a street is measured through them to the next curb, or to the farther of the two where no curb lies beyond it and it lies outside the street\'s class half width; for a street that only carries the road on beyond the vertex they count where its ray meets nothing else), with a line across its pavement where that stretch ends at a slot or a structure.'}
  pp.write_text(json.dumps(provenance,separators=(',',':'))+'\n')
  return {**summary,'changedTiles':len(changed),'removedRoadwayBuildings':removed}

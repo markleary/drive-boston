@@ -228,6 +228,15 @@ assert not misplaced_stalls,f'{len(misplaced_stalls)} parking stalls stand in a 
 # and no two stalls share ground (a lot OpenStreetMap maps twice is laid out once: parking_lots.merged)
 crowded_stalls=parking_lots.crowded(parking_lots.in_world(surface_headers))
 assert not crowded_stalls,f'{len(crowded_stalls)} pairs of parking stalls share ground, the first at {crowded_stalls[0]}; run build-street-surfaces.py'
+# A street that a road of the Turnpike stage ends on is measured through that road to its own curbs for as far as the road lies on it
+# (boston_highways.on_street): flush with the ground and inside the street's roadway. Its pavement edges were curbs for that street too, which
+# left 13 of the 86 streets such a road ends on under 5 m wide, six at the measuring floor of 2.4 m, with their sidewalk band in the asphalt.
+import street_surfaces as surface_stage
+landing_counts=surface_stage.highway_curbs(data_dir,city,surface_roads)[3]
+assert all(street_surfaces.get(field,0)==landing_counts[key] for field,key in (('streetLandings','landings'),('landedStreets','streets'),('carriedStreets','carried'),('landingMetres','metres'),('landingLips','lips'))),f'provenance must describe the street landings the roadways were measured with ({landing_counts}); run build-street-surfaces.py'
+pinched_streets=surface_stage.pinched_streets(data_dir,city)
+assert not pinched_streets,f'{len(pinched_streets)} streets are measured to the edge of a ramp that lies on them, the first {pinched_streets[0][0]} ({pinched_streets[0][1]}) at {pinched_streets[0][3]}; run build-street-surfaces.py'
+print(f"Validated {landing_counts['landings']} street landings of the Turnpike stage: {landing_counts['streets']} streets measured through {landing_counts['metres']} m of ramp to their own curbs, {landing_counts['carried']} that only carry a ramp on, {landing_counts['lips']} slot mouths closed, no street still measured to the ramp that lies on it.")
 
 def point_in_polygon(x,z,poly):
  inside=False
