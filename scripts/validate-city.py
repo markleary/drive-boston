@@ -237,6 +237,10 @@ assert all(street_surfaces.get(field,0)==landing_counts[key] for field,key in ((
 pinched_streets=surface_stage.pinched_streets(data_dir,city)
 assert not pinched_streets,f'{len(pinched_streets)} streets are measured to the edge of a ramp that lies on them, the first {pinched_streets[0][0]} ({pinched_streets[0][1]}) at {pinched_streets[0][3]}; run build-street-surfaces.py'
 print(f"Validated {landing_counts['landings']} street landings of the Turnpike stage: {landing_counts['streets']} streets measured through {landing_counts['metres']} m of ramp to their own curbs, {landing_counts['carried']} that only carry a ramp on, {landing_counts['lips']} slot mouths closed, no street still measured to the ramp that lies on it.")
+# No fallback sidewalk band lies on the pavement of a record of that stage where it runs in the open (street_surfaces.banded_highways):
+# a street measured to the edge of a ramp or a cut has the road beyond it, and the band lay on the ramp's lanes or over the cut.
+banded=surface_stage.banded_highways(data_dir,city,surface_headers)
+assert not banded,f'{len(banded)} pieces of fallback sidewalk band ({sum(b[1] for b in banded):.0f} m2) lie on the open pavement of the Turnpike stage, the first in tile {banded[0][0]} at {banded[0][2]}; run build-street-surfaces.py'
 
 def point_in_polygon(x,z,poly):
  inside=False

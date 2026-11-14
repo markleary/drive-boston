@@ -52,4 +52,18 @@ class CompiledSurfaces(unittest.TestCase):
   install_surfaces(tile,roads,records,road_key,[box(-5,-5,-4,-4)])
   self.assertFalse(unary_union([Polygon(r[0],r[1:]) for r in tile['0']['streetPavement']]).contains(Point(-4.5,-4.5)))
 
+ def test_no_fallback_band_on_a_highways_open_pavement(self):
+  # A street measured to the edge of a ramp in the open at z = 5: its band would lie on the ramp's lanes; the band on the other side stays.
+  roads=[{'id':'a','name':'a','points':[[-30,0],[30,0]],'width':8}]
+  records={road_key(roads[0]):{'left':np.array([[-30,5],[30,5]],float),'right':np.array([[-30,-4],[30,-4]],float),'walk':[0,0]}}
+  ramp=box(-20,5,20,12)
+  def band(highways):
+   tiles={f'{x}_{z}':{'tx':x,'tz':z,'size':100} for x in (-1,0) for z in (-1,0)};stats=install_surfaces(tiles,roads,records,road_key,highways=highways)
+   return unary_union([Polygon(r[0],r[1:]) for t in tiles.values() for r in t['streetSidewalks']]),stats
+  before,_=band(());after,stats=band([ramp])
+  self.assertAlmostEqual(before.intersection(ramp).area,40*2.9,places=3)
+  self.assertLess(after.intersection(ramp).area,1e-6)
+  self.assertAlmostEqual(after.area,before.area-40*2.9,places=3,msg='the band beyond the ramp and on the far side stays')
+  self.assertEqual(stats['highwayBandArea'],116)
+
 if __name__=='__main__':unittest.main()
