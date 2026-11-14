@@ -2,7 +2,7 @@ import './helpers/npc-fleet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
-import {loadMetroCity} from './helpers/metro-city.mjs';
+import {loadMetroCity,readJson} from './helpers/metro-city.mjs';
 import {addTunnels,highwayLegend} from '../src/render/tunnels.ts';
 import {isHighwayDeck,isMotorway,openStretches,stations} from '../src/simulation/motorway.ts';
 import {inTunnelPortal,tunnelCoveredAt,tunnelGeometry,tunnelPointAt,tunnelStations,tunnelSurfaceLandingAt} from '../src/simulation/tunnels.ts';
@@ -473,12 +473,14 @@ test('no ground stands in the pavement of an installed highway deck',()=>{
     const base=road.id.replace(/-\d+$/,''),piece=base!==road.id&&(byId.has(base)||/^(i90|storrow)-(eb|wb)$/.test(base)),k=piece?base:road.id,n=piece?Number(road.id.slice(base.length+1)):1,cur=seen.get(k)??{lo:Infinity,hi:-Infinity};
     if(n<cur.lo){cur.lo=n;cur.first=road;}if(n>cur.hi){cur.hi=n;cur.last=road;}seen.set(k,cur);
   }
-  for(const {first:f,last:l} of seen.values()){first.add(f);last.add(l);}
+  const route=new Map();for(const [k,{first:f,last:l}] of seen){first.add(f);last.add(l);route.set(f,k);route.set(l,k);}
+  // A route end the stage held on its street's surface lies on that street over its whole landing (boston_highways.landing_reach).
+  const reach=new Map((readJson('provenance.json').bostonHighways.heldLandings??[]).map(h=>[`${h.road} ${h.end}`,Math.max(15,h.landingMeters??0)]));
   for(const road of highway.filter(r=>!r.tunnel)){
-    const along=stations(road.points),total=along.at(-1);
+    const along=stations(road.points),total=along.at(-1),k=route.get(road);
     for(let i=0;i<road.points.length;i++){
       // Where a route meets its street or the road it joins, the two share the ground (within the stage's LANDING_LIP).
-      const meeting=(first.has(road)&&along[i]<18)||(last.has(road)&&total-along[i]<18);
+      const meeting=(first.has(road)&&along[i]<(reach.get(`${k} start`)??15)+3)||(last.has(road)&&total-along[i]<(reach.get(`${k} end`)??15)+3);
       const a=road.points[Math.max(0,i-1)],b=road.points[Math.min(road.points.length-1,i+1)],l=Math.hypot(b[0]-a[0],b[1]-a[1])||1,nx=-(b[1]-a[1])/l,nz=(b[0]-a[0])/l,half=road.deckWidths[i]/2-.3;
       for(const o of [-half,-half/2,0,half/2,half])assert.ok(sampleElevation(city,road.points[i][0]+nx*o,road.points[i][1]+nz*o)<=road.elevations[i]+(meeting?.18:.01),`${road.id} at ${road.points[i]}`);
     }
@@ -531,6 +533,29 @@ test('a ramp lies on its street inside its landing and goes down in the open bey
     }
     assert.ok(checked>300);
   }
+});
+
+test('the Longfellow exit at Charles Circle lies on Cambridge Street where it runs in the street\'s roadway',()=>{
+  // It had followed the survey under Cambridge Street's fill and ended in a cut up to 0.76 m deep that closed on the street's centre
+  // line, the street measured to 3.35 m beside it: a ramp whose pavement lies in the roadway of the street it lands on is held on that
+  // street's surface there (boston_highways.street_surface and hold_surface; heldLandings in the provenance).
+  const id='storrow-wb-exit-charles-circle-longfellow',chain=highway.filter(r=>r.id===id||r.id.startsWith(`${id}-`)).sort((a,b)=>(Number(a.id.slice(id.length+1))||1)-(Number(b.id.slice(id.length+1))||1));
+  const street=city.roads.find(r=>r.id==='8763-0-0'),end=chain.at(-1);
+  assert.deepEqual(end.points.at(-1),street.points.at(-1),'the exit ends on the vertex where Cambridge Street (8763-0-0) ends');
+  assert.ok(!end.tunnel,`${end.id}, the record on the street, is a deck on its ground and no cut`);
+  const held=readJson('provenance.json').bostonHighways.heldLandings.find(h=>h.road===id&&h.end==='end');
+  assert.ok(held&&held.heldMeters===held.wantedMeters&&held.heldMeters>20,`the stage held the exit on the street for ${held?.heldMeters} m`);
+  // Every station whose pavement reaches into the street's roadway (its class width), back from the end: the ground across the
+  // middle two thirds of its pavement stands no more than a landing's lip over it.
+  let on=0;
+  walk:for(const road of [...chain].reverse())for(let i=road.points.length-1;i>=0;i--){
+    const [x,z]=road.points[i],w=road.deckWidths[i];if(roadProjection(street,x,z).distance>street.width/2+w/2)break walk;
+    const a=road.points[Math.max(0,i-1)],b=road.points[Math.min(road.points.length-1,i+1)],l=Math.hypot(b[0]-a[0],b[1]-a[1]),nx=-(b[1]-a[1])/l,nz=(b[0]-a[0])/l;
+    const over=[-1/3,-1/6,0,1/6,1/3].map(o=>sampleElevation(city,x+nx*o*w,z+nz*o*w)).sort((p,q)=>p-q)[2]-road.elevations[i];
+    assert.ok(over<=.2,`the ground stands ${over.toFixed(2)} m over ${road.id} at ${road.points[i]}`);on++;
+  }
+  assert.ok(on>=10,`${on} stations in the street's roadway`);
+  assert.ok(street.pavedWidth>9,`Cambridge Street is measured through the ramp to its own curbs (pavedWidth ${street.pavedWidth}; 7.54 m while it was measured to the cut)`);
 });
 
 test('the Dartmouth Street entrance is signed overhead: 90 West, New York, on a gantry at the mouth of its slot',()=>{
