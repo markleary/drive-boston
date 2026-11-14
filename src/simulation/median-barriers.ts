@@ -32,6 +32,11 @@ export const MEDIAN_LEDGE=[.1,.35];
  * covered by the foot up to `RAIL_LIP` over the higher pavement, this much over the ground. Higher ground is retained by
  * the cut's own wall as before, and the row gives way to it (`blockedStretches`). */
 export const MEDIAN_COVER=.03;
+/** An edge is probed at each of its stations and, where two stations lie further apart than this, at points no further apart
+ * between them: a median can begin and end between two stations, and the record across it, probing at its own stations,
+ * would drop its rail there while this one carried no row. (The highway stages set their stations 3 m apart, so on their
+ * records every segment is one step.) */
+export const MEDIAN_PROBE=4;
 
 /** A deck that takes part in a median: a generated highway deck without a surveyed roadway. One with a `Road.roadway`
  * (Storrow Drive, a ramp between its curbs) is a street's pavement on its ground and carries no rail there either. */
@@ -193,22 +198,26 @@ function median(city:CityData,road:Road){
       }
       return{other:found.other,section};
     };
-    const faced=road.points.map((_,i)=>i?probe(i,1):probe(1,0));let run:MedianSection[]|undefined;
-    for(let i=1;i<road.points.length;i++){
-      let from=faced[i-1],to=faced[i],start=0,end=1;
+    // (a station is probed as the end of the segment before it; the steps of a longer segment follow on: MEDIAN_PROBE)
+    let run:MedianSection[]|undefined,before=probe(1,0);
+    for(let i=1;i<road.points.length;i++)for(let k=1,count=Math.max(1,Math.ceil((along[i]-along[i-1])/MEDIAN_PROBE));k<=count;k++){
+      const low=(k-1)/count,high=k/count,after=probe(i,high);
+      let from=before,to=after,start=low,end=high;before=after;
       if(!from&&!to){run=undefined;continue;}
       if(!from||!to){
-        // The stretch begins or ends between the two stations: where, to a millimetre of this 3 m.
-        let inside=from?0:1,outside=1-inside,edge=from??to;
-        for(let k=0;k<12;k++){const middle=(inside+outside)/2,found=probe(i,middle);if(found){inside=middle;edge=found;}else outside=middle;}
+        // The stretch begins or ends between the two points: where, to a millimetre of these 3 m.
+        let inside=from?low:high,outside=from?high:low,edge=from??to;
+        for(let n=0;n<12;n++){const middle=(inside+outside)/2,found=probe(i,middle);if(found){inside=middle;edge=found;}else outside=middle;}
         if(from){end=inside;to=edge;}else{start=inside;from=edge;}
       }
       const a=from!.section,b=to!.section;
       if(Math.hypot(b.x-a.x,b.z-a.z)<.12){run=undefined;continue;}
-      const key=`${i},${side}`,list=result.hidden.get(key);if(list)list.push([start,end]);else result.hidden.set(key,[[start,end]]);
+      // (the steps of one segment that follow on each other are one stretch of it)
+      const key=`${i},${side}`,list=result.hidden.get(key),earlier=list?.[list.length-1];
+      if(earlier&&earlier[1]===start)earlier[1]=end;else if(list)list.push([start,end]);else result.hidden.set(key,[[start,end]]);
       if(carries(road,from!.other)){
-        if(run&&start===0)run.push(b);else result.runs.push(run=[a,b]);
-        if(end<1)run=undefined;
+        if(run&&start===low)run.push(b);else result.runs.push(run=[a,b]);
+        if(end<high)run=undefined;
       }else run=undefined;
     }
   }

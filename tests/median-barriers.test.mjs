@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {bridgeBarriers,deckEdge,deckEdgeElevation,roadProjection,sampleRoadElevation,JERSEY,MOUTH_REACH} from '../src/simulation/road-surfaces.ts';
-import {medianBarriers,medianBarrierMesh,medianBarrierBoxes,MEDIAN_REACH,MEDIAN_WIDENING,MEDIAN_LAP,MEDIAN_FOOT,MEDIAN_UNDER} from '../src/simulation/median-barriers.ts';
+import {medianBarriers,medianBarrierMesh,medianBarrierBoxes,MEDIAN_REACH,MEDIAN_WIDENING,MEDIAN_LAP,MEDIAN_FOOT,MEDIAN_UNDER,MEDIAN_PROBE} from '../src/simulation/median-barriers.ts';
 import {LANE_WIDTH,isHighwayDeck,motorwayLanes} from '../src/simulation/motorway.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
 import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
@@ -85,6 +85,26 @@ test('a row begins and ends where the two decks come within reach, to the centim
   }
 });
 
+test('a median that begins and ends between two stations of a deck is found from either deck: one row, and both rails give way to it',()=>{
+  // One deck has a station every 100 m. The other, with one every 2 m, lies 5 m off and swings to 0.4 m of it about z = -150:
+  // within reach for some 85 m, all of it inside the first deck's second segment. Probed at its own stations alone the coarse
+  // deck saw no median there while the fine one dropped its rail: nothing stood between the two directions where the coarse
+  // deck carries the row, and a rail beside the row where it does not.
+  const swing=z=>4.6*Math.min(1,Math.max(0,(60-Math.abs(z+150))/40));
+  const fine=(x,from,to,sign)=>Array.from({length:LENGTH/2+1},(_,i)=>{const z=from+(to-from)*i/(LENGTH/2);return[x+sign*swing(z),z];}),coarse=(x,from,to)=>[0,1,2,3].map(i=>[x,from+(to-from)*i/3]);
+  const edge=road=>road.points.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p[0]-road.points[i][0],p[1]-road.points[i][1]),0);
+  assert.ok(100>MEDIAN_PROBE*3);
+  for(const [north,south,which]of [[coarse(0,0,-LENGTH),fine(-WIDTH-5,-LENGTH,0,1),'the deck that carries the row'],[fine(0,0,-LENGTH,-1),coarse(-WIDTH-5,-LENGTH,0),'the other deck']]){
+    const city=fixture([deck('a-north',north),deck('b-south',south)]),rows=medianBarriers(city,city.roads[0]);
+    assert.equal(rows.length,1,`one row where ${which} has its stations 100 m apart`);
+    assert.deepEqual(medianBarriers(city,city.roads[1]),[]);
+    const length=metres(rows[0]),widths=rows[0].map(s=>s.half*2);
+    assert.ok(length>80&&length<92&&rows[0].every(s=>s.z<-103&&s.z>-197),`along the ${length.toFixed(1)} m about z = -150 where the pavements lie within reach (${which})`);
+    assert.ok(Math.abs(Math.min(...widths)-JERSEY.base)<1e-9&&Math.abs(Math.max(...widths)-MEDIAN_REACH-2*MEDIAN_LAP)<.02,'its foot as wide as the reach at both ends, the profile alone where 0.4 m lie between the pavements');
+    for(const road of city.roads){const gone=edge(road)-railed(city,road,-1);assert.ok(Math.abs(gone-length)<3,`${road.id}: its own rail gives way along the row and nowhere else (${gone.toFixed(1)} m of rail gone, a row of ${length.toFixed(1)} m; ${which})`);}
+  }
+});
+
 test('a short widening or a jog in the pavements does not break the row; a long one does, and the rails stand along it',()=>{
   // The southbound deck eases out to 3.6 m between the pavements over 20 m, stays there for `long` metres about z = -150 and eases back (0.6 m elsewhere).
   const swing=long=>{const points=Array.from({length:LENGTH/2+1},(_,i)=>{const z=-LENGTH+i*2,out=Math.max(0,Math.min(1,(long/2+20-Math.abs(z+150))/20));return[-WIDTH-.6-3*out,z];});return fixture([deck('a-north',line(0,0,-LENGTH)),deck('b-south',points)]);};
@@ -123,9 +143,10 @@ test('the row is one closed solid: every face outward, a face at both ends, the 
     assert.ok(Math.abs(volume(mesh)-(foot+profile)*LENGTH)<.01*LENGTH,`wound outward: ${volume(mesh).toFixed(1)} m3 for ${((foot+profile)*LENGTH).toFixed(1)}`);
     const ys=[];for(let i=1;i<mesh.length;i+=3)ys.push(mesh[i]);
     assert.ok(Math.abs(Math.max(...ys)-(DECK+JERSEY.height))<1e-6&&Math.abs(Math.min(...ys)-(DECK-.75-MEDIAN_UNDER))<1e-6,'from under the slab to the profile\'s top');
-    const boxes=medianBarrierBoxes(rows,.75);
-    assert.equal(boxes.filter(q=>q.width===JERSEY.base).length,LENGTH/10);
-    assert.equal(boxes.filter(q=>q.width>JERSEY.base).length,gap>JERSEY.base?LENGTH/10:0,'the foot collides where it is wider than the profile');
+    // (a cross-section at every station, 10 m apart here, and at the probes between two stations: MEDIAN_PROBE)
+    const boxes=medianBarrierBoxes(rows,.75),sections=LENGTH/10*Math.ceil(10/MEDIAN_PROBE);
+    assert.equal(boxes.filter(q=>q.width===JERSEY.base).length,sections);
+    assert.equal(boxes.filter(q=>q.width>JERSEY.base).length,gap>JERSEY.base?sections:0,'the foot collides where it is wider than the profile');
   }
 });
 
