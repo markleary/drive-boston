@@ -92,9 +92,12 @@ test('a crosswalk in mid block crosses its roadway whole or is not drawn, and no
   // Less than a lane of asphalt beyond the end is the kerb's own shoulder; a lane or more is a roadway left uncrossed.
   const strip=w=>(x,z)=>onLane(x,z)||(x>=0&&x<=40&&z>3.5&&z<=3.5+w)||onSide(x);
   assert.deepEqual(at(strip(3)),[31],'3 m of asphalt beyond the end: the stripes reach the roadway\'s edge');
+  assert.deepEqual(at(strip(3.4)),[31],'3.4 m beyond it: still within the 3.5 m, though the ground beyond begins 10 cm short of them');
+  assert.deepEqual(at(strip(3.6)),[],'3.6 m beyond it: a lane left uncrossed');
   assert.deepEqual(at(strip(4)),[],'4 m beyond it: they do not');
   // A slit between two sheets of asphalt is no edge.
   assert.deepEqual(at((x,z)=>(onLane(x,z)||onAvenue(x,z)||onSide(x))&&!(z>3.5&&z<3.6)),[],'a 10 cm slit along the lane\'s edge does not end the roadway');
+  assert.deepEqual(at((x,z)=>(onLane(x,z)||onAvenue(x,z)||onSide(x))&&!(z>6.8&&z<6.9)),[],'nor does one 3.3 m out, where the 3.5 m end: the asphalt is read a break\'s width further');
   // The tip of the island between the two roadways may stand beside the end of the stripes (they reach from x 31 to 34).
   assert.deepEqual(at((x,z)=>onLane(x,z)||(onAvenue(x,z)&&x<35)||onSide(x)),[31],'the island begins a metre beyond the stripes: they end at its tip');
   // Further on it is no end for them; the candidate before Side Street stands beside it and comes in, since it crosses the lane whole.

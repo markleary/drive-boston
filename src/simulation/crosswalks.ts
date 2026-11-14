@@ -34,7 +34,7 @@ import { pavementSpan, polylineLength, roadwaySpan, stationAlong } from './tile-
  *
  * A crosswalk that stands `MID_BLOCK` or more from its node is not at a corner any more: its station is where the
  * road's line left the record of a street that forks off beside it, or where the walk gave up, in asphalt the two
- * still share. There it crosses the roadway whole or is not drawn. Of the 965 that stood so, 196 crossed their own
+ * still share. There it crosses the roadway whole or is not drawn. Of the 965 that stood so, 194 crossed their own
  * record's width and ended with a lane or more of asphalt beyond (Louder's Lane, 6.5 m long at the kerb of Centre
  * Street's 24 m roadway). The roadway must end within `SHORT` beyond each end of the stripes, on a line across beside
  * that end (along the stripes' length and `BESIDE` either way: the tip of the island where a fork parts is such an
@@ -257,16 +257,18 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
   };
   /** Whether the roadway ends within `SHORT` beyond offset `o` across `c`, going `side`: on a line across the road
    * beside that end (every half metre of the stripes' length and `BESIDE` either way) the asphalt the tile draws
-   * breaks off for `BREAK` or more, or, where the tile cannot see the whole of that line, a point of it lies on no record. */
+   * breaks off for `BREAK` or more, the break beginning within `SHORT` (so the line is read `BREAK` further: a roadway
+   * that ends 3.4 m out has ended within 3.5), or, where the tile cannot see the whole of that line, a point of it
+   * within `SHORT` lies on no record. */
   const ends = (c: Crosswalk, o: number, side: 1 | -1) => {
-    const nx = -c.tz * side, nz = c.tx * side;
+    const nx = -c.tz * side, nz = c.tx * side, far = SHORT + BREAK;
     for (let a = -BESIDE; a <= STRIPE_LENGTH + BESIDE; a += .5) {
-      const x = c.at[0] + c.tx * a - c.tz * o, z = c.at[1] + c.tz * a + c.tx * o, drawn = ground?.spans(x, z, nx, nz, 0, SHORT);
-      if (drawn && drawn.known[0] <= 0 && drawn.known[1] >= SHORT) {
+      const x = c.at[0] + c.tx * a - c.tz * o, z = c.at[1] + c.tz * a + c.tx * o, drawn = ground?.spans(x, z, nx, nz, 0, far);
+      if (drawn && drawn.known[0] <= 0 && drawn.known[1] >= far) {
         let from = 0;
-        for (let i = 0; i < drawn.spans.length; i += 2) { if (drawn.spans[i] - from >= BREAK) return true; from = drawn.spans[i + 1]; }
-        if (SHORT - from >= BREAK) return true;
-      } else if (a >= 0 && a <= STRIPE_LENGTH) for (let d = .25; d <= SHORT; d += .5) { const p: Point2 = [x + nx * d, z + nz * d]; if (!others.some(e => onRecord(e, p))) return true; }
+        for (let i = 0; i < drawn.spans.length && from <= SHORT; i += 2) { if (drawn.spans[i] - from >= BREAK) return true; from = drawn.spans[i + 1]; }
+        if (from <= SHORT) return true;
+      } else if (a >= 0 && a <= STRIPE_LENGTH) for (let d = .25; d <= SHORT; d += .25) { const p: Point2 = [x + nx * d, z + nz * d]; if (!others.some(e => onRecord(e, p))) return true; }
     }
     return false;
   };
