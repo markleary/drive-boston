@@ -3,11 +3,12 @@ import test from 'node:test';
 import {junctionIndex,junctionIndexSteps,planCrosswalks,STRIPE_LENGTH,CROSSWALK_SETBACK,MIN_SPACING} from '../src/simulation/crosswalks.ts';
 import {pavementEdges,pavementSpan,polylineLength} from '../src/simulation/tile-format.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
+import {drawnStreets} from '../src/simulation/drawn-streets.ts';
 import {hasMetroData,loadMetroCity} from './helpers/metro-city.mjs';
 
 const road=(id,points,width,name=id,extra={})=>({id,name,points,width,oneway:0,...extra});
 const near=(a,b,tolerance=.05)=>Math.abs(a-b)<tolerance;
-const plan=(roads,{signals=[],edges=new Map(),others=[]}={})=>planCrosswalks(roads,junctionIndex(roads,signals),r=>edges.get(r.id),others);
+const plan=(roads,{signals=[],edges=new Map(),others=[],ground}={})=>planCrosswalks(roads,junctionIndex(roads,signals),r=>edges.get(r.id),others,ground);
 const on=(list,id)=>list.filter(c=>c.road.id===id).sort((a,b)=>a.at[0]-b.at[0]||a.at[1]-b.at[1]);
 
 test('crosswalks belong to junctions: a stem is striped across its mouth, the through street beside a comparable street, never at a dead end or a mid-street split',()=>{
@@ -67,10 +68,39 @@ test('a fork\'s asphalt widening past the node is walked out of before the strip
   const straight=road('straight',[[0,0],[80,0]],7,'Washington Street'),fork=road('fork',[[0,0],[69.3,40]],7,'Washington Street'),cross=road('cross',[[0,-60],[0,0],[0,60]],10,'Marginal Road');
   const flare={left:[[0,-3.5],[80,-3.5]],right:[[0,3.5],[10,6],[30,16],[80,16]]};
   const edges=new Map([['straight',flare]]);
-  const out=plan([straight,fork,cross],{edges,others:[flare]});
+  // (This test is about the walk alone: with a tile that draws no asphalt beside the stripes they end at the roadway's edge wherever they stand.)
+  const bare={spans:(x,z,nx,nz,from,to)=>({spans:[],known:[from,to]})},out=plan([straight,fork,cross],{edges,others:[flare],ground:bare});
   const [onFork]=on(out,'fork');assert.ok(onFork,'the fork is striped across its mouth');
   // The fork line z=x/sqrt(3) leaves the flare (z=6 at x=10 rising to 16 at x=30) about 17.5 m out; the record at the node alone would stop it at 4.5 m.
   const d=Math.hypot(onFork.at[0],onFork.at[1]);assert.ok(d>17&&d<21,`beyond where the straight street's record still covers it (${d.toFixed(1)} m out, not 4.5)`);
+});
+
+test('a crosswalk in mid block crosses its roadway whole or is not drawn, and none that ends short comes in for it',()=>{
+  // Lane Street leaves a node beside Wide Avenue, which forks off at 10 degrees: the lane's line stays inside the avenue's record
+  // for the 30 m the walk goes, so its crosswalk stands 31 m out, across its own 7 m and no more. Side Street ends the block at
+  // x 45, with a candidate of its own 6 m before it that the first one crowds out.
+  const A=10*Math.PI/180,far=[Math.cos(A)*120,Math.sin(A)*120];
+  const lane=road('lane',[[0,0],[45,0]],7,'Lane Street'),avenue=road('avenue',[[0,0],far],16,'Wide Avenue'),side=road('side',[[45,-60],[45,0],[45,60]],10,'Side Street');
+  const ribbon=(a,b,h)=>{const l=Math.hypot(b[0]-a[0],b[1]-a[1]),n=[-(b[1]-a[1])/l,(b[0]-a[0])/l];return {left:[[a[0]-n[0]*h,a[1]-n[1]*h],[b[0]-n[0]*h,b[1]-n[1]*h]],right:[[a[0]+n[0]*h,a[1]+n[1]*h],[b[0]+n[0]*h,b[1]+n[1]*h]]};};
+  const edges=new Map([['lane',ribbon([0,0],[45,0],3.5)],['avenue',ribbon([0,0],far,8)]]),others=[...edges.values()];
+  // The asphalt a tile draws, as its `spans` gives it: the paved stretches of a line, here sampled every 5 cm.
+  const drawn=inside=>({spans(x,z,nx,nz,from,to){const out=[];let on=false;for(let s=from;s<=to+1e-9;s+=.05){const hit=inside(x+nx*s,z+nz*s);if(hit!==on)out.push(s);on=hit;}if(on)out.push(to);return {spans:out,known:[from,to]};}});
+  const onLane=(x,z)=>x>=0&&x<=45&&Math.abs(z)<=3.5,onAvenue=(x,z)=>{const u=x*Math.cos(A)+z*Math.sin(A),v=-x*Math.sin(A)+z*Math.cos(A);return u>=0&&u<=120&&Math.abs(v)<=8;},onSide=x=>Math.abs(x-45)<=5;
+  const at=inside=>on(plan([lane,avenue,side],{edges,others,ground:drawn(inside)}),'lane').map(c=>+c.at[0].toFixed(1));
+  assert.deepEqual(at((x,z)=>onLane(x,z)||onAvenue(x,z)||onSide(x)),[],'one sheet of asphalt from the lane to the avenue\'s far kerb: the stripes would end 10 m short of it, and the candidate before Side Street 11 m');
+  assert.deepEqual(at((x,z)=>onLane(x,z)||(onAvenue(x,z)&&x<29)||onSide(x)),[31],'where the two roadways have parted, the stripes cross the lane from kerb to kerb and stay');
+  // Less than a lane of asphalt beyond the end is the kerb's own shoulder; a lane or more is a roadway left uncrossed.
+  const strip=w=>(x,z)=>onLane(x,z)||(x>=0&&x<=40&&z>3.5&&z<=3.5+w)||onSide(x);
+  assert.deepEqual(at(strip(3)),[31],'3 m of asphalt beyond the end: the stripes reach the roadway\'s edge');
+  assert.deepEqual(at(strip(4)),[],'4 m beyond it: they do not');
+  // A slit between two sheets of asphalt is no edge.
+  assert.deepEqual(at((x,z)=>(onLane(x,z)||onAvenue(x,z)||onSide(x))&&!(z>3.5&&z<3.6)),[],'a 10 cm slit along the lane\'s edge does not end the roadway');
+  // The tip of the island between the two roadways may stand beside the end of the stripes (they reach from x 31 to 34).
+  assert.deepEqual(at((x,z)=>onLane(x,z)||(onAvenue(x,z)&&x<35)||onSide(x)),[31],'the island begins a metre beyond the stripes: they end at its tip');
+  // Further on it is no end for them; the candidate before Side Street stands beside it and comes in, since it crosses the lane whole.
+  assert.deepEqual(at((x,z)=>onLane(x,z)||(onAvenue(x,z)&&x<36)||onSide(x)),[39],'the island begins 2 m beyond the stripes: they leave, and the crosswalk before Side Street takes their place');
+  // Ground the tile cannot see is judged by the records it holds: the avenue's record lies beyond the lane's edge.
+  assert.deepEqual(on(plan([lane,avenue,side],{edges,others}),'lane'),[],'without the drawn asphalt, the avenue\'s record beyond the end');
 });
 
 test('crosswalks on one roadway closer than the minimum spacing keep the stronger junction; parallel streets are not confused for one roadway',()=>{
@@ -209,7 +239,7 @@ async function tileCrosswalks(key){
   const box=r=>{let a=Infinity,b=-Infinity,c=Infinity,d=-Infinity;for(const [x,z] of r.points){a=Math.min(a,x);b=Math.max(b,x);c=Math.min(c,z);d=Math.max(d,z);}return a<=reach.maxX+40&&b>=reach.minX-40&&c<=reach.maxZ+40&&d>=reach.minZ-40;},roads=city.roads.filter(box);
   const records=new Map();for(const p of [...tile.pavements,...tile.borderPavements])if(!records.has(p.road))records.set(p.road,p);
   const edgesOf=r=>{const p=records.get(r.id);return p&&p.edges.length>=8?pavementEdges(tile,p):undefined;};
-  return {tile,edgesOf,crosswalks:planCrosswalks(roads,junctionIndex(city.roads,city.signals),edgesOf,[...records.values()].map(p=>pavementEdges(tile,p))).filter(c=>owned.has(c.road))};
+  return {tile,edgesOf,crosswalks:planCrosswalks(roads,junctionIndex(city.roads,city.signals),edgesOf,[...records.values()].map(p=>pavementEdges(tile,p)),tile.streetPavement?drawnStreets(tile):undefined).filter(c=>owned.has(c.road))};
 }
 
 test('Congress Street\'s crosswalk at the eastbound landings of Exit 135 crosses both carriageways and the ramps\' landing, kerb to kerb',{skip:!hasMetroData()},async()=>{
@@ -224,14 +254,17 @@ test('Congress Street\'s crosswalk at the eastbound landings of Exit 135 crosses
   for(const o of crosswalks){if(o===c||Math.abs(o.tx*c.tx+o.tz*c.tz)<.8)continue;const d=Math.hypot(o.at[0]-c.at[0],o.at[1]-c.at[1]);assert.ok(d>=MIN_SPACING,`no other crosswalk across this roadway within the spacing (${o.road.id} at ${d.toFixed(1)} m)`);}
 });
 
-test('Newton Street in Brookline keeps a crosswalk on each of its two roadways where they part',{skip:!hasMetroData()},async()=>{
-  // The lower roadway's crosswalk would reach across the upper one where the median between them ends under its line; the upper
-  // roadway has its own 9 m along, across a roadway the lower one's station does not reach. Thinned with the wider span, the
-  // lower one went and its roadway was left without stripes.
-  const {crosswalks}=await tileCrosswalks('-7_4'),at=(x,z)=>crosswalks.find(c=>c.road.name==='Newton Street'&&Math.hypot(c.at[0]-x,c.at[1]-z)<2);
-  const upper=at(-6655.6,4749.2),lower=at(-6646.5,4771.1);
-  assert.ok(upper&&lower,`both are planned (${crosswalks.filter(c=>c.road.name==='Newton Street').map(c=>c.at.map(v=>v.toFixed(1)))})`);
-  assert.ok(near(upper.span[1]-upper.span[0],18.2,.3)&&near(lower.span[1]-lower.span[0],15.6,.3),`each across its own roadway (${(upper.span[1]-upper.span[0]).toFixed(1)} and ${(lower.span[1]-lower.span[0]).toFixed(1)} m)`);
+test('Newton Street in Brookline keeps the crosswalk of its upper roadway where the two part, and none that ends in their shared asphalt',{skip:!hasMetroData()},async()=>{
+  // The upper roadway's crosswalk reaches from the north kerb to the tip of the median, 31 m from its node: it crosses its roadway
+  // whole and stays. The lower roadway's stood 9 m along, where the median has ended: 15.6 m from the south kerb, with 17 m of
+  // the upper roadway's asphalt beyond its end. It could not take that in (it would crowd out the upper one, the thinning
+  // order pull request 133 settled), so it crossed half a roadway in mid block, and is not drawn. Nor is the third, 22.3 m from
+  // the north kerb with 15 m of asphalt beyond.
+  const {crosswalks}=await tileCrosswalks('-7_4'),at=(x,z)=>crosswalks.find(c=>c.road.name==='Newton Street'&&Math.hypot(c.at[0]-x,c.at[1]-z)<4);
+  const upper=at(-6655.6,4749.2);
+  assert.ok(upper&&near(upper.span[1]-upper.span[0],18.2,.3),`the upper roadway's, kerb to median (${upper&&(upper.span[1]-upper.span[0]).toFixed(1)} m)`);
+  assert.equal(at(-6646.5,4771.1),undefined,'none across the lower roadway alone');
+  assert.equal(at(-6600.1,4768.2),undefined,'none from the north kerb into the shared asphalt');
 });
 
 test('Main Street\'s crosswalk in Medford crosses the leg of Bow Street that shares its asphalt, to the kerb at Albion Street\'s corner',{skip:!hasMetroData()},async()=>{
@@ -290,6 +323,35 @@ test('no crosswalk stands where only the road itself meets its line, and Bowdoin
   // Street's mouth, on its record: not taken.
   const {crosswalks:dorchester}=await tileCrosswalks('1_4'),bowdoin=dorchester.find(c=>c.road.id==='9561-0-0'&&Math.hypot(c.node[0]-1028.9,c.node[1]-4414.2)<2);
   assert.ok(bowdoin&&near(Math.hypot(bowdoin.at[0]-bowdoin.node[0],bowdoin.at[1]-bowdoin.node[1]),16,.6)&&near(bowdoin.span[1]-bowdoin.span[0],13.2,.5),`Bowdoin Street's stays 16 m from the node, 13.2 m long (${bowdoin&&Math.hypot(bowdoin.at[0]-bowdoin.node[0],bowdoin.at[1]-bowdoin.node[1]).toFixed(1)} m, ${bowdoin&&(bowdoin.span[1]-bowdoin.span[0]).toFixed(1)} m)`);
+});
+
+test('no crosswalk stands in mid block with a roadway left uncrossed beyond its end: Louder\'s Lane, South Border Road, Chestnut Hill Avenue',{skip:!hasMetroData()},async()=>{
+  // Louder's Lane runs inside Centre Street's asphalt for its first 40 m. Its crosswalk stood 31 m out, 6.5 m long at Centre
+  // Street's west kerb with 25 m of asphalt beyond; the candidate at the block's other end, 5 m from its node, is the same
+  // stray 4 m along, and does not come in for it.
+  const lane=(await tileCrosswalks('-5_4')).crosswalks.filter(c=>c.road.id==='18901-0-0');
+  assert.deepEqual(lane.map(c=>c.at.map(v=>+v.toFixed(0))),[],'none on Louder\'s Lane inside Centre Street\'s roadway');
+  // South Border Road's lay on Roosevelt Circle's roadway, 12.3 m long across another crosswalk, 31 m from its node.
+  assert.deepEqual((await tileCrosswalks('-3_-9')).crosswalks.filter(c=>c.road.id==='osm-80619122-0').map(c=>c.at.map(v=>+v.toFixed(0))),[],'none on South Border Road in the circle');
+  // Chestnut Hill Avenue's reached 19.2 m from one kerb into a junction 28 m across.
+  assert.deepEqual((await tileCrosswalks('-7_1')).crosswalks.filter(c=>c.road.id==='7780-0-0').map(c=>c.at.map(v=>+v.toFixed(0))),[],'none on Chestnut Hill Avenue in mid junction');
+});
+
+test('a crosswalk in mid block that crosses its roadway whole stays, at a kerb or at the tip of an island, and a whole one comes in for a stray',{skip:!hasMetroData()},async()=>{
+  const from=c=>Math.hypot(c.at[0]-c.node[0],c.at[1]-c.node[1]),find=(list,id,x,z)=>list.find(c=>c.road.id===id&&Math.hypot(c.at[0]-x,c.at[1]-z)<3);
+  // Washington Street in Brookline: 22.2 m from kerb to kerb, 30 m from its node, across the roadway two lines still share.
+  const washington=find((await tileCrosswalks('-5_1')).crosswalks,'osm-1476713396-0',-4462.1,1310.7);
+  assert.ok(washington&&from(washington)>29&&near(washington.span[1]-washington.span[0],22.2,.3),`Washington Street's stays (${washington&&(washington.span[1]-washington.span[0]).toFixed(1)} m, ${washington&&from(washington).toFixed(1)} m out)`);
+  // Calumet Street: from the east kerb to the tip of the island where the street forks, which the far line of the stripes touches
+  // for 10 cm; beside their end the island is there. Kerwin Street's ends half a metre short of its island's tip.
+  const calumet=find((await tileCrosswalks('-3_2')).crosswalks,'1046-0-0',-2088.9,2422.4);
+  assert.ok(calumet&&near(calumet.span[1]-calumet.span[0],13.7,.3),`Calumet Street's stays at the island's tip (${calumet&&(calumet.span[1]-calumet.span[0]).toFixed(1)} m)`);
+  const kerwin=find((await tileCrosswalks('-1_6')).crosswalks,'3619-0-0',-583,6305.2);
+  assert.ok(kerwin&&near(kerwin.span[1]-kerwin.span[0],12.5,.3),`Kerwin Street's stays (${kerwin&&(kerwin.span[1]-kerwin.span[0]).toFixed(1)} m)`);
+  // Massachusetts Avenue in Cambridge: a crosswalk from the west kerb to the middle of the avenue had crowded out the one that
+  // crosses it from kerb to kerb, 38 m; that one is drawn now.
+  const avenue=find((await tileCrosswalks('-4_-4')).crosswalks,'osm-249388676-0',-3741.5,-3230.4);
+  assert.ok(avenue&&near(avenue.span[1]-avenue.span[0],38.1,.4),`Massachusetts Avenue is crossed whole (${avenue&&(avenue.span[1]-avenue.span[0]).toFixed(1)} m)`);
 });
 
 test('Boylston Street\'s carriageways split between tiles -4_2 and -5_2 keep one crosswalk per side of the junction when each tile plans the roads near it',{skip:!hasMetroData()},async()=>{

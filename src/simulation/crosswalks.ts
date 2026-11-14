@@ -1,4 +1,5 @@
 import type { Point2, Road } from '../types';
+import type { DrawnStreets } from './drawn-streets.ts';
 import { pavementSpan, polylineLength, roadwaySpan, stationAlong } from './tile-format.ts';
 
 /** Where tile-builder.ts stripes crosswalks.
@@ -29,13 +30,28 @@ import { pavementSpan, polylineLength, roadwaySpan, stationAlong } from './tile-
  * into the junction, ran 18 m into it. So open ground must lie `BEYOND` the new end on one of the stripes' lines
  * (their start, middle and end: a kerb at an angle leaves the other two on the roadway), which is ground inside no
  * record the tile holds, and the added part may lie over no other crosswalk's stripes whichever way that one runs
- * (`over`), nor crowd one that runs its way (`crowds`). */
+ * (`over`), nor crowd one that runs its way (`crowds`).
+ *
+ * A crosswalk that stands `MID_BLOCK` or more from its node is not at a corner any more: its station is where the
+ * road's line left the record of a street that forks off beside it, or where the walk gave up, in asphalt the two
+ * still share. There it crosses the roadway whole or is not drawn. Of the 965 that stood so, 196 crossed their own
+ * record's width and ended with a lane or more of asphalt beyond (Louder's Lane, 6.5 m long at the kerb of Centre
+ * Street's 24 m roadway). The roadway must end within `SHORT` beyond each end of the stripes, on a line across beside
+ * that end (along the stripes' length and `BESIDE` either way: the tip of the island where a fork parts is such an
+ * end), by the asphalt the tile draws (`ground`: a break of `BREAK` or more, since two sheets of asphalt meet in a
+ * slit) and, on ground the tile cannot see, by the records it holds. One that ends short leaves the plan, which is
+ * settled again without it so that it thins nothing; and what comes in for it must cross its roadway whole as well,
+ * wherever it stands, since the candidate at the other end of a short block is as often the same stray. */
 export const CROSSWALK_SETBACK = 1, STRIPE_LENGTH = 3, MIN_SPACING = 12, COMPARABLE = .75, SIGNAL_REACH = 25, MIN_ROAD = 18, MIN_WIDTH = 7;
 /** How far beyond a widened crosswalk's end the roadway must have ended, and how deep two crosswalks' stripes must lie in each other to count as one over the other. */
 const BEYOND = 1, OVERLAP = .3;
 export const NO_CROSSWALK = /alley|unnamed/i;
 /** How near two vertices are one junction (`legsAt`), and so the least length of a leg that leaves it. */
 const NODE = 1;
+/** From how far along its road a crosswalk stands in mid block and no longer at its junction's corner; how much of
+ * the roadway such a crosswalk may leave uncrossed beyond an end (less than a lane); how far beside the end's corners
+ * the roadway's edge may stand (the tip of an island's nose); and the least break in the drawn asphalt that is one. */
+const MID_BLOCK = 20, SHORT = 3.5, BESIDE = 1.5, BREAK = .3;
 
 export interface Leg { road: Road; tx: number; tz: number }
 export interface JunctionIndex { legsAt(p: Point2): Leg[]; signalNear(p: Point2): boolean }
@@ -189,8 +205,8 @@ function roadEnd(road: Road, points: Point2[], index: JunctionIndex, edgesOf: (r
  * `roadwaySpan`. A tile passes every road within reach of the ones it owns (which can end 200 m outside it), not only
  * those, so the thinning sees the other carriageway's candidate across a tile border (Boylston Street between tiles
  * -4_2 and -5_2) and both tiles keep the same one; the caller then draws the owned roads' crosswalks. */
-export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[]): Generator<void, Crosswalk[]> {
-  const candidates: Crosswalk[] = [], wider = new Map<Crosswalk, [number, number]>();
+export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[], ground?: Pick<DrawnStreets, 'spans'>): Generator<void, Crosswalk[]> {
+  const candidates: Crosswalk[] = [], wider = new Map<Crosswalk, [number, number]>(), midBlock = new Set<Crosswalk>();
   for (const [i, road] of roads.entries()) {
     if (i % 50 === 49) yield;
     if (road.elevations || road.kind?.endsWith('_link') || road.width < MIN_WIDTH || NO_CROSSWALK.test(road.name)) continue;
@@ -208,6 +224,7 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
       const { at, tx, tz } = station, edges = edgesOf(road), width = road.pavedWidth ?? road.width;
       const own: [number, number] = (edges && pavementSpan(edges, at, tx, tz)) ?? [-width / 2, width / 2], span = roadwaySpan(own, others, at, tx, tz);
       const candidate: Crosswalk = { road, node: points[ends[j].i], at, tx, tz, span, priority: end.priority }; candidates.push(candidate);
+      if (end.offset >= MID_BLOCK) midBlock.add(candidate);
       // What it would span with the twins whose edge steps under its line, for the ones the thinning keeps.
       const reach = roadwaySpan(own, others, at, tx, tz, STRIPE_LENGTH); if (reach[0] < span[0] - .01 || reach[1] > span[1] + .01) wider.set(candidate, reach);
     }
@@ -216,7 +233,6 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
   // median width), so two tiles planning the same border candidates keep the same one: the wider street's first.
   const breadth = (c: Crosswalk) => c.road.pavedWidth ?? c.road.width;
   candidates.sort((a, b) => b.priority - a.priority || breadth(b) - breadth(a) || (b.span[1] - b.span[0]) - (a.span[1] - a.span[0]) || (a.road.id < b.road.id ? -1 : a.road.id > b.road.id ? 1 : 0) || a.at[0] - b.at[0] || a.at[1] - b.at[1]);
-  const kept: Crosswalk[] = [];
   const center = (c: Crosswalk): Point2 => [c.at[0] + c.tx * STRIPE_LENGTH / 2, c.at[1] + c.tz * STRIPE_LENGTH / 2];
   /** Whether `k` crosses the roadway `c` crosses, within the minimum spacing along it. */
   const crowds = (k: Crosswalk, c: Crosswalk) => {
@@ -229,7 +245,6 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
     const n = -dx * c.tz + dz * c.tx, lo = dot > 0 ? n + k.span[0] : n - k.span[1], hi = dot > 0 ? n + k.span[1] : n - k.span[0];
     return Math.min(hi, c.span[1]) - Math.max(lo, c.span[0]) > 2;
   };
-  for (const c of candidates) if (!kept.some(k => crowds(k, c))) kept.push(c);
   /** Whether open ground, inside no record, lies at offset `o` across `c` on one of its stripes' three lines. */
   const open = (c: Crosswalk, o: number) => [0, STRIPE_LENGTH / 2, STRIPE_LENGTH].some(a => { const p: Point2 = [c.at[0] + c.tx * a - c.tz * o, c.at[1] + c.tz * a + c.tx * o]; return !others.some(e => onRecord(e, p)); });
   /** Whether the stripes of `c` between two offsets of its span lie over those of `k`: two rectangles, on their four axes. */
@@ -240,21 +255,51 @@ export function* planCrosswalkSteps(roads: Road[], index: JunctionIndex, edgesOf
     return Math.abs(dx * c.tx + dz * c.tz) < h + h * dot + b * cross - OVERLAP && Math.abs(dz * c.tx - dx * c.tz) < a + h * cross + b * dot - OVERLAP
       && Math.abs(dx * k.tx + dz * k.tz) < h + h * dot + a * cross - OVERLAP && Math.abs(dz * k.tx - dx * k.tz) < b + h * cross + a * dot - OVERLAP;
   };
-  // The ones that stay reach across a record whose edge steps under their line, on each side where that brings them
-  // to the roadway's edge and onto no other crosswalk, and if they then crowd none.
-  for (let i = 0; i < kept.length; i++) {
-    const reach = wider.get(kept[i]); if (!reach) continue;
-    const c = kept[i], rest = kept.filter((_, j) => j !== i);
-    const takes = (lo: number, hi: number, end: number, side: 1 | -1) => hi - lo > .01 && open(c, end + side * BEYOND) && !rest.some(k => over(c, lo, hi, k));
-    const span: [number, number] = [takes(reach[0], c.span[0], reach[0], -1) ? reach[0] : c.span[0], takes(c.span[1], reach[1], reach[1], 1) ? reach[1] : c.span[1]];
-    if (span[0] === c.span[0] && span[1] === c.span[1]) continue;
-    const wide: Crosswalk = { ...c, span };
-    if (!rest.some(o => crowds(o, wide) || crowds(wide, o))) kept[i] = wide;
-  }
-  return kept;
+  /** Whether the roadway ends within `SHORT` beyond offset `o` across `c`, going `side`: on a line across the road
+   * beside that end (every half metre of the stripes' length and `BESIDE` either way) the asphalt the tile draws
+   * breaks off for `BREAK` or more, or, where the tile cannot see the whole of that line, a point of it lies on no record. */
+  const ends = (c: Crosswalk, o: number, side: 1 | -1) => {
+    const nx = -c.tz * side, nz = c.tx * side;
+    for (let a = -BESIDE; a <= STRIPE_LENGTH + BESIDE; a += .5) {
+      const x = c.at[0] + c.tx * a - c.tz * o, z = c.at[1] + c.tz * a + c.tx * o, drawn = ground?.spans(x, z, nx, nz, 0, SHORT);
+      if (drawn && drawn.known[0] <= 0 && drawn.known[1] >= SHORT) {
+        let from = 0;
+        for (let i = 0; i < drawn.spans.length; i += 2) { if (drawn.spans[i] - from >= BREAK) return true; from = drawn.spans[i + 1]; }
+        if (SHORT - from >= BREAK) return true;
+      } else if (a >= 0 && a <= STRIPE_LENGTH) for (let d = .25; d <= SHORT; d += .5) { const p: Point2 = [x + nx * d, z + nz * d]; if (!others.some(e => onRecord(e, p))) return true; }
+    }
+    return false;
+  };
+  /** The crosswalks of `pool` that stay, and the candidates among them that end short: of those that stand in mid
+   * block, and of those that come in for one that left (`first` holds the ones that stayed before any left). */
+  const settle = (pool: Crosswalk[], first?: Set<Crosswalk>) => {
+    const kept: Crosswalk[] = [];
+    for (const c of pool) if (!kept.some(k => crowds(k, c))) kept.push(c);
+    const from = [...kept];
+    // The ones that stay reach across a record whose edge steps under their line, on each side where that brings them
+    // to the roadway's edge and onto no other crosswalk, and if they then crowd none.
+    for (let i = 0; i < kept.length; i++) {
+      const reach = wider.get(kept[i]); if (!reach) continue;
+      const c = kept[i], rest = kept.filter((_, j) => j !== i);
+      const takes = (lo: number, hi: number, end: number, side: 1 | -1) => hi - lo > .01 && open(c, end + side * BEYOND) && !rest.some(k => over(c, lo, hi, k));
+      const span: [number, number] = [takes(reach[0], c.span[0], reach[0], -1) ? reach[0] : c.span[0], takes(c.span[1], reach[1], reach[1], 1) ? reach[1] : c.span[1]];
+      if (span[0] === c.span[0] && span[1] === c.span[1]) continue;
+      const wide: Crosswalk = { ...c, span };
+      if (!rest.some(o => crowds(o, wide) || crowds(wide, o))) kept[i] = wide;
+    }
+    return { kept, from, short: from.filter((c, i) => (midBlock.has(c) || (first && !first.has(c))) && !(ends(kept[i], kept[i].span[0], -1) && ends(kept[i], kept[i].span[1], 1))) };
+  };
+  // A crosswalk in mid block crosses its roadway whole or is not drawn: one that ends short, with a lane or more of
+  // asphalt beyond an end, leaves the plan, and the rest is settled again without it, so that it thins no crosswalk
+  // it does not outlast. What then comes in for it must cross its roadway whole as well, wherever it stands: the
+  // candidate at the other end of a short block is as often a stray on the same asphalt.
+  let pool = candidates, plan = settle(pool);
+  const first = new Set(plan.from);
+  while (plan.short.length) { const short = new Set(plan.short); pool = pool.filter(c => !short.has(c)); plan = settle(pool, first); }
+  return plan.kept;
 }
 
 /** The whole plan at once, for tests and tools. */
-export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[]): Crosswalk[] {
-  const steps = planCrosswalkSteps(roads, index, edgesOf, others); let r = steps.next(); while (!r.done) r = steps.next(); return r.value;
+export function planCrosswalks(roads: Road[], index: JunctionIndex, edgesOf: (road: Road) => Edges | undefined, others: Edges[], ground?: Pick<DrawnStreets, 'spans'>): Crosswalk[] {
+  const steps = planCrosswalkSteps(roads, index, edgesOf, others, ground); let r = steps.next(); while (!r.done) r = steps.next(); return r.value;
 }
