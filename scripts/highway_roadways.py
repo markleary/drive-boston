@@ -65,6 +65,26 @@ changes:
   ground follows as above; under any other lifted road (a Turnpike carriageway, a cut, a deck the survey shows no
   curb for) the ground comes up with it (fills): by no more than the road rose, so that it lies under the road as it
   did, to DROP under it at most, never lowered, and under a bridge that passes OVERHEAD as well.
+- The median (part, after every road is corrected to its own curbs): the two carriageways of a railed road (railed: a
+  main road that is no parkway, whose pavement the runtime rails or walls and between whose two directions it stands
+  one barrier row, src/simulation/median-barriers.ts) never share pavement. Each was fitted to its own curbs alone,
+  and the survey shows the median in four ways: the barrier's two faces, one line for both, no line at all (each
+  carriageway then took the roadway half way to its twin and OVERLAP beyond, or kept its solved width from its outer
+  curb), and nothing on a viaduct, where the lane-count decks stand on centre lines too close together. So their
+  pavements lay in each other along 1.2 km of the Turnpike's median, by up to 1.95 m, and came closer than the
+  barrier is wide along 0.8 km more. Wherever the twin runs beside a station in the open at its level (beside) with
+  less than BARRIER between the two pavements, each gives up half of what is missing on its median side, so that
+  each ends half the barrier's footprint short of the middle line between them. What gives, in this order: the room
+  the survey shows beyond the outer edge (the pavement moves out to its outer curb, as `span` moves it); the
+  shoulders (the pavement narrows on its median side, its outer edge kept, down to the least width its lanes take,
+  boston_highways.least_width: the lane centres LANE_ROOM inside both edges, which is the room every inner lane
+  keeps to the barrier's face); then the centre line (the pavement moves out at its least width, past its outer
+  bound: the Allston viaduct, where no curb is surveyed and both decks were at their least width 13.2 m apart, by
+  up to 0.4 m each). No lane narrows and none is dropped: between its outer curb and the median the least width
+  fits everywhere the survey shows both. A station other roads meet, one held, under or beside a building or in a
+  street landing does not move (pinned) and only narrows; the move keeps SHIFT_RATE and the width WIDTH_RATE. The
+  pass repeats until at least BARRIER lies between the two at every station (MEDIAN_SLACK more is asked for, for
+  the rounding of points and widths). median_check() is the test of the installed records, run by validate.
 - check() is the stage's own test of the result, run by validate: no width changes faster than WIDTH_RATE along
   a route, and every paved roadway is a surface of an installed route.
 
@@ -113,8 +133,17 @@ STEP_SLACK=.05    # (check) a width step may pass WIDTH_RATE by this
 HOLD_NEAR=15      # a road is held where it was solved this close to a station whose surveyed place the ground does not leave free
 LIFTED=.02        # a road its twin has lifted by more than this has its ground brought up under it
 OVERHEAD=2.5      # a deck of another stage this far over that ground passes over the road: the ground under it comes up too
+BARRIER=.62       # the footprint of the barrier row the runtime stands on the median of two carriageways (JERSEY.base in src/simulation/road-surfaces.ts): they leave this between their pavements
+MEDIAN_SLACK=.02  # and a pass asks for this much more, for the rounding of a point and a width
+MEDIAN_REACH=3.0  # the runtime stands the row where no more than this lies between the two pavements (MEDIAN_REACH in src/simulation/median-barriers.ts)
+MEDIAN_ROUNDS=12  # a median settles in a few passes (the Turnpike's in five)
+OPPOSED=-.5       # the largest cosine between two directions of travel that run opposite ways (median-barriers.ts)
+STOREY=I.STOREY   # a twin this far over or under a carriageway passes over or under it: the two are not across a median there
+LANE_ROOM=1.2     # the runtime keeps each outer lane's centre this far inside the edge of its pavement (motorwayLanes in src/simulation/motorway.ts), and so each inner lane from the barrier's face
 METHOD=('Every road in the open at its own ground measured to the curb survey of the source sidecar every 1 m (the first curb each way; a far one kept unless another road begins behind it or its ground stands off the road; a road alongside at the same height shares the roadway half way; short excursions dropped, gaps carried between measured neighbours); '
- 'cuts and the Turnpike carriageways on the ground moved onto the middle of their roadway and sized to it, the decks only narrowed; Storrow Drive and ramp decks on the ground moved only as far as the curbs need, '
+ 'cuts and the Turnpike carriageways on the ground moved onto the middle of their roadway and sized to it, the decks only narrowed; '
+ "the two carriageways of a railed road then parted wherever their pavements lie in each other or closer than the median barrier is wide (0.62 m), each giving up half of what is missing on its median side: first the room the survey shows beyond its outer edge, then its shoulders down to the least width its lanes take, then its centre line; "
+ 'Storrow Drive and ramp decks on the ground moved only as far as the curbs need, '
  'the roadway beside their lanes handed to build-street-surfaces.py as aprons and the graded grid set under them across every cell it passes over (the surveyed roadway whatever street class width reaches across it, each of two roads side by side its own; a pavement shared with a street raised to fall 4% from the deck to that street\'s far curb; a deck in its street landing only raised to), the aprons then kept only where the ground lies within 0.45 m under the deck; nothing moved where other roads meet, under a roof or a building; moves and widths rate-limited')
 
 
@@ -362,6 +391,123 @@ def correct(plan,m,joints,least,hold=()):
  plan.points=[[round(float(q[0]+nx*s),3),round(float(q[1]+nz*s),3)] for q,(nx,nz),s in zip(p,normal,plan.shift)];plan.widths=[round(2*float(h),3) for h in half]
  plan.along=np.asarray(stations(plan.points));plan.tangents=I.tangents(plan.points);plan.line=LineString(plan.points)
  return moved,sized
+
+
+def railed(plan):
+ """A carriageway whose pavement the runtime rails or walls at its edge (`span` at every open station) and on whose median it
+ stands a barrier row: a main road that is no parkway (a parkway's decks are paved to their curbs, `flush`, and carry no rail on their ground)."""
+ return bool(plan.main) and plan.spec['bridge']!='storrow'
+
+
+def inside(roof):
+ """Of the stations under a roof, those with a roofed station on both sides: the first and the last of a roofed stretch
+ stand in its portals, and the pavement between one of them and the open station beside it lies in the open."""
+ roof=np.asarray(roof,bool);return roof&np.r_[roof[:1],roof[:-1]]&np.r_[roof[1:],roof[-1:]]
+
+
+def facing(points,tangents,halves,heights,roof,line,along,q,widths,levels,roofed):
+ """What lies between a pavement and that of a road running the opposite way beside it, at each of its stations:
+ (gap, side, distance). The pavement is given by its stations (`points`, `tangents`, half widths, heights, roofed or
+ not), the other road by its centre line (`line`, with the distances `along` it of its stations `q`), widths, heights
+ and roof. `gap` is measured as the runtime measures a median (facing in src/simulation/median-barriers.ts): from the
+ vertex of this pavement's edge on the other's side to the other's centre line, less its half width there: negative
+ where the two pavements lie in each other. The edges of both are straight between their stations, so the least of
+ what the two read at their stations is the least between the pavements anywhere. NaN where the other does not run
+ beside the station in the open at its level: beyond its end (half a metre past it still counts), at an angle, either
+ of them inside a roofed stretch there (`inside`: a pavement lies in the open as far as the first roofed station, so a
+ road beside a portal gives way up to the station abreast of the second), or the other a STOREY over or under (a road
+ passing over or under another is not across a median from it). `side` is +1 where the other lies on the station's
+ +n side (n = (-tz, tx), the side the measurement calls L), else -1; `distance` is how far along the other the point
+ beside the station lies."""
+ p=np.asarray(points,float);own=np.asarray(tangents,float);normal=np.stack([-own[:,1],own[:,0]],1);q=np.asarray(q,float);along=np.asarray(along,float)
+ foot=shapely.get_coordinates(shapely.line_interpolate_point(line,shapely.line_locate_point(line,shapely.points(p))));side=np.where(np.sum((foot-p)*normal,axis=1)>0,1.,-1.)
+ edge=p+normal*(side*np.asarray(halves,float))[:,None];pts=shapely.points(edge);s=shapely.line_locate_point(line,pts);d=shapely.distance(line,pts)
+ k=np.clip(np.searchsorted(along,s,'right'),1,len(q)-1);t=q[k]-q[k-1];t/=np.maximum(np.hypot(t[:,0],t[:,1]),1e-9)[:,None]
+ # (an edge that has passed the other's centre line lies that far inside its pavement and half its width more)
+ foot=shapely.get_coordinates(shapely.line_interpolate_point(line,s));d=np.where(np.sum((foot-edge)*normal,axis=1)*side<0,-d,d);roofed=np.asarray(roofed,bool)
+ # (beside it, not beyond its end: a station abreast of the other's last one, or half a metre past it, still has it beside)
+ past=np.maximum(np.sum((q[0]-p)*t,axis=1),np.sum((p-q[-1])*t,axis=1))
+ ok=(past<=.5)&(np.sum(t*own,axis=1)<=OPPOSED)&~inside(roof)&~(roofed[k-1]&roofed[k])&(np.abs(np.interp(s,along,np.asarray(levels,float))-np.asarray(heights,float))<STOREY)
+ return np.where(ok,d-np.interp(s,along,np.asarray(widths,float))/2,np.nan),side,s
+
+
+def beside(plan,other):
+ """What lies between the pavement of `plan` and that of `other`, a road running the opposite way, at each station of
+ `plan` as the two lie: (gap, side, distance), as `facing` reads them."""
+ return facing(plan.points,plan.tangents,np.asarray(plan.widths,float)/2,plan.y,plan.covered,other.line,other.along,other.points,other.widths,other.y,inside(other.covered))
+
+
+def pinned(plan,m,joints,hold):
+ """The stations of a carriageway that its median does not move, only narrows: its ends, a station other roads meet
+ (`joints`), one held where it was solved (`hold`), one under or beside a building, under a roof or in a street landing.
+ Unlike the curb measurement, the median does move a viaduct: nothing else says where two decks side by side in the air lie."""
+ n=len(plan.points);frozen=m['state'][3]
+ return np.asarray([i in (0,n-1) or i in joints or i in hold or bool(frozen[i]) or bool(plan.covered[i]) or bool(plan.street[i]) or plan.allowance[i]<=.999 for i in range(n)],bool)
+
+
+def place(plan,shift,half):
+ """Lay a corrected plan on its solved line moved by `shift` (metres along its +n normal, per station) at the half widths `half`."""
+ p=np.asarray(plan.solved_points,float);t=np.asarray(I.tangents(plan.solved_points),float);normal=np.stack([-t[:,1],t[:,0]],1);plan.shift=[round(float(s),3) for s in shift]
+ plan.points=[[round(float(q[0]+nx*s),3),round(float(q[1]+nz*s),3)] for q,(nx,nz),s in zip(p,normal,plan.shift)];plan.widths=[round(2*float(h),3) for h in half]
+ plan.along=np.asarray(stations(plan.points));plan.tangents=I.tangents(plan.points);plan.line=LineString(plan.points)
+
+
+def strain(plan,other,m,pins,least):
+ """How a carriageway lies to its twin (`other`) before a pass of `part`: what is missing between the two pavements at each
+ of its stations (`need`), and how far its median edge can come back there with its lanes kept (`give`: down to the least
+ width, at the place a pinned station leaves it: one that is pinned can only narrow, and the stations beside it leave
+ theirs no faster than SHIFT_RATE). Outward is away from the twin: `out` is its sign along +n, `so` the move so far."""
+ gap,side,foot=beside(plan,other);known=~np.isnan(gap);need=np.where(known,np.maximum(0.,BARRIER+MEDIAN_SLACK-gap),0.);short=need>0;out=-1. if side[short].sum()>0 else 1.
+ assert (side[short]==-out).all(),f'{other.id} lies on both sides of {plan.id}'
+ n=len(plan.points);along=np.asarray(stations(plan.solved_points),float);h=np.asarray(plan.widths,float)/2;so=np.asarray(plan.shift,float)*out;floor=np.minimum(h,np.asarray([least(plan,i) for i in range(n)],float)/2)
+ marks=np.flatnonzero(pins);cone=np.maximum(so,(so[marks][None,:]+SHIFT_RATE*np.abs(along[:,None]-along[marks][None,:])).min(1)) if len(marks) else np.full(n,np.inf)
+ curb=m['L'][m['at']] if out>0 else m['R'][m['at']]
+ return {'need':need,'known':known,'foot':foot,'out':out,'along':along,'h':h,'so':so,'floor':floor,'cone':cone,'give':(h-floor)+(cone-so),'curb':curb,'pins':pins,'reach':np.asarray(plan.along,float)}
+
+
+def retreat(own,twin):
+ """One pass of `part` for one carriageway, from its `strain` and its twin's: (shift, half widths). What is missing at a
+ station is the more of what the two measure there (each reads the distance to the other's line, which differs by
+ centimetres where that line turns). Each gives up half of it; where one cannot with its lanes kept (`give`), the other
+ takes what is left; and only where neither can does a pavement come narrower than its least width, each by half of what
+ then remains. See the module text for what gives in a carriageway."""
+ h,so,floor,cone,pins,along=(own[k] for k in ('h','so','floor','cone','pins','along'));rows=np.flatnonzero(twin['known']);rows=rows[np.argsort(twin['foot'][rows],kind='stable')]
+ need=np.where(own['known'],np.maximum(own['need'],np.interp(own['reach'],twin['foot'][rows],twin['need'][rows],left=0.,right=0.)),0.) if len(rows) else own['need']
+ # (what the twin can give where it reads the median itself: a station of it inside a roofed stretch gives nothing)
+ can=np.interp(own['foot'],twin['reach'],np.where(twin['known'],twin['give'],0.));r=np.minimum(np.maximum(need/2,need-can),own['give'])+np.maximum(0.,need-own['give']-can)/2;free=~pins
+ # the room the survey shows beyond the outer edge, the shoulders (down to the least width the lanes take), then the centre line
+ slack=np.where(np.isnan(own['curb']),0.,np.maximum(0.,own['curb']-(h+so)))
+ first=np.where(free,np.minimum(r,slack),0.);rest=r-first;less=np.where(free,np.minimum(rest/2,h-floor),0.);more=np.where(free,rest-2*less,0.)
+ want=so+first+less+more;bound=h-so-r;outer=np.where(free,h-less,h-r)+want
+ # (a pinned station keeps its place, and the stations beside it leave theirs no faster than SHIFT_RATE: what the move cannot give there, the width does)
+ moved=np.where(pins,so,np.maximum(so,np.minimum(np.asarray(lipschitz(want,along,SHIFT_RATE,upper=True)),cone)))
+ half=np.minimum(h,np.minimum(bound+moved,np.maximum(floor,outer-moved)))
+ return moved*own['out'],np.asarray(lipschitz(half,along,WIDTH_RATE,lower=True))
+
+
+def part(pair,measured,pins,least):
+ """Leave the median barrier's footprint between the two carriageways of a railed road (see the module text): `pair` are
+ its two plans as corrected to their own curbs, `pins` {plan id: the stations that only narrow, pinned}. Returns the
+ summary of the pair: per road the metres parted, the most its median edge was taken back, its centre line moved, and
+ its outer edge moved out (`maxOut`) and past its outer bound (`maxPast`: the surveyed curb, or where the edge lay
+ where the survey shows none), and the stretches left narrower than the least width its lanes take (`tight`: [first
+ station, last station, metres short]); for the pair the least left between the two pavements and the passes."""
+ before={p.id:(np.asarray(p.shift,float),np.asarray(p.widths,float)/2) for p in pair};rounds=0
+ while True:
+  a,b=(strain(p,o,measured[p.id],pins[p.id],least) for p,o in (pair,pair[::-1]))
+  if max(float(a['need'].max()),float(b['need'].max()))<MEDIAN_SLACK/2:break
+  rounds+=1;assert rounds<=MEDIAN_ROUNDS,f'the median between {pair[0].id} and {pair[1].id} did not settle'
+  for p,v in zip(pair,(retreat(a,b),retreat(b,a))):place(p,*v)
+ out={'roads':[p.id for p in pair],'passes':rounds,'parted':{}};least_gap=math.inf
+ for p,o in (pair,pair[::-1]):
+  gap,side,_=beside(p,o);known=~np.isnan(gap);sign=-1. if known.any() and side[known].sum()>0 else 1.;s0,h0=before[p.id];s=np.asarray(p.shift,float);h=np.asarray(p.widths,float)/2;n=len(h);m=measured[p.id]
+  back=(h0-h)+(s-s0)*sign;edge=h0+s0*sign;curb=m['L'][m['at']] if sign>0 else m['R'][m['at']];moved_out=(h+s*sign)-edge;past=(h+s*sign)-np.where(np.isnan(curb),edge,np.maximum(curb,edge))
+  rows=np.flatnonzero(back>.005);along=np.asarray(p.along,float);floor=np.minimum(h0,np.asarray([least(p,i) for i in range(n)],float)/2)
+  if known.any():least_gap=min(least_gap,float(np.nanmin(gap)))
+  out['parted'][p.id]={'stations':int(len(rows)),'meters':round(float(sum(along[min(n-1,i+1)]-along[max(0,i-1)] for i in rows.tolist())/2),1),'maxBack':round(float(back.max()),3),'maxShift':round(float(np.abs(s-s0).max()),3),
+   'maxOut':round(float(max(0.,moved_out.max())),3),'maxPast':round(float(max(0.,past.max())),3),'tight':[[int(i),int(j),round(float((floor-h)[i:j+1].max()),3)] for i,j in runs((h<floor-.005).tolist())]}
+ out['leastBetween']=round(least_gap,3) if math.isfinite(least_gap) else None
+ return out
 
 
 def compress(left,right,tol=.03):
@@ -638,17 +784,24 @@ def survey(plans,curbs,streets,ground,raw,buildings,least):
  return measured
 
 
-def apply(plans,measured,gores,least,hold):
- """Correct every plan to its measured roadway but for the stations in `hold` ({plan id: stations}). Returns (aprons with their plans, summary)."""
- pairs=[];summary={}
+def apply(plans,measured,gores,least,hold,twins=()):
+ """Correct every plan to its measured roadway but for the stations in `hold` ({plan id: stations}), then part the two
+ carriageways of each pair in `twins` (railed roads: part). Returns (aprons with their plans, summary, the medians' summaries)."""
+ pairs=[];summary={};joints={plan.id:set(gores.get(plan.id,()))|{k for k,_ in plan.junctions} for plan in plans}
+ counts={plan.id:correct(plan,measured[plan.id],joints[plan.id],least,hold.get(plan.id,())) for plan in plans}
+ # (`fitted`: a carriageway's line by its own curbs, which names its records: the median's move must not carry a record's middle over a neighbourhood line)
+ for pair in twins:
+  for p in pair:p.fitted=[list(q) for q in p.points]
+ medians=[part(pair,measured,{p.id:pinned(p,measured[p.id],joints[p.id],hold.get(p.id,())) for p in pair},least) for pair in twins]
+ # (a parted carriageway is counted as it lies)
+ for plan in {p.id:p for pair in twins for p in pair}.values():counts[plan.id]=(sum(abs(s)>.005 for s in plan.shift),sum(abs(w-v)>.005 for w,v in zip(plan.widths,plan.solved_widths)))
  for plan in plans:
-  m=measured[plan.id];joints=set(gores.get(plan.id,()))|{k for k,_ in plan.junctions};held=hold.get(plan.id,())
-  moved,sized=correct(plan,m,joints,least,held);own=aprons(plan,m);pairs+=[(plan,a) for a in own]
+  m=measured[plan.id];held=hold.get(plan.id,());moved,sized=counts[plan.id];own=aprons(plan,m);pairs+=[(plan,a) for a in own]
   fo=m['open'];both=fo&~np.isnan(m['L'])&~np.isnan(m['R'])
   if moved or sized or own:
    summary[plan.id]={'openMeters':round(float(fo.sum()*STEP)),'surveyedMeters':round(float(both.sum()*STEP)),'movedStations':int(moved),'resizedStations':int(sized),'maxShift':round(max(abs(s) for s in plan.shift),2),
     'widest':round(max(plan.widths),2),'narrowest':round(min(plan.widths),2),'aprons':len(own),'heldStations':len(held),'heldFromBuildings':int(m['capped'])}
- return pairs,summary
+ return pairs,summary,medians
 
 
 def check(routes,aprons_,decks,ground):
@@ -665,3 +818,43 @@ def check(routes,aprons_,decks,ground):
  for a in aprons_:
   assert a['road'] in routes and len(a['left'])==len(a['right'])>=2 and strip(a).area>1,f"the paved roadway beside {a['road']} is no surface"
  return {'widthStations':steps,'aprons':len(aprons_)}
+
+
+def carriageway(chain):
+ """The records of one carriageway, in route order, as one line: per vertex its point, pavement width, height, whether it lies
+ under a roof (a tunnel record's `covered`), the record it belongs to with its station there, and how far the centre of its
+ innermost lane lies from the centre line (the runtime's motorwayLanes: the lanes LANE apart, closer only on a record too
+ narrow to keep the outer ones LANE_ROOM inside its edges)."""
+ pts=[];w=[];y=[];roof=[];own=[];inner=[]
+ for r in chain:
+  along=stations(r['points']);covered=(r.get('tunnel') or {}).get('covered',[]);n=r['lanes'];offset=(n-1)/2*min(I.LANE,(r['width']-2*LANE_ROOM)/(n-1)) if n>1 else 0.
+  for i,q in enumerate(r['points']):
+   if i==0 and pts and math.dist(pts[-1],q)<.01:continue   # (the station two records share is the first one's)
+   pts.append(q);w.append(r['deckWidths'][i]);y.append(r['elevations'][i]);roof.append(any(a-.001<=along[i]<=b+.001 for a,b in covered));own.append((r['id'],i));inner.append(offset)
+ return {'points':pts,'widths':np.asarray(w,float),'y':np.asarray(y,float),'roof':np.asarray(roof,bool),'own':own,'inner':np.asarray(inner,float),'along':np.asarray(stations(pts),float),'line':LineString(pts),'tangents':np.asarray(I.tangents(pts),float)}
+
+
+def median_check(pairs,listed=None):
+ """The installed medians. `pairs`: (the records of one carriageway in route order, those of the other, whether the road is
+ railed) for each road with two. Where the two run beside each other in the open at one level (as `beside` reads two plans:
+ opposite ways, neither under a roof, less than a STOREY apart in height), no two pavements lie in each other; and those of
+ a railed road, between which the runtime stands its barrier row, leave BARRIER between them and keep the centre of each
+ innermost lane LANE_ROOM from the barrier's face wherever the row stands (no more than MEDIAN_REACH between the
+ pavements), but for the stations `listed` ({record id: [[first, last], ...]}: where a pinned station could not keep the
+ least width its lanes take). Returns counts and the least of both."""
+ listed=listed or {};out={'medianStations':0,'leastBetween':None,'leastLaneRoom':None}
+ for one,other,rails in pairs:
+  sides=[carriageway(one),carriageway(other)]
+  for mine,theirs in (sides,sides[::-1]):
+   gap,_,s=facing(mine['points'],mine['tangents'],mine['widths']/2,mine['y'],mine['roof'],theirs['line'],theirs['along'],theirs['points'],theirs['widths'],theirs['y'],inside(theirs['roof']))
+   ok=~np.isnan(gap);k=np.clip(np.searchsorted(theirs['along'],s,'right'),1,len(theirs['points'])-1)
+   for i in np.flatnonzero(ok).tolist():
+    rid,j=mine['own'][i];where=f"{rid} at {mine['points'][i]}, beside {theirs['own'][int(k[i])][0]}"
+    assert gap[i]>=-.005,f'two pavements lie {-gap[i]:.2f} m in each other: {where}'
+    if not rails or gap[i]>MEDIAN_REACH:continue
+    out['medianStations']+=1;assert gap[i]>=BARRIER-.005,f'{gap[i]:.2f} m between two pavements, less than the median barrier is wide: {where}'
+    room=mine['widths'][i]/2-mine['inner'][i]+(gap[i]-BARRIER)/2
+    if any(a<=j<=b for a,b in listed.get(rid,())):continue
+    assert room>=LANE_ROOM-.005,f"the centre of the inner lane lies {room:.2f} m from the median barrier's face: {where}"
+    out['leastBetween']=round(float(gap[i]),3) if out['leastBetween'] is None else min(out['leastBetween'],round(float(gap[i]),3));out['leastLaneRoom']=round(float(room),3) if out['leastLaneRoom'] is None else min(out['leastLaneRoom'],round(float(room),3))
+ return out

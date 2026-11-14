@@ -25,6 +25,14 @@ const OPPOSED=-.5;
  * out of the other's excavation whatever their levels, which leaves a bare ledge between the two roads (the Turnpike's west
  * of the Prudential tunnel, 0.8 to 1.0 m). Decks further apart than `MEDIAN_LEVEL` have their own rails. */
 export const MEDIAN_STEP=1.5;
+/** ... and so do two cuts with no more than this between their pavements: the barrier's footprint (`JERSEY.base`, 0.62 m;
+ * road-surfaces.ts imports this module, so the figure is written out here and a test holds the two together) and a hand's
+ * width. The Turnpike's stage parts its two carriageways by that footprint (`part` in scripts/highway_roadways.py: 0.62 m,
+ * and up to 0.70 m where a width tapers), and a strip that narrow holds neither ground nor a wall for each road: a cut's
+ * wall is 0.4 m thick about a line 8 cm beyond its pavement, so the two stood 8 to 14 cm apart with a slot between them
+ * along the 59 m west of the Prudential tunnel where the two roads, no longer in each other, lie 0.8 to 1.0 m apart in
+ * height. The row stands on the higher pavement there, and its foot is the face of the step down to the lower one. */
+export const MEDIAN_SLOT=.72;
 /** Where two pavements overlap a step apart the higher slab ends in a ledge inside the lower road, and the row stands on
  * that ledge instead of on the middle of the overlap: not at all up to the first height, all the way from the second. */
 export const MEDIAN_LEDGE=[.1,.35];
@@ -86,7 +94,7 @@ function facing(city:CityData,road:Road,x:number,z:number,y:number,tx:number,tz:
     // (a cut takes part where it is open to the sky)
     if(other.tunnel&&tunnelCoveredAt(other,tunnelStations(other)[hit.index]+length*hit.t))continue;
     const height=sampleRoadElevation(city,other,x,z);
-    if(Math.abs(height-y)>(gap<=0&&road.tunnel&&other.tunnel?MEDIAN_STEP:MEDIAN_LEVEL)||landings(other).some(m=>Math.hypot(m[0]-x,m[1]-z)<MOUTH_REACH))continue;
+    if(Math.abs(height-y)>(gap<=MEDIAN_SLOT&&road.tunnel&&other.tunnel?MEDIAN_STEP:MEDIAN_LEVEL)||landings(other).some(m=>Math.hypot(m[0]-x,m[1]-z)<MOUTH_REACH))continue;
     best={other,gap,height};
   }
   return best;
@@ -104,12 +112,15 @@ const carries=(road:Road,other:Road)=>road.id<other.id||road.id===other.id&&(roa
 /** How far the ground that is drawn between two pavements stands over `top`, along the line from a point of one's edge
  * (unit normal (ox, oz) out of its pavement) to the other's, `gap` metres on. The terrain is cut away 0.3 m beyond a cut's
  * pavement (its portal), so only what lies beyond that counts, and a deck's pavement covers what the foot laps onto.
- * -Infinity where no ground is left between the two. */
+ * -Infinity where no ground is left between the two, and where what is left stands inside the barrier itself: a strip no
+ * wider than the profile's top about the middle line, no higher than the profile less `MEDIAN_COVER`. The Turnpike's stage
+ * parts two carriageways by the barrier's footprint (`part` in scripts/highway_roadways.py), which leaves 2 to 4 cm of
+ * terrain between the excavations of two cuts, and a bump of half a metre in that sliver is no ground for a wall to hold. */
 function stripRise(city:CityData,x:number,z:number,ox:number,oz:number,gap:number,top:number,cut:boolean,otherCut:boolean){
   const from=cut?.3:MEDIAN_LAP,to=gap-(otherCut?.3:MEDIAN_LAP);if(to<=from)return -Infinity;
   let rise=-Infinity;const count=Math.max(1,Math.ceil((to-from)/.25));
   for(let k=0;k<=count;k++){const d=from+(to-from)*k/count;rise=Math.max(rise,sampleElevation(city,x+ox*d,z+oz*d)-top);}
-  return rise;
+  return Math.max(gap/2-from,to-gap/2)<=JERSEY.top/2&&rise<=JERSEY.height-MEDIAN_COVER?-Infinity:rise;
 }
 /** A point of a record's edge between stations i - 1 and i: where, how high, and the unit normal out of its pavement. */
 function edgePoint(road:Road,i:number,t:number,side:number){

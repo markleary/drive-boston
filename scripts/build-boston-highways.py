@@ -50,6 +50,8 @@ def main():
  for pair in record['twins']['pairs']:
   one,other=pair['roads'];lift=pair['lifted'];print(f"{one} and {other} share one height along {pair['alongsideMeters']:.0f} m: {one} lifted over {lift[one]['meters']:.0f} m (up to {lift[one]['max']:.2f} m), {other} over {lift[other]['meters']:.0f} m (up to {lift[other]['max']:.2f} m); {len(pair['apart'])} stretches left apart (up to {max((e['by'] for e in pair['apart']),default=0):.2f} m)")
  if record['twins']['ramps']:print(f"  ramps solved again with them: {', '.join(record['twins']['ramps'])}")
+ for median in record['roadways']['medians']:
+  one,other=median['roads'];parted=median['parted'];print(f"{one} and {other} parted along {parted[one]['meters']:.0f} and {parted[other]['meters']:.0f} m in {median['passes']} passes (a median edge taken back by up to {max(v['maxBack'] for v in parted.values()):.2f} m, a centre line moved by up to {max(v['maxShift'] for v in parted.values()):.2f} m, an outer edge past its bound by up to {max(v['maxPast'] for v in parted.values()):.2f} m): at least {median['leastBetween']:.2f} m between the two pavements; {sum(len(v['tight']) for v in parted.values())} stretches narrower than their lanes take")
  seams=record['bridgeSeams'];print(f"{len(seams['changed'])} records changed where a bridge stopped over the cut ({', '.join(sorted({c['name'] for c in seams['changed']})) or 'none'}); ramp pieces added: {', '.join(seams['pieces']) or 'none'}")
  for i in record['infeasible']:print(f"  tight: {i['road']} {i['at']} by {i['worst']} m")
  for u in record['unresolved']:print(f"  unresolved crossing: {u['road']} and {u['other']} at {u['point']}")

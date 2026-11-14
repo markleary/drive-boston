@@ -141,6 +141,16 @@ class SeamTest(unittest.TestCase):
   self.assertEqual(H.bridge_seams(bridge(side=10),[road],ground)[1],[],'a street of its own width meeting the landing keeps its junction')
   self.assertEqual(H.bridge_seams(bridge(),[road],lambda x,z:2.0)[1],[],'a landing on level ground stays')
   self.assertEqual(H.bridge_seams(bridge(),[plan([[30,-30],[30,0],[30,30]])],ground)[1],[],'and so does one far from the road')
+ def test_a_carriageway_record_is_named_for_the_place_its_own_curbs_put_it_in(self):
+  from shapely.geometry import box
+  hoods=[{'name':'Fenway','shape':box(-10,-50,200,.04)},{'name':'Brookline','shape':box(-10,.04,200,50)}]
+  def main(z):
+   p=plan([[i*3.0,z] for i in range(40)]);p.id='i90-eb';p.spec={'id':'i90-eb','bridge':'i90','kind':'motorway'};p.ways=[{'name':'I-90 East','tags':{}}];p.ends=[None,None];p.on_deck=[False,False]
+   p.tunnel=[False]*40;p.covered=[False]*40;p.junctions=[];return p
+  self.assertEqual(H.records([main(0.0)],hoods)[0][0]['name'],'I-90 East · Fenway');moved=main(.08);self.assertEqual(H.records([moved],hoods)[0][0]['name'],'I-90 East · Brookline')
+  # (highway_roadways.apply keeps the line a carriageway has by its own curbs before its median moves it: 8 cm do not rename a record)
+  moved.fitted=[[i*3.0,0.0] for i in range(40)];self.assertEqual(H.records([moved],hoods)[0][0]['name'],'I-90 East · Fenway')
+
  def test_a_street_joining_a_deck_at_its_height_splits_the_record(self):
   p=plan(line(40));p.id='storrow-eb';p.spec={'id':'storrow-eb','bridge':'storrow','kind':'motorway'};p.ways=[{'name':'Storrow Drive East','tags':{}}];p.ends=[None,None];p.on_deck=[False,False]
   p.tunnel=[False]*40;p.covered=[False]*40;p.junctions=[(20,-.2),(30,-2.0)]
