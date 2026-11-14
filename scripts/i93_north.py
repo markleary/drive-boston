@@ -578,10 +578,10 @@ def round_bound(values,cap,along,radius,grade,sign):
  return (sign*np.minimum(out,np.maximum(c,v))).tolist()
 
 
-def solve(plan,report):
- """Solve a plan's profile. The hard bounds are first widened into cones that
- respect the grade, so a steep embankment is met by climbing early, not by a kink,
- and their corners rounded to the plan's radius (round_bound)."""
+def hard_bounds(plan):
+ """The bounds a plan's profile is solved within (solve): (low, high, target, weight). The hard bounds are first
+ widened into cones that respect the grade, so a steep embankment is met by climbing early, not by a kink, and
+ their corners rounded to the plan's radius (round_bound)."""
  low,high,target,weight,soft=plan.bounds();g=plan.grade*.92
  # Near an overpass the terrain floor yields only where the cone of the target
  # clearance beneath the bridge needs it (the cut). That cone lies under the
@@ -591,6 +591,12 @@ def solve(plan,report):
  for i,y in plan.fixed.items():low[i]=high[i]=y  # a fixed run steeper than the cones (a ramp matched to its sibling) keeps its heights
  # The rounding carries on a little steeper than the cones (so it comes back onto them) but under the grade.
  low=round_bound(low,high,plan.along,plan.radius,plan.grade*.96,1);high=round_bound(high,low,plan.along,plan.radius,plan.grade*.96,-1)
+ return low,high,target,weight
+
+
+def solve(plan,report):
+ """Solve a plan's profile within its hard bounds (hard_bounds)."""
+ low,high,target,weight=hard_bounds(plan)
  bad=[i for i in range(len(low)) if low[i]>high[i]+.01]
  if bad:report['infeasible'].append({'road':plan.id,'stations':len(bad),'at':[round(float(plan.along[bad[0]]),1),round(float(plan.along[bad[-1]]),1)],'worst':round(max(low[i]-high[i] for i in bad),2)})
  y,ok=spline(plan.along,target,weight,low,high,plan.stiff,plan.grade);plan.y=[round(v,4) for v in y];report['grades'][plan.id]=ok;return ok
@@ -1046,16 +1052,23 @@ def classify(p,plan,main,ramps,streets):
  return None
 
 
-def overlap(plan,e,other):
- """(station, height of `other` there) for the stations of `plan` from end `e` inward while their pavements
- overlap, through gaps shorter than OVERLAP_REACH (two diverging source lines wander apart and back)."""
+def overlap_stations(plan,e,other):
+ """(station, distance along `other`) for the stations of `plan` from end `e` inward while their pavements overlap,
+ through gaps shorter than OVERLAP_REACH (two diverging source lines wander apart and back). Geometry alone: `other`
+ need not have been solved."""
  out=[];last=None
  for i in (range(len(plan.points)) if e==0 else range(len(plan.points)-1,-1,-1)):
   p=Point(plan.points[i]);d=other.line.project(p)
   if other.line.distance(p)<=(plan.widths[i]+other.width_at(d))/2-OVERLAP_SLACK:last=i
   elif last is None or abs(plan.along[i]-plan.along[last])>OVERLAP_REACH:break
-  out.append((i,other.at(d)))
- return [(i,y) for i,y in out if last is not None and (i<=last if e==0 else i>=last)]
+  out.append((i,d))
+ return [(i,d) for i,d in out if last is not None and (i<=last if e==0 else i>=last)]
+
+
+def overlap(plan,e,other):
+ """(station, height of `other` there) for the stations of `plan` from end `e` inward while their pavements
+ overlap (overlap_stations)."""
+ return [(i,other.at(d)) for i,d in overlap_stations(plan,e,other)]
 
 
 def match_overlap(plan,e,other):
