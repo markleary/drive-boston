@@ -36,9 +36,14 @@ test('grading retains the broad Mission Hill ascent and ties into existing groun
   assert.ok(Math.abs(before)>5,'fixture must span a real hill');
   assert.ok(Math.sign(before)===Math.sign(after)&&Math.abs(after)>Math.abs(before)*.7,'cross-street leveling must not erase the hill');
   const inWindow=p=>p[0]>=city.bounds.minX&&p[0]<=city.bounds.maxX&&p[1]>=city.bounds.minZ&&p[1]<=city.bounds.maxZ;
-  for(const bridge of city.roads.filter(r=>r.elevations)){
-    for(const [i,level]of[[0,bridge.startLevel],[bridge.points.length-1,bridge.endLevel]])if(level===0&&inWindow(bridge.points[i]))
-      assert.ok(Math.abs(sampleElevation(city,...bridge.points[i])-bridge.elevations[i])<.015,`${bridge.id} has a new approach step`);
+  const decks=city.roads.filter(r=>r.elevations),highways=decks.filter(r=>Number.isInteger(r.lanes));
+  for(const bridge of decks){
+    for(const [i,level]of[[0,bridge.startLevel],[bridge.points.length-1,bridge.endLevel]])if(level===0&&inWindow(bridge.points[i])){
+      // (an end on a vertex of a highway record lands on that road, not on the ground: boston_highways.landed_decks)
+      const p=bridge.points[i],on=highways.find(o=>o!==bridge&&o.points.some(q=>q[0]===p[0]&&q[1]===p[1]));
+      if(on)assert.ok(Math.abs(on.elevations[on.points.findIndex(q=>q[0]===p[0]&&q[1]===p[1])]-bridge.elevations[i])<.01,`${bridge.id} steps off ${on.id}`);
+      else assert.ok(Math.abs(sampleElevation(city,...p)-bridge.elevations[i])<.015,`${bridge.id} has a new approach step`);
+    }
     if(bridge.bridge?.id==='bowker'&&bridge.startLevel===1&&bridge.endLevel===1)assert.ok(bridge.elevations.every(h=>h===6.4),'upper deck remains separate from ground grading');
   }
 });

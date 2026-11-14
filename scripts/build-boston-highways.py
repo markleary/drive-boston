@@ -45,6 +45,7 @@ def main():
  print(f"{len(record['routes'])} routes: {record['deckMeters']:.0f} m of deck in {len(record['roads']['added'])} records, {record['tunnelMeters']:.0f} m of tunnel in {len(record['roads']['tunnels'])} records")
  print(f"{len(record['crossings'])} crossings with existing roads, {len(record['newCrossings'])} between new roads; closed ends {', '.join(c['road']+' '+c['end'] for c in record['closed'])}; closed bore ends {', '.join(c['road'] for c in record['capped']) or 'none'}")
  print(f"{len(record['terrain']['vertices'])} grid vertices changed (cut up to {record['terrain']['maxCutMeters']} m, filled up to {record['terrain']['maxFillMeters']} m); {len(record['approachPieces'])} street approach pieces")
+ landed=record['landedDecks'];print(f"{len(landed)} deck ends of earlier stages land on a vertex of a record; re-laid onto the road: {', '.join(f"{x['road']} {x['end']} ({x['held']+1} stations held, up {x['maxRaise']} m, down {x['maxLower']} m)" for x in landed if x['maxRaise'] or x['maxLower']) or 'none'}")
  print(f"{len(record['overpasses'])} bridges levelled over the cut ({sum(len(c['changed']) for c in record['overpasses'])} deck pieces)")
  for c in record['overpasses']:print(f"  {', '.join(c['names'])}: deck {c['deck'][0]} to {c['deck'][1]} m between landings at {c['landings']}")
  for pair in record['twins']['pairs']:

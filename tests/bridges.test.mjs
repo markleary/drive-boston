@@ -109,8 +109,12 @@ test('deck mesh normals face up and source ramp endpoints meet the terrain',()=>
   }
   assert.ok([...edges.values()].every(n=>n===0),'closed slab faces must share opposite edge directions');
   const inWindow=p=>p[0]>=city.bounds.minX&&p[0]<=city.bounds.maxX&&p[1]>=city.bounds.minZ&&p[1]<=city.bounds.maxZ;
-  if(road.startLevel===0&&inWindow(road.points[0]))assert.ok(Math.abs(road.elevations[0]-sampleElevation(city,...road.points[0]))<.005,`${road.id} start meets the graded ground`);
-  if(road.endLevel===0&&inWindow(road.points.at(-1)))assert.ok(Math.abs(road.elevations.at(-1)-sampleElevation(city,...road.points.at(-1)))<.005,`${road.id} end meets the graded ground`);
+  // (an end on a vertex of a highway record lands on that road: boston_highways.landed_decks)
+  const landsOn=p=>{for(const o of structures){if(o===road||!Number.isInteger(o.lanes))continue;const j=o.points.findIndex(q=>q[0]===p[0]&&q[1]===p[1]);if(j>=0)return o.elevations[j];}return null;};
+  for(const [p,y,level,end] of [[road.points[0],road.elevations[0],road.startLevel,'start'],[road.points.at(-1),road.elevations.at(-1),road.endLevel,'end']]){
+   if(level!==0||!inWindow(p))continue;const on=landsOn(p);
+   assert.ok(Math.abs(y-(on??sampleElevation(city,...p)))<(on==null?.005:.01),on==null?`${road.id} ${end} meets the graded ground`:`${road.id} ${end} meets the highway it lands on`);
+  }
  }
 });
 
