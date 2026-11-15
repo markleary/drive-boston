@@ -1,0 +1,51 @@
+name: Exhaustive map validation
+
+# Run on demand after substantial map regeneration or rendering changes.
+# The default PR and deployment gates live in validate.yml.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-full:
+    name: All runtime and visual-detail tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:physics
+
+  map-replay:
+    name: Exact map generation replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: python -m venv .venv-data
+      - run: .venv-data/bin/pip install -r scripts/requirements.txt
+      - run: .venv-data/bin/python scripts/validate-city.py
+
+  furniture:
+    name: Whole-map street furniture and pedestrian audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run audit:furniture

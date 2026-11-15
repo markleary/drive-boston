@@ -1,0 +1,11 @@
+{
+  "reviewed": "2026-11-15",
+  "deckSidewalkWays": [810642367, 817775844],
+  "reason": "Both OpenStreetMap ways are layer=1, bridge=yes, footway=sidewalk on the Longfellow road deck. The bridge renderer already owns these sidewalks. Clipping them to Charlesbank park polygons must not create independent ground-level arched footbridges.",
+  "preservedGroundPathWay": 150052469,
+  "sources": [
+    "https://www.openstreetmap.org/way/810642367",
+    "https://www.openstreetmap.org/way/817775844",
+    "https://www.openstreetmap.org/way/150052469"
+  ]
+}

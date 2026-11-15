@@ -1,5 +1,16 @@
 import type {CityData,Point2} from '../types';
+import pathOwnership from '../data/longfellow-paths.json' with {type:'json'};
 import {roadProjection,sampleRoadElevation} from './road-surfaces.ts';
+
+const deckSidewalkWays=new Set(pathOwnership.deckSidewalkWays);
+/** These source sidewalks are part of the upper road bridge, already built by
+ * charles-bridges.ts. Park clipping leaves short pieces beside its Boston
+ * abutment; interpreting those pieces as standalone arches puts false bridges
+ * through the ground-level Dudley White path and the granite footings. */
+export function longfellowDeckOwnsPath(id:string){
+  const way=/^osm-way-(\d+)(?:-|$)/.exec(id);
+  return !!way&&deckSidewalkWays.has(Number(way[1]));
+}
 
 /** Shared horizontal bridge frame, including the Cambridge transition to Main Street. */
 const x0=-372.57,z0=-1296.11,dx=506.2,dz=46.95;

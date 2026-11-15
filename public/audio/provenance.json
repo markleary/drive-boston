@@ -306,6 +306,86 @@
         "filter": "asetrate=33075,aresample=44100,highpass=f=90,equalizer=f=800:t=q:w=0.8:g=3,equalizer=f=220:t=q:w=1:g=-2,treble=g=-4:f=4000,alimiter=limit=0.92:level=false",
         "description": "Lower-pitched, smoother straight-six-inspired interpretation mastered from the approved GT exhaust; not an authentic 2JZ recording or a separate ElevenLabs generation."
       }
+    },
+    {
+      "id": "moving-truck-idle",
+      "seconds": 6,
+      "loop": true,
+      "prompt": "An older 1990s medium duty moving box truck diesel engine idling at a constant 650 RPM, close exterior recording. Heavy uneven low diesel chug, dry injector clatter, gentle worn fan belt and cab panel vibration. Steady speed and volume for a seamless loop. No starting, stopping, revving, wind, traffic, horns, voices or music.",
+      "file": "moving-truck-idle.mp3",
+      "generatedAt": "2026-11-15T16:18:25.114Z",
+      "bytes": 97009,
+      "sha256": "e72ebb11ef78034ff12c58f79328736322c9b9ef6f88dfbdec52693e1e06bd25"
+    },
+    {
+      "id": "moving-truck-drive",
+      "seconds": 8,
+      "loop": true,
+      "prompt": "An older medium duty moving box truck inline six diesel engine held at a steady 1800 RPM under heavy cargo load. Deep throaty mechanical rumble, distinct rapid diesel combustion clatter, subdued exhaust growl and faint loose body panel rattles. Constant pitch and volume for a seamless dry close loop. No gear changes, acceleration sweeps, air hiss, whistle, wind, passing traffic, voices or music.",
+      "file": "moving-truck-drive.mp3",
+      "generatedAt": "2026-11-15T16:18:28.663Z",
+      "bytes": 129192,
+      "sha256": "13740a0979d481a630a1c1886fc3d0282a4b0c4798655c0777cf796183163fa0"
+    },
+    {
+      "id": "moving-truck-high",
+      "seconds": 6,
+      "loop": true,
+      "prompt": "An older loaded medium duty moving box truck diesel engine working hard at a constant 2800 RPM. Coarse strained diesel growl, heavy pulsing exhaust, rattling mechanical harmonics, warm low bass. Steady pitch and level from start to end for a seamless close dry loop. No gear changes, acceleration, turbo whistle, wind, road noise, other vehicles, voices or music.",
+      "file": "moving-truck-high.mp3",
+      "generatedAt": "2026-11-15T16:18:31.746Z",
+      "bytes": 97009,
+      "sha256": "fc0ec89469549533d2afc39b33ac114487233675fdf0e9e247065add8b36cfc7"
+    },
+    {
+      "id": "moving-truck-upshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "One older medium duty diesel moving truck automatic transmission upshift under load. A short soft clunk and a deep diesel exhaust note dropping gently in pitch, followed by silence. Close dry realistic sound under one second. No sharp impact, crash, air horn, turbo whistle, music or speech.",
+      "file": "moving-truck-upshift.mp3",
+      "generatedAt": "2026-11-15T16:18:33.541Z",
+      "bytes": 17179,
+      "sha256": "5ce84219a08cb1c0d39e30387fc2ad1db0d572ee9ac14f95323f7544ebef4e6d"
+    },
+    {
+      "id": "moving-truck-downshift",
+      "seconds": 1,
+      "loop": false,
+      "prompt": "One older medium duty diesel box truck automatic downshift. A brief rounded diesel rev rising and falling with a subdued worn transmission clunk, then silence. Close dry realistic recording under one second. No sharp bang, crash, air horn, turbo whistle, music or speech.",
+      "file": "moving-truck-downshift.mp3",
+      "generatedAt": "2026-11-15T16:18:35.533Z",
+      "bytes": 17179,
+      "sha256": "b8b5703564c461732de6ca8d912aaf8919f19395df907dfe807bce72446039b0"
+    },
+    {
+      "id": "moving-truck-horn",
+      "seconds": 1.5,
+      "loop": false,
+      "prompt": "One short honk from the slightly worn deep dual tone electric horn of an older medium duty moving box truck. Bassy raspy natural horn starts immediately, holds for half a second and fades to silence. Close dry sound, no train horn, no repeated honking, no engine, no traffic, voices or music.",
+      "file": "moving-truck-horn.mp3",
+      "generatedAt": "2026-11-15T16:18:37.293Z",
+      "bytes": 24702,
+      "sha256": "a2868b0f8c6e2f74d32d489a579e757b449e0b7318fb7b5fc032a0e6c48f225b"
+    },
+    {
+      "id": "moving-truck-storrow-crash",
+      "seconds": 3,
+      "loop": false,
+      "prompt": "A moving box truck cargo roof strikes a low steel bridge. Immediate massive blunt metallic impact followed by aluminum roof sheet tearing and peeling backward, rivets popping, box side panels buckling with a long crunchy scraping steel groan, then short settling rattles as the truck jams to a stop. Close dry realistic mechanical crash. No explosion, glass, fire, voices, sirens or music.",
+      "file": "moving-truck-storrow-crash.mp3",
+      "generatedAt": "2026-11-15T16:18:39.280Z",
+      "bytes": 48944,
+      "sha256": "b952d4a7c5cfa83b671de3534f53fd296bdbf1a20209237171072ab8fa3846db"
+    },
+    {
+      "id": "moving-truck-boo",
+      "seconds": 2.5,
+      "loop": false,
+      "prompt": "A small crowd of adults gives one collective disappointed BOOO in reaction to a silly mistake. Natural human voices, a rounded sustained boo for about one and a half seconds, trailing off into silence. Lighthearted spectator reaction, close dry recording. No words except boo, no applause, laughing, cheering, whistles, music or ambience.",
+      "file": "moving-truck-boo.mp3",
+      "generatedAt": "2026-11-15T16:18:41.062Z",
+      "bytes": 40585,
+      "sha256": "474c5b3c1728009e7570133c83eaa4fdf97f270516ab33d5d8261f498b5b188d"
     }
   ]
 }

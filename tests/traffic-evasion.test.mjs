@@ -16,6 +16,16 @@ test('head-on prediction distinguishes a collision course from ordinary passing 
   assert.equal(headOnThreat(car,{...player,x:1.5,yaw:Math.PI-.2}),undefined,'an opposing driver already steering clear is not a collision course');
 });
 
+test('head-on prediction uses the moving truck length and box width while retaining coupe defaults',()=>{
+  const car={x:0,y:.65,z:0,yaw:0,speed:6,halfLength:2.4,halfWidth:.95};
+  const player={x:0,y:.7,z:35,yaw:Math.PI,speed:14,steering:0};
+  const coupe=headOnThreat(car,player),truck=headOnThreat(car,{...player,halfLength:3.8,halfWidth:1.21});
+  assert.equal(coupe.time,(35-2.4-2.1)/20,'callers without dimensions retain the coupe envelope');
+  assert.equal(truck.time,(35-2.4-3.8)/20,'the longer truck reaches the NPC earlier');
+  assert.equal(headOnThreat(car,{...player,x:2.3}),undefined,'the narrower coupe clears this approach');
+  assert.ok(headOnThreat(car,{...player,x:2.3,halfLength:3.8,halfWidth:1.21}),'the moving box overlaps this approach');
+});
+
 test('lateral evasion accelerates smoothly and never slides a stopped vehicle sideways',()=>{
   const state={offset:0,velocity:0,target:2.4,holdUntil:0};
   for(let i=0;i<120;i++){const next=advanceEvasion(state,1/60,6);assert.ok(Math.abs(next.velocity-state.velocity)<=2.6/60+1e-8);assert.ok(Math.abs(next.velocity)<=1.8);Object.assign(state,next);}
@@ -49,6 +59,25 @@ test('an NPC steers away from a predicted head-on, stays on pavement, then rejoi
     assert.ok(firstOffset<0,'a centered threat favors the NPC’s own curb');
     assert.ok(peak>.8,`the car visibly swerves (${peak} m)`);assert.ok(steer>.05,'front wheels steer during the maneuver');
     assert.ok(Math.abs(f.traffic.snapshot()[f.index].evasion)<.03,'the car returns to its lane after the player passes');
+  }finally{f.dispose();}
+});
+
+test('a minivan holds its escape side until an oncoming coupe has actually passed',async()=>{
+  const f=await fixture({width:12});
+  try{
+    const index=f.traffic.snapshot().findIndex(a=>a.type==='minivan'&&a.speed>4&&Math.sin(a.yaw)>.99),actor=f.traffic.snapshot()[index];
+    assert.ok(actor,'a rolling minivan is available');
+    const player={...f.far,x:actor.x+45,z:actor.z-2.05,yaw:actor.yaw+Math.PI,speed:22.352,halfLength:2.02,halfWidth:.85};
+    let peak=0,held=0;
+    for(let i=0;i<420;i++){
+      f.traffic.update(1/60,player,f.far);f.physics.world.step();
+      const now=f.traffic.snapshot()[index],offset=Math.abs(now.evasion),along=player.x-now.x;
+      if(along>0&&peak>.08){assert.ok(offset>=peak-.005,`minivan starts returning with player still ${along.toFixed(1)} m ahead`);held++;}
+      if(along>0)peak=Math.max(peak,offset);
+      player.x-=player.speed/60;
+    }
+    assert.ok(peak>.1&&held>20,'the minivan holds a real escape maneuver through the approach');
+    assert.ok(Math.abs(f.traffic.snapshot()[index].evasion)<.03,'the minivan rejoins after both vehicles have cleared');
   }finally{f.dispose();}
 });
 

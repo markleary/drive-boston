@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
+import RAPIER from '@dimforge/rapier3d-compat';
 import {resolveCity} from '../src/simulation/city-tiles.ts';
 import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {addCharlesBridgeDetails} from '../src/render/charles-bridges.ts';
+import {addLowClearanceDetails} from '../src/render/low-clearance.ts';
 import {parkSurface,WATER_SURFACE_OFFSET} from '../src/render/area-surfaces.ts';
 import {drapedRibbon} from '../src/render/terrain-ground.ts';
 import {roadDeckGeometry} from '../src/simulation/road-surfaces.ts';
-import {inLongfellowCorridor,longfellowPoint,LONGFELLOW_LENGTH} from '../src/simulation/longfellow.ts';
+import {inLongfellowCorridor,longfellowPoint,longfellowProfile,LONGFELLOW_LENGTH,LONGFELLOW_YAW} from '../src/simulation/longfellow.ts';
 import {read,readJson,windowCity} from './helpers/metro-city.mjs';
 const metro=await resolveCity(readJson('city.json'),read),city=windowCity(metro,{minX:-750,maxX:300,minZ:-1550,maxZ:-1050});
 const released={throttle:0,brake:0,steer:0,handbrake:false};
@@ -20,7 +22,7 @@ async function drive(ids){
  })).filter((p,i,a)=>!i||Math.hypot(p.x-a[i-1].x,p.z-a[i-1].z)>.02);
  const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),details=addCharlesBridgeDetails(scene,city);
  try{
-  for(const mesh of details.collisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
+  for(const mesh of [...details.collisions,...addLowClearanceDetails(scene,city).collisions])physics.addStaticMesh(mesh.vertices,mesh.indices);
   const [start,next]=route;physics.reset(start.x,start.z,Math.atan2(next.x-start.x,next.z-start.z),start.road.id);
   for(let i=0;i<60;i++)physics.step({...released,brake:1},1/60);
   let cursor=1,lastProgress=0;
@@ -40,9 +42,25 @@ async function drive(ids){
  }finally{physics.dispose();scene.traverse(o=>o.geometry?.dispose());}
 }
 
-test('Cambridge-to-Boston Longfellow drive clears all decorative piers from the start of the ramp',()=>drive(['osm-1228698551-0','14614-0-0','water-link-14614-0-0','14614-0-1']));
-test('Boston-to-Cambridge Longfellow drive clears the full ramp and returns to Main Street',()=>drive(['14615-0-0','water-link-14615-0-0','14615-0-1','osm-1501638153-0','osm-1305820996-0']));
+test('Cambridge-to-Boston Longfellow drive clears all decorative piers from the start of the ramp',()=>drive(['osm-1228698551-0','14614-0-0','water-link-14614-0-0','14614-0-1','13130-0-0','8580-0-0']));
+test('Boston-to-Cambridge Longfellow drive clears the full ramp and returns to Main Street',()=>drive(['9280-0-0','13131-0-0','14615-0-0','water-link-14615-0-0','14615-0-1','osm-1501638153-0','osm-1305820996-0']));
 test('Memorial Drive passes under the Longfellow decoration and across both deck-to-ground joins',()=>drive(['osm-8615862-0','osm-827504928-0','osm-822621173-0','osm-8614583-0']));
+
+test('all three Boston river ribs cross the former gap and bear inside the portal masonry',async()=>{
+ const scene=new THREE.Scene(),details=addCharlesBridgeDetails(scene,city),portal=addLowClearanceDetails(scene,city),physics=await DrivingPhysics.create(city,{buildingColliders:false});
+ try{
+  const handles=new Set(portal.collisions.map(c=>physics.addStaticMesh(c.vertices,c.indices).handle));physics.world.step();
+  const bearings=details.group.userData.bostonBearings;assert.equal(bearings.length,3);
+  const steel=details.group.children.find(m=>m.material?.color.getHexString()==='465e55');assert.ok(steel);steel.updateMatrixWorld();
+  const height=longfellowProfile(city),ray=new THREE.Raycaster();
+  for(const bearing of bearings){
+   const direction={x:Math.sin(LONGFELLOW_YAW),y:0,z:Math.cos(LONGFELLOW_YAW)},contact=physics.world.castRay(new RAPIER.Ray({x:bearing.x-direction.x,y:bearing.y,z:bearing.z-direction.z},direction),1.01,true,undefined,undefined,undefined,undefined,c=>handles.has(c.handle));
+   assert.ok(contact&&contact.timeOfImpact<1,`rib ${bearing.side} stops before its masonry bearing`);
+   const d=LONGFELLOW_LENGTH+6,p=longfellowPoint(d,bearing.side);ray.set(new THREE.Vector3(p[0],height(d)+1,p[1]),new THREE.Vector3(0,-1,0));
+   assert.ok(ray.intersectObject(steel,false).some(hit=>hit.point.y<height(d)-1),`rib ${bearing.side} leaves the old river-to-pier gap open`);
+  }
+ }finally{physics.dispose();scene.traverse(o=>o.geometry?.dispose());}
+});
 
 
 test('the rail reservation and both bridge approaches exclude tree trunks and nearby canopy',()=>{

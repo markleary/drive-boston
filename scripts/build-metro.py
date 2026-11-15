@@ -40,6 +40,9 @@ TOWNS={'CAMBRIDGE':'Cambridge','SOMERVILLE':'Somerville','BROOKLINE':'Brookline'
 FULL_GEOMETRY={'Chelsea','Everett','Medford','Malden','Melrose'}
 # The final extension north of the Mystic: OSM footprints dressed from assessor parcels.
 NORTH={'Everett','Medford','Malden','Melrose'}
+# The dedicated Longfellow renderer owns its layer-1 sidewalks. Keeping their
+# park-clipped fragments would create fictitious ground-level arched bridges.
+LONGFELLOW_DECK_SIDEWALKS=set(json.loads((ROOT/'src/data/longfellow-paths.json').read_text())['deckSidewalkWays'])
 SOURCES=[
  *central.SOURCES,
  {'name':'City of Boston official surrounding town polygons','url':'https://gisportal.boston.gov/arcgis/rest/services/Basemaps/Boston_Basemap_Cached_WM/MapServer/17','license':'City of Boston open data; source attribution retained'},
@@ -331,6 +334,7 @@ def load_osm(cache,districts,coverage):
  covered=prep(coverage)
  seen_paths=set()
  for e in osm_elements(cache,'metro-paths')+osm_elements(cache,'north-paths'):
+  if e['id'] in LONGFELLOW_DECK_SIDEWALKS:continue
   if e['id'] in seen_paths:continue
   seen_paths.add(e['id'])
   tags=e.get('tags',{});pts=[xy(p['lon'],p['lat']) for p in e.get('geometry') or []]

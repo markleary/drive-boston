@@ -12,7 +12,7 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
   expect((await snap(page)).carId).toBe('mclaren-gt');expect((await snap(page)).paused).toBe(true);
   await page.screenshot({path:info.outputPath('garage-settings.png')});
   await page.getByRole('button',{name:'Keep driving',exact:true}).click();
-  await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(26);
+  await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(34);
   expect((await snap(page)).audio.failed).toEqual([]);
   await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeGreaterThan(.1);
   await page.screenshot({path:info.outputPath('mclaren-gt-boston.png')});
@@ -36,7 +36,7 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
   await page.screenshot({path:info.outputPath('harbor-s4-boston.png')});expect(errors).toEqual([]);
 });
 
-test('touch settings expose all four cars in a scrollable panel',async({browser},info)=>{
+test('touch settings expose all five cars and load only the selected engine bank',async({browser},info)=>{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const page=await context.newPage();
   try{
     const requests:string[]=[];
@@ -61,10 +61,15 @@ test('touch settings expose all four cars in a scrollable panel',async({browser}
     expect(requests.some(name=>name.startsWith('mclaren'))).toBe(false);
     const supraBytes=(await snap(page)).audio.decodedBytes;
     await page.locator('#open-settings').click();
-    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Toyota Supra Mk4','supra-mk4']]){
+    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Moving Truck','moving-truck'],['Toyota Supra Mk4','supra-mk4']]){
       const car=page.getByRole('button',{name,exact:true});await car.scrollIntoViewIfNeeded();await car.tap();
       await expect(car).toHaveAttribute('aria-pressed','true');expect((await snap(page)).carId).toBe(id);
       const bounds=await car.boundingBox();expect(bounds!.x).toBeGreaterThanOrEqual(0);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(390);
+      if(id==='moving-truck'){
+        await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(19);
+        expect((await snap(page)).audio.failed).toEqual([]);
+        expect(requests.filter(name=>name.startsWith('moving-truck'))).toHaveLength(8);
+      }
       if(id==='harbor-s4'){
         const audio=(await snap(page)).audio;
         expect(audio.loadedCount).toBe(11);
@@ -118,7 +123,7 @@ for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'
     test.setTimeout(150000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
     await start(page);await page.keyboard.press('Escape');await page.getByRole('button',{name,exact:true}).click();
     await page.getByRole('button',{name:'Keep driving',exact:true}).click();
-    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(26);
+    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(34);
     await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe(id);
     expect((await snap(page)).audio.failed).toEqual([]);
     const plates=await page.evaluate(model=>{const g=(window as any).__backbay.scene.getObjectByName(model),p=g.getObjectByName('PlayerMassachusettsPlates');return {car:g.userData.carId,vertices:p.geometry.attributes.position.count,texture:!!p.material.map};},model);

@@ -31,7 +31,7 @@ for(const id of ['mclaren-720s','supra-mk4'])for(const dt of [1/60,1/120])test(`
   }finally{p.dispose();}
 });
 
-test('all four cars swap safely and retain the selected mass and footprint after riding',async()=>{
+test('all player vehicles swap safely and retain the selected mass and footprint after riding',async()=>{
   const p=await DrivingPhysics.create(city);
   try{
     const colliders=p.world.colliders.len();
@@ -40,7 +40,7 @@ test('all four cars swap safely and retain the selected mass and footprint after
       p.setVehicleType('ultrabee');p.setVehicleType('car');
       const state=p.getState();assert.equal(state.carId,id);assert.equal(p.body.mass(),PLAYER_CARS[id].mass);
       assert.equal(state.halfLength,PLAYER_CARS[id].halfLength);assert.equal(state.halfWidth,PLAYER_CARS[id].halfWidth);
-      assert.equal(p.controller.numWheels(),4);assert.equal(p.world.colliders.len(),colliders);
+      assert.equal(p.controller.numWheels(),4);assert.equal(p.world.colliders.len(),colliders+(id==='moving-truck'?2:0));
     }
   }finally{p.dispose();}
 });

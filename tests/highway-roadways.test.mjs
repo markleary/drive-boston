@@ -105,10 +105,13 @@ test('Charles Circle has its ramps to and from Storrow Drive',()=>{
   const vertices=new Map();
   for(const r of city.roads)if(!/^(i90|storrow|route1a)-/.test(r.id))for(const p of r.points)vertices.set(`${p[0]},${p[1]}`,r);
   const route=id=>[...byId.values()].filter(r=>r.id===id||new RegExp(`^${id}-\\d+$`).test(r.id)).sort((a,b)=>(Number(a.id.slice(id.length+1))||1)-(Number(b.id.slice(id.length+1))||1));
-  for(const [id,from,to] of [['storrow-wb-exit-charles-circle','Charlesbank Road','Cambridge Street'],['storrow-wb-entrance-charles-circle','Cambridge Street','Charlesbank Road']]){
+  for(const [id,from,to] of [['storrow-wb-exit-charles-circle','Storrow Drive West','Cambridge Street'],['storrow-wb-entrance-charles-circle','Cambridge Street','Storrow Drive West']]){
     const chain=route(id);assert.ok(chain.length>=2,`${id} is installed`);
-    const start=vertices.get(chain[0].points[0].join(',')),end=vertices.get(chain.at(-1).points.at(-1).join(','));
-    assert.equal(start?.name,from,`${id} starts on a vertex of ${from}`);assert.ok(end&&[to,'Charles Street'].includes(end.name),`${id} ends on a vertex of ${to}`);
+    // A junction can belong to the main carriageway and a side street. Keep
+    // every incident road instead of letting input order choose its name.
+    const connected=point=>city.roads.filter(r=>!r.id.startsWith('storrow-')&&r.points.some(p=>p[0]===point[0]&&p[1]===point[1])).map(r=>r.name);
+    assert.ok(connected(chain[0].points[0]).includes(from),`${id} starts on a vertex of ${from}`);
+    assert.ok(connected(chain.at(-1).points.at(-1)).some(name=>[to,'Charles Street'].includes(name)),`${id} ends on a vertex of ${to}`);
     for(let i=1;i<chain.length;i++)assert.deepEqual(chain[i-1].points.at(-1),chain[i].points[0]);
     // it lands on the ground at both ends and crosses the northbound road on a deck
     assert.ok(Math.abs(chain[0].elevations[0]-sampleElevation(city,...chain[0].points[0]))<.2&&Math.abs(chain.at(-1).elevations.at(-1)-sampleElevation(city,...chain.at(-1).points.at(-1)))<.2);

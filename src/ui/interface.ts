@@ -45,6 +45,7 @@ export interface InterfaceStats {
   altitude?: number;
   verticalSpeed?: number;
   wheelieRemaining?:number;
+  storrowed?:boolean;
   gear?:number;
   rpm?:number;
   performance?:HUDPerformanceData;
@@ -111,6 +112,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     <div class="hud speed-cluster" aria-label="Vehicle instruments"><div class="speed-label"><span id="gear" class="gear">D</span><span id="journey-label">AFTERNOON DRIVE</span></div><div><span class="speed-value" id="speed-value">0</span><span class="speed-unit">MPH</span></div><div class="altitude-readout hidden" id="altitude-readout"><div class="altitude-number"><span id="altitude-value">0</span><span class="altitude-unit">FT</span></div><div class="altitude-caption">Above ground <span id="vertical-speed">LEVEL</span></div></div><div class="speed-line"><div class="speed-fill" id="speed-fill"></div></div><div class="camera-label" id="camera-label">Chase camera</div></div>
     <div class="hud hint" id="drive-hint"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Drive</span><span><kbd>Space</kbd> Handbrake</span><span><kbd>R</kbd> Reset</span></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <button class="storrow-recovery hidden" id="storrow-recovery" aria-label="Repair truck and move beyond the bridge">Repair &amp; move past bridge <kbd>R</kbd></button>
     <section class="welcome" id="welcome" aria-label="Welcome to Boston">
       <img class="welcome-scene" id="welcome-scene" src="${import.meta.env.BASE_URL}title-scene.jpg" alt="" aria-hidden="true"><div class="welcome-veil" id="welcome-veil" aria-hidden="true"></div><div class="welcome-shade" aria-hidden="true"></div>
       <div class="welcome-top">${EMBLEM}<div class="welcome-wordmark"><span>BOSTON</span><span class="welcome-slash">/</span><span class="welcome-accent">FREE DRIVE</span></div></div>
@@ -533,6 +535,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   }
   click('cycle-camera', cycleCamera); click('open-settings', () => setSettings(true)); click('close-settings', () => setSettings(false)); click('resume-drive', () => setSettings(false));
   click('reset-drive', () => { reset(); setSettings(false); });
+  click('storrow-recovery',()=>reset());
   click('open-credits', () => { creditsOpen = true; el('settings-modal').classList.add('hidden'); focusModal('credits-modal', 'close-credits'); updatePause(); });
   click('close-credits', () => { creditsOpen = false; el('credits-modal').classList.add('hidden'); el('settings-modal').classList.remove('hidden'); el('open-credits').focus(); updatePause(); });
   host.querySelectorAll<HTMLButtonElement>('[data-light]').forEach(b => on(b, 'click', () => setLighting(b.dataset.light as LightingMode, true)));
@@ -825,6 +828,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     el('speed-value').textContent=String(Math.round(speed));el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;el('gear').textContent=travelMode==='helicopter'?'H':travelMode==='walk'?'W':state.speed<-.3?'R':travelMode==='bike'?'E':`D${stats?.gear&&stats.gear>0?stats.gear:''}`;
     el('gear').title=travelMode==='drive'&&stats?.rpm?`Automatic transmission · ${Math.round(stats.rpm)} rpm`:'';
     if(travelMode==='drive')el('journey-label').textContent=PLAYER_CARS[carId].name.toUpperCase();
+    el('storrow-recovery').classList.toggle('hidden',!stats?.storrowed||travelMode!=='drive'||isPaused());
     if(travelMode==='bike')el('journey-label').textContent=(stats?.wheelieRemaining??0)>0?`WHEELIE · ${Math.ceil(stats!.wheelieRemaining!)}s`:'ULTRA BEE · ELECTRIC';
     if(travelMode==='walk')el('journey-label').textContent=state.speed>WALKER.walkSpeed+.8?'RUNNING':'ON FOOT';
     if(travelMode==='helicopter'){
