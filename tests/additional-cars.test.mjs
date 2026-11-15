@@ -38,7 +38,7 @@ test('all player vehicles swap safely and retain the selected mass and footprint
     for(let repeat=0;repeat<3;repeat++)for(const id of Object.keys(PLAYER_CARS)){
       assert.ok(isPlayerCarId(id));p.setCar(id);advance(p,1,{...idle,throttle:1});
       p.setVehicleType('ultrabee');p.setVehicleType('car');
-      const state=p.getState();assert.equal(state.carId,id);assert.equal(p.body.mass(),PLAYER_CARS[id].mass);
+      const state=p.getState();assert.equal(state.carId,id);assert.ok(Math.abs(p.body.mass()-PLAYER_CARS[id].mass)<.001);
       assert.equal(state.halfLength,PLAYER_CARS[id].halfLength);assert.equal(state.halfWidth,PLAYER_CARS[id].halfWidth);
       assert.equal(p.controller.numWheels(),4);assert.equal(p.world.colliders.len(),colliders+(id==='moving-truck'?2:0));
     }

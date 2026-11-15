@@ -88,6 +88,15 @@ test('gamepad: start, drive, menus, vehicles and controller tips', async ({ page
   await press(page, 'Up');
   await expect(page.locator('#resume-drive')).not.toBeFocused();
   expect(await page.evaluate(() => document.activeElement?.closest('#settings-modal') !== null)).toBe(true);
+  // A native vehicle select remains usable through controller navigation.
+  const cars=page.getByRole('combobox',{name:'Your car'});
+  await cars.focus();
+  await press(page,'Right');
+  await expect(cars).toHaveValue('mclaren-gt');
+  await press(page,'Left');
+  await expect(cars).toHaveValue('harbor-s4');
+  await press(page,'Down');
+  await expect(cars).not.toBeFocused();
   await page.screenshot({ path: testInfo.outputPath('gamepad-settings.png') });
   await press(page, 'B');
   await expect(page.locator('#settings-modal')).toBeHidden();

@@ -10,12 +10,15 @@ import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import {buildPlayerEngineAudio} from './build-player-car-audio.mjs';
+import {masterTeslaReverseAudio} from './master-tesla-reverse.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(root, 'public/audio');
 const model = 'eleven_text_to_sound_v2';
 const format = 'mp3_44100_128';
 const clips = [
+  {id:'tesla-model-3-performance-drive',seconds:8,loop:true,prompt:'Quiet Tesla Model 3 Performance electric car at steady slow speed, close exterior perspective. Very soft smooth traction motor hum, fine clean inverter whine and subdued airy pedestrian warning whirr. Refined and much quieter than a gasoline engine. Constant pitch and level, seamless dry isolated loop. No combustion, exhaust, revving, gear changes, tire or wind noise, siren, beeps, music, voices or fade.'},
+  {"id": "tesla-model-3-performance-reverse", "seconds": 10, "loop": true, "prompt": "Continuous Tesla electric car reverse warning, a deep hollow futuristic UFO WOOOOOO. Warm low 200 Hz body with soft airy ghostly organ harmonics. Static hovering spaceship held at exactly the same power: fixed pitch and absolutely even volume throughout, no movement or swells. Smooth seamless ten-second loop. No high whistle, wobble, tremolo, pulsing, clicks, percussion, siren, music or voices.", "model": "eleven_text_to_sound_v3", "promptInfluence": 0.8},
   {id:'moving-truck-idle',seconds:6,loop:true,prompt:'An older 1990s medium duty moving box truck diesel engine idling at a constant 650 RPM, close exterior recording. Heavy uneven low diesel chug, dry injector clatter, gentle worn fan belt and cab panel vibration. Steady speed and volume for a seamless loop. No starting, stopping, revving, wind, traffic, horns, voices or music.'},
   {id:'moving-truck-drive',seconds:8,loop:true,prompt:'An older medium duty moving box truck inline six diesel engine held at a steady 1800 RPM under heavy cargo load. Deep throaty mechanical rumble, distinct rapid diesel combustion clatter, subdued exhaust growl and faint loose body panel rattles. Constant pitch and volume for a seamless dry close loop. No gear changes, acceleration sweeps, air hiss, whistle, wind, passing traffic, voices or music.'},
   {id:'moving-truck-high',seconds:6,loop:true,prompt:'An older loaded medium duty moving box truck diesel engine working hard at a constant 2800 RPM. Coarse strained diesel growl, heavy pulsing exhaust, rattling mechanical harmonics, warm low bass. Steady pitch and level from start to end for a seamless close dry loop. No gear changes, acceleration, turbo whistle, wind, road noise, other vehicles, voices or music.'},
@@ -118,15 +121,25 @@ async function main() {
   if(!selected.length&&!derivedSelected.length)throw new Error('No clips match --only.');
   const total = selected.reduce((sum, clip) => sum + clip.seconds, 0);
   const pending = [];
-  for (const clip of selected) if (!await exists(resolve(output, `${clip.id}.mp3`))) pending.push(clip);
+  let reverseMasterPending=false;
+  for (const clip of selected) {
+    const reverse=clip.id==='tesla-model-3-performance-reverse';
+    if(await exists(resolve(output,`${clip.id}.${reverse?'wav':'mp3'}`)))continue;
+    // A failed/interrupted local mastering pass must not trigger another
+    // billable generation when its fresh source is already on disk.
+    if(reverse&&await exists(resolve(output,`${clip.id}.mp3`)))reverseMasterPending=true;
+    else pending.push(clip);
+  }
   if(pending.reduce((sum,clip)=>sum+clip.seconds,0)>60)throw new Error('Pending generation exceeds the 60-second budget; use --only=prefix.');
   console.log(`Audio plan: ${selected.length} clips / ${total}s total; ${pending.length} missing / ${pending.reduce((sum, clip) => sum + clip.seconds, 0)}s to generate.`);
   if (!process.argv.includes('--generate')) {
     for (const clip of pending) console.log(`  ${clip.id}: ${clip.seconds}s${clip.loop ? ' loop' : ''}`);
+    if(reverseMasterPending)console.log('The reverse source exists; only local WAV mastering remains.');
     if(derivedSelected.length)console.log('Selected drive/high assets are mastered locally from the existing GT sources; no additional provider requests.');
     console.log('Preview only. Add --generate to make billable ElevenLabs requests. Existing files are never overwritten.');
     return;
   }
+  if(reverseMasterPending)await masterTeslaReverseAudio();
   if (!pending.length) {await buildPlayerEngineAudio({selected:derivedSelected});return;}
   const key = await localKey();
   await mkdir(output, { recursive: true });
@@ -140,7 +153,7 @@ async function main() {
       response = await fetch(`https://api.elevenlabs.io/v1/sound-generation?output_format=${format}`, {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(180_000),
         headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: clip.prompt, duration_seconds: clip.seconds, loop: clip.loop, model_id: model, prompt_influence: 0.5 }),
+        body: JSON.stringify({ text: clip.prompt, duration_seconds: clip.seconds, loop: clip.loop, model_id: clip.model??model, prompt_influence: clip.promptInfluence??0.5 }),
       });
     } catch {
       throw new Error(`Network request failed for ${clip.id}. No automatic retry was made; check connectivity before running again.`);
@@ -169,6 +182,10 @@ async function main() {
       clips: completed,
     }, null, 2) + '\n');
     console.log(`Saved ${file} (${bytes.length} bytes).`);
+    if(clip.id==='tesla-model-3-performance-reverse'){
+      await masterTeslaReverseAudio();
+      completed=JSON.parse(await readFile(provenancePath,'utf8')).clips;
+    }
   }
   await buildPlayerEngineAudio({selected:derivedSelected});
 }

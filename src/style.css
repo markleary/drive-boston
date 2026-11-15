@@ -251,10 +251,10 @@ html,body{height:100dvh}
 .map-caption .pad-glyph{margin-left:6px}
 .travel-switch .pad-switch{padding:0 7px 0 5px;color:#f5f1e4a3}
 .welcome-start .pad-only{margin:0 -12px}.welcome-start .pad-glyph{width:24px;height:24px;font-size:12px}
-#interface.gamepad button:focus,#interface.gamepad a:focus{outline:2px solid var(--orange);outline-offset:5px}
+#interface.gamepad button:focus,#interface.gamepad a:focus,#interface.gamepad select:focus{outline:2px solid var(--orange);outline-offset:5px}
 #interface.gamepad .welcome-start:focus{outline-color:var(--accent)}
 
-.car-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.car-choices button{min-height:44px}
+.car-select{display:block;width:100%;min-height:46px;padding:11px 12px;border:1px solid #233b3b40;border-radius:5px;background:var(--paper);color:var(--ink);font:inherit;font-size:16px;cursor:pointer;color-scheme:light}.car-select:focus-visible{outline:2px solid var(--orange);outline-offset:3px}#car-pad-help{align-items:center;gap:7px}
 /* GPS. While a destination is set the location pill becomes the turn-by-turn display (so it keeps the
    pill's place in every layout) and the atlas lists the route with the button that clears it. */
 .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}

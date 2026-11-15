@@ -1,4 +1,7 @@
 import {test,expect} from '@playwright/test';
+// These exercise keyboard/touch; a host's connected controller must not steer
+// the car into traffic during acceleration checks. Controller input has its own suite.
+test.beforeEach(async({context})=>{await context.addInitScript(()=>Object.defineProperty(navigator,'getGamepads',{value:()=>[],configurable:true}));});
 const snap=(page:any)=>page.evaluate(()=>(window as any).__backbay.snapshot());
 async function start(page:any){await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:60000});await page.getByTestId('start-drive').click();}
 
@@ -6,13 +9,13 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
   test.setTimeout(150000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
   await start(page);expect((await snap(page)).carId).toBe('harbor-s4');
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('button',{name:'Harbor S4',exact:true})).toHaveAttribute('aria-pressed','true');
-  await page.getByRole('button',{name:'McLaren GT',exact:true}).click();
+  await expect(page.getByRole('combobox',{name:'Your car'})).toHaveValue('harbor-s4');
+  await page.getByRole('combobox',{name:'Your car'}).selectOption('mclaren-gt');
   await expect(page.locator('#car-description')).toContainText('203 mph');
   expect((await snap(page)).carId).toBe('mclaren-gt');expect((await snap(page)).paused).toBe(true);
   await page.screenshot({path:info.outputPath('garage-settings.png')});
   await page.getByRole('button',{name:'Keep driving',exact:true}).click();
-  await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(35);
+  await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(37);
   expect((await snap(page)).audio.failed).toEqual([]);
   await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeGreaterThan(.1);
   await page.screenshot({path:info.outputPath('mclaren-gt-boston.png')});
@@ -24,21 +27,22 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
   // Repeat swaps without simulation/streaming changes: no mesh accumulation.
   await page.keyboard.press('Escape');const counts:number[]=[];
   for(let i=0;i<3;i++){
-    await page.getByRole('button',{name:'Harbor S4',exact:true}).click();
-    await page.getByRole('button',{name:'McLaren GT',exact:true}).click();
+    await page.getByRole('combobox',{name:'Your car'}).selectOption('harbor-s4');
+    await page.getByRole('combobox',{name:'Your car'}).selectOption('mclaren-gt');
     counts.push(await page.evaluate(()=>(window as any).__backbay.scene.getObjectByName('PlayerMcLarenGT').children.length));
   }
   expect(new Set(counts).size).toBe(1);
   expect(await page.evaluate(()=>(window as any).__backbay.scene.children.filter((o:any)=>o.name==='PlayerMcLarenGT'||o.name==='PlayerCoupe').length)).toBe(1);
   await page.reload();await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:60000});await page.getByTestId('start-drive').click();
   expect((await snap(page)).carId).toBe('mclaren-gt');
-  await page.keyboard.press('Escape');await page.getByRole('button',{name:'Harbor S4',exact:true}).click();await page.getByRole('button',{name:'Keep driving',exact:true}).click();
+  await page.keyboard.press('Escape');await page.getByRole('combobox',{name:'Your car'}).selectOption('harbor-s4');await page.getByRole('button',{name:'Keep driving',exact:true}).click();
   await page.screenshot({path:info.outputPath('harbor-s4-boston.png')});expect(errors).toEqual([]);
 });
 
-test('touch settings expose all five cars and load only the selected engine bank',async({browser},info)=>{
+test('touch settings expose all six cars and load only the selected engine bank',async({browser},info)=>{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const page=await context.newPage();
   try{
+    await context.addInitScript(()=>Object.defineProperty(navigator,'getGamepads',{value:()=>[],configurable:true}));
     const requests:string[]=[];
     page.on('request',request=>{
       const path=new URL(request.url()).pathname;
@@ -61,10 +65,15 @@ test('touch settings expose all five cars and load only the selected engine bank
     expect(requests.some(name=>name.startsWith('mclaren'))).toBe(false);
     const supraBytes=(await snap(page)).audio.decodedBytes;
     await page.locator('#open-settings').click();
-    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Moving Truck','moving-truck'],['Toyota Supra Mk4','supra-mk4']]){
-      const car=page.getByRole('button',{name,exact:true});await car.scrollIntoViewIfNeeded();await car.tap();
-      await expect(car).toHaveAttribute('aria-pressed','true');expect((await snap(page)).carId).toBe(id);
+    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Moving Truck','moving-truck'],['Tesla Model 3 Performance','tesla-model-3-performance'],['Toyota Supra Mk4','supra-mk4']]){
+      const car=page.getByRole('combobox',{name:'Your car'});await car.scrollIntoViewIfNeeded();await car.selectOption({label:name});
+      await expect(car).toHaveValue(id);expect((await snap(page)).carId).toBe(id);
       const bounds=await car.boundingBox();expect(bounds!.x).toBeGreaterThanOrEqual(0);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(390);
+      if(id==='tesla-model-3-performance'){
+        await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(13);
+        expect((await snap(page)).audio.failed).toEqual([]);
+        expect(requests.filter(name=>name.startsWith('tesla-model-3-performance'))).toHaveLength(2);
+      }
       if(id==='moving-truck'){
         await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(20);
         expect((await snap(page)).audio.failed).toEqual([]);
@@ -121,9 +130,9 @@ for(const scenario of ['missing GT loops','corrupt high-RPM loop','only generic 
 for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'],['supra-mk4','Toyota Supra Mk4','PlayerSupraMk4']]){
   test(`${name}: selection, actual shifting, matching plates, mode changes and persistence`,async({page},info)=>{
     test.setTimeout(150000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
-    await start(page);await page.keyboard.press('Escape');await page.getByRole('button',{name,exact:true}).click();
+    await start(page);await page.keyboard.press('Escape');await page.getByRole('combobox',{name:'Your car'}).selectOption(id);
     await page.getByRole('button',{name:'Keep driving',exact:true}).click();
-    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(35);
+    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(37);
     await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe(id);
     expect((await snap(page)).audio.failed).toEqual([]);
     const plates=await page.evaluate(model=>{const g=(window as any).__backbay.scene.getObjectByName(model),p=g.getObjectByName('PlayerMassachusettsPlates');return {car:g.userData.carId,vertices:p.geometry.attributes.position.count,texture:!!p.material.map};},model);
@@ -135,7 +144,7 @@ for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'
     for(const key of ['2','3']){await page.keyboard.press(key);await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe('off');await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeLessThan(.001);}
     await page.keyboard.press('1');await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe(id);
     await page.keyboard.press('Escape');await expect.poll(async()=>(await snap(page)).audio.masterGain).toBeLessThan(.001);
-    for(let i=0;i<3;i++){await page.getByRole('button',{name:'Harbor S4',exact:true}).click();await page.getByRole('button',{name,exact:true}).click();}
+    for(let i=0;i<3;i++){await page.getByRole('combobox',{name:'Your car'}).selectOption('harbor-s4');await page.getByRole('combobox',{name:'Your car'}).selectOption(id);}
     expect(await page.evaluate(()=>(window as any).__backbay.scene.children.filter((o:any)=>o.userData.carId).length)).toBe(1);
     await page.reload();await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:60000});await page.getByTestId('start-drive').click();
     expect((await snap(page)).carId).toBe(id);await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe(id);expect(errors).toEqual([]);
@@ -145,7 +154,7 @@ for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'
     await page.route(`**/audio/${id}-high.mp3*`,route=>route.fulfill({contentType:'audio/mpeg',body:'invalid audio'}));
     await start(page);await expect.poll(async()=>(await snap(page)).audio.loading).toBe(false);
     await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe('generic');await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeGreaterThan(.1);
-    await page.keyboard.press('Escape');await page.getByRole('button',{name:'McLaren GT',exact:true}).click();await page.getByRole('button',{name:'Keep driving',exact:true}).click();
+    await page.keyboard.press('Escape');await page.getByRole('combobox',{name:'Your car'}).selectOption('mclaren-gt');await page.getByRole('button',{name:'Keep driving',exact:true}).click();
     await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe('mclaren-gt');
   });
 }
