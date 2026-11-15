@@ -3,28 +3,82 @@ name: Validate roads and physics
 on:
   pull_request:
   workflow_call:
+    inputs:
+      upload-pages:
+        description: Upload the validated build for the calling Pages workflow
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# A newer PR commit supersedes its old validation; deployment runs keep their
+# caller's queue and never share this group with PR validation.
+concurrency:
+  group: validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        if: ${{ inputs.upload-pages }}
+        with:
+          path: dist
+
+  runtime:
+    name: Runtime tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:ci -- --shard ${{ matrix.shard }}/4
+
+  generators:
+    name: Generators and map integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: npm ci
-      - run: npm run build
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
       - run: python -m venv .venv-data
       - run: .venv-data/bin/pip install -r scripts/requirements.txt
-      - run: npm run test:physics
       - run: PYTHONPATH=scripts .venv-data/bin/python -m unittest discover -s scripts -p 'test_*.py'
-      - run: npm run validate:data
-      - run: npm run audit:furniture
-      - run: npm run audit:roads -- --baseline reports/road-generation.json --output /tmp/road-generation.json
+      - run: .venv-data/bin/python scripts/validate-package.py
+      - run: .venv-data/bin/python scripts/audit-road-generation.py --baseline reports/road-generation.json --output /tmp/road-generation.json
+
+  # Preserve the existing "validate" status as a single gate for branch rules.
+  validate:
+    if: ${{ always() }}
+    needs: [build, runtime, generators]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require every validation job to pass
+        env:
+          BUILD: ${{ needs.build.result }}
+          RUNTIME: ${{ needs.runtime.result }}
+          GENERATORS: ${{ needs.generators.result }}
+        run: test "$BUILD" = success && test "$RUNTIME" = success && test "$GENERATORS" = success
