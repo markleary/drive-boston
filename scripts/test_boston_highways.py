@@ -302,13 +302,22 @@ class NodeTest(unittest.TestCase):
   def solve(p):p.y[0]=b.y[0]+1 if p is a else a.y[0]+1
   with self.assertRaisesRegex(AssertionError,'late ramp dependencies did not settle: cyclic-a'):
    H.settle_late_ramps([a,b],stale,solve)
-  self.assertEqual(b.y[0],8,'stop after the bounded solve, including a final whole-graph stale check')
+  self.assertEqual(b.y[0],40,'stop after four refinement and sixteen dependency sweeps, including a final whole-graph stale check')
 
- def test_late_ramps_refuse_a_dependency_that_needs_a_fifth_solve(self):
-  p=plan([[0,0],[10,0]],main=False);p.id='five-pass-ramp'
-  with self.assertRaisesRegex(AssertionError,'five-pass-ramp'):
-   H.settle_late_ramps([p],lambda p:p.y[0]<5,lambda p:p.y.__setitem__(0,p.y[0]+1))
-  self.assertEqual(p.y[0],4)
+ def test_late_ramps_settle_convergent_trunk_branch_feedback_after_refinement(self):
+  trunk=plan([[0,0],[10,0]],main=False);trunk.id='trunk'
+  branch=plan([[0,0],[10,1]],main=False);branch.id='branch'
+  trunk.ends=[('node',branch,0),('street',[])];branch.ends=[('node',trunk,0),('street',[])]
+  trunks={(trunk,0)};bound={'trunk':{},'branch':{}};calls=[]
+  def solve(p):
+   bound[p.id]=H.ramp_dependency_targets(p,{},trunks);calls.append(p.id)
+   p.y=[(branch.y[0]+1)/2]*2 if p is trunk else list(trunk.y)
+  stale=lambda p:H.stale_ramp_dependencies(p,bound[p.id],{},trunks)
+  H.settle_late_ramps(I.ordered([branch,trunk],{},trunks),stale,solve)
+  self.assertGreater(calls.count('trunk'),4,'the dependency-only phase must finish the feedback between cover and the branch endpoint')
+  self.assertAlmostEqual(trunk.y[0],1,delta=.001)
+  self.assertTrue(all(abs(a-b)<=5e-4 for a,b in zip(branch.y,trunk.y)))
+  self.assertFalse(any(stale(p) for p in (trunk,branch)))
 
  def test_overlap_fit_residual_is_distinct_from_an_outdated_parent_binding(self):
   parent=plan([[0,0],[10,0],[20,0]],main=False);parent.id='parent'
@@ -332,6 +341,19 @@ class NodeTest(unittest.TestCase):
   child.ends=[('street',[]),('node',parent,0)]
   bound=H.ramp_dependency_targets(child,{},set());parent.y[1]=.02
   self.assertFalse(H.stale_ramp_dependencies(child,bound,{},set()),'an end on the beginning of its trunk binds only that endpoint')
+
+ def test_free_trunk_end_tracks_the_node_height_used_by_cover(self):
+  trunk=plan([[0,0],[10,0],[20,0]],main=False);trunk.id='trunk'
+  branch=plan([[0,0],[10,1],[20,5]],main=False);branch.id='branch'
+  trunk.ends=[('node',branch,0),('street',[])];trunks={(trunk,0)}
+  bound=H.ramp_dependency_targets(trunk,{},trunks)
+  self.assertEqual(bound,{('node',0):0.},'prepare reads the endpoint even though the trunk is solved without a fixed overlap')
+  branch.y[1]=.02
+  self.assertFalse(H.stale_ramp_dependencies(trunk,bound,{},trunks),'the branch interior is not read as a trunk overlap constraint')
+  branch.y[0]=.01
+  self.assertTrue(H.stale_ramp_dependencies(trunk,bound,{},trunks),'a later branch solve invalidates the endpoint supplied to cover')
+  with self.assertRaisesRegex(AssertionError,'late ramp dependencies did not settle: trunk'):
+   H.settle_late_ramps([trunk],lambda p:H.stale_ramp_dependencies(p,bound,{},trunks),lambda p:None)
 
  def ground(self,x,z):return 2.0 if x>=95 else 1.8 if x<=26 else -2.5
  def roads(self):

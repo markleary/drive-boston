@@ -796,9 +796,11 @@ def ramp_dependency_targets(plan,leads,trunks):
  """The parent heights read by a ramp, independent of its spline's fit residual."""
  targets={}
  for e,kind in enumerate(plan.ends):
-  if kind and kind[0]=='node' and (plan,e) not in trunks and kind[1].y is not None:
+  if kind and kind[0]=='node' and kind[1].y is not None:
+   # Even a free trunk end reads this height through prepare/end_height for
+   # its cover bounds; only its fixed pavement-overlap binding is omitted.
    targets[('node',e)]=float(kind[1].y[kind[2]])
-   if not (e==1 and kind[2]==0):
+   if (plan,e) not in trunks and not (e==1 and kind[2]==0):
     for k,y in I.overlap(plan,e,kind[1]):targets[('nodeOverlap',e,k)]=y
  for other,e in leads.get(plan.id,()):
   for k,y in I.overlap(plan,e,other):targets[('overlap',other.id,e,k)]=y
@@ -817,13 +819,20 @@ def settle_late_ramps(ordered,stale,solve,refine=lambda plan:False):
  start of the sweep but whose parent changes earlier in that same sweep.
  `refine` retains the bounded attempts to improve a spline's fit to overlap
  constraints. Those residuals are checked by the geometry validators; they
- do not mean its dependency inputs changed. The final invariant instead
- requires every node/lead binding to describe the current parent profiles.
+ do not mean its dependency inputs changed. Then a bounded dependency-only
+ phase settles feedback such as a free trunk's cover reading a branch that
+ follows the trunk. The final invariant requires every node/lead binding to
+ describe the current parent profiles.
  """
  for _ in range(4):
   changed=False
   for plan in ordered:
    if stale(plan) or refine(plan):solve(plan);changed=True
+  if not changed:break
+ for _ in range(16):
+  changed=False
+  for plan in ordered:
+   if stale(plan):solve(plan);changed=True
   if not changed:break
  unresolved=[plan.id for plan in ordered if stale(plan)]
  assert not unresolved,f'late ramp dependencies did not settle: {", ".join(unresolved)}'

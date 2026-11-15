@@ -1,6 +1,6 @@
 {
   "checks": [
-    "436 generator tests passed, including fail-closed detection of unresolved ramp dependencies and changing interior overlap targets.",
+    "437 generator tests passed, including bounded convergence of trunk/branch feedback, fail-closed detection of unresolved ramp dependencies, and changing endpoint and interior overlap targets.",
     "902 physics/runtime tests passed, including complete tunnel drives, underpass clearance, ramp connections, roof and building collision, mesh winding, barriers and streaming.",
     "All eight locations recaptured with matching poses against pristine baseline commit 8b799e1. Both screenshot runs completed neighborhood streaming and recorded zero browser, shader or WebGL errors.",
     "The production build and full npm run validate:data passed, including generator replay, building geometry, street landings, tunnel joins, terrain, rail and far-massing checks.",
