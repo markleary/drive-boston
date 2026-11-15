@@ -3,19 +3,20 @@ import type { DriveInput, TravelMode } from '../types';
 
 type CarSound = `${PerformanceCarId}-${'idle'|'drive'|'high'|'upshift'|'downshift'}`;
 const carSound=(id:PerformanceCarId,layer:'idle'|'drive'|'high'|'upshift'|'downshift'):CarSound=>`${id}-${layer}`;
-type TruckEffect = 'moving-truck-horn' | 'moving-truck-storrow-crash' | 'moving-truck-boo';
+type TruckEffect = 'moving-truck-horn' | 'moving-truck-storrow-crash' | 'moving-truck-boo' | 'moving-truck-reverse';
 type SoundName = CarSound | TruckEffect | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
 /** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
-type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number };
+type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean };
 interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; }
 const CAR_IDS=Object.keys(CAR_POWERTRAINS) as PerformanceCarId[];
 const CAR_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high','upshift','downshift'] as const).map(layer=>carSound(id,layer)));
 const CAR_ENGINE_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high'] as const).map(layer=>carSound(id,layer)));
 const COMMON_SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
-const TRUCK_EFFECTS:TruckEffect[]=['moving-truck-horn','moving-truck-storrow-crash','moving-truck-boo'];
+const REVERSE_ALARM:TruckEffect='moving-truck-reverse';
+const TRUCK_EFFECTS:TruckEffect[]=['moving-truck-horn','moving-truck-storrow-crash','moving-truck-boo',REVERSE_ALARM];
 const SOUNDS:SoundName[] = [...CAR_SOUNDS, ...COMMON_SOUNDS,...TRUCK_EFFECTS];
-const ONE_SHOTS = new Set<SoundName>([...TRUCK_EFFECTS,...CAR_IDS.flatMap(id=>[carSound(id,'upshift'),carSound(id,'downshift')]),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
+const ONE_SHOTS = new Set<SoundName>([...TRUCK_EFFECTS.filter(name=>name!==REVERSE_ALARM),...CAR_IDS.flatMap(id=>[carSound(id,'upshift'),carSound(id,'downshift')]),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
 /** Velocity change (m/s in one physics step) below which a knock is a bump rather than a crash. */
 const LIGHT_IMPACT = 3.5;
 const clamp = (value: number, low = 0, high = 1) => Math.max(low, Math.min(high, value));
@@ -46,7 +47,7 @@ export class DriveAudio {
   }
 
   setCar(id:PlayerCarId){
-    if(id===this.carId)return;this.carId=id;this.previousDriveGear=0;this.gear=0;this.rpm=850;this.stopOneShots();
+    if(id===this.carId)return;this.carId=id;this.previousDriveGear=0;this.gear=0;this.rpm=850;this.stopOneShots();this.stopLoop(REVERSE_ALARM);
     if(this.context)for(const name of ['engine-idle','engine-drive',...CAR_SOUNDS] as SoundName[])this.loops.get(name)?.gain.gain.setTargetAtTime(0,this.context.currentTime,.025);
     if (this.mobile) {
       this.wantedSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[])];
@@ -70,20 +71,21 @@ export class DriveAudio {
   private impactCount = 0;
   private lastStorrow=-Infinity;
   private storrowCount=0;
+  private reverseAlarmNextBeep=0;
   private noise?: AudioBuffer;
   private gate = -1;
 
   get enabled() { return !this.muted; }
   set enabled(value: boolean) {
     this.muted = !value;
-    if (this.muted) this.stopOneShots();
+    if (this.muted) {this.stopOneShots();this.stopLoop(REVERSE_ALARM);}
     this.syncMaster();
     if (value) this.resume();
   }
 
   setMode(mode: TravelMode) {
     if (mode === this.mode) return;
-    this.mode = mode; this.previousDriveGear=0;this.stopOneShots();
+    this.mode = mode; this.previousDriveGear=0;this.stopOneShots();this.stopLoop(REVERSE_ALARM);
     if (!this.context) return;
     const now = this.context.currentTime;
     const silent: SoundName[] = mode === 'helicopter' ? ['engine-idle', 'engine-drive', 'tire-road', 'tire-skid'] : mode==='bike'?['engine-idle','engine-drive','helicopter-rotor','tire-skid']:mode==='walk'?['engine-idle','engine-drive','helicopter-rotor','tire-road','tire-skid']:['helicopter-rotor'];
@@ -107,6 +109,7 @@ export class DriveAudio {
       masterGain: this.master?.gain.value ?? 0, rpm: Math.round(this.rpm), gear: this.gear + 1,
       rotorGain: this.loops.get('helicopter-rotor')?.gain.gain.value ?? 0,
       electricGain:this.electric?.gain.gain.value??0, impactCount: this.impactCount,storrowCount:this.storrowCount,
+      reverseAlarm:this.loops.has(REVERSE_ALARM),
       engineProfile:this.mode!=='drive'?'off':this.carEngineReady?this.carId:this.loops.has('engine-idle')||this.loops.has('engine-drive')?'generic':this.fallback?'synthesized':'loading',
       engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0)+CAR_ENGINE_SOUNDS.reduce((sum,name)=>sum+(this.loops.get(name)?.gain.gain.value??0),0)+(this.fallback?.gain.gain.value??0),
     };
@@ -143,6 +146,7 @@ export class DriveAudio {
     if (paused && !this.paused) this.stopOneShots();
     this.paused = paused;
     this.syncMaster();
+    this.updateReverseAlarm(!controls?.storrowed&&((controls?.gear??0)<0||speed<-.2));
     const now = context.currentTime;
     const dt = clamp(now - this.previousTime, 0, 0.1); this.previousTime = now;
     if (paused || document.hidden) {this.previousDriveGear=0;return;}
@@ -345,6 +349,7 @@ export class DriveAudio {
     const context=this.context;
     if(!context||!this.master||this.mode!=='drive'||this.carId!=='moving-truck'||this.muted||this.paused||document.hidden||this.disposed||!Number.isFinite(severity))return;
     const now=context.currentTime;if(now-this.lastStorrow<1.2)return;
+    this.stopLoop(REVERSE_ALARM);
     this.lastStorrow=now;this.storrowCount++;this.impactCount++;this.resume();
     const gain=.55+clamp(Math.abs(severity)/15)*.45,crash=this.buffers.get('moving-truck-storrow-crash'),boo=this.buffers.get('moving-truck-boo');
     if(crash)this.playOneShot(crash,gain,1);
@@ -367,8 +372,8 @@ export class DriveAudio {
   private resume = () => {
     if (!this.muted && !document.hidden && this.context?.state === 'suspended') void this.context.resume().catch(() => {});
   };
-  private visibilityChanged = () => { if (document.hidden) this.stopOneShots(); this.syncMaster(); };
-  private hidePage = () => { this.paused = true; this.stopOneShots(); this.syncMaster(); };
+  private visibilityChanged = () => { if (document.hidden) {this.stopOneShots();this.stopLoop(REVERSE_ALARM);} this.syncMaster(); };
+  private hidePage = () => { this.paused = true; this.stopOneShots(); this.stopLoop(REVERSE_ALARM);this.syncMaster(); };
 
   private syncMaster() {
     if (!this.context || !this.master) return;
@@ -406,7 +411,9 @@ export class DriveAudio {
       if (!wanted()) return;
       if (!ONE_SHOTS.has(name)) buffer = this.seamlessBuffer(buffer);
       this.normalize(buffer);
-      if (!ONE_SHOTS.has(name)) this.createLoop(name, buffer);
+      // Start the warning at its first beep when reverse is selected, rather
+      // than continuously running a silent alarm at an arbitrary phase.
+      if (!ONE_SHOTS.has(name)&&name!==REVERSE_ALARM) this.createLoop(name, buffer);
       this.buffers.set(name, buffer);
     } catch {
       if (wanted()) this.failed.add(name);
@@ -421,6 +428,11 @@ export class DriveAudio {
   }
 
   private releaseSound(name: SoundName) {
+    this.stopLoop(name);
+    this.buffers.delete(name);
+  }
+
+  private stopLoop(name:SoundName){
     const loop = this.loops.get(name);
     if (loop) {
       loop.source.stop();
@@ -429,7 +441,25 @@ export class DriveAudio {
       loop.gain.disconnect();
       this.loops.delete(name);
     }
-    this.buffers.delete(name);
+  }
+
+  private updateReverseAlarm(reverse:boolean){
+    if(!reverse||this.carId!=='moving-truck'||this.mode!=='drive'||this.paused||this.muted||document.hidden||this.disposed){this.stopLoop(REVERSE_ALARM);return;}
+    const buffer=this.buffers.get(REVERSE_ALARM);
+    if(!buffer)return;
+    const now=this.context!.currentTime;
+    if(!this.loops.has(REVERSE_ALARM)){this.createLoop(REVERSE_ALARM,buffer);this.reverseAlarmNextBeep=now;}
+    const loop=this.loops.get(REVERSE_ALARM)!;loop.source.playbackRate.value=1;loop.filter.frequency.value=3200;
+    // The generated warning tone is gated on the audio clock for an exact
+    // 0.45 s beep / 0.55 s silent cadence, independent of FPS or engine RPM.
+    // A short edge ramp removes clicks; one source serves every repetition.
+    while(this.reverseAlarmNextBeep<now-.45)this.reverseAlarmNextBeep+=1;
+    while(this.reverseAlarmNextBeep<now+1.1){
+      const start=this.reverseAlarmNextBeep,gain=loop.gain.gain;
+      gain.setValueAtTime(0,start);gain.linearRampToValueAtTime(.42,start+.008);
+      gain.setValueAtTime(.42,start+.435);gain.linearRampToValueAtTime(0,start+.45);
+      this.reverseAlarmNextBeep+=1;
+    }
   }
 
   private createLoop(name: SoundName, buffer: AudioBuffer) {

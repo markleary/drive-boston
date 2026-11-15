@@ -4,6 +4,7 @@ import {pointAtDistance,stations} from './motorway.ts';
 import {roadProjection,roadWidthAt,sampleRoadElevation} from './road-surfaces.ts';
 
 export interface StorrowRecoveryPose {x:number;z:number;yaw:number;roadId?:string;}
+export interface StorrowRecoveryPlan {exits:StorrowRecoveryPose[];retreats:StorrowRecoveryPose[];}
 type RecoverySite=Pick<LowClearanceCrossing,'roadId'|'x'|'z'|'yaw'|'halfDepth'>;
 type Leg={road:Road;along:number[];start:number;end:number;sign:number;distance:number;};
 const clamp=(n:number,a:number,b:number)=>Math.max(a,Math.min(b,n));
@@ -32,6 +33,9 @@ export function storrowRecoveryCandidates(city:CityData,site:RecoverySite,pose:{
     for(const candidate of city.roads){
       if(candidate===road||candidate.points.length<2)continue;
       const q=roadProjection(candidate,...tip.p);if(q.distance>8)continue;
+      // A nearby parallel carriageway is not a continuation. Source seams
+      // can have a small longitudinal gap, but cannot jump across a median.
+      if(Math.abs((q.x-tip.p[0])*dz-(q.z-tip.p[1])*dx)>1.5)continue;
       if(Math.abs(sampleRoadElevation(city,candidate,q.x,q.z)-y)>1.25)continue;
       const positions=stations(candidate.points),at=positions[q.index]+(positions[q.index+1]-positions[q.index])*q.t,tangent=pointAtDistance(candidate.points,at,positions).dir;
       for(const orientation of [1,-1]){
@@ -68,9 +72,10 @@ export function storrowRecoveryCandidates(city:CityData,site:RecoverySite,pose:{
     const longitudinal=(x-site.x)*sx+(z-site.z)*sz,extent=Math.abs(dx*sx+dz*sz)*halfLength+Math.abs(dz*sx-dx*sz)*halfWidth;
     if(blockedByStrike?blockedByStrike(candidate):longitudinal-extent<site.halfDepth+.3)continue;
     // A tangent to a sharp bend can leave a long box outside the road. Check
-    // all corners against this connected corridor rather than a nearby street.
+    // its footprint, including the middle of its sides, against this connected
+    // corridor rather than accepting pavement on an unrelated nearby street.
     let paved=true;
-    for(const nose of [-1,1])for(const side of [-1,1]){
+    for(const nose of [-1,-.5,0,.5,1])for(const side of [-1,0,1]){
       const cx=x+dx*nose*halfLength+dz*side*halfWidth,cz=z+dz*nose*halfLength-dx*side*halfWidth;
       if(cx<city.bounds.minX||cx>city.bounds.maxX||cz<city.bounds.minZ||cz>city.bounds.maxZ)paved=false;
       if(!legs.some(l=>{
@@ -86,10 +91,18 @@ export function storrowRecoveryCandidates(city:CityData,site:RecoverySite,pose:{
   return candidates;
 }
 
+/** Back away along the approach when the truck cannot fit beyond the portal.
+ * Reversing the search direction also reverses the local lane frame, keeping
+ * the truck's original facing on bends and across reversed source records.
+ * The same full-footprint pavement checks apply as for a far-side repair. */
+export function storrowRetreatCandidates(city:CityData,site:RecoverySite,pose:{x:number;z:number;yaw:number},direction:number,halfLength:number,halfWidth:number):StorrowRecoveryPose[]{
+  return storrowRecoveryCandidates(city,site,pose,-direction,halfLength,halfWidth);
+}
+
 /** Infer the struck lane for an uncatalogued structure. Real maps must keep
  * every exit on the connected, same-level pavement. A world with no road
  * records is an explicit flat physics fixture and gets a virtual corridor. */
-export function storrowSolidRecoveryCandidates(city:CityData,pose:{x:number;z:number;yaw:number},groundY:number,direction:number,halfLength:number,halfWidth:number,blockedByStrike:(pose:StorrowRecoveryPose)=>boolean):StorrowRecoveryPose[]{
+export function storrowSolidRecoveryPlan(city:CityData,pose:{x:number;z:number;yaw:number},groundY:number,direction:number,halfLength:number,halfWidth:number,blockedByStrike:(pose:StorrowRecoveryPose)=>boolean):StorrowRecoveryPlan{
   let first:Road|undefined,score=Infinity;
   for(const road of city.roads){
     if(road.points.length<2)continue;
@@ -103,9 +116,12 @@ export function storrowSolidRecoveryCandidates(city:CityData,pose:{x:number;z:nu
     const dx=Math.sin(pose.yaw)*1100,dz=Math.cos(pose.yaw)*1100;
     first={id:'storrow-physics-corridor',name:'',width:halfWidth*2+1,oneway:0,points:[[pose.x-dx,pose.z-dz],[pose.x+dx,pose.z+dz]]};
   }
-  if(!first)return[];
+  if(!first)return{exits:[],retreats:[]};
   const projection=roadProjection(first,pose.x,pose.z),a=first.points[projection.index],b=first.points[projection.index+1];
   const site={roadId:first.id,x:projection.x,z:projection.z,yaw:Math.atan2(b[0]-a[0],b[1]-a[1]),halfDepth:0};
-  const result=storrowRecoveryCandidates(synthetic?{...city,roads:[first]}:city,site,pose,direction,halfLength,halfWidth,blockedByStrike);
-  return synthetic?result.map(p=>({...p,roadId:undefined})):result;
+  const corridor=synthetic?{...city,roads:[first]}:city;
+  const exits=storrowRecoveryCandidates(corridor,site,pose,direction,halfLength,halfWidth,blockedByStrike);
+  const retreats=storrowRetreatCandidates(corridor,site,pose,direction,halfLength,halfWidth);
+  const poses=(list:StorrowRecoveryPose[])=>synthetic?list.map(p=>({...p,roadId:undefined})):list;
+  return{exits:poses(exits),retreats:poses(retreats)};
 }

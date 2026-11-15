@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {storrowRecoveryCandidates} from '../src/simulation/storrow-recovery.ts';
+import {storrowRecoveryCandidates,storrowRetreatCandidates} from '../src/simulation/storrow-recovery.ts';
 import {roadProjection} from '../src/simulation/road-surfaces.ts';
 const road=(id,points,extra={})=>({id,name:'Storrow Drive',width:9,oneway:0,points,...extra});
 const site={id:'test',roadId:'under',x:0,z:20,yaw:0,halfDepth:4,width:9,station:20,roadY:0};
@@ -32,4 +32,28 @@ test('continuation avoids a perpendicular side street and a stacked elevated roa
 test('no continuation gives no repair positions beyond the pavement end',()=>{
  assert.deepEqual(planned([road('under',[[0,0],[0,28]])]),[]);
  assert.deepEqual(planned([road('under',[[0,0],[0,36]])]),[],'center on pavement is insufficient when the nose crosses the end');
+});
+
+for(const reverse of [false,true])test(`retreat follows the curved approach across a source seam while preserving ${reverse?'reverse':'forward'} strike facing`,()=>{
+ const transform=([x,z])=>reverse?[-x,40-z]:[x,z];
+ const roads=[road('under',[[0,6],[0,36]].map(transform)),road('approach',[[-65,-70],[-35,-38],[-12,-10],[0,5]].map(transform))];
+ const [x,z]=transform([-1.5,10]),pose={x,z,yaw:0};
+ // The impact center is unchanged under this reflection. Both nose directions
+ // remain +Z at the crossing; reverse hits retreat in +Z instead of -Z.
+ const poses=storrowRetreatCandidates(city(roads),{...site,yaw:reverse?Math.PI:0},pose,reverse?-1:1,3.8,1.21);
+ assert.ok(poses.length>6);assert.ok(poses.every(p=>p.roadId==='approach'));
+ for(const p of poses){
+  assert.ok(reverse?p.z>30:p.z<10,'retreat stays on the approach side');
+  assert.ok(Math.cos(p.yaw)>0,'truck is not turned around');
+  const fx=Math.sin(p.yaw),fz=Math.cos(p.yaw);
+  for(const along of [-3.8,-1.9,0,1.9,3.8])for(const across of [-1.21,0,1.21]){
+   assert.ok(roads.some(r=>roadProjection(r,p.x+fx*along+fz*across,p.z+fz*along-fx*across).distance<r.width/2-.1),'complete footprint follows the pavement');
+  }
+ }
+ assert.ok(poses.some(p=>Math.sin(p.yaw)>.5),'nose follows the original approach heading around the bend');
+});
+
+test('retreat cannot jump to an unconnected nearby road when the approach ends',()=>{
+ const roads=[road('under',[[0,15],[0,36]]),road('nearby',[[-40,10],[40,10]]),road('parallel',[[6,-100],[6,30]])];
+ assert.deepEqual(storrowRetreatCandidates(city(roads),site,{x:0,z:18,yaw:0},1,3.8,1.21),[]);
 });
