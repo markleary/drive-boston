@@ -4,6 +4,8 @@ import test from 'node:test';
 import * as THREE from 'three';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {createTraffic} from '../src/simulation/traffic.ts';
+import {TRAFFIC_DENSITY} from '../src/simulation/npc-density.ts';
+import {TRAFFIC_CAPACITY} from '../src/simulation/npc-vehicle-specs.ts';
 
 import {loadCentralCity} from './helpers/metro-city.mjs';
 const city=await loadCentralCity();
@@ -41,6 +43,31 @@ test('busy districts get a visible local fleet while explicit teleports preserve
         }
         for(let j=0;j<i;j++)assert.ok(gap(after[i],after[j])>=18-1e-6,'all respawns retain a safe traffic gap');
       }
+    }
+  }finally{traffic.dispose();physics.dispose();}
+});
+
+test('each traffic density step doubles the fleet and its neighborhood targets, growing and shrinking in place',async()=>{
+  const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);
+  try{
+    const base=traffic.population(city.spawn);assert.equal(base.total,TRAFFIC_CAPACITY*TRAFFIC_DENSITY.low);assert.equal(base.target,58);
+    const downtown=city.landmarks.find(place=>place.id==='downtown-crossing').driveStart;
+    let previous=base;
+    for(const level of ['medium','high','low']){
+      traffic.setDensity(TRAFFIC_DENSITY[level]);
+      traffic.populateAt(downtown,downtown);
+      const population=traffic.population(downtown);
+      assert.equal(population.total,TRAFFIC_CAPACITY*TRAFFIC_DENSITY[level],`${level}: the fleet is the base pool times the density`);
+      assert.equal(traffic.count,population.total);
+      assert.equal(population.target,58*TRAFFIC_DENSITY[level]);
+      assert.ok(population.local>=population.target,`${level}: a teleport arrives in a neighborhood populated to the density's target`);
+      if(level!=='low'){assert.ok(population.local>=previous.local*1.8,`${level}: one step up about doubles the local cars (${previous.local} to ${population.local})`);previous=population;}
+      else assert.ok(population.local<=population.target+6,`low: stepping down thins the neighborhood to its target (${population.local} of ${population.target})`);
+      // Every car's colliders are live and known to the impact classifier; taken-out cars leave none behind.
+      const cars=traffic.snapshot();
+      for(const car of cars)assert.ok(traffic.colliders.has(car.collider));
+      for(const handle of traffic.colliders)assert.ok(physics.world.getCollider(handle),'no collider handle outlives its car');
+      for(let i=0;i<cars.length;i++)for(let j=0;j<i;j++)assert.ok(gap(cars[i],cars[j])>=18-1e-6,'resized fleets keep a safe traffic gap');
     }
   }finally{traffic.dispose();physics.dispose();}
 });

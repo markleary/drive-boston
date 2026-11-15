@@ -14,8 +14,10 @@ test('approved fleet keeps unique matching MA registrations, paint, and both LOD
   });
   expect(atlas.plateCount).toBe(77);expect(atlas.paintCount).toBe(77);expect(atlas.width).toBe(2048);expect(atlas.height).toBe(1280);
   const wheelPhases=()=>page.evaluate(()=>{
-    const g=(window as any).__backbay,s=g.snapshot(),group=g.scene.getObjectByName('AmbientTraffic'),body=group.children.find((m:any)=>m.name==='NPC near paint'),rubber=group.children.find((m:any)=>m.name==='NPC near rubber');
+    const g=(window as any).__backbay,s=g.snapshot(),group=g.scene.getObjectByName('AmbientTraffic'),batch=(name:string)=>group.children.find((m:any)=>m.name===name);
     return s.traffic.map((v:any,i:number)=>{
+      // The fleet places only the level of detail a car is shown at.
+      const near=batch('NPC near paint'),detail=near.getVisibleAt(near.userData.npcInstances[i][0])?'near':'far',body=batch(`NPC ${detail} paint`),rubber=batch(`NPC ${detail} rubber`);
       const b=body.matrixWorld.clone(),w=b.clone();body.getMatrixAt(body.userData.npcInstances[i][0],b);rubber.getMatrixAt(rubber.userData.npcInstances[i][3],w);
       const dot=(column:number)=>b.elements[column*4]*w.elements[4]+b.elements[column*4+1]*w.elements[5]+b.elements[column*4+2]*w.elements[6];
       return{type:v.type,speed:v.speed,angle:Math.atan2(dot(2),dot(1))};

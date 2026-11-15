@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import {createStreetLife} from '../src/render/street-life.ts';
+import {PEDESTRIAN_DENSITY} from '../src/simulation/npc-density.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 
 import {loadCentralCity} from './helpers/metro-city.mjs';
@@ -85,5 +86,29 @@ test('a nearby moving player car pauses a walker, then the same route resumes',(
     assert.ok(person.position.distanceTo(start)<1e-6,'the walker must stop rather than stride through the nearby moving car');
     for(let i=61;i<=120;i++)life.update(1/60,i/60);
     assert.equal(person.route,route);assert.ok(person.position.distanceTo(start)>.5,'walking must resume once the car has passed');
+  }finally{life.dispose();}
+});
+
+test('each pedestrian density step doubles the walkers and their neighborhood targets, rebuilding the model in place',()=>{
+  const scene=new THREE.Scene(),life=createStreetLife(scene,city);
+  try{
+    assert.equal(life.count,112);
+    const downtown=city.landmarks.find(place=>place.id==='downtown-crossing').driveStart;
+    const counts={};
+    for(const level of ['low','high','medium']){
+      life.setDensity(PEDESTRIAN_DENSITY[level]);
+      life.update(.016,1,downtown);
+      life.populateAt(downtown,downtown);
+      const population=life.population(downtown);
+      assert.equal(life.count,112*PEDESTRIAN_DENSITY[level]);assert.equal(life.pedestrians.length,life.count);assert.equal(population.total,life.count);
+      assert.equal(population.target,72*PEDESTRIAN_DENSITY[level]);
+      assert.ok(population.local>=population.target*.9,`${level}: a teleport shows the density's crowd (${population.local} of ${population.target})`);
+      counts[level]=population.local;
+      life.pedestrians.forEach((person,index)=>assert.equal(person.id,index));
+      // One model for the pool: every instanced part sized to the walkers, nothing left of the previous one.
+      const soles=scene.getObjectByName('Shoe soles');assert.equal(soles.instanceMatrix.count,life.count*2);
+      assert.equal(scene.getObjectByName('Pedestrians').children.filter(o=>o.name==='Shoe soles').length,1);
+    }
+    assert.ok(counts.medium>=counts.low*1.8&&counts.high>=counts.medium*1.8,`one step up about doubles the local walkers (${counts.low}, ${counts.medium}, ${counts.high})`);
   }finally{life.dispose();}
 });

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {createNPCPlateAtlas} from './npc-license-plates.ts';
-import {NPC_VEHICLES,type NPCVehicleType} from '../simulation/npc-vehicle-specs.ts';
+import {NPC_VEHICLES,type NPCVehicleSpec,type NPCVehicleType} from '../simulation/npc-vehicle-specs.ts';
 
 type Detail='near'|'far';
 type Surface='paint'|'black'|'rubber'|'chrome'|'rim'|'darkRim'|'glass'|'lamp'|'red'|'amber'|'white'|'seam'|'box'|'registration';
@@ -48,6 +48,9 @@ export function createNPCVehicleBatches(parent:THREE.Group,capacity:number,mobil
     if(!geometries.length)continue;
     const vertices=surface==='registration'?capacity*Math.max(...geometries.map(p=>p.g.attributes.position.count)):geometries.reduce((n,p)=>n+p.g.attributes.position.count,0),indices=surface==='registration'?capacity*Math.max(...geometries.map(p=>p.g.index?.count??0)):geometries.reduce((n,p)=>n+(p.g.index?.count??0),0);
     const mesh=new THREE.BatchedMesh(capacity*(surface==='registration'?1:5),vertices,indices,materials[surface]);mesh.name=`NPC ${detail} ${surface}`;mesh.castShadow=true;mesh.receiveShadow=false;
+    // The fleet spreads over the neighborhood, so a batch's bounds would cover the view anyway: it is not culled whole
+    // (no bounds to recompute over every instance each frame), and each pass still culls its cars one by one, unsorted.
+    mesh.frustumCulled=false;mesh.sortObjects=false;
     const shapes=new Map<string,number>();if(surface!=='registration')for(const {key,g} of geometries)shapes.set(key,mesh.addGeometry(g));
     // Both pools contain the same immutable model buffers in the same order.
     // Instance transforms/colors and plate UVs remain private.
@@ -56,24 +59,39 @@ export function createNPCVehicleBatches(parent:THREE.Group,capacity:number,mobil
     const instances=Array.from({length:capacity},()=>Array(5).fill(-1));mesh.userData.npcInstances=instances;
     parent.add(mesh);batches.push({mesh,surface,detail,shapes,instances,sharedKey});
   }
+  const byDetail={near:batches.filter(b=>b.detail==='near'),far:batches.filter(b=>b.detail==='far')};
+  // The level of detail each car is shown at (null: hidden, or not drawn since it was bound) and the paint it was given.
+  const shownAt:(Detail|null)[]=Array(capacity).fill(null),paints=new Float64Array(capacity*3).fill(-1),specs:NPCVehicleSpec[]=[];
   const details:Detail[]=Array(capacity).fill('near'),types:NPCVehicleType[]=[],angles=Array(capacity).fill(0),previous:(THREE.Vector3|undefined)[]=Array(capacity),wheelMatrices=Array.from({length:4},()=>new THREE.Matrix4()),spin=new THREE.Matrix4(),steer=new THREE.Matrix4(),point=new THREE.Vector3();
   return {
-    bind(index:number,type:NPCVehicleType){types[index]=type;plates.assign(index);for(const batch of batches)for(let part=0;part<5;part++){let shape=batch.shapes.get(`${type}:${part}`);if(batch.surface==='registration'&&part===0){const source=templates!.get(`${type}-${batch.detail}`)!.body.get('registration')!;const geometry=plates.geometry(source,index);shape=batch.mesh.addGeometry(geometry);geometry.dispose();}if(shape!==undefined){const id=batch.mesh.addInstance(shape);batch.instances[index][part]=id;batch.mesh.setVisibleAt(id,false);}}},
+    bind(index:number,type:NPCVehicleType){types[index]=type;specs[index]=NPC_VEHICLES.find(s=>s.type===type)!;shownAt[index]=null;plates.assign(index);for(const batch of batches)for(let part=0;part<5;part++){let shape=batch.shapes.get(`${type}:${part}`);if(batch.surface==='registration'&&part===0){const source=templates!.get(`${type}-${batch.detail}`)!.body.get('registration')!;const geometry=plates.geometry(source,index);shape=batch.mesh.addGeometry(geometry);geometry.dispose();}if(shape!==undefined){const id=batch.mesh.addInstance(shape);batch.instances[index][part]=id;batch.mesh.setVisibleAt(id,false);}}},
     registration:plates.number,
     draw(index:number,matrix:THREE.Matrix4,color:THREE.Color,distance:number,steering=0){
-      const spec=NPC_VEHICLES.find(s=>s.type===types[index])!,e=matrix.elements,last=previous[index];point.setFromMatrixPosition(matrix);
+      const spec=specs[index],e=matrix.elements,last=previous[index];point.setFromMatrixPosition(matrix);
       // Signed displacement handles reverse motion and struck/parked cars too.
       // Teleports do not wind the wheels through an entire map journey.
       if(last&&point.distanceToSquared(last)<25)angles[index]=(angles[index]+((point.x-last.x)*e[8]+(point.y-last.y)*e[9]+(point.z-last.z)*e[10])/spec.wheelRadius)%(Math.PI*2);
       if(last)last.copy(point);else previous[index]=point.clone();
       const parts=templates!.get(`${spec.type}-near`)!;spin.makeRotationX(angles[index]);steer.makeRotationY(steering);
       for(let wheel=0;wheel<4;wheel++){const m=wheelMatrices[wheel].makeTranslation(parts.wheels[wheel].pivot);if(wheel<2)m.multiply(steer);m.multiply(spin).premultiply(matrix);}
-      details[index]=distance>(details[index]==='near'?110:90)?'far':'near';
-      for(const batch of batches)for(let part=0;part<5;part++){const id=batch.instances[index][part];if(id<0)continue;const visible=batch.detail===details[index];batch.mesh.setVisibleAt(id,visible);batch.mesh.setMatrixAt(id,part?wheelMatrices[part-1]:matrix);if(visible&&batch.surface==='paint')batch.mesh.setColorAt(id,color);}
+      const detail=details[index]=distance>(details[index]==='near'?110:90)?'far':'near';
+      // Only the shown level's instances are placed; visibility and paint are written when they change.
+      const repaint=paints[index*3]!==color.r||paints[index*3+1]!==color.g||paints[index*3+2]!==color.b;
+      if(shownAt[index]!==detail){
+        for(const batch of batches)if(batch.detail!==detail)for(let part=0;part<5;part++){const id=batch.instances[index][part];if(id>=0)batch.mesh.setVisibleAt(id,false);}
+      }
+      for(const batch of byDetail[detail])for(let part=0;part<5;part++){
+        const id=batch.instances[index][part];if(id<0)continue;
+        if(shownAt[index]!==detail)batch.mesh.setVisibleAt(id,true);
+        batch.mesh.setMatrixAt(id,part?wheelMatrices[part-1]:matrix);
+        if(batch.surface==='paint'&&(repaint||shownAt[index]!==detail))batch.mesh.setColorAt(id,color);
+      }
+      shownAt[index]=detail;paints[index*3]=color.r;paints[index*3+1]=color.g;paints[index*3+2]=color.b;
     },
     /** Hide a car that left the road network (a closed end); drawing it again shows it. */
-    hide(index:number){previous[index]=undefined;for(const batch of batches)for(let part=0;part<5;part++){const id=batch.instances[index][part];if(id>=0)batch.mesh.setVisibleAt(id,false);}},
-    flush(){for(const batch of batches)batch.mesh.computeBoundingSphere();},
+    hide(index:number){previous[index]=undefined;if(shownAt[index]===null)return;shownAt[index]=null;for(const batch of batches)for(let part=0;part<5;part++){const id=batch.instances[index][part];if(id>=0)batch.mesh.setVisibleAt(id,false);}},
+    /** Kept for callers: the batches need no per-frame bounds (they are not culled whole). */
+    flush(){},
     setNight(night:boolean){materials.lamp.emissiveIntensity=night?2.5:.45;materials.red.emissiveIntensity=night?1.5:.35;materials.amber.emissive.setHex(night?0xd37817:0);materials.amber.emissiveIntensity=night?.4:.12;},
     dispose(){for(const batch of batches){parent.remove(batch.mesh);if(batch.sharedKey){const shared=sharedBuffers.get(batch.sharedKey)!;if(--shared.owners)batch.mesh.geometry=new THREE.BufferGeometry();else sharedBuffers.delete(batch.sharedKey);}batch.mesh.dispose();}plates.dispose();Object.values(materials).forEach(m=>m.dispose());},
   };

@@ -43,6 +43,7 @@ import { addTunnels } from './tunnels';
 import { tunnelAt,inTunnelApproach } from '../simulation/tunnels.ts';
 import { createRoadHeadlights } from './road-headlights';
 import { TRAFFIC_CAPACITY } from '../simulation/npc-vehicle-specs';
+import { TRAFFIC_DENSITY } from '../simulation/npc-density';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; warm?: Warm; upload?: Upload; }
 
@@ -50,7 +51,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const metro=isMetroCity(city)?city:undefined;
   if(!metro)prepareNeighborhoodArchitecture(city);
   const materials=createMaterials(!!options.mobile);
-  const roadHeadlights=createRoadHeadlights(TRAFFIC_CAPACITY);
+  const roadHeadlights=createRoadHeadlights(TRAFFIC_CAPACITY*TRAFFIC_DENSITY.high);
   for(const material of [materials.asphalt,materials.paint,materials.yellow])roadHeadlights.apply(material);
   const height=(x:number,z:number)=>sampleElevation(city,x,z);
   scene.background=null;scene.fog=new THREE.Fog('#aeb9bc',250,1050);

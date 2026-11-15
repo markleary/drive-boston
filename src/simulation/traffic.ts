@@ -4,6 +4,7 @@ import type { CityData, Point2, VehicleState, Road } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import {createNPCVehicleBatches} from '../render/npc-vehicles.ts';
 import type {RoadHeadlights} from '../render/road-headlights.ts';
+import {shrinkPool} from './npc-density.ts';
 import {NPC_BODY_LIFT,TRAFFIC_CAPACITY,npcVehicleAt,npcPaint,type NPCVehicleSpec} from './npc-vehicle-specs.ts';
 import {createNPCVehicleColliders} from '../physics/npc-vehicle.ts';
 import { sampleElevation } from './terrain.ts';
@@ -34,7 +35,7 @@ export interface Path { points: Point2[]; distances: number[]; length: number; s
  * eases back onto its lane over `rejoin` from the pose it was left in. A
  * `parked` car has driven into a closed end and waits, hidden, to be placed again;
  * a `hidden` one rides a deck that has not streamed in. */
-interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; respawnAfter?:number; parked?:boolean; hidden?:boolean; }
+interface Actor { body: RAPIER.RigidBody; collider: RAPIER.Collider; colliders:RAPIER.Collider[]; spec:NPCVehicleSpec; registration:string; path: Path; distance: number; speed: number; cruise: number; x: number; z: number; yaw: number; color: THREE.Color; steering:number; evasion?:Evasion; signalStop?: number; signalCommitted?: boolean; knocked?: { since: number; settled: number }; rejoin?: { t: number; duration: number; x: number; y: number; z: number; q: THREE.Quaternion }; waiting:number; priorityUntil?:number; ended?:number; respawnAfter?:number; parked?:boolean; hidden?:boolean; /** The conflict trajectory of the last step and what it was walked from (rightsOfWay). */ lookAhead?:{path:Path;distance:number;horizon:number;x:number;z:number;yaw:number;trajectory:Trajectory}; }
 type FleetObstacle = TrafficObstacle & { hidden?: boolean };
 /** A car on an undrawn deck still leads a visible car along the route it is about
  * to join (the queue it reaches keeps its spacing), but never makes it yield to a
@@ -66,6 +67,10 @@ export const LANE_CHANGE=.12,EXIT_SHARE=[.25,.35];
  * CONFLICT.maxHorizon): a car closing on a ramp merge sees the ramp car
  * converging early enough to settle the order by arrival. */
 const MOTORWAY_HORIZON=120,MERGE_WINDOW=400;
+/** Key of a pair of fleet indices i < j in the right-of-way memory: i * PAIR_KEY + j (above the largest fleet). */
+const PAIR_KEY=4096;
+/** No car further than this (m) slows a street car in the step's following rules (55 m ahead, in its lane). */
+const FOLLOW_REACH=60,NO_OBSTACLES:readonly number[]=[];
 /** A closed start emits a car per lane every 1.5 to 4 s while the observer is within this many metres. */
 const EMIT_RANGE=750;
 /** Closing speed (m/s) at which a touch becomes a knock rather than a nudge. */
@@ -312,7 +317,7 @@ export function blendJoin(points:Point2[],roads:Road[],next:Point2[],road:Road,k
 
 /** Lightweight local traffic; all routes follow the imported directed road graph.
  * `deckDrawn` hides traffic until its supporting deck is visible. */
-export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[],{deckDrawn,mobile,headlights}:{deckDrawn?:(road:Road)=>boolean;mobile?:boolean;headlights?:RoadHeadlights}={}) {
+export function createTraffic(scene: THREE.Scene, city: CityData, physics: DrivingPhysics,constructionZones:readonly ConstructionZone[]=[],{deckDrawn,mobile,headlights,density=1}:{deckDrawn?:(road:Road)=>boolean;mobile?:boolean;headlights?:RoadHeadlights;/** The fleet's size and every population target, as a multiple of the base fleet (npc-density.ts). */density?:number}={}) {
   const { nodes, heights, edges } = roadGraph(city);
   const zonesByRoad=new Map<string,ConstructionZone[]>(),lanes=new Map<Edge,Point2[]>();
   for(const zone of constructionZones){const list=zonesByRoad.get(zone.roadId)??[];list.push(zone);zonesByRoad.set(zone.roadId,list);}
@@ -324,6 +329,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   };
   const spawnEdges=edges.filter(edge=>edge.length>=12);
   const activityAt=createActivityProfile(city);
+  // The population setting scales the pool and every target together; at 1 they are the base fleet's.
+  let factor=density;
+  const poolSize=()=>Math.max(4,Math.round(COUNT*factor)),streetsAt=(x:number,z:number)=>Math.round(activityAt(x,z).traffic*factor);
+  const highwayShare=(level:number)=>Math.round(MOTORWAY_DENSITY[level]*factor),highwayStreets=()=>Math.round(MOTORWAY_STREETS*factor);
   const outgoing = new Map<number, Edge[]>(), connections = new Map<number, Set<number>>(), arriving=new Map<number,Set<Road>>();
   for(const edge of edges){
     const next=outgoing.get(edge.start);if(next)next.push(edge);else outgoing.set(edge.start,[edge]);
@@ -567,7 +576,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
 
   const actors: Actor[] = [];
   const group = new THREE.Group(); group.name = 'AmbientTraffic'; scene.add(group);
-  const fleet=createNPCVehicleBatches(group,COUNT,mobile);
+  let fleet=createNPCVehicleBatches(group,poolSize(),mobile),night=false;
   const spawnPlayer = physics.getState();
   let drawObserver:Pick<VehicleState,'x'|'z'>=spawnPlayer;
   const edgeActivity=new Map(edges.map(edge=>[edge.id,activityAt(...edge.points[Math.floor(edge.points.length/2)]).traffic]));
@@ -641,9 +650,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   const initialEdges=nearbyEdges(spawnPlayer,650),nearEdges=nearbyEdges(spawnPlayer,240),street=nearestStreet(spawnPlayer);
   const streetEdges=nearEdges.filter(edge=>edge.name===street),forward=forwardPlacements(streetEdges,spawnPlayer);
   // A start on or beside the highway fills it first (none of this applies elsewhere, so the street layout is unchanged).
-  const spawnLevel=motorwayLevel(spawnPlayer),spawnHighway=MOTORWAY_DENSITY[spawnLevel],streetTraffic=activityAt(spawnPlayer.x,spawnPlayer.z).traffic;
-  const target=spawnLevel?Math.min(COUNT-3,Math.max(streetTraffic,spawnHighway+MOTORWAY_STREETS)):streetTraffic,nearTarget=Math.round(streetTraffic/3),streetTarget=Math.round(streetTraffic/6);
-  for (let i = 0; i < COUNT && spawnEdges.length; i++) {
+  const spawnLevel=motorwayLevel(spawnPlayer),spawnHighway=highwayShare(spawnLevel),streetTraffic=streetsAt(spawnPlayer.x,spawnPlayer.z);
+  const target=spawnLevel?Math.min(poolSize()-3,Math.max(streetTraffic,spawnHighway+highwayStreets())):streetTraffic,nearTarget=Math.round(streetTraffic/3),streetTarget=Math.round(streetTraffic/6);
+  const byCollider=new Map<number,Actor>(),colliderHandles=new Set<number>();
+  for (let i = 0, size = poolSize(); i < size && spawnEdges.length; i++) {
     // Populate the street in view first, then adjacent blocks, then a reserve
     // fleet in the rest of the city. Every placement keeps its safe headway.
     let candidate=i<spawnHighway?motorwayPlacement(spawnPlayer,spawnPlayer,35,MOTORWAY_REACH):undefined;
@@ -654,6 +664,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     if(!candidate&&i<target)candidate=placement(initialEdges,spawnPlayer,spawnPlayer,35,LOCAL_RADIUS);
     if(!candidate)candidate=placement(spawnEdges,spawnPlayer,spawnPlayer,i<target?35:LOCAL_RADIUS+80,Infinity);
     if (!candidate) continue;
+    addActor(candidate);
+  }
+  /** A new car of the fleet at `candidate`, in the next fleet slot. */
+  function addActor(candidate:Placement){
     const { path, d, p } = candidate;
     const q = at(path, d + 2), yaw = Math.atan2(q[0] - p[0], q[1] - p[1]);
     const road=pathRoad(path,d),normal=roadNormal(city,road,p[0],p[1]),ground=sampleRoadElevation(city,road,p[0],p[1]);
@@ -665,8 +679,9 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     setDeckVisibility(actor,road);actors.push(actor);
     // Highway cars start at speed, no faster than the car ahead allows.
     if(speedClass(road)>0)actor.speed=Math.min(cruiseOn(actor,road)*.9,leaderLimit(actor,fleetObstacles(),actors.length-1));
+    for(const c of colliders){byCollider.set(c.handle,actor);colliderHandles.add(c.handle);}
+    return actor;
   }
-  const byCollider=new Map(actors.flatMap(actor=>actor.colliders.map(collider=>[collider.handle,actor] as const)));
   // Each lane leaving a closed start emits a car from its barrier every 1.5 to
   // 4 s, on its own random stream so the fleet's draws are unchanged.
   const emitters=edges.filter(edge=>edge.source).map(edge=>{const point=pointAtDistance(laneFor(edge),CLOSURE_SETBACK).p;return{edge,point,covered:coveredAt(edge.road,point[0],point[1]),timer:0};});
@@ -687,7 +702,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     const actor=actors[index];
     lift.set(0,NPC_BODY_LIFT,0).applyQuaternion(rotation);meshPosition.copy(position).sub(lift);matrix.compose(meshPosition,rotation,scale);
     fleet.draw(index,matrix,actor.color,Math.hypot(actor.x-drawObserver.x,actor.z-drawObserver.z),actor.steering);
-    headlights?.add(index,matrix,actor.spec.length/2,actor.spec.width);
+    headlights?.add(matrix,actor.spec.length/2,actor.spec.width);
   }
   /** A struck vehicle becomes a sliding, spinning dynamic compound body, carrying
    * its lane speed into the collision; its taller shape rests on the road. The
@@ -846,8 +861,13 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
 
   const posAt=(path:Path,s:number):Pose=>{const p=at(path,s);return{x:p[0],z:p[1],yaw:pathYaw(path,s)};};
   /** The route ahead of a lane keeper, long enough to cover its braking distance. */
-  function trajectory(actor:Actor):Trajectory{
-    const cap=actor.path.merges?.some(s=>s-actor.distance>-30&&s-actor.distance<MERGE_WINDOW)?MOTORWAY_HORIZON:CONFLICT.maxHorizon,horizon=Math.min(cap,CONFLICT.minHorizon+actor.speed*actor.speed/(2*CONFLICT.decel)),here={x:actor.x,z:actor.z,yaw:actor.yaw},poses=[here];
+  /** How far ahead (m) a car's conflict trajectory looks. */
+  function horizonOf(actor:Actor){
+    const cap=actor.path.merges?.some(s=>s-actor.distance>-30&&s-actor.distance<MERGE_WINDOW)?MOTORWAY_HORIZON:CONFLICT.maxHorizon;
+    return Math.min(cap,CONFLICT.minHorizon+actor.speed*actor.speed/(2*CONFLICT.decel));
+  }
+  function trajectory(actor:Actor,horizon=horizonOf(actor)):Trajectory{
+    const here={x:actor.x,z:actor.z,yaw:actor.yaw},poses=[here];
     // posAt for each sample, walking the path once: the yaw is the chord over the next 2 m.
     const path=actor.path,point=walker(path),from=walker(path),to=walker(path);
     for(let t=CONFLICT.step;t<=horizon&&actor.distance+t<path.length;t+=CONFLICT.step){const s=actor.distance+t,y=Math.min(s,path.length-2),p=point(s),a=from(y),b=to(y+2);poses.push({x:p[0],z:p[1],yaw:Math.atan2(b[0]-a[0],b[1]-a[1])});}
@@ -895,38 +915,63 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
    * not standing in its path), which lets it pass through after a long wait. */
   function rightsOfWay(keepers:boolean[],external:TrafficObstacle[]){
     const n=actors.length,limits=new Array<number>(n).fill(Infinity),blockers=new Array<number>(n+external.length).fill(-1),blockerInPath=new Array<boolean>(n).fill(false);
-    const paths=actors.map((actor,i)=>keepers[i]?trajectory(actor):undefined),held=actors.map((actor,i)=>keepers[i]?heldAt(actor):Infinity),heights=actors.map(actor=>actor.body.translation().y);
+    const held=actors.map((actor,i)=>keepers[i]?heldAt(actor):Infinity);
     const forced=actors.map(actor=>elapsed<(actor.priorityUntil??0)),speedOf=(k:number)=>k<n?actors[k].speed:external[k-n].speed??0;
+    // A pair is tested only where the two can meet. Each keeper's reach is first bounded from its look-ahead alone (its
+    // trajectory has at most horizon/step + 1 poses), so a trajectory is walked only for a car with another in reach.
+    const xs=new Float64Array(n),zs=new Float64Array(n),heights=new Float64Array(n),bounds=new Float64Array(n),horizons=new Float64Array(n),hidden=new Uint8Array(n);
+    for(let i=0;i<n;i++){
+      const actor=actors[i];xs[i]=actor.x;zs[i]=actor.z;heights[i]=actor.body.translation().y;hidden[i]=actor.hidden?1:0;
+      if(keepers[i]){horizons[i]=horizonOf(actor);bounds[i]=CONFLICT.step*(Math.floor(horizons[i]/CONFLICT.step)+2)+actor.spec.length/2+3;}else bounds[i]=-1;
+    }
+    const paths:(Trajectory|undefined)[]=new Array(n);
+    // A car that has not moved since the last step (waiting at a light, in a queue) keeps the trajectory it had.
+    const pathOf=(i:number)=>{
+      if(paths[i])return paths[i];
+      const actor=actors[i],kept=actor.lookAhead;
+      if(kept&&kept.path===actor.path&&kept.distance===actor.distance&&kept.horizon===horizons[i]&&kept.x===actor.x&&kept.z===actor.z&&kept.yaw===actor.yaw)return paths[i]=kept.trajectory;
+      const fresh=trajectory(actor,horizons[i]);actor.lookAhead={path:actor.path,distance:actor.distance,horizon:horizons[i],x:actor.x,z:actor.z,yaw:actor.yaw,trajectory:fresh};
+      return paths[i]=fresh;
+    };
+    // Keepers by cell twice the widest reach, so a pair in reach lies in neighbouring cells; each car's partners are
+    // taken in index order, as the decisions are made.
+    let reach=0;for(let i=0;i<n;i++)reach=Math.max(reach,bounds[i]);
+    const cell=2*reach||1,cellKey=(cx:number,cz:number)=>(cx+32768)*65536+(cz+32768),cells=new Map<number,number[]>(),partners:number[]=[];
+    for(let i=0;i<n;i++)if(bounds[i]>=0){const key=cellKey(Math.floor(xs[i]/cell),Math.floor(zs[i]/cell)),list=cells.get(key);if(list)list.push(i);else cells.set(key,[i]);}
     const decisions:Decision[]=[],memory=new Map<number,number>();
     for(let i=0;i<n;i++){
-      const pi=paths[i];if(!pi)continue;
-      const reachI=CONFLICT.step*pi.poses.length+pi.halfLength+3;
-      for(let j=i+1;j<n;j++){
-        const pj=paths[j];if(!pj||Math.abs(heights[i]-heights[j])>3)continue;
-        const a=actors[i],b=actors[j];
+      const bi=bounds[i];if(bi<0)continue;
+      partners.length=0;const cx=Math.floor(xs[i]/cell),cz=Math.floor(zs[i]/cell);
+      for(let c=0;c<9;c++)for(const j of cells.get(cellKey(cx+c%3-1,cz+Math.floor(c/3)-1))??NO_OBSTACLES)if(j>i)partners.push(j);
+      partners.sort((a,b)=>a-b);
+      for(const j of partners){
+        const bj=bounds[j];
+        const dx=xs[j]-xs[i],dz=zs[j]-zs[i],d2=dx*dx+dz*dz,bound=bi+bj;
         // Hidden cars settle conflicts with one another to keep spacing
         // while their deck is out of view.
-        if(!!a.hidden!==!!b.hidden)continue;
-        const dx=b.x-a.x,dz=b.z-a.z;
-        if(Math.hypot(dx,dz)>reachI+CONFLICT.step*pj.poses.length+pj.halfLength+3)continue;
+        if(d2>bound*bound||Math.abs(heights[i]-heights[j])>3||hidden[i]!==hidden[j])continue;
+        const pi=pathOf(i),pj=pathOf(j),a=actors[i],b=actors[j];
+        if(Math.hypot(dx,dz)>CONFLICT.step*pi.poses.length+pi.halfLength+3+CONFLICT.step*pj.poses.length+pj.halfLength+3)continue;
         const ti=firstContact(pi,pj);if(ti===undefined)continue;
         const tj=firstContact(pj,pi)??0;
         const winner=rightOfWay(
           {index:i,travel:ti,speed:a.speed,stopsShort:ti>held[i],forced:forced[i],otherAhead:dx*Math.sin(a.yaw)+dz*Math.cos(a.yaw)>=0},
           {index:j,travel:tj,speed:b.speed,stopsShort:tj>held[j],forced:forced[j],otherAhead:-dx*Math.sin(b.yaw)-dz*Math.cos(b.yaw)>=0},
-          rightOfWayMemory.get(i*256+j));
+          rightOfWayMemory.get(i*PAIR_KEY+j));
         if(winner===undefined)continue;
         const xi=clearance(pi,pj,ti),xj=clearance(pj,pi,tj),cross=crossing(pi.pose(ti),pj.pose(tj));
         decisions.push(winner===i?{w:i,l:j,tw:ti,tl:tj,xw:xi,xl:xj,crossing:cross,swapped:false,bothHold:false}:{w:j,l:i,tw:tj,tl:ti,xw:xj,xl:xi,crossing:cross,swapped:false,bothHold:false});
       }
     }
     const buses=new Map<number,Trajectory>();
-    for(let i=0;i<n;i++){
-      const pi=paths[i];if(!pi)continue;
+    for(let i=0;i<n&&external.length;i++){
+      if(bounds[i]<0)continue;
       const actor=actors[i];
       if(actor.hidden)continue;
       for(let k=0;k<external.length;k++){
-        const bus=external[k];if(!bus.pose||Math.abs(bus.y-heights[i])>3||Math.hypot(bus.x-actor.x,bus.z-actor.z)>CONFLICT.step*pi.poses.length+pi.halfLength+(bus.halfLength??6)+CONFLICT.maxHorizon+3)continue;
+        const bus=external[k],away=Math.hypot(bus.x-actor.x,bus.z-actor.z),busReach=(bus.halfLength??6)+CONFLICT.maxHorizon+3;
+        if(!bus.pose||Math.abs(bus.y-heights[i])>3||away>bounds[i]+busReach)continue;
+        const pi=pathOf(i);if(away>CONFLICT.step*pi.poses.length+pi.halfLength+busReach)continue;
         if(holdsBus(actor,bus)){blockers[n+k]=i;continue;}
         const trajectory=buses.get(k)??busTrajectory(bus);buses.set(k,trajectory);
         const travel=firstContact(pi,trajectory);
@@ -971,7 +1016,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       return speedOf(d.w)*Math.max(0,Math.cos(actors[d.w].yaw-actors[d.l].yaw));
     };
     for(const d of decisions){
-      if(d.w<n&&d.l<n)memory.set(Math.min(d.w,d.l)*256+Math.max(d.w,d.l),d.w);
+      if(d.w<n&&d.l<n)memory.set(Math.min(d.w,d.l)*PAIR_KEY+Math.max(d.w,d.l),d.w);
       // A car held outside a junction it could not get through waits on what
       // stops it beyond; a blocker of its own is no part of a deadlock.
       const lead=follows(d),gap=d.tl-Math.max(0,d.tw);
@@ -990,11 +1035,11 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   }
 
   return {
-    count: actors.length,
+    get count(){return actors.length;},
     /** `motorway`: highway cars within MOTORWAY_REACH; `highway`: the observer's motorwayLevel. */
     population(observer:Observer&{y?:number}){
       const profile=activityAt(observer.x,observer.z);
-      return {level:profile.level,target:profile.traffic,forward:actors.filter(actor=>{const p=aheadOf([actor.x,actor.z],observer);return p.along>35&&p.along<200&&Math.abs(p.across)<12;}).length,local:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<LOCAL_RADIUS).length,nearby:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<240).length,total:actors.length,
+      return {level:profile.level,target:streetsAt(observer.x,observer.z),forward:actors.filter(actor=>{const p=aheadOf([actor.x,actor.z],observer);return p.along>35&&p.along<200&&Math.abs(p.across)<12;}).length,local:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<LOCAL_RADIUS).length,nearby:actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<240).length,total:actors.length,
         motorway:actors.filter(actor=>!actor.parked&&speedClass(pathRoad(actor.path,actor.distance))===2&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<MOTORWAY_REACH).length,highway:motorwayLevel(observer),parked:actors.filter(actor=>actor.parked).length};
     },
     // Called only during an explicit map teleport/reset, before the new view is
@@ -1002,7 +1047,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     // On or beside the highway its share is placed first.
     populateAt(observer:Observer&{y?:number},player:Pick<VehicleState,'x'|'z'>=observer,external:TrafficObstacle[]=[]){
       const profile=activityAt(observer.x,observer.z),local=()=>actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<LOCAL_RADIUS).length;
-      const levelHere=motorwayLevel(observer),traffic=levelHere?Math.min(actors.length-3,Math.max(profile.traffic,MOTORWAY_DENSITY[levelHere]+MOTORWAY_STREETS)):profile.traffic,highwayTarget=MOTORWAY_DENSITY[levelHere];
+      const streets=streetsAt(observer.x,observer.z),levelHere=motorwayLevel(observer),traffic=levelHere?Math.min(actors.length-3,Math.max(streets,highwayShare(levelHere)+highwayStreets())):streets,highwayTarget=highwayShare(levelHere);
       let onHighway=levelHere?actors.filter(actor=>!actor.parked&&speedClass(pathRoad(actor.path,actor.distance))===2&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<MOTORWAY_REACH).length:0;
       const candidates=nearbyEdges(observer,650),near=nearbyEdges(observer,240),name=nearestStreet(observer),same=near.filter(edge=>edge.name===name);
       const forward=levelHere===2?[]:forwardPlacements(same,observer);
@@ -1016,9 +1061,9 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         let candidate=onHighway<highwayTarget?motorwayPlacement(observer,player,35,MOTORWAY_REACH,actor,external):undefined;
         if(candidate)onHighway++;
         else if(away>=LOCAL_RADIUS*1.35){
-          if(levelHere<2&&inFront<Math.min(6,Math.round(profile.traffic/6)))candidate=forwardPlacement(forward,observer,player,inFront,actor,external);
-          if(!candidate&&levelHere<2&&nearby<Math.round(profile.traffic/6))candidate=placement(same,observer,player,35,230,actor,external);
-          if(!candidate&&nearby<Math.round(profile.traffic/3))candidate=placement(near,observer,player,35,240,actor,external);
+          if(levelHere<2&&inFront<Math.min(6,Math.round(streets/6)))candidate=forwardPlacement(forward,observer,player,inFront,actor,external);
+          if(!candidate&&levelHere<2&&nearby<Math.round(streets/6))candidate=placement(same,observer,player,35,230,actor,external);
+          if(!candidate&&nearby<Math.round(streets/3))candidate=placement(near,observer,player,35,240,actor,external);
           candidate??=placement(candidates,observer,player,35,LOCAL_RADIUS,actor,external);
         }
         if(candidate){relocate(actor,candidate.path,candidate.d);if(Math.hypot(candidate.p[0]-observer.x,candidate.p[1]-observer.z)<240)nearby++;const p=aheadOf(candidate.p,observer);if(p.along>35&&p.along<200&&Math.abs(p.across)<12)inFront++;}
@@ -1028,7 +1073,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     /** Each car with its heading, so a bus changing lanes sees how far a turning or crossing car reaches. */
     obstacles:():TrafficObstacle[]=>actors.filter(a=>!a.hidden).map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw})),
     /** Collider handles of the fleet, so an impact on the player can be classified. */
-    colliders:new Set(byCollider.keys()),
+    colliders:colliderHandles as ReadonlySet<number>,
     update(dt: number, player: VehicleState, observer: Pick<VehicleState,'x'|'y'|'z'> = player, external:TrafficObstacle[] = []) {
       dt = Math.max(0, Math.min(dt, 1 / 30));
       drawObserver=observer;elapsed += dt;rehomeTimer+=dt;
@@ -1064,7 +1109,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         rehomeTimer=0;
         // On or beside the highway, keep its own share of the fleet (MOTORWAY_DENSITY) within MOTORWAY_REACH on top of the streets'.
         level=motorwayLevel(observer);
-        const streetTraffic=activityAt(observer.x,observer.z).traffic,target=level?Math.min(actors.length-3,Math.max(streetTraffic,MOTORWAY_DENSITY[level]+MOTORWAY_STREETS)):streetTraffic,highwayTarget=MOTORWAY_DENSITY[level];
+        const streetTraffic=streetsAt(observer.x,observer.z),target=level?Math.min(actors.length-3,Math.max(streetTraffic,highwayShare(level)+highwayStreets())):streetTraffic,highwayTarget=highwayShare(level);
         let local=actors.filter(actor=>Math.hypot(actor.x-observer.x,actor.z-observer.z)<localRadius).length;
         highway=level?actors.filter(actor=>!actor.parked&&speedClass(pathRoad(actor.path,actor.distance))===2&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<MOTORWAY_REACH).length:0;
         if(local<Math.min(target,actors.length)||highway<highwayTarget){
@@ -1079,7 +1124,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
           const beyond=level===2?Math.min(localRadius*1.35,MOTORWAY_REACH+200):localRadius*1.35;
           let moved=0;
           for(const actor of actors){
-            if((local>=target&&highway>=highwayTarget)||moved>=2)break;
+            if((local>=target&&highway>=highwayTarget)||moved>=Math.ceil(2*factor))break;
             const away=Math.hypot(actor.x-observer.x,actor.z-observer.z);
             if(Math.hypot(actor.x-player.x,actor.z-player.z)<=35)continue;
             // A highway short of cars also takes street cars out of view.
@@ -1096,7 +1141,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         emitter.timer-=dt;if(emitter.timer>0)continue;
         emitter.timer=1.5+emitRandom()*2.5;
         const p=emitter.point;
-        if(highway>=MOTORWAY_DENSITY[Math.max(1,level)]||(below?!emitter.edge.road.tunnel:emitter.covered)||Math.hypot(p[0]-observer.x,p[1]-observer.z)>EMIT_RANGE||Math.hypot(p[0]-player.x,p[1]-player.z)<20||actors.some(actor=>Math.hypot(actor.x-p[0],actor.z-p[1])<28))continue;
+        if(highway>=highwayShare(Math.max(1,level))||(below?!emitter.edge.road.tunnel:emitter.covered)||Math.hypot(p[0]-observer.x,p[1]-observer.z)>EMIT_RANGE||Math.hypot(p[0]-player.x,p[1]-player.z)<20||actors.some(actor=>Math.hypot(actor.x-p[0],actor.z-p[1])<28))continue;
         // A car parked behind a closed end first, else the farthest one well out of view.
         let pick=actors.find(actor=>actor.parked);
         if(!pick){let far=localRadius*1.35;for(const actor of actors){const d=Math.hypot(actor.x-observer.x,actor.z-observer.z);if(d>far&&!actor.knocked&&Math.hypot(actor.x-player.x,actor.z-player.z)>35){far=d;pick=actor;}}}
@@ -1106,6 +1151,10 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       // Snapshot once per step instead of allocating an O(N²) pile of obstacle
       // objects. The stable snapshot also avoids actor-order-dependent following.
       const obstacles:FleetObstacle[]=[{...player,halfLength:2.1,halfWidth:.9},...fleetObstacles(),...external];
+      // The obstacles by FOLLOW_REACH cell: a car's following rules look only at the nine cells about it (they take the
+      // least speed over the obstacles they see, so the order they are seen in does not matter).
+      const cells=new Map<number,number[]>(),cellKey=(cx:number,cz:number)=>(cx+32768)*65536+(cz+32768);
+      obstacles.forEach((other,k)=>{const key=cellKey(Math.floor(other.x/FOLLOW_REACH),Math.floor(other.z/FOLLOW_REACH)),list=cells.get(key);if(list)list.push(k);else cells.set(key,[k]);});
       detectKnocks();
       for(const actor of actors)if(!actor.knocked&&!actor.rejoin&&actor.path.length-actor.distance<40&&Math.hypot(actor.x-observer.x,actor.z-observer.z)<=localRadius*1.35)extendRoute(actor);
       const keepers=actors.map(actor=>!actor.knocked&&!actor.rejoin&&!actor.parked),{limits,blockers}=rightsOfWay(keepers,external);
@@ -1158,8 +1207,11 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
           if(!actor.signalCommitted)target=Math.min(target,Math.sqrt(Math.max(0,2*5*(gap-.5))));
         }else{actor.signalStop=undefined;actor.signalCommitted=false;}
         const actorHeight=obstacles[index+1].y,hidden=!!actor.hidden;
-        for(let otherIndex=0;otherIndex<obstacles.length;otherIndex++){
+        const acx=Math.floor(actor.x/FOLLOW_REACH),acz=Math.floor(actor.z/FOLLOW_REACH);
+        for(let cell=0;cell<9;cell++)for(const otherIndex of cells.get(cellKey(acx+cell%3-1,acz+Math.floor(cell/3)-1))??NO_OBSTACLES){
           const other=obstacles[otherIndex];
+          // Everything below acts on a car less than FOLLOW_REACH ahead (55 m and its lane's width at most).
+          const ox=other.x-actor.x,oz=other.z-actor.z;if(ox*ox+oz*oz>FOLLOW_REACH*FOLLOW_REACH)continue;
           if(otherIndex===index+1||!leads(actor,other,actor.yaw))continue;
           // Two lane keepers settle their order through rightsOfWay; the symmetric
           // rules below would stop both of two cars meeting at a corner for good.
@@ -1231,7 +1283,23 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       fleet.flush();
       headlights?.endFrame();
     },
-    setNight(night: boolean) {fleet.setNight(night);},
+    setNight(on: boolean) {night=on;fleet.setNight(on);},
+    /** Resize the fleet to `next` times the base pool (npc-density.ts). Shrinking thins the observer's neighborhood
+     * to its new target (`shrinkPool`); growing adds cars beyond the local radius, which the refill (or populateAt) brings into the neighborhood.
+     * The batches are rebuilt for the new size, since their plate atlas grows with it. */
+    setDensity(next:number){
+      if(next===factor)return;
+      factor=next;const size=poolSize();
+      if(actors.length>size){
+        const level=motorwayLevel(drawObserver),streets=streetsAt(drawObserver.x,drawObserver.z),local=level?Math.min(size-3,Math.max(streets,highwayShare(level)+highwayStreets())):streets;
+        const kept=new Set(shrinkPool(actors,size,actor=>Math.hypot(actor.x-drawObserver.x,actor.z-drawObserver.z),LOCAL_RADIUS,local));
+        for(const actor of actors)if(!kept.has(actor)){for(const c of actor.colliders){byCollider.delete(c.handle);colliderHandles.delete(c.handle);}physics.world.removeRigidBody(actor.body);}
+        const survivors=actors.filter(actor=>kept.has(actor));actors.length=0;actors.push(...survivors);
+      }
+      const old=fleet;fleet=createNPCVehicleBatches(group,size,mobile);old.dispose();fleet.setNight(night);
+      actors.forEach((actor,index)=>{fleet.bind(index,actor.spec.type);actor.registration=fleet.registration(index);});
+      while(actors.length<size){const candidate=placement(spawnEdges,drawObserver,drawObserver,LOCAL_RADIUS+80,Infinity,undefined,[],200);if(!candidate)break;addActor(candidate);}
+    },
     dispose() {
       for (const actor of actors) physics.world.removeRigidBody(actor.body);
       fleet.dispose();
