@@ -14,7 +14,7 @@ import numpy as np
 
 from building_collision_policy import exact_far_collision
 
-FLOAT32_MAX=np.finfo(np.float32).max
+FLOAT32_MAX=float(np.finfo(np.float32).max)
 
 
 def require(condition, message):
@@ -35,12 +35,18 @@ def parse_json(raw):
  return json.loads(raw,parse_float=finite_float,parse_constant=invalid_constant)
 
 
+def finite_number(value):
+ if type(value) not in (int,float):return False
+ try:return math.isfinite(value)
+ except OverflowError:return False
+
+
 def integer(value, minimum=0):
- return type(value) is int and value>=minimum
+ return type(value) is int and value>=minimum and finite_number(value)
 
 
 def point(value, dimensions):
- return isinstance(value,list) and len(value)==dimensions and all(type(v) in (int,float) and math.isfinite(v) for v in value)
+ return isinstance(value,list) and len(value)==dimensions and all(finite_number(v) for v in value)
 
 
 def read_gzip(path):
@@ -118,14 +124,20 @@ def validate_package(data_dir):
  for key in ('origin','bounds','coverage','spawn','elevation','tiles','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water'):
   require(key in city,f'city.json lacks {key}')
  grid=city['elevation']
- require(grid['encoding']=='int16-gzip' and integer(grid['width'],2) and integer(grid['height'],2) and grid['cellSize']>0 and grid.get('scale',.01)>0,'invalid elevation dimensions/encoding')
+ require(grid['encoding']=='int16-gzip' and integer(grid['width'],2) and integer(grid['height'],2) and finite_number(grid.get('cellSize')) and grid['cellSize']>0 and finite_number(grid.get('scale',.01)) and grid.get('scale',.01)>0,'invalid elevation dimensions/encoding')
+ # terrainGrid rejects missing origins and a non-finite sum. The terrain mesh
+ # also stores both ends of each horizontal axis in Float32 vertex buffers.
+ require(all(finite_number(grid.get(axis)) for axis in ('originX','originZ')) and math.isfinite(float(grid['originX'])+float(grid['originZ'])),'invalid elevation origins')
+ for axis,count in (('originX',grid['width']),('originZ',grid['height'])):
+  start=float(grid[axis]);end=start+(float(count)-1)*float(grid['cellSize'])
+  require(math.isfinite(end) and abs(start)<=FLOAT32_MAX and abs(end)<=FLOAT32_MAX,f'{axis}: non-finite runtime terrain coordinates')
  for name in (grid['file'],grid['source']):
   raw=read_gzip(data_dir/name)
   require(len(raw)==grid['width']*grid['height']*2,f'{name}: elevation byte count differs from dimensions')
   heights=np.frombuffer(raw,dtype='<i2').astype(np.float64)*grid.get('scale',.01)
   require(np.isfinite(heights).all() and (np.abs(heights)<=FLOAT32_MAX).all(),f'{name}: non-finite runtime heights')
  tiles=city['tiles'];keys=tiles['keys'];size=tiles['size'];directory=data_dir/tiles['directory']
- require(size>0 and all(isinstance(k,str) and re.fullmatch(r'-?\d+_-?\d+',k) for k in keys) and len(keys)==len(set(keys)),'invalid or duplicate manifest tile keys')
+ require(finite_number(size) and size>0 and all(isinstance(k,str) and re.fullmatch(r'-?\d+_-?\d+',k) for k in keys) and len(keys)==len(set(keys)),'invalid or duplicate manifest tile keys')
  require({f't_{k}.bin' for k in keys}=={p.name for p in directory.glob('*.bin')},'tile manifest differs from files shipped')
  far=far_records(read_gzip(data_dir/tiles['far']),size,set(keys))
  require(sum(map(len,far.values()))==tiles['buildingCount'],'far building count differs from manifest')

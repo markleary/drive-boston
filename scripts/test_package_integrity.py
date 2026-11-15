@@ -22,7 +22,7 @@ class PackageIntegrityTest(unittest.TestCase):
   self.building={'id':'a','center':[2,2],'footprint':[[1,1],[3,1],[1,3]],'anchor':[2,0,2],'height':1,'baseElevation':0,'v':3,'f':3,'r':0}
   self.header={'tx':0,'tz':0,'size':1000,'indexBytes':2,'vertexCount':3,'buildings':[self.building]}
   self.city={k:[] for k in ('coverage','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water')}
-  self.city.update(origin={},bounds={},spawn={},elevation={'encoding':'int16-gzip','width':2,'height':2,'cellSize':6,'file':'elevation.bin','source':'elevation-source.bin','scale':.01},tiles={'size':1000,'keys':['0_0'],'directory':'tiles','far':'far.bin','buildingCount':1},tunnels={'files':['tunnel.json']})
+  self.city.update(origin={},bounds={},spawn={},elevation={'encoding':'int16-gzip','width':2,'height':2,'cellSize':6,'originX':0,'originZ':0,'file':'elevation.bin','source':'elevation-source.bin','scale':.01},tiles={'size':1000,'keys':['0_0'],'directory':'tiles','far':'far.bin','buildingCount':1},tunnels={'files':['tunnel.json']})
   self.json('city.json',self.city);self.json('provenance.json',{'region':'metro'})
   self.json('transit.json',{'routes':[]});self.json('tunnel.json',{'roads':[],'landmarks':[],'sources':[]})
   self.gzip('elevation.bin',b'\0'*8);self.gzip('elevation-source.bin',b'\0'*8)
@@ -99,6 +99,39 @@ class PackageIntegrityTest(unittest.TestCase):
  def test_grid_dimension_mismatch_rejected(self):
   self.gzip('elevation-source.bin',b'\0'*6)
   with self.assertRaisesRegex(ValueError,'elevation byte count'):self.check()
+
+ def test_grid_origins_are_required_finite_numbers(self):
+  valid=copy.deepcopy(self.city['elevation'])
+  for axis in ('originX','originZ'):
+   with self.subTest(axis=axis,value='missing'):
+    self.city['elevation']=copy.deepcopy(valid);del self.city['elevation'][axis];self.json('city.json',self.city)
+    with self.assertRaisesRegex(ValueError,'elevation origins'):self.check()
+   for value in (None,True,'0',float('nan'),float('inf'),10**400):
+    with self.subTest(axis=axis,value=value):
+     self.city['elevation']={**valid,axis:value};self.json('city.json',self.city)
+     with self.assertRaisesRegex(ValueError,'elevation origins|non-finite JSON'):self.check()
+  self.city['elevation']={**valid,'originX':-12.5,'originZ':6.25};self.json('city.json',self.city)
+  self.assertEqual(self.check()['elevationSamples'],4)
+
+ def test_grid_origin_sum_must_be_finite_in_runtime_precision(self):
+  self.city['elevation'].update(originX=1e308,originZ=1e308);self.json('city.json',self.city)
+  with self.assertRaisesRegex(ValueError,'elevation origins'):self.check()
+
+ def test_grid_horizontal_mesh_coordinates_must_fit_float32(self):
+  valid=copy.deepcopy(self.city['elevation'])
+  for axis in ('originX','originZ'):
+   for origin,cell in ((1e39,6),(-1e39,6),(3e38,1e38),(0,1e308)):
+    with self.subTest(axis=axis,origin=origin,cell=cell):
+     self.city['elevation']={**valid,axis:origin,'cellSize':cell};self.json('city.json',self.city)
+     with self.assertRaisesRegex(ValueError,'runtime terrain coordinates'):self.check()
+
+ def test_grid_cell_size_and_scale_are_positive_finite_numbers(self):
+  valid=copy.deepcopy(self.city['elevation'])
+  for field in ('cellSize','scale'):
+   for value in (None,True,'6',0,-1,float('inf'),10**400):
+    with self.subTest(field=field,value=value):
+     self.city['elevation']={**valid,field:value};self.json('city.json',self.city)
+     with self.assertRaisesRegex(ValueError,'dimensions/encoding|non-finite JSON'):self.check()
 
  def test_finite_json_that_overflows_runtime_float32_is_rejected(self):
   header=copy.deepcopy(self.header);header['buildings'][0]['anchor'][1]=1e39;self.tile(header)
