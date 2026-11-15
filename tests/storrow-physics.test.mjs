@@ -4,6 +4,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {PLAYER_CARS,MOVING_TRUCK} from '../src/simulation/player-cars.ts';
 import {roadProjection,roadWidthAt} from '../src/simulation/road-surfaces.ts';
+import {tunnelStations} from '../src/simulation/tunnels.ts';
 const city={bounds:{minX:-3000,maxX:3000,minZ:-3000,maxZ:3000},buildings:[],roads:[],spawn:{x:0,z:0,yaw:0}};
 const idle={throttle:0,brake:0,steer:0,handbrake:false};
 const step=(p,frames,input=idle)=>{for(let i=0;i<frames;i++)p.step(input,1/60);return p.getState();};
@@ -74,10 +75,11 @@ for(const reverse of [false,true])test(`uncatalogued curved portal repairs on th
       const stuck=p.getState();
       // All far-side candidates are temporarily occupied. R must keep the
       // wreck in place, rather than falling back to a nearby road or grass.
-      const blocker=p.world.createCollider(RAPIER.ColliderDesc.cuboid(80,3,45).setTranslation(40,3,82));
-      p.resetToRoad();const held=p.getState();assert.ok(held.storrowed);assert.equal(held.storrowDamage,stuck.storrowDamage);
+      const blocker=p.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(40,3,82));
+      p.world.createCollider(RAPIER.ColliderDesc.cuboid(80,3,45),blocker);
+      assert.equal(p.resetToRoad(),'blocked');const held=p.getState();assert.ok(held.storrowed);assert.equal(held.storrowDamage,stuck.storrowDamage);
       assert.ok(Math.hypot(held.x-stuck.x,held.z-stuck.z)<.001);
-      p.world.removeCollider(blocker,true);
+      p.world.removeRigidBody(blocker);
     }
     p.resetToRoad();const s=p.getState();assert.equal(s.storrowed,false);
     assert.ok(reverse?s.x<-30:s.x>30,`repair follows the bend past the solid: (${s.x}, ${s.z})`);
@@ -93,14 +95,60 @@ for(const reverse of [false,true])test(`uncatalogued curved portal repairs on th
   }finally{p.dispose();}
 });
 
-test('an uncatalogued portal with no pavement beyond it keeps the truck wedged instead of using an off-road rescue pose',async()=>{
+test('an uncatalogued portal with no pavement beyond it repairs safely back along its approach',async()=>{
   const road={id:'short-road',name:'Local Road',points:[[0,-100],[0,36]],width:7,oneway:0};
   const p=await DrivingPhysics.create({...city,roads:[road]});
   try{
     p.setCar('moving-truck');beam(p);step(p,90);
     for(let i=0;i<900&&!p.getState().storrowed;i++)p.step({...idle,throttle:1},1/60);
     assert.ok(p.getState().storrowed);const stuck=step(p,30);
-    p.resetToRoad();const after=p.getState();assert.ok(after.storrowed);
-    assert.equal(after.storrowDamage,stuck.storrowDamage);assert.ok(Math.hypot(after.x-stuck.x,after.z-stuck.z)<.001);
+    assert.equal(p.resetToRoad(),'retreated');const after=p.getState();assert.equal(after.storrowed,false);
+    assert.equal(after.storrowDamage,0);assert.ok(after.z<stuck.z-12);assert.ok(Math.abs(after.yaw)<.001);
+    assert.ok(p.canResetAt(after.x,after.z,after.yaw,road.id,true));
+  }finally{p.dispose();}
+});
+
+for(const reverse of [false,true])test(`too-low tunnel retreat follows a curved approach, clears traffic, and preserves ${reverse?'reverse':'forward'} strike facing`,async()=>{
+  const transform=([x,z])=>reverse?[-x,60-z]:[x,z];
+  const road={id:'low-tunnel',name:'Local Tunnel',points:[[-60,-70],[-35,-30],[-10,-5],[0,10],[0,110]].map(transform),width:7,oneway:0,elevations:[0,0,0,0,0]};
+  const along=tunnelStations(road);road.tunnel={clearance:3.2,covered:[[along.at(-2)+20,along.at(-1)]],capEnd:true};
+  const p=await DrivingPhysics.create({...city,roads:[road]});
+  try{
+    p.setCar('moving-truck');p.reset(0,reverse?45:15,0,road.id);step(p,90);
+    for(let i=0;i<1500&&!p.getState().storrowed;i++)p.step({...idle,throttle:reverse?-1:1},1/60);
+    assert.ok(p.getState().storrowed,'the actual tunnel ceiling catches the cargo box');const stuck=step(p,30);
+    // A car queue blocks the first few approach candidates; repair must go
+    // farther around the bend without cutting through the verge or the queue.
+    const queued=p.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0,2,reverse?51:9));
+    p.world.createCollider(RAPIER.ColliderDesc.cuboid(4,2,9),queued);
+    assert.equal(p.resetToRoad(),'retreated');const s=p.getState();
+    assert.equal(s.storrowed,false);assert.equal(s.storrowDamage,0);assert.equal(s.speed,0);
+    assert.ok(reverse?s.z>stuck.z+12:s.z<stuck.z-12);assert.ok(reverse?s.x>5:s.x<-5,'retreat follows the bend around occupied approach positions');
+    const fx=Math.sin(s.yaw),fz=Math.cos(s.yaw),spec=PLAYER_CARS['moving-truck'];
+    assert.ok(fx>.5&&fz>0,'nose retains original road facing');
+    for(const along of [-1,-.5,0,.5,1])for(const across of [-1,0,1]){
+      const x=s.x+fx*along*spec.halfLength+fz*across*spec.halfWidth,z=s.z+fz*along*spec.halfLength-fx*across*spec.halfWidth;
+      assert.ok(roadProjection(road,x,z).distance<roadWidthAt(road,x,z)/2-.1,'the complete truck stays on the approach pavement');
+    }
+    assert.ok(p.canResetAt(s.x,s.z,s.yaw,road.id,true),'cab, chassis, and full-height cargo clear all geometry and traffic');
+    p.takeStorrowStrikes();step(p,120);assert.equal(p.getState().storrowed,false);assert.equal(p.takeStorrowStrikes().length,0);
+  }finally{p.dispose();}
+});
+
+test('a geometry-blocked far side uses the approach, but an occupied approach stays wedged until traffic clears',async()=>{
+  const roads=[{id:'lower',name:'Storrow Drive',points:[[0,-100],[0,180]],width:12,oneway:1},{id:'upper',name:'Test Overpass',points:[[-20,30],[20,30]],width:8,oneway:0,elevations:[3.7,3.7],bridge:{id:'test',thickness:.5,clearanceEstimated:true}}];
+  const p=await DrivingPhysics.create({...city,roads});
+  try{
+    p.setCar('moving-truck');step(p,90);for(let i=0;i<900&&!p.getState().storrowed;i++)p.step({...idle,throttle:1},1/60);
+    assert.ok(p.getState().storrowed);const stuck=step(p,30);
+    // The far-side roadway exists but every exit remains under a low ceiling.
+    p.world.createCollider(RAPIER.ColliderDesc.cuboid(8,.5,80).setTranslation(0,3.7,115));
+    const queue=p.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0,2,-45));
+    p.world.createCollider(RAPIER.ColliderDesc.cuboid(6,2,60),queue);
+    assert.equal(p.resetToRoad(),'blocked');const held=p.getState();
+    assert.ok(held.storrowed);assert.equal(held.storrowDamage,stuck.storrowDamage);assert.equal(held.z,stuck.z);
+    p.world.removeRigidBody(queue);
+    assert.equal(p.resetToRoad(),'retreated');const s=p.getState();assert.ok(s.z<stuck.z-12);assert.equal(s.storrowDamage,0);
+    assert.ok(p.canResetAt(s.x,s.z,s.yaw,'lower',true));
   }finally{p.dispose();}
 });

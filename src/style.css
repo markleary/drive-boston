@@ -294,4 +294,6 @@ html,body{height:100dvh}
 .flight-pad .touch-btn.word{font-size:10px;font-weight:700;letter-spacing:.06em}
 #interface.touch-enabled .flight-pad .touch-btn.word{font-size:10px}
 
-.storrow-recovery{position:absolute;left:50%;top:120px;transform:translateX(-50%);padding:10px 16px;border:1px solid #f7ba5a88;border-radius:8px;background:#262d2eef;color:#ffe2ad;font-size:13px;box-shadow:0 4px 22px #0003;white-space:nowrap}.storrow-recovery kbd{margin-left:12px}.touch-enabled .storrow-recovery{top:150px}.touch-enabled .storrow-recovery kbd{display:none}
+.storrow-toast{position:absolute;z-index:4;left:50%;top:38%;transform:translate(-50%,-50%) scale(.96);opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;color:#f04438;font-family:'Bebas Neue',sans-serif;font-size:clamp(32px,6vw,68px);line-height:1.05;letter-spacing:.035em;text-align:center;white-space:nowrap;text-shadow:0 2px 3px #210705,0 0 18px #21070599}.storrow-toast.visible{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.storrow-recovery{position:absolute;z-index:4;left:50%;top:calc(38% + clamp(32px,4vw,45px));transform:translateX(-50%);padding:10px 16px;border:1px solid #f7ba5a88;border-radius:8px;background:#262d2eef;color:#ffe2ad;font-size:13px;box-shadow:0 4px 22px #0003;white-space:nowrap}.storrow-recovery kbd{margin-left:12px}.touch-enabled .storrow-recovery kbd{display:none}
+@media(prefers-reduced-motion:reduce){.storrow-toast{transition:none}}
