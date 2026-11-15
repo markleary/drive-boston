@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, MOVING_TRUCK, isPerformanceCar, carGear, carRpm, type PlayerCarId } from '../simulation/player-cars.ts';
 import {lowClearanceAt} from '../simulation/low-clearance.ts';
-import {storrowRecoveryCandidates,type StorrowRecoveryPose} from '../simulation/storrow-recovery.ts';
+import {storrowRecoveryCandidates,storrowSolidRecoveryCandidates,type StorrowRecoveryPose} from '../simulation/storrow-recovery.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
@@ -64,7 +64,7 @@ export class DrivingPhysics {
   readonly chassisCollider: RAPIER.Collider;
   private truckColliders:RAPIER.Collider[]=[];
   private cargoCollider?:RAPIER.Collider;
-  private storrow?:{damage:number;direction:number;elapsed:number;anchor?:RAPIER.RigidBody;exit:{x:number;z:number;yaw:number;roadId?:string};exits?:StorrowRecoveryPose[];};
+  private storrow?:{damage:number;direction:number;elapsed:number;anchor?:RAPIER.RigidBody;exits:StorrowRecoveryPose[];};
   private storrowStrikes:StorrowStrike[]=[];
   private truckApproachSpeed=0;
   private truckApproachAge=0;
@@ -343,21 +343,18 @@ export class DrivingPhysics {
     });
     if(!hit||!point)return;
     const direction=before.speed<0?-1:1,site=lowClearanceAt(this.city,point.x,point.z,2);
-    let exits:StorrowRecoveryPose[]|undefined;
-    let exit={x:before.x,z:before.z,yaw:before.yaw,roadId:sampleVehicleSurface(this.city,before.x,before.z,before.y).road?.id};
+    let exits:StorrowRecoveryPose[];
     if(site&&Math.abs(before.y-site.roadY-this.carSpec.spawnHeight)<1.5){
       exits=storrowRecoveryCandidates(this.city,site,before,direction,this.carSpec.halfLength,this.carSpec.halfWidth);
     }else{
-      // Other low overpasses (including tunnel portals) use their real solid
-      // extent. Walk the complete truck beyond the struck mesh before repair.
-      const dx=Math.sin(before.yaw)*direction,dz=Math.cos(before.yaw)*direction;
-      for(let distance=8;distance<=1000;distance+=2){
-        const x=before.x+dx*distance,z=before.z+dz*distance;
-        const pose=this.resetPose(x,z,before.yaw,exit.roadId),center=this.colliderCenter(cargo,pose.position,pose.rotation);
-        if(!hit.intersectsShape(cargo.shape,center,pose.rotation)){exit={...exit,x:x+dx*12,z:z+dz*12};break;}
-      }
+      // Project the actual solid onto the road corridor. Its far side follows
+      // bends and source seams, and includes the full truck footprint. A tall
+      // query avoids accepting a higher-clearance gap inside the same portal.
+      const footprint=new RAPIER.Cuboid(this.carSpec.halfWidth,1000,this.carSpec.halfLength),solid=hit,impactY=point.y;
+      exits=storrowSolidRecoveryCandidates(this.city,before,sampleVehicleSurface(this.city,before.x,before.z,before.y).height,direction,this.carSpec.halfLength,this.carSpec.halfWidth,
+        candidate=>solid.intersectsShape(footprint,{x:candidate.x,y:impactY,z:candidate.z},{x:0,y:Math.sin(candidate.yaw/2),z:0,w:Math.cos(candidate.yaw/2)}));
     }
-    this.storrow={damage:clamp(.35+Math.abs(before.speed)*.032,.35,1),direction,elapsed:0,exit,exits};
+    this.storrow={damage:clamp(.35+Math.abs(before.speed)*.032,.35,1),direction,elapsed:0,exits};
     this.storrowStrikes.push({severity:Math.max(severity,Math.abs(before.speed)),direction});
   }
 
@@ -510,13 +507,14 @@ export class DrivingPhysics {
    * at its level, the same placement as an overturned car's recovery. */
   resetToRoad(){
     if(this.storrow){
-      const exit=this.storrow.exit,dx=Math.sin(exit.yaw)*this.storrow.direction,dz=Math.cos(exit.yaw)*this.storrow.direction;
       // Prefer the far side of this same crossing, retaining lane/direction.
       // Longer search covers a queue immediately beyond the bridge.
-      const candidates=this.storrow.exits??Array.from({length:16},(_,i)=>({...exit,x:exit.x+dx*i*4,z:exit.z+dz*i*4}));
-      for(const at of candidates){
+      for(const at of this.storrow.exits){
         if(this.canResetAt(at.x,at.z,at.yaw,at.roadId,true)){this.reset(at.x,at.z,at.yaw,at.roadId);return;}
       }
+      // A full queue or an exhausted road is not permission to use grass or
+      // the saved rescue point. Keep the wreck in place; R can retry when clear.
+      return;
     }
     this.recoverFromCrash(this.body.translation());
   }

@@ -62,6 +62,25 @@ test('an NPC steers away from a predicted head-on, stays on pavement, then rejoi
   }finally{f.dispose();}
 });
 
+test('a minivan holds its escape side until an oncoming coupe has actually passed',async()=>{
+  const f=await fixture({width:12});
+  try{
+    const index=f.traffic.snapshot().findIndex(a=>a.type==='minivan'&&a.speed>4&&Math.sin(a.yaw)>.99),actor=f.traffic.snapshot()[index];
+    assert.ok(actor,'a rolling minivan is available');
+    const player={...f.far,x:actor.x+45,z:actor.z-2.05,yaw:actor.yaw+Math.PI,speed:22.352,halfLength:2.02,halfWidth:.85};
+    let peak=0,held=0;
+    for(let i=0;i<420;i++){
+      f.traffic.update(1/60,player,f.far);f.physics.world.step();
+      const now=f.traffic.snapshot()[index],offset=Math.abs(now.evasion),along=player.x-now.x;
+      if(along>0&&peak>.08){assert.ok(offset>=peak-.005,`minivan starts returning with player still ${along.toFixed(1)} m ahead`);held++;}
+      if(along>0)peak=Math.max(peak,offset);
+      player.x-=player.speed/60;
+    }
+    assert.ok(peak>.1&&held>20,'the minivan holds a real escape maneuver through the approach');
+    assert.ok(Math.abs(f.traffic.snapshot()[index].evasion)<.03,'the minivan rejoins after both vehicles have cleared');
+  }finally{f.dispose();}
+});
+
 test('an NPC brakes instead of swerving through a blocked escape corridor',async()=>{
   const f=await fixture();
   try{

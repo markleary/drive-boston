@@ -3,6 +3,7 @@ import test from 'node:test';
 import RAPIER from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {PLAYER_CARS,MOVING_TRUCK} from '../src/simulation/player-cars.ts';
+import {roadProjection,roadWidthAt} from '../src/simulation/road-surfaces.ts';
 const city={bounds:{minX:-3000,maxX:3000,minZ:-3000,maxZ:3000},buildings:[],roads:[],spawn:{x:0,z:0,yaw:0}};
 const idle={throttle:0,brake:0,steer:0,handbrake:false};
 const step=(p,frames,input=idle)=>{for(let i=0;i<frames;i++)p.step(input,1/60);return p.getState();};
@@ -54,5 +55,52 @@ test('truck repair skips occupied far-side positions and switching from a bike r
     const queued=p.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0,.7,49.8));p.world.createCollider(RAPIER.ColliderDesc.cuboid(1,.6,2.5),queued);p.resetToRoad();const after=p.getState();
     assert.equal(after.storrowed,false);assert.ok(after.z>56,`repair clears queued car: ${after.z}`);assert.ok(p.canResetAt(after.x,after.z,after.yaw,undefined,true));
     p.setVehicleType('ultrabee');p.reset(0,30,0,'lower');p.setVehicleType('car');assert.ok(p.canResetAt(p.getState().x,p.getState().z,p.getState().yaw),'truck cannot appear inside bridge after bike switch');
+  }finally{p.dispose();}
+});
+
+for(const reverse of [false,true])test(`uncatalogued curved portal repairs on the connected road ${reverse?'in reverse':'forwards'}, past the complete solid`,async()=>{
+  const points=[[0,-100],[0,36],[35,71],[100,90]].map(([x,z])=>reverse?[-x,60-z]:[x,z]);
+  const road={id:'local-portal',name:'Local Road',points,width:7,oneway:0};
+  const p=await DrivingPhysics.create({...city,roads:[road]});
+  try{
+    p.setCar('moving-truck');
+    // A long portal covers the bend itself. Its far extent cannot be measured
+    // by sending the entrance yaw straight ahead past the roadway.
+    const roof=p.world.createCollider(RAPIER.ColliderDesc.cuboid(20,.5,18).setTranslation(0,3.7004,reverse?16:44));
+    p.reset(0,reverse?60:0,0);step(p,90);
+    for(let i=0;i<1500&&!p.getState().storrowed;i++)p.step({...idle,throttle:reverse?-1:1},1/60);
+    assert.ok(p.getState().storrowed);step(p,30);
+    if(!reverse){
+      const stuck=p.getState();
+      // All far-side candidates are temporarily occupied. R must keep the
+      // wreck in place, rather than falling back to a nearby road or grass.
+      const blocker=p.world.createCollider(RAPIER.ColliderDesc.cuboid(80,3,45).setTranslation(40,3,82));
+      p.resetToRoad();const held=p.getState();assert.ok(held.storrowed);assert.equal(held.storrowDamage,stuck.storrowDamage);
+      assert.ok(Math.hypot(held.x-stuck.x,held.z-stuck.z)<.001);
+      p.world.removeCollider(blocker,true);
+    }
+    p.resetToRoad();const s=p.getState();assert.equal(s.storrowed,false);
+    assert.ok(reverse?s.x<-30:s.x>30,`repair follows the bend past the solid: (${s.x}, ${s.z})`);
+    const fx=Math.sin(s.yaw),fz=Math.cos(s.yaw),spec=PLAYER_CARS['moving-truck'];
+    for(const along of [-spec.halfLength,0,spec.halfLength])for(const across of [-spec.halfWidth,0,spec.halfWidth]){
+      const x=s.x+fx*along+fz*across,z=s.z+fz*along-fx*across;
+      assert.ok(roadProjection(road,x,z).distance<roadWidthAt(road,x,z)/2-.1,'the whole box remains on the connected pavement');
+    }
+    assert.ok(fx>.6&&fz>0,'the nose follows the road, retaining its facing while reversing');
+    const projectionShape=new RAPIER.Cuboid(spec.halfWidth,1000,spec.halfLength);
+    assert.equal(roof.intersectsShape(projectionShape,{x:s.x,y:s.y,z:s.z},{x:0,y:Math.sin(s.yaw/2),z:0,w:Math.cos(s.yaw/2)}),false,'the complete footprint is beyond the struck roof');
+    assert.ok(p.canResetAt(s.x,s.z,s.yaw,road.id,true));
+  }finally{p.dispose();}
+});
+
+test('an uncatalogued portal with no pavement beyond it keeps the truck wedged instead of using an off-road rescue pose',async()=>{
+  const road={id:'short-road',name:'Local Road',points:[[0,-100],[0,36]],width:7,oneway:0};
+  const p=await DrivingPhysics.create({...city,roads:[road]});
+  try{
+    p.setCar('moving-truck');beam(p);step(p,90);
+    for(let i=0;i<900&&!p.getState().storrowed;i++)p.step({...idle,throttle:1},1/60);
+    assert.ok(p.getState().storrowed);const stuck=step(p,30);
+    p.resetToRoad();const after=p.getState();assert.ok(after.storrowed);
+    assert.equal(after.storrowDamage,stuck.storrowDamage);assert.ok(Math.hypot(after.x-stuck.x,after.z-stuck.z)<.001);
   }finally{p.dispose();}
 });

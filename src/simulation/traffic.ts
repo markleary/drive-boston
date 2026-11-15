@@ -842,8 +842,12 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     }
     const state=actor.evasion;if(!state)return;
     const dx=player.x-actor.x,dz=player.z-actor.z,along=dx*Math.sin(lanePoint.yaw)+dz*Math.cos(lanePoint.yaw);
-    // Keep the escape side while passing; do not cut back across the player.
-    if(!threat&&elapsed>state.holdUntil&&Math.abs(along)>actor.spec.length/2+6)state.target=0;
+    // Losing the collision-course prediction after moving aside does not mean
+    // the oncoming player has passed. Returning while it is still ahead can
+    // swing a long vehicle's front corner into an otherwise clear close pass.
+    const passed=along<-(actor.spec.length/2+(player.halfLength??2.1)+2);
+    const leftEncounter=Math.hypot(dx,dz)>65||Math.abs(player.y-height)>2.2;
+    if(!threat&&elapsed>state.holdUntil&&(passed||leftEncounter))state.target=0;
     const next=advanceEvasion(state,dt,actor.speed);
     return{state,...next};
   }
