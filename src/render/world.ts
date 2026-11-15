@@ -35,6 +35,7 @@ import { STREET_LIGHT } from '../simulation/highway-lighting';
 import type { Warm } from './static-batches';
 import type { Upload } from './paced-upload';
 import { addCharlesBridgeDetails } from './charles-bridges';
+import { addLowClearanceDetails } from './low-clearance';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 import { addTobinBridgeDetails } from './tobin-bridge';
 import { updateWater } from './water-material';
@@ -106,6 +107,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
 
   const charlesBridges=addCharlesBridgeDetails(scene,city);buildingCollisions.push(...charlesBridges.collisions);
   roadStructures.userData.longfellow=charlesBridges.group.userData;
+  const lowClearances=addLowClearanceDetails(scene,city);buildingCollisions.push(...lowClearances.collisions);roadStructures.userData.lowClearances=lowClearances.group.userData;
   const harvardBridge=addHarvardBridgeDetails(scene,city,{mobile:options.mobile});buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
   const tobinBridge=addTobinBridgeDetails(scene,city,materials.asphalt);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
   const tunnels=addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;

@@ -3,7 +3,8 @@ import type { DriveInput, TravelMode } from '../types';
 
 type CarSound = `${PerformanceCarId}-${'idle'|'drive'|'high'|'upshift'|'downshift'}`;
 const carSound=(id:PerformanceCarId,layer:'idle'|'drive'|'high'|'upshift'|'downshift'):CarSound=>`${id}-${layer}`;
-type SoundName = CarSound | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
+type TruckEffect = 'moving-truck-horn' | 'moving-truck-storrow-crash' | 'moving-truck-boo';
+type SoundName = CarSound | TruckEffect | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
 /** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
 type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number };
@@ -12,8 +13,9 @@ const CAR_IDS=Object.keys(CAR_POWERTRAINS) as PerformanceCarId[];
 const CAR_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high','upshift','downshift'] as const).map(layer=>carSound(id,layer)));
 const CAR_ENGINE_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high'] as const).map(layer=>carSound(id,layer)));
 const COMMON_SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
-const SOUNDS = [...CAR_SOUNDS, ...COMMON_SOUNDS];
-const ONE_SHOTS = new Set<SoundName>([...CAR_IDS.flatMap(id=>[carSound(id,'upshift'),carSound(id,'downshift')]),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
+const TRUCK_EFFECTS:TruckEffect[]=['moving-truck-horn','moving-truck-storrow-crash','moving-truck-boo'];
+const SOUNDS:SoundName[] = [...CAR_SOUNDS, ...COMMON_SOUNDS,...TRUCK_EFFECTS];
+const ONE_SHOTS = new Set<SoundName>([...TRUCK_EFFECTS,...CAR_IDS.flatMap(id=>[carSound(id,'upshift'),carSound(id,'downshift')]),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
 /** Velocity change (m/s in one physics step) below which a knock is a bump rather than a crash. */
 const LIGHT_IMPACT = 3.5;
 const clamp = (value: number, low = 0, high = 1) => Math.max(low, Math.min(high, value));
@@ -26,6 +28,7 @@ export class DriveAudio {
   private loops = new Map<SoundName, Loop>();
   private failed = new Set<SoundName>();
   private oneShots = new Set<AudioBufferSourceNode | OscillatorNode>();
+  private hornShot?:AudioBufferSourceNode;
   private fallback?: { oscillator: OscillatorNode; gain: GainNode; filter: BiquadFilterNode };
   private electric?: {oscillator:OscillatorNode;gain:GainNode};
   private rotorFallback?: { oscillator: OscillatorNode; modulator: OscillatorNode; gain: GainNode };
@@ -36,7 +39,9 @@ export class DriveAudio {
   private lastShift=-Infinity;
   private shiftCount=0;
   private get carEngineReady(){const id=this.carId;return isPerformanceCar(id)&&(['idle','drive','high'] as const).every(layer=>this.loops.has(carSound(id,layer)));}
-  constructor(private readonly mobile = false) {
+  private readonly mobile:boolean;
+  constructor(mobile = false) {
+    this.mobile=mobile;
     if (mobile) this.wantedSounds = COMMON_SOUNDS;
   }
 
@@ -44,8 +49,8 @@ export class DriveAudio {
     if(id===this.carId)return;this.carId=id;this.previousDriveGear=0;this.gear=0;this.rpm=850;this.stopOneShots();
     if(this.context)for(const name of ['engine-idle','engine-drive',...CAR_SOUNDS] as SoundName[])this.loops.get(name)?.gain.gain.setTargetAtTime(0,this.context.currentTime,.025);
     if (this.mobile) {
-      this.wantedSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3)];
-      for (const name of CAR_SOUNDS) {
+      this.wantedSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[])];
+      for (const name of [...CAR_SOUNDS,...TRUCK_EFFECTS]) {
         if (this.wantedSounds.includes(name)) continue;
         this.releaseSound(name);
         this.failed.delete(name);
@@ -63,6 +68,8 @@ export class DriveAudio {
   private lastHorn = -Infinity;
   private lastImpact = new Map<ImpactKind, number>();
   private impactCount = 0;
+  private lastStorrow=-Infinity;
+  private storrowCount=0;
   private noise?: AudioBuffer;
   private gate = -1;
 
@@ -99,7 +106,7 @@ export class DriveAudio {
       activeOneShots: this.oneShots.size, fallback: Boolean(this.mode === 'drive' ? this.fallback : this.mode==='helicopter'?this.rotorFallback:false),
       masterGain: this.master?.gain.value ?? 0, rpm: Math.round(this.rpm), gear: this.gear + 1,
       rotorGain: this.loops.get('helicopter-rotor')?.gain.gain.value ?? 0,
-      electricGain:this.electric?.gain.gain.value??0, impactCount: this.impactCount,
+      electricGain:this.electric?.gain.gain.value??0, impactCount: this.impactCount,storrowCount:this.storrowCount,
       engineProfile:this.mode!=='drive'?'off':this.carEngineReady?this.carId:this.loops.has('engine-idle')||this.loops.has('engine-drive')?'generic':this.fallback?'synthesized':'loading',
       engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0)+CAR_ENGINE_SOUNDS.reduce((sum,name)=>sum+(this.loops.get(name)?.gain.gain.value??0),0)+(this.fallback?.gain.gain.value??0),
     };
@@ -199,7 +206,16 @@ export class DriveAudio {
     }
     // Use the complete generic engine mix until every dedicated car layer is
     // decoded, so either a partial failure or total loss cannot leave RPM gaps.
-    if(useCar&&isPerformanceCar(id)){
+    if(useCar&&id==='moving-truck'){
+      // The heavy diesel works below 3,000 RPM, with injector clatter at idle
+      // and a loaded exhaust layer through its long automatic gear changes.
+      for(const name of CAR_ENGINE_SOUNDS)if(!name.startsWith(id+'-'))this.setLoop(name,0,1,2000);
+      const driveMix=clamp(Math.max(velocity/5,load*.72)),highMix=clamp((this.rpm-2050)/750),duck=now-this.lastShift<.28?.72:1;
+      this.setLoop(carSound(id,'idle'),(1-driveMix)*.58,clamp(this.rpm/650,.78,1.6),1700);
+      this.setLoop(carSound(id,'drive'),driveMix*(1-highMix)*(.52+load*.23)*duck,clamp(this.rpm/1800,.45,1.7),1900+load*1800);
+      this.setLoop(carSound(id,'high'),driveMix*highMix*(.48+load*.25)*duck,clamp(this.rpm/2800,.65,1.25),2300+load*1500);
+      this.setLoop('engine-idle',0,1,1000);this.setLoop('engine-drive',0,1,1000);
+    }else if(useCar&&isPerformanceCar(id)){
       for(const name of CAR_ENGINE_SOUNDS)if(!name.startsWith(id+'-'))this.setLoop(name,0,1,2000);
       const revised=id!=='mclaren-gt',supra=id==='supra-mk4';
       // Both newer cars now use mastered GT exhaust sources. All moving mixes
@@ -240,13 +256,17 @@ export class DriveAudio {
     if (!context || !this.master || this.mode !== 'drive' || this.muted || this.paused || document.hidden || this.disposed) return;
     const now = context.currentTime;
     if (now - this.lastHorn < 0.7) return;
-    this.resume(); this.lastHorn = now; this.stopOneShots();
-    const buffer = this.buffers.get('horn');
-    if (buffer) this.playOneShot(buffer, 0.7, 1);
+    this.resume(); this.lastHorn = now;
+    // Retrigger only the horn: honking at the bridge must not cancel the
+    // metal tear or the spectator reaction scheduled after it.
+    try{this.hornShot?.stop();}catch{/* Previous horn already ended. */}
+    this.hornShot=undefined;
+    const buffer = this.buffers.get(this.carId==='moving-truck'?'moving-truck-horn':'horn')??this.buffers.get('horn');
+    if (buffer) this.hornShot=this.playOneShot(buffer, 0.7, 1);
     else if (this.failed.has('horn')) this.fallbackHorn();
   }
 
-  private playOneShot(buffer: AudioBuffer, volume: number, rate: number, softShift:false|'gt'|'exhaust'=false) {
+  private playOneShot(buffer: AudioBuffer, volume: number, rate: number, softShift:false|'gt'|'exhaust'=false,delay=0) {
     const context = this.context!;
     const source = context.createBufferSource(); source.buffer = buffer; source.playbackRate.value = rate;
     const gain = context.createGain(); gain.gain.value = volume;
@@ -262,8 +282,9 @@ export class DriveAudio {
       gain.gain.setValueAtTime(volume,now+Math.max(attack,duration-release));gain.gain.linearRampToValueAtTime(0,now+duration);
     }else source.connect(gain);
     gain.connect(this.master!); this.oneShots.add(source);
-    source.onended = () => { this.oneShots.delete(source); source.disconnect(); filter?.disconnect(); gain.disconnect(); };
-    source.start();
+    source.onended = () => { this.oneShots.delete(source); if(this.hornShot===source)this.hornShot=undefined;source.disconnect(); filter?.disconnect(); gain.disconnect(); };
+    source.start(context.currentTime+delay);
+    return source;
   }
 
   /** A filtered noise burst with a fast decay stands in for a missing crash clip. */
@@ -316,6 +337,19 @@ export class DriveAudio {
     const buffer = this.buffers.get(name);
     if (buffer) this.playOneShot(buffer, gain, kind === 'pedestrian' ? .95 + Math.random() * .1 : .92 + Math.random() * .16);
     else if (this.failed.has(name)) this.fallbackImpact(gain, kind === 'pedestrian');
+  }
+
+  /** One confirmed roof strike. Scheduling on the audio clock lets pause,
+   * mute and vehicle changes cancel the delayed spectator reaction. */
+  storrowed(severity:number){
+    const context=this.context;
+    if(!context||!this.master||this.mode!=='drive'||this.carId!=='moving-truck'||this.muted||this.paused||document.hidden||this.disposed||!Number.isFinite(severity))return;
+    const now=context.currentTime;if(now-this.lastStorrow<1.2)return;
+    this.lastStorrow=now;this.storrowCount++;this.impactCount++;this.resume();
+    const gain=.55+clamp(Math.abs(severity)/15)*.45,crash=this.buffers.get('moving-truck-storrow-crash'),boo=this.buffers.get('moving-truck-boo');
+    if(crash)this.playOneShot(crash,gain,1);
+    else this.fallbackImpact(gain,false);
+    if(boo)this.playOneShot(boo,.68,1,false,.7);
   }
 
   dispose() {
@@ -487,6 +521,6 @@ export class DriveAudio {
 
   private stopOneShots() {
     for (const source of this.oneShots) { try { source.stop(); } catch { /* Already ended. */ } }
-    this.oneShots.clear();
+    this.oneShots.clear();this.hornShot=undefined;
   }
 }

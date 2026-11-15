@@ -1,17 +1,19 @@
 import type {VehicleState} from '../types';
 
+/** Physics supplies the selected vehicle's footprint; older callers retain the coupe envelope. */
+export type PlayerTrafficState=VehicleState&{halfLength?:number;halfWidth?:number};
 export interface Evasion {offset:number;velocity:number;target:number;holdUntil:number;}
 interface Car {x:number;y:number;z:number;yaw:number;speed:number;halfLength:number;halfWidth:number;}
 /** Predict an overlapping, opposing approach; ordinary opposing-lane traffic,
  * crossing traffic, reverse motion, and different bridge levels are excluded. */
-export function headOnThreat(car:Car,player:VehicleState){
+export function headOnThreat(car:Car,player:PlayerTrafficState){
   const heading=Math.cos(player.yaw-car.yaw);
   if(player.speed<3||heading>-.65||Math.abs(player.y-car.y)>2.2)return;
   const dx=player.x-car.x,dz=player.z-car.z,along=dx*Math.sin(car.yaw)+dz*Math.cos(car.yaw),across=dx*Math.cos(car.yaw)-dz*Math.sin(car.yaw);
-  const closing=car.speed-player.speed*heading,gap=along-car.halfLength-2.1;
+  const closing=car.speed-player.speed*heading,gap=along-car.halfLength-(player.halfLength??2.1);
   if(gap<=0||along>65||closing<6)return;
   const time=gap/closing,predictedAcross=across+player.speed*Math.sin(player.yaw-car.yaw)*time;
-  if(time<.15||time>2.2||Math.abs(predictedAcross)>car.halfWidth+.9+.25)return;
+  if(time<.15||time>2.2||Math.abs(predictedAcross)>car.halfWidth+(player.halfWidth??.9)+.25)return;
   return{along,across:predictedAcross,time};
 }
 

@@ -1,0 +1,199 @@
+{
+  "checkedUnrestrictedBostonRoads": 14920,
+  "referenceParkwayWays": 132,
+  "referenceExtracts": [
+    "osm-cambridge-roads.json",
+    "osm-brookline-roads.json",
+    "osm-somerville-roads.json",
+    "osm-chelsea-roads.json"
+  ],
+  "bufferMeters": 4,
+  "minimumCoveredFraction": 0.6,
+  "candidates": [
+    {
+      "id": "14372-0-0",
+      "sourceName": "North Beacon Street",
+      "lengthMeters": 14.76,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        8639366
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "10287-0-0",
+      "sourceName": "Cambridge Street",
+      "lengthMeters": 17.19,
+      "coveredFraction": 0.6911,
+      "osmWays": [
+        807640152
+      ],
+      "decision": "perpendicular upper road bridge"
+    },
+    {
+      "id": "8457-0-0",
+      "sourceName": "Charles Street",
+      "lengthMeters": 53.59,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        48982004
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "13137-0-0",
+      "sourceName": "Charles Street",
+      "lengthMeters": 33.52,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        122376136
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "13138-0-0",
+      "sourceName": "Charles Street",
+      "lengthMeters": 83.28,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        8646240
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "1797-0-0",
+      "sourceName": "David G Mugar Way",
+      "lengthMeters": 24.84,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        817406992
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "1798-0-0",
+      "sourceName": "David G Mugar Way",
+      "lengthMeters": 34.08,
+      "coveredFraction": 0.9987,
+      "osmWays": [
+        931384763,
+        817406992
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "7601-0-0",
+      "sourceName": "David G Mugar Way",
+      "lengthMeters": 80.1,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        630958765
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "13337-0-0",
+      "sourceName": "David G Mugar Way",
+      "lengthMeters": 90.22,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        630958765
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "14322-0-0",
+      "sourceName": "David G Mugar Way",
+      "lengthMeters": 381.41,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        828869387
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "14323-0-0",
+      "sourceName": "David G Mugar Way",
+      "lengthMeters": 84.32,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        1416013986
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "14324-0-0",
+      "sourceName": "David G Mugar Way",
+      "lengthMeters": 96.82,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        1416013987
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "8696-0-0",
+      "sourceName": "Everett Street",
+      "lengthMeters": 12.76,
+      "coveredFraction": 0.6716,
+      "osmWays": [
+        86134690,
+        1533648656
+      ],
+      "decision": "perpendicular street crossing"
+    },
+    {
+      "id": "9444-0-0",
+      "sourceName": "North Harvard Street",
+      "lengthMeters": 6.39,
+      "coveredFraction": 0.9358,
+      "osmWays": [
+        8646497,
+        8646148
+      ],
+      "decision": "perpendicular upper road bridge"
+    },
+    {
+      "id": "9170-0-0",
+      "sourceName": "Nashua Street",
+      "lengthMeters": 11.06,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        970407067,
+        829909270
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "9171-0-0",
+      "sourceName": "Nashua Street",
+      "lengthMeters": 57.45,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        829909270,
+        482011737
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "13140-0-0",
+      "sourceName": "Nashua Street",
+      "lengthMeters": 60.6,
+      "coveredFraction": 1.0,
+      "osmWays": [
+        970407067
+      ],
+      "decision": "restrict NPC box trucks; preserve display name"
+    },
+    {
+      "id": "10309-0-0",
+      "sourceName": "Western Avenue",
+      "lengthMeters": 17.58,
+      "coveredFraction": 0.6822,
+      "osmWays": [
+        807640152
+      ],
+      "decision": "perpendicular upper road bridge"
+    }
+  ]
+}
