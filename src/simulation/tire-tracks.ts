@@ -1,9 +1,10 @@
-import type {CityData,DriveInput,Point2} from '../types';
+import type {CityData,DriveInput,ParkPath,Point2} from '../types';
 import type {CityTile} from './tile-format.ts';
 import {pavementEdges} from './tile-format.ts';
 import {pointInside} from './roads.ts';
 import {roadProjection,sampleVehicleSurface} from './road-surfaces.ts';
 import {isCommonwealthMall} from './commonwealth-mall.ts';
+import {isFellsArea,parkSurfaceRuns} from './fells-trails.ts';
 
 export type TireSurface='pavement'|'grass';
 export interface TireContact {
@@ -40,13 +41,21 @@ class SurfaceIndex {
  * as it does for the vehicle's own support. */
 export function createTireSurfaceSampler(city:CityData,tiles:()=>Iterable<CityTile>=()=>[]){
   const areas=new SurfaceIndex(),cached=new WeakMap<CityTile,SurfaceIndex>();
+  const woodland=(city.parks??[]).filter(isFellsArea),pathRuns=new WeakMap<ParkPath,ParkPath[]>();
+  const pavedRuns=(path:ParkPath)=>{
+    let runs=pathRuns.get(path);
+    if(!runs){runs=parkSurfaceRuns(path,woodland).filter(run=>!run.natural).map(run=>({...path,points:run.points}));pathRuns.set(path,runs);}
+    return runs;
+  };
   let lastTiles:CityTile[]=[],measured=new Set<string>();
   // The Commonwealth Avenue Mall is typed with the paved squares but is a lawn; its surveyed walk is a tile sidewalk polygon.
   for(const p of city.parks??[])areas.add(p.rings,(/plaza|copley square/i.test(p.name)||/Malls, Squares/i.test(p.kind??''))&&!isCommonwealthMall(p)?'pavement':'grass');
   for(const w of city.water??[])areas.add(w.rings,null);
+  // Only paved path runs override the ground. Fells soil uses the existing
+  // brown, ragged soft-ground tracks; roads and bridge decks retain rubber.
   // Roads/paths are indexed by segment so each wheel only visits nearby lines.
   const lines=new Map<string,{points:Point2[];width:number;id:string;elevated:boolean}[]>();
-  for(const r of [...(city.roads??[]),...(city.parkPaths??[])]){
+  for(const r of [...(city.roads??[]),...(city.parkPaths??[]).flatMap(pavedRuns)]){
     const entry={points:r.points,width:r.width+('oneway' in r?5.8:0),id:r.id,elevated:'elevations' in r&&!!r.elevations},keys=new Set<string>();
     for(let i=1;i<r.points.length;i++){
       const a=r.points[i-1],b=r.points[i],radius=entry.width/2;
@@ -76,7 +85,7 @@ export function createTireSurfaceSampler(city:CityData,tiles:()=>Iterable<CityTi
         cached.set(tile,index);
       }
       if(index.at(x,z).length)return'pavement';
-      for(const p of tile.parkPaths)if(roadProjection(p,x,z).distance<=p.width/2)return'pavement';
+      for(const path of tile.parkPaths)for(const p of pavedRuns(path))if(roadProjection(p,x,z).distance<=p.width/2)return'pavement';
     }
     for(const line of lines.get(`${Math.floor(x/LINE_CELL)},${Math.floor(z/LINE_CELL)}`)??[]){
       if(line.elevated||measured.has(line.id))continue;
