@@ -13,9 +13,10 @@ validation of the superseded commit. Pages deployment still waits for validation
 and uses its build artifact, avoiding a second install and build.
 
 `scripts/run-ci-tests.mjs` discovers new `tests/*.test.mjs` files automatically.
-Its explicit exclusions are limited to crosswalk paint placement, facade UVs,
-building identity/style, neighborhood landmark decoration and State House
-materials. The full test command remains unchanged; no test files were removed.
+Its four explicit exclusions are limited to facade UVs, building identity/style,
+neighborhood landmark decoration and State House materials. Crosswalk planner
+and whole-map placement tests remain in regular CI. The full test command remains
+unchanged; no test files were removed.
 
 ## Exhaustive checks
 

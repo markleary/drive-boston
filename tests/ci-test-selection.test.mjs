@@ -7,9 +7,9 @@ import {join} from 'node:path';
 import test from 'node:test';
 import {CI_EXCLUSIONS, REPO_ROOT, discoverTestFiles, parseArguments, runTests, selectTestShards} from '../scripts/run-ci-tests.mjs';
 
-test('CI shards include every test exactly once except the five reviewed visual suites', () => {
+test('CI shards include every test exactly once except the four reviewed visual suites', () => {
   const files = discoverTestFiles(), excluded = [
-    'building-identities.test.mjs', 'crosswalks.test.mjs', 'facade-uv.test.mjs',
+    'building-identities.test.mjs', 'facade-uv.test.mjs',
     'neighborhood-landmarks.test.mjs', 'state-house.test.mjs',
   ];
   assert.deepEqual(Object.keys(CI_EXCLUSIONS).sort(), excluded);
@@ -22,7 +22,7 @@ test('CI shards include every test exactly once except the five reviewed visual 
   }
   for (const file of ['collisions', 'vehicle', 'bike-recovery', 'helicopter', 'boston-highways', 'highway-ramp-connections',
     'central-artery', 'i93-runtime', 'soldiers-field-clearance', 'tunnel-passages', 'tunnel-shell-locations',
-    'building-passages', 'building-undersides', 'building-clearance', 'stream-order', 'scene-memory', 'tile-resources', 'upload-release']) {
+    'building-passages', 'building-undersides', 'building-clearance', 'crosswalks', 'stream-order', 'scene-memory', 'tile-resources', 'upload-release']) {
     assert.ok(expected.includes(`${file}.test.mjs`), `${file} is critical CI coverage`);
   }
 });

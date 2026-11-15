@@ -11,7 +11,6 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 export const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 export const CI_EXCLUSIONS = Object.freeze({
   'building-identities.test.mjs': 'Facade style and building-name classification; retained in the full local suite.',
-  'crosswalks.test.mjs': 'Exhaustive painted-stripe placement; road support, collision and junction traversal stay in CI.',
   'facade-uv.test.mjs': 'Exhaustive facade texture alignment across the surveyed city.',
   'neighborhood-landmarks.test.mjs': 'Architectural styling and decorative Fenway layout.',
   'state-house.test.mjs': 'Landmark material selection and source-triangle preservation.',
@@ -31,6 +30,7 @@ const TEST_WEIGHTS = Object.freeze({
   'bridges.test.mjs': 45,
   'boston-highways.test.mjs': 41,
   'helicopter.test.mjs': 39,
+  'crosswalks.test.mjs': 37,
   'overpass-routes.test.mjs': 36,
   'terrain-actors.test.mjs': 25,
   'pedestrian-locality.test.mjs': 24,

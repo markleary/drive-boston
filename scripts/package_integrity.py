@@ -49,6 +49,10 @@ def point(value, dimensions):
  return isinstance(value,list) and len(value)==dimensions and all(finite_number(v) for v in value)
 
 
+def numeric_fields(value, fields):
+ return isinstance(value,dict) and all(finite_number(value.get(field)) for field in fields)
+
+
 def read_gzip(path):
  raw=path.read_bytes()
  require(len(raw)>=10 and raw[:4]==b'\x1f\x8b\x08\0' and raw[4:8]==b'\0'*4,f'{path.name}: non-reproducible gzip header')
@@ -121,8 +125,16 @@ def validate_package(data_dir):
  city=parse_json((data_dir/'city.json').read_bytes())
  provenance=parse_json((data_dir/'provenance.json').read_bytes())
  require(provenance.get('region')=='metro','expected a metro package')
- for key in ('origin','bounds','coverage','spawn','elevation','tiles','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water'):
+ for key in ('origin','bounds','coverage','spawn','elevation','tiles','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water','sources'):
   require(key in city,f'city.json lacks {key}')
+ for key in ('coverage','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water','sources'):
+  require(isinstance(city[key],list),f'{key}: expected a runtime array')
+ require(numeric_fields(city['origin'],('xFeet','yFeet','longitude','latitude')),'invalid city origin')
+ bounds=city['bounds'];spawn=city['spawn']
+ require(numeric_fields(bounds,('minX','maxX','minZ','maxZ')),'invalid city bounds')
+ require(bounds['minX']<bounds['maxX'] and bounds['minZ']<bounds['maxZ'] and all(abs(v)<=FLOAT32_MAX for v in (bounds['minX'],bounds['maxX'],bounds['minZ'],bounds['maxZ'])),'invalid city bounds order or runtime range')
+ require(numeric_fields(spawn,('x','z','yaw')),'invalid city spawn')
+ require(bounds['minX']<=spawn['x']<=bounds['maxX'] and bounds['minZ']<=spawn['z']<=bounds['maxZ'],'city spawn is outside bounds')
  grid=city['elevation']
  require(grid['encoding']=='int16-gzip' and integer(grid['width'],2) and integer(grid['height'],2) and finite_number(grid.get('cellSize')) and grid['cellSize']>0 and finite_number(grid.get('scale',.01)) and grid.get('scale',.01)>0,'invalid elevation dimensions/encoding')
  # terrainGrid rejects missing origins and a non-finite sum. The terrain mesh

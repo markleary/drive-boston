@@ -21,8 +21,8 @@ class PackageIntegrityTest(unittest.TestCase):
   self.root=pathlib.Path(self.tmp.name);(self.root/'tiles').mkdir()
   self.building={'id':'a','center':[2,2],'footprint':[[1,1],[3,1],[1,3]],'anchor':[2,0,2],'height':1,'baseElevation':0,'v':3,'f':3,'r':0}
   self.header={'tx':0,'tz':0,'size':1000,'indexBytes':2,'vertexCount':3,'buildings':[self.building]}
-  self.city={k:[] for k in ('coverage','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water')}
-  self.city.update(origin={},bounds={},spawn={},elevation={'encoding':'int16-gzip','width':2,'height':2,'cellSize':6,'originX':0,'originZ':0,'file':'elevation.bin','source':'elevation-source.bin','scale':.01},tiles={'size':1000,'keys':['0_0'],'directory':'tiles','far':'far.bin','buildingCount':1},tunnels={'files':['tunnel.json']})
+  self.city={k:[] for k in ('coverage','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water','sources')}
+  self.city.update(origin={'xFeet':40000,'yFeet':50000,'longitude':-71.07,'latitude':42.35},bounds={'minX':0,'maxX':6,'minZ':0,'maxZ':6},spawn={'x':4,'z':4,'yaw':0},elevation={'encoding':'int16-gzip','width':2,'height':2,'cellSize':6,'originX':0,'originZ':0,'file':'elevation.bin','source':'elevation-source.bin','scale':.01},tiles={'size':1000,'keys':['0_0'],'directory':'tiles','far':'far.bin','buildingCount':1},tunnels={'files':['tunnel.json']})
   self.json('city.json',self.city);self.json('provenance.json',{'region':'metro'})
   self.json('transit.json',{'routes':[]});self.json('tunnel.json',{'roads':[],'landmarks':[],'sources':[]})
   self.gzip('elevation.bin',b'\0'*8);self.gzip('elevation-source.bin',b'\0'*8)
@@ -54,6 +54,42 @@ class PackageIntegrityTest(unittest.TestCase):
 
  def test_hidden_fragments_are_not_counted_as_buildings(self):
   self.far(flags=4,fragment=True);self.assertEqual(self.check()['buildings'],1)
+
+ def test_startup_metadata_requires_numeric_fields(self):
+  valid=copy.deepcopy(self.city)
+  for group in ('origin','bounds','spawn'):
+   for malformed in ({},None,[]):
+    with self.subTest(group=group,value=malformed):
+     self.city={**valid,group:malformed};self.json('city.json',self.city)
+     with self.assertRaisesRegex(ValueError,f'invalid city {group}'):self.check()
+   for field in valid[group]:
+    with self.subTest(group=group,field=field,value='missing'):
+     self.city=copy.deepcopy(valid);del self.city[group][field];self.json('city.json',self.city)
+     with self.assertRaisesRegex(ValueError,f'invalid city {group}'):self.check()
+    for value in (None,True,'0',float('nan'),float('inf'),10**400):
+     with self.subTest(group=group,field=field,value=value):
+      self.city=copy.deepcopy(valid);self.city[group][field]=value;self.json('city.json',self.city)
+      with self.assertRaisesRegex(ValueError,f'invalid city {group}|non-finite JSON'):self.check()
+
+ def test_bounds_are_ordered_and_spawn_is_inside_them(self):
+  valid=copy.deepcopy(self.city)
+  for field,value in (('maxX',0),('maxZ',-1),('maxX',1e39)):
+   with self.subTest(field=field,value=value):
+    self.city=copy.deepcopy(valid);self.city['bounds'][field]=value;self.json('city.json',self.city)
+    with self.assertRaisesRegex(ValueError,'bounds order or runtime range'):self.check()
+  for field,value in (('x',-1),('x',7),('z',-1),('z',7)):
+   with self.subTest(field=field,value=value):
+    self.city=copy.deepcopy(valid);self.city['spawn'][field]=value;self.json('city.json',self.city)
+    with self.assertRaisesRegex(ValueError,'spawn is outside bounds'):self.check()
+
+ def test_startup_collections_must_be_arrays(self):
+  valid=copy.deepcopy(self.city)
+  for field in ('coverage','landmarkBuildings','roads','signals','landmarks','neighborhoods','parks','water','sources'):
+   with self.subTest(field=field):
+    self.city={**valid,field:{}};self.json('city.json',self.city)
+    with self.assertRaisesRegex(ValueError,'expected a runtime array'):self.check()
+  self.city=copy.deepcopy(valid);del self.city['sources'];self.json('city.json',self.city)
+  with self.assertRaisesRegex(ValueError,'city.json lacks sources'):self.check()
 
  def test_empty_manifest_tile_is_valid(self):
   self.city['tiles']['keys'].append('1_0');self.json('city.json',self.city)
