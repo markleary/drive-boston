@@ -1,6 +1,6 @@
 # Player cars
 
-Settings → Your car selects the original Harbor S4 (the default), McLaren GT, McLaren 720S, Toyota Supra Mk4 or Moving Truck. The preference is stored locally in `boston-player-car-v1`, retained while riding the Ultra Bee or flying, and restored on reload. Changing the car parks it upright at the current drive surface; a blocked chassis uses the existing nearby-road recovery. All cars use the same live Rapier body; the old controller, meshes, materials and plate texture are released when replaced.
+Settings → Your car selects the original Harbor S4 (the default), McLaren GT, McLaren 720S, Toyota Supra Mk4, Tesla Model 3 Performance or Moving Truck from a dropdown. The preference is stored locally in `boston-player-car-v1`, retained while riding the Ultra Bee or flying, and restored on reload. Changing the car parks it upright at the current drive surface; a blocked chassis uses the existing nearby-road recovery. All cars use the same live Rapier body; the old controller, meshes, materials and plate texture are released when replaced.
 
 Pedestrian hit detection takes its footprint from the active physics vehicle, including the GT's longer front/rear bumper reach and the bike's smaller dimensions.
 
@@ -81,7 +81,42 @@ Published targets include 720S 0–100 in 2.9 s, 0–200 in 7.8 s and 100–0 in
 
 Rapier raycast suspension uses each car's mass, footprint, wheel sizes, weight bias, suspension travel, spring/damper response, steering and grip limits. Rear-wheel traction caps launch force; wheel power, rolling resistance and quadratic aerodynamic drag govern acceleration at speed. The six/seven gear shift points, effective drivetrain efficiencies (74% / 84%), drag areas (.724 / .64 m²), traction caps, inertias and suspension coefficients are calibrated game approximations, not measured factory component values. The gearbox reports the same RPM and gear to the HUD and audio. Neither proprietary McLaren hydraulic chassis control nor a complete tire/engine simulation is claimed.
 
-Focused tests measure acceleration/braking/top speed at both 60 and 120 Hz, all forward gears and reverse, repeated car/bike swaps, correct collision footprints, and full-speed CCD wall collisions. Geometry checks cover dimensions, finite vertices/normals, plate orientation, distinct paint, the lowered Supra wing and the triangle budget. Browser tests exercise both cars, engine/shift playback, saved choices, mode changes, cleanup, audio failure fallback and the four-car mobile settings grid.
+Focused tests measure acceleration/braking/top speed at both 60 and 120 Hz, all forward gears and reverse, repeated car/bike swaps, correct collision footprints, and full-speed CCD wall collisions. Geometry checks cover dimensions, finite vertices/normals, plate orientation, distinct paint, the lowered Supra wing and the triangle budget. Browser tests exercise both cars, engine/shift playback, saved choices, mode changes, cleanup, audio failure fallback and the mobile vehicle selector.
+
+## Tesla Model 3 Performance
+
+The drivetrain reference is the refreshed **2024 US Model 3 Performance**, with its 510 hp specification. The original procedural artwork follows the user-supplied **2025 Highland Performance** front, rear and detail reference images, in red paint. `src/render/tesla-model-3.ts` composes a curved body shell, conforming slim LED lenses and panel seams, a shallow recessed rear plate panel, tinted glazing, a modeled cabin, shaped mirrors, raised, upswept carbon-look lip spoiler and Performance diffuser. The rear wordmark follows the trunk surface without a raised mounting block.
+
+Its staggered 20-inch wheels have concave swept spokes and visible red brake calipers. Calipers move with steering and suspension but remain fixed relative to the upright while the tires, rims and discs rotate. Geometry checks cover dimensions, exterior lamp/caliper visibility, the trunk surface and at least 5 cm clearance between the rear upholstery and glass. Geometry is merged by material, stays below 110,000 triangles and uses fewer than 30 render meshes including the four wheel assemblies, plates and wordmark. The model is an original approximation from reference images, not factory CAD.
+
+### Manufacturer references
+
+- [Tesla's Model 3 Performance specification](https://www.tesla.com/model3-performance) and [Tesla's April 2024 launch presentation](https://www.youtube.com/watch?v=krQKnhMwxn4): 510 hp, 741 Nm, dual-motor AWD, 163 mph and 2.9 seconds to 60 mph with rollout subtracted; 4,054 lb curb mass.
+- [Tesla owner's manual dimensions](https://www.tesla.com/ownersmanual/model3/en_us/GUID-56562137-FC31-4110-A13C-9A9FC6657BF0.html): Performance body dimensions, track and wheelbase.
+- [Factory wheel and tire specifications](https://www.tesla.com/ownersmanual/model3/en_us/GUID-FDDB10EF-FFA9-46EB-B8CC-03614AE92B6B.html): staggered 235/35 R20 and 275/30 R20 tires.
+- [Subsystem specifications](https://www.tesla.com/ownersmanual/model3/en_us/GUID-E414862C-CFA1-4A0B-9548-BE21C32CAA58.html): single-speed 9.03:1 reduction, regenerative braking and Performance brake discs.
+- [Braking and stopping](https://www.tesla.com/ownersmanual/model3/en_us/GUID-3DFFB071-C0F6-474D-8A45-17BE1A006365.html): lift-off regeneration and brake lamps during substantial regenerative deceleration.
+
+| Parameter | Reference / game setting |
+| --- | --- |
+| Curb mass | 4,054 lb, rounded to 1,839 kg |
+| Body length / width / height | 4.724 / 1.850 / 1.431 m |
+| Width including mirrors | 2.089 m |
+| Wheelbase / front track / rear track | 2.875 / 1.582 / 1.560 m |
+| Front / rear tire radius | .33625 / .3365 m |
+| Nominal ground clearance | .128 m |
+| Published peak motor power | 510 hp / approximately 380 kW |
+| Drive | Dual-motor AWD; single forward ratio and reverse |
+| Maximum forward speed | 163 mph / 262.3 km/h |
+| Published 0–60 mph | 2.9 s, rollout subtracted |
+
+Both axles receive propulsion with a calibrated 40:60 front/rear force split. The electric drive has immediate low-speed traction, a power-limited high-speed envelope and an electronic speed governor, with no idle revs or gearshift torque gaps. Motor RPM follows the fixed reduction ratio and wheel speed. A lowered center of mass represents the underfloor battery. Lift-off regeneration provides about .2g deceleration at road speeds, fades near standstill, blends with service braking and illuminates the brake lamps during strong slowing. Reverse first brakes forward motion; it does not instantly reverse velocity.
+
+Flat-ground Rapier measurements at 60 and 120 Hz: **0–60 in 3.20–3.21 s from a true standstill, or 2.90–2.91 s after the measured .30 s one-foot rollout**; terminal speed **163.00 mph**; 100–0 km/h braking **37.51–37.62 m**. Brake distance is a game calibration, not a Tesla-published claim. Tests also cover both driven axles, uninterrupted single-speed operation, regenerative stopping, direction changes, stable mirrored turns, repeated vehicle swaps and top-speed CCD collisions.
+
+The 90% drivetrain efficiency, .51 m² drag area, 16.35 kN launch-force cap, torque split, inertia, tire grip, suspension rates, 3.4 kN regenerative force and 7 m/s reverse limit are calibrated game approximations. The listed 741 Nm is a manufacturer reference; this simulation uses a power/traction envelope, not a factory torque map. Adaptive damping software, battery temperature/state of charge, Track Mode and detailed tire/ABS control are not simulated. The conservative symmetric collision length includes the longer rear overhang.
+
+The dedicated locally shipped electric hum and reverse-warning effects are documented with generation provenance in [the audio README](../audio/README.md).
 
 ## Storrow Movers moving truck
 

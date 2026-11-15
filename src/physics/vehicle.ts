@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, MOVING_TRUCK, isPerformanceCar, carGear, carRpm, type PlayerCarId } from '../simulation/player-cars.ts';
+import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, MOVING_TRUCK, isPerformanceCar, isElectricCar, carGear, carRpm, type PlayerCarId } from '../simulation/player-cars.ts';
 import {lowClearanceAt} from '../simulation/low-clearance.ts';
 import {storrowRecoveryCandidates,storrowRetreatCandidates,storrowSolidRecoveryPlan,type StorrowRecoveryPlan} from '../simulation/storrow-recovery.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
@@ -148,7 +148,7 @@ export class DrivingPhysics {
     this.clearTruckBody();
     this.chassisCollider.setTranslationWrtParent({x:0,y:-.06,z:0});
     this.chassisCollider.setShape(new RAPIER.Cuboid(spec.halfWidth, performance?.19:.23, spec.halfLength));
-    this.chassisCollider.setMassProperties(spec.mass, {x:0,y:performance?-.15:-.17,z:drive?.cgZ??0}, id==='mclaren-gt'?{x:2500,y:2850,z:750}:performance?{x:spec.mass*1.63,y:spec.mass*1.86,z:spec.mass*.49}:{x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
+    this.chassisCollider.setMassProperties(spec.mass, {x:0,y:isElectricCar(id)?-.24:performance?-.15:-.17,z:drive?.cgZ??0}, id==='mclaren-gt'?{x:2500,y:2850,z:750}:performance?{x:spec.mass*1.63,y:spec.mass*1.86,z:spec.mass*.49}:{x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
     this.body.setLinearDamping(spec.linearDamping); this.body.setAngularDamping(1.6);
     if(id==='moving-truck'){
       const chassis=MOVING_TRUCK.chassis;
@@ -388,7 +388,7 @@ export class DrivingPhysics {
       this.bike.step(input, timestep, state.speed, state.yaw);
       this.steering=this.bike.steering;this.braking=this.bike.braking;this.gear=state.speed<-.3?-1:1;this.rpm=0;
     } else {
-    const speed = state.speed,spec=this.carSpec,id=this.selectedCar,performance=isPerformanceCar(id),drive=performance?CAR_POWERTRAINS[id]:null;
+    const speed = state.speed,spec=this.carSpec,id=this.selectedCar,performance=isPerformanceCar(id),electric=isElectricCar(id),drive=performance?CAR_POWERTRAINS[id]:null;
     const throttle = clamp(input.throttle, -1, 1);
     const pedalBrake = clamp(input.brake, 0, 1);
     const changeDirection = throttle * speed < -0.4;
@@ -408,8 +408,8 @@ export class DrivingPhysics {
     this.rpm=isPerformanceCar(this.selectedCar)?carRpm(this.selectedCar,speed,this.gear,this.pedal):850+Math.abs(speed)/(this.gear<0?7.5:7.5*targetGear)*3000+Math.abs(this.pedal)*650;
     if(drive&&previousGear>0&&this.gear>0&&previousGear!==this.gear)this.shiftRemaining=drive.shiftSeconds;
     this.shiftRemaining=Math.max(0,this.shiftRemaining-timestep);
-    // Performance cars use rear-wheel drive with calibrated wheel power,
-    // launch traction, shift interruption and quadratic aerodynamic drag.
+    // Combustion performance cars drive the rear axle; the dual-motor EV
+    // shares continuous torque between both axles without a shift interruption.
     const resistance=drive?drive.rolling+.5*1.225*drive.dragArea*speed*speed:spec.mass*spec.linearDamping*Math.abs(speed);
     if(drive&&Math.abs(speed)>.05){
       const q=this.body.rotation(),fx=2*(q.x*q.z+q.w*q.y),fy=2*(q.y*q.z-q.w*q.x),fz=1-2*(q.x*q.x+q.y*q.y),drag=-Math.sign(speed)*resistance*timestep;
@@ -417,9 +417,13 @@ export class DrivingPhysics {
     }
     const tractiveForce=Math.min(spec.traction,spec.power*(drive?.efficiency??1)/Math.max(10,Math.abs(speed)));
     const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
-    const force = changeDirection || pedalBrake > 0.1 || (input.handbrake&&Math.abs(throttle)<.05) ? 0 : this.pedal * governedForce/(performance?2:4)*(this.shiftRemaining>0?.2:1);
+    const force = changeDirection || pedalBrake > 0.1 || (input.handbrake&&Math.abs(throttle)<.05) ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
+    // Lift-off regenerative braking fades at walking speed and blends with
+    // the service brakes. Actual braking remains tire/contact dependent.
+    const regenForce=electric&&!changeDirection&&!input.handbrake?3400*(1-Math.min(1,Math.abs(this.pedal)/.15))*Math.min(1,Math.abs(speed)/3):0;
+    if(regenForce>spec.mass*1.3)this.braking=true;
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
-    const brakingImpulse = (changeDirection ? spec.brakeForce*.8 : pedalBrake * spec.brakeForce) * timestep / 4;
+    const brakingImpulse = (changeDirection ? spec.brakeForce*.8 : Math.max(pedalBrake * spec.brakeForce,regenForce)) * timestep / 4;
     const rollingImpulse = !performance&&Math.abs(throttle) < 0.05 ? (90+Math.min(110,Math.abs(speed)*5))*timestep : 0;
     for (let i = 0; i < 4; i++) {
       const radius=spec.wheelbase/Math.tan(this.steering||1e-8);
@@ -427,7 +431,8 @@ export class DrivingPhysics {
       this.controller.setWheelSteering(i, i < 2 ? ackermann : 0);
       // Rapier chooses engine force before wheel braking. A locked rear wheel
       // must receive exactly zero engine force, including decaying pedal input.
-      this.controller.setWheelEngineForce(i, (input.handbrake&&i>=2)||(performance&&i<2)?0:force);
+      const driveShare=electric?(i<2?.2:.3):performance?(i<2?0:.5):.25;
+      this.controller.setWheelEngineForce(i, input.handbrake&&i>=2?0:force*driveShare);
       this.controller.setWheelBrake(i, brakingImpulse*(i<2?1.2:.8) + rollingImpulse + (input.handbrake && i >= 2 ? 16000 * timestep / 2 : 0));
       const slidingTurn=input.handbrake&&Math.abs(input.steer)>.25&&Math.abs(speed)>3;
       this.controller.setWheelSideFrictionStiffness(i, slidingTurn && i >= 2 ? 0.45 : 1.05);
@@ -644,7 +649,7 @@ export class DrivingPhysics {
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.body.resetForces(true);
     this.body.resetTorques(true);
-    this.steering = 0;this.pedal=0;this.gear=1;this.rpm=850;
+    this.steering = 0;this.pedal=0;this.gear=1;this.rpm=isElectricCar(this.selectedCar)?0:850;
     this.overturnedTime = 0;this.shiftRemaining=0;this.braking=false;this.bike?.reset();
     for (let i = 0; i < this.controller.numWheels(); i++) {
       this.controller.setWheelEngineForce(i, 0);

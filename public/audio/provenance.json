@@ -396,6 +396,46 @@
       "generatedAt": "2026-11-15T17:51:47.888Z",
       "bytes": 65244,
       "sha256": "52b9d20ca93b0a6a45417286a5dc656bc585e163872aa395c22707f5477d627e"
+    },
+    {
+      "id": "tesla-model-3-performance-drive",
+      "seconds": 8,
+      "loop": true,
+      "prompt": "Quiet Tesla Model 3 Performance electric car at steady slow speed, close exterior perspective. Very soft smooth traction motor hum, fine clean inverter whine and subdued airy pedestrian warning whirr. Refined and much quieter than a gasoline engine. Constant pitch and level, seamless dry isolated loop. No combustion, exhaust, revving, gear changes, tire or wind noise, siren, beeps, music, voices or fade.",
+      "file": "tesla-model-3-performance-drive.mp3",
+      "generatedAt": "2026-11-15T18:42:09.178Z",
+      "bytes": 129192,
+      "sha256": "db5be97aec49e364d46a5d7ff81308a80a6e4e1c2940822104dfdaa3e0d6e69a"
+    },
+    {
+      "id": "tesla-model-3-performance-reverse",
+      "seconds": 10,
+      "loop": true,
+      "prompt": "Continuous Tesla electric car reverse warning, a deep hollow futuristic UFO WOOOOOO. Warm low 200 Hz body with soft airy ghostly organ harmonics. Static hovering spaceship held at exactly the same power: fixed pitch and absolutely even volume throughout, no movement or swells. Smooth seamless ten-second loop. No high whistle, wobble, tremolo, pulsing, clicks, percussion, siren, music or voices.",
+      "model": "eleven_text_to_sound_v3",
+      "format": "mp3_44100_128",
+      "promptInfluence": 0.8,
+      "generatedAt": "2026-11-15T20:47:55.610Z",
+      "bytes": 353430,
+      "sha256": "6eda2cb55df2f00061b8696d959d0b63c55c86db8be20e1c27330eca45c95c05",
+      "file": "tesla-model-3-performance-reverse.wav",
+      "masteredAt": "2026-11-15T20:58:39.903Z",
+      "mastering": {
+        "tool": "scripts/master-tesla-reverse.mjs (ffmpeg + local PCM processing)",
+        "sourceFile": "artifacts/tesla/audio/reverse-elevenlabs-source.mp3",
+        "sourceSha256": "9c445a185dcd9b1330b110e11f8e7ae411265a45ac3d7f4ad00d50cb8090e880",
+        "sourceBytes": 160957,
+        "sourceChannel": "right, mono",
+        "pitchRatio": 1,
+        "filters": "highpass 35 Hz; lowpass 2600 Hz",
+        "outputFormat": "16-bit mono WAV, 22050 Hz",
+        "loopCrossfadeMs": 250,
+        "seamCorrelation": 0.20365093908510692,
+        "zeroCrossingRotationSamples": 76130,
+        "zeroCrossingEaseMs": 0.7256235827664399,
+        "durationSeconds": 8.012517006802721,
+        "description": "Fresh ElevenLabs UFO source at its original low pitch; matched-phase cosine loop splice and lossless output. No fast level modulation or synthesized layers."
+      }
     }
   ]
 }

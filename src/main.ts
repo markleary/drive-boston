@@ -312,6 +312,7 @@ async function boot(){
     // Persist the active state immediately, before a possible renderer exit.
     window.addEventListener('pageshow',event=>{if(event.persisted)captureSession();});
     window.addEventListener('keydown',event=>{
+      if(event.target instanceof HTMLSelectElement)return;
       if(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement)return;
       if(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ShiftLeft','ShiftRight','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyF','KeyX'].includes(event.code)){
         event.preventDefault();if(ui.isPaused())return;keys.add(event.code);if(event.code==='KeyF'&&!event.repeat&&travelMode==='drive')audio.horn();
