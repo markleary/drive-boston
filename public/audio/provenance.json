@@ -386,6 +386,16 @@
       "generatedAt": "2026-11-15T16:18:41.062Z",
       "bytes": 40585,
       "sha256": "474c5b3c1728009e7570133c83eaa4fdf97f270516ab33d5d8261f498b5b188d"
+    },
+    {
+      "id": "moving-truck-reverse",
+      "seconds": 4,
+      "loop": true,
+      "prompt": "Standard electronic backup alarm on an older moving box truck: four identical 1000 Hz beeps, exactly one per second, half a second on and half a second silent. Familiar slightly buzzy industrial reversing alarm speaker. First beep starts immediately. Constant pitch, rhythm and volume, seamless four second loop. Isolated dry close sound. No engine, hiss, siren, melody, voices, music, traffic or ambience.",
+      "file": "moving-truck-reverse.mp3",
+      "generatedAt": "2026-11-15T17:51:47.888Z",
+      "bytes": 65244,
+      "sha256": "52b9d20ca93b0a6a45417286a5dc656bc585e163872aa395c22707f5477d627e"
     }
   ]
 }
