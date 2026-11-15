@@ -8,6 +8,7 @@ import {signalPhase} from './signals.ts';
 import {createGreenLine,createTransitBus} from '../render/transit-vehicles.ts';
 import {createTransitTracks} from '../render/transit-tracks.ts';
 import {createRailProfile,railSurface,railCovered,railStopDistance,type RailProfile} from './transit-rail-surface.ts';
+import type {PlayerTrafficState} from './traffic-evasion.ts';
 export interface TransitRoute {id:string;line:string;kind:'bus'|'tram';destination:string;directionId?:number;covered?:{start:number;end:number}[];bridges?:{start:number;end:number}[];points:Point2[];length:number;stops:{id:string;name:string;distance:number;position:Point2}[];}
 export interface TransitData {routes:TransitRoute[];sources:{name:string;url:string;license:string}[];notes:string;}
 /** A vehicle other traffic must keep clear of. A bus or tram also gives its
@@ -251,7 +252,7 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
   /** Collider handles of every bus and tram section; they stay kinematic (a 12 t bus does not budge for a car). */
   colliders,
   snapshot:()=>actors.map(a=>({kind:a.route.kind,line:a.route.line,destination:a.route.destination,route:a.route.id,distance:a.distance,yaw:a.yaw,covered:!!a.route.rail&&railCovered(a.route.rail,a.distance),carCount:1,laneOffset:a.offset,x:a.x,y:a.y,z:a.z,speed:a.speed,dwell:a.dwell,nextStop:a.route.stops[a.nextStop]?.name,lastStop:a.lastStop})),
-  update(dt:number,player:VehicleState,observer:Pick<VehicleState,'x'|'y'|'z'>=player,traffic:TrafficObstacle[]=[]){
+  update(dt:number,player:PlayerTrafficState,observer:Pick<VehicleState,'x'|'y'|'z'>=player,traffic:TrafficObstacle[]=[]){
    dt=Math.max(0,Math.min(dt,1/30));elapsed+=dt;const fleet=obstacles();tracks.updateVisibility(observer.x,observer.z);
    for(const actor of actors){
     const p=transitPoint(actor.route,actor.distance),look=transitPoint(actor.route,actor.distance+6),fx=Math.sin(actor.yaw),fz=Math.cos(actor.yaw),half=actor.tram?11.25:6;
@@ -263,7 +264,7 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
     const light=actor.route.signalStops.find(l=>l.distance>=actor.distance+half-.3);
     if(light&&signalPhase(elapsed,light.yaw)!=='green'){const gap=light.distance-actor.distance-half;if(actor.signalStop!==light.distance){actor.signalStop=light.distance;actor.signalCommitted=actor.speed>2&&gap<actor.speed*actor.speed/7+1;}if(!actor.signalCommitted)target=Math.min(target,Math.sqrt(Math.max(0,2*2.4*(gap-.6))));}else{actor.signalStop=undefined;actor.signalCommitted=false;}
     const covered=!!actor.route.rail&&railCovered(actor.route.rail,actor.distance);
-    const others:TrafficObstacle[]=[...(covered?[]:[{...player,halfLength:2.1,halfWidth:.9},...traffic]),...fleet.filter(a=>a.x!==actor.x||a.z!==actor.z)];
+    const others:TrafficObstacle[]=[...(covered?[]:[{...player,halfLength:player.halfLength??2.1,halfWidth:player.halfWidth??.9},...traffic]),...fleet.filter(a=>a.x!==actor.x||a.z!==actor.z)];
     if(actor.route.lanes){
      // Move over while an open tram is within 90 m ahead or 30 m behind (either direction), ease back once it has gone;
      // the change runs faster with speed, and the bus heads into it as a lane change rather than sliding sideways.

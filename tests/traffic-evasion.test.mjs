@@ -16,6 +16,16 @@ test('head-on prediction distinguishes a collision course from ordinary passing 
   assert.equal(headOnThreat(car,{...player,x:1.5,yaw:Math.PI-.2}),undefined,'an opposing driver already steering clear is not a collision course');
 });
 
+test('head-on prediction uses the moving truck length and box width while retaining coupe defaults',()=>{
+  const car={x:0,y:.65,z:0,yaw:0,speed:6,halfLength:2.4,halfWidth:.95};
+  const player={x:0,y:.7,z:35,yaw:Math.PI,speed:14,steering:0};
+  const coupe=headOnThreat(car,player),truck=headOnThreat(car,{...player,halfLength:3.8,halfWidth:1.21});
+  assert.equal(coupe.time,(35-2.4-2.1)/20,'callers without dimensions retain the coupe envelope');
+  assert.equal(truck.time,(35-2.4-3.8)/20,'the longer truck reaches the NPC earlier');
+  assert.equal(headOnThreat(car,{...player,x:2.3}),undefined,'the narrower coupe clears this approach');
+  assert.ok(headOnThreat(car,{...player,x:2.3,halfLength:3.8,halfWidth:1.21}),'the moving box overlaps this approach');
+});
+
 test('lateral evasion accelerates smoothly and never slides a stopped vehicle sideways',()=>{
   const state={offset:0,velocity:0,target:2.4,holdUntil:0};
   for(let i=0;i<120;i++){const next=advanceEvasion(state,1/60,6);assert.ok(Math.abs(next.velocity-state.velocity)<=2.6/60+1e-8);assert.ok(Math.abs(next.velocity)<=1.8);Object.assign(state,next);}

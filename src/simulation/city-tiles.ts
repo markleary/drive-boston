@@ -3,6 +3,8 @@ import { decodeElevation, gunzip, parseTile, tileFile, tileKey, tileOf, type Cit
 import { parseFar, type FarBuilding, type FarCity } from './far-format.ts';
 import {prepareBuildingTunnelPassage} from './tunnel-passages.ts';
 import {refineFrogPond} from './boston-common.ts';
+import {STORROW_SOURCE_CARRIAGEWAYS} from './cars-only-roads.ts';
+import {longfellowDeckOwnsPath} from './longfellow.ts';
 
 /** A metro city streams its buildings from 1 km tiles. `city.buildings` holds
  * the currently loaded detailed set; `far` holds every building's hull. */
@@ -51,6 +53,7 @@ export async function resolveCity(city: CityData, read: Reader): Promise<CityDat
   ]);
   if (elevation && heights) elevation.heights = heights;
   if (city.water) city.water = city.water.map(refineFrogPond);
+  if(city.parkPaths)city.parkPaths=city.parkPaths.filter(path=>!longfellowDeckOwnsPath(path.id));
   for(const sidecar of tunnels??[]){
     const roadIds=new Set(sidecar.roads.map(r=>r.id)),landmarkIds=new Set(sidecar.landmarks.map(l=>l.id));
     city.roads=[...city.roads.filter(r=>!roadIds.has(r.id)),...sidecar.roads];
@@ -58,6 +61,10 @@ export async function resolveCity(city: CityData, read: Reader): Promise<CityDat
     city.sources=[...city.sources,...sidecar.sources.filter(s=>!city.sources.some(existing=>existing.url===s.url))];
     if(sidecar.signs?.length)city.highwaySigns=[...(city.highwaySigns??[]),...sidecar.signs];
   }
+  // Layer 8 calls these Route 28 motorway alignments Charlesbank Road. The
+  // retained OSM Storrow ways 828869387/931384763 match within 1 m at Longfellow;
+  // the separate park-side Charlesbank Road is not this pair of carriageways.
+  for(const road of city.roads){const direction=STORROW_SOURCE_CARRIAGEWAYS[road.id];if(direction){road.name=`Storrow Drive ${direction==='east'?'East':'West'}`;road.kind='motorway';}}
   // A survey-deck trace is a graph edge over a mesh that draws and collides by
   // itself: keep it out of every road consumer except traffic, GPS and labels.
   if(city.roads.some(r=>r.surveyDeck)){city.surveyRoads=[...(city.surveyRoads??[]),...city.roads.filter(r=>r.surveyDeck)];city.roads=city.roads.filter(r=>!r.surveyDeck);}
@@ -68,6 +75,9 @@ export async function resolveCity(city: CityData, read: Reader): Promise<CityDat
 
 export async function loadTile(city: MetroCity, tx: number, tz: number, read: Reader): Promise<CityTile> {
   const tile=parseTile(await gunzip(await read(`${city.tiles.directory}/${tileFile(tx, tz)}`)));
+  // Correct older packaged/cached tiles before render, physics and walkers
+  // consume their paths. The compiler excludes these deck-owned ways too.
+  tile.parkPaths=tile.parkPaths.filter(path=>!longfellowDeckOwnsPath(path.id));
   for(const building of tile.buildings){const data=tile.geometry.get(building.id);if(data)tile.geometry.set(building.id,prepareBuildingTunnelPassage(city,building,data));}
   return tile;
 }

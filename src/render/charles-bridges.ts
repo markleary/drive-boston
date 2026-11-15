@@ -4,6 +4,7 @@ import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {sampleElevation} from '../simulation/terrain.ts';
 import {roadSlabGeometry} from '../simulation/road-surfaces.ts';
 import {LONGFELLOW_LENGTH,LONGFELLOW_YAW,longfellowPoint,longfellowProfile} from '../simulation/longfellow.ts';
+import {lowClearanceCrossings,longfellowPortalLayout} from '../simulation/low-clearance.ts';
 
 /** Original procedural interpretation on the retained Longfellow alignment.
  * Four granite towers flank the central arch; engineering dimensions are estimated.
@@ -19,6 +20,18 @@ export function addCharlesBridgeDetails(scene:THREE.Object3D,city:CityData){
   const ballast=new THREE.MeshStandardMaterial({color:'#79766d',roughness:1});
   const batches=new Map<THREE.Material,THREE.BufferGeometry[]>();
   const length=LONGFELLOW_LENGTH,yaw=LONGFELLOW_YAW,height=longfellowProfile(city);
+  const bostonPortal=lowClearanceCrossings(city).find(site=>site.roadId==='13519-0-0');
+  const bostonBearings:{x:number;y:number;z:number;side:number}[]=[];
+  // The retained river frame stops at the road-name seam, short of the Boston
+  // bank. Its last ribs must reach the actual portal pier, whose other face
+  // supports the Storrow arch while leaving the riverside path open.
+  const lastBearing=(side:number)=>{
+    if(!bostonPortal)return length;
+    const {left,pierOffset,pierWidth}=longfellowPortalLayout(bostonPortal),target=-(left+pierOffset)-pierWidth/2+.15;
+    const origin=longfellowPoint(0,side),unit=longfellowPoint(1,side),cos=Math.cos(bostonPortal.yaw),sin=Math.sin(bostonPortal.yaw);
+    const start=(origin[0]-bostonPortal.x)*cos-(origin[1]-bostonPortal.z)*sin,direction=(unit[0]-origin[0])*cos-(unit[1]-origin[1])*sin;
+    return(target-start)/direction;
+  };
   const position=(along:number,across:number,y:number)=>{const p=longfellowPoint(along,across);return new THREE.Vector3(p[0],y,p[1]);};
   const add=(g:THREE.BufferGeometry,m:THREE.Material,solid=false)=>{
     const list=batches.get(m)??[];list.push(g);batches.set(m,list);
@@ -50,12 +63,22 @@ export function addCharlesBridgeDetails(scene:THREE.Object3D,city:CityData){
   }
   // Open spandrel arch ribs, cross bracing, and vertical deck posts.
   for(let i=0;i<spans;i++)for(const side of [-12,0,12]){
+    const start=i*span,end=i===spans-1?lastBearing(side):(i+1)*span,station=(t:number)=>start+(end-start)*t;
     for(let j=0;j<12;j++){
-      const point=(t:number)=>position((i+t)*span,side,height((i+t)*span)-5+4.05*Math.sin(Math.PI*t));
+      const point=(t:number)=>position(station(t),side,height(station(t))-5+4.05*Math.sin(Math.PI*t));
       beam(point(j/12),point((j+1)/12),.42,.55,steel);
-      if(j>0&&j%2===0){const p=point(j/12);beam(p,position((i+j/12)*span,side,height((i+j/12)*span)-.55),.22,.22,steel);}
+      if(j>0&&j%2===0){const p=point(j/12);beam(p,position(station(j/12),side,height(station(j/12))-.55),.22,.22,steel);}
     }
-    if(side===0){const d=(i+.5)*span;beam(position(d,-12,height(d)-1),position(d,12,height(d)-1),.3,.35,steel);}
+    if(side===0){const d=(start+end)/2;beam(position(d,-12,height(d)-1),position(d,12,height(d)-1),.3,.35,steel);}
+    if(i===spans-1&&bostonPortal){
+      const y=height(end)-5,p=position(end,side,y);bostonBearings.push({x:p.x,y:p.y,z:p.z,side});
+      // A granite corbel overlaps the pier body. The bottom plate and web shoe
+      // carry the rib end into that masonry rather than leaving a cut-off beam.
+      box(1.6,.65,1.6,end-.25,side,y-.82,stone,true);
+      box(1.1,.16,1.3,end-.25,side,y-.415,steel);
+      box(.68,.25,.65,end-.1,side,y-.21,steel);
+      box(.78,.7,.14,end+.08,side,y-.02,steel);
+    }
   }
   for(const d of [5*span,6*span])for(const side of [-1,1]){
     const a=side*16.5,deck=height(d);
@@ -83,5 +106,5 @@ export function addCharlesBridgeDetails(scene:THREE.Object3D,city:CityData){
     const normalized=parts.map(g=>{const n=g.index?g.toNonIndexed():g;n.deleteAttribute('uv');return n;});const geometry=mergeGeometries(normalized,false)!;
     new Set([...parts,...normalized]).forEach(g=>g.dispose());const mesh=new THREE.Mesh(geometry,m);mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);
   }
-  group.userData={towers:4,archSpans:11,accuracy:'Procedural granite towers, piers, steel arches and central rail reservation on source road alignments'};scene.add(group);return{group,collisions};
+  group.userData={towers:4,archSpans:11,bostonBearings,accuracy:'Procedural granite towers, piers, steel arches and central rail reservation on source road alignments'};scene.add(group);return{group,collisions};
 }

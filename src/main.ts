@@ -227,6 +227,7 @@ async function boot(){
     if(streamer){const arrival=mobile&&saved?saved:city.spawn;ui.setLoading('Streaming the neighborhood',.4);await streamer.ensureAround(arrival.x,arrival.z);}
     await contextGate.wait();
     for(const mesh of world.buildingCollisions)physics.addStaticMesh(mesh.vertices,mesh.indices);
+    physics.setCar(carId);
     const embrace=addTheEmbrace(scene,city);physics.addStaticMesh(embrace.collision.vertices,embrace.collision.indices);
     metroLandmarks=metro?addMetroLandmarkDetails(scene,city):undefined;for(const mesh of metroLandmarks?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
     tdGarden=addTdGardenDetails(scene,city,mobile);tdGarden?.setNight((lighting as LightingMode)==='night');setMelroseNight((lighting as LightingMode)==='night');for(const mesh of tdGarden?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
@@ -403,7 +404,7 @@ async function boot(){
       // clearance. Advance it on the camera's clock: quantizing it to Rapier's
       // 60 Hz ticks makes a moving aircraft bob against the smoothed camera.
       if(flying&&!paused){flight!.update(dt,flightControls);distance+=flight!.state.speed*dt;}
-      const carState=physics!.getState(),riding=carState.vehicle==='ultrabee';
+      const carState=physics!.getState(),riding=carState.vehicle==='ultrabee',movingTruck=!riding&&carState.carId==='moving-truck';
       const interior=flying?undefined:walking?tunnelAt(city,afoot.x,afoot.z,afoot.y+1):tunnelAt(city,carState.x,carState.z,carState.y);
       // First person on foot sees through the walker's eyes, except while lying knocked down.
       const firstPerson=walking&&cameraMode==='hood'&&!afoot.knocked;
@@ -420,7 +421,7 @@ async function boot(){
         if(away)orbitPitch=THREE.MathUtils.clamp(orbitPitch+pad.ry*dt*1.3,-.15,1.4);
       }
       const turned=padLookBack?Math.PI:0,heading=(walking?afoot.viewYaw:state.yaw)+turned,viewOffset=lookOffset+padLook;
-      const yaw=heading+viewOffset;target.set(state.x,state.y+(walking?1.4:.5),state.z);
+      const yaw=heading+viewOffset;target.set(state.x,state.y+(walking?1.4:movingTruck&&!away?1.35:.5),state.z);
       const portraitInset=cameraMode==='chase'?portraitChaseInset(ui.isTouchEnabled(),innerWidth,innerHeight):0;
       applyChaseViewOffset(camera,innerWidth,innerHeight,portraitInset);
       camera.up.set(0,1,0);
@@ -431,6 +432,7 @@ async function boot(){
       }else if(cameraMode==='hood'&&!walking){
         desired.set(state.x+Math.sin(yaw)*.5,state.y+(riding&&!flying?1.02:.9),state.z+Math.cos(yaw)*.5);look.set(state.x+Math.sin(yaw)*40,state.y+(flying?-7-(orbitPitch-.3)*35:.7),state.z+Math.cos(yaw)*40);camera.fov=65;
         if(riding&&!flying){desired.set(0,1.02,-.15).applyQuaternion(bike.group.quaternion).add(bike.group.position);look.set(Math.sin(viewOffset+turned),-.22,Math.cos(viewOffset+turned)).applyQuaternion(bike.group.quaternion).multiplyScalar(40).add(desired);camera.up.applyQuaternion(bike.group.quaternion);camera.fov=78;}
+        if(movingTruck&&!flying){desired.set(0,1.22,2.6).applyQuaternion(playerCar!.group.quaternion).add(playerCar!.group.position);look.set(Math.sin(viewOffset+turned),-.02,Math.cos(viewOffset+turned)).applyQuaternion(playerCar!.group.quaternion).multiplyScalar(40).add(desired);camera.up.applyQuaternion(playerCar!.group.quaternion);}
       }else if(cameraMode==='aerial'&&!interior?.covered){
         desired.set(state.x,state.y+(flying?65:150)*zoom,state.z+(flying?.01:20*zoom));look.copy(target);camera.fov=52;
         cameraDirection.subVectors(desired,target);const aerialDistance=cameraDirection.length();cameraDirection.normalize();
@@ -447,6 +449,7 @@ async function boot(){
         look.set(state.x,state.y+1.65,state.z);camera.fov=58;underRoof(interior);
       }else{
         const framing=groundChaseFraming(riding,state.speed,zoom,viewOffset,portraitInset>0);
+        if(movingTruck){framing.follow*=1.4;framing.height+=1.35;framing.lookHeight+=.6;}
         const lookYaw=portraitInset>0?yaw:heading;
         desired.set(state.x-Math.sin(yaw)*framing.follow,state.y+framing.height,state.z-Math.cos(yaw)*framing.follow);look.set(state.x+Math.sin(lookYaw)*framing.ahead,state.y+framing.lookHeight,state.z+Math.cos(lookYaw)*framing.ahead);camera.fov=55+Math.min(5,Math.abs(state.speed)*.13);underRoof(interior);
       }
@@ -467,12 +470,13 @@ async function boot(){
       const flightShadows=flying&&quality==='high'&&!mobile;
       world!.update(target,elapsed,!mobile||!paused,flightShadows,camera,flying);rail?.update(target.x,target.z);construction.update(state,carState);park.update(elapsed);streetLife.update(paused?0:dt,elapsed,state,flying?undefined:carState);parkingLots.update(dt,state);updateFoliage(scene,camera.position,elapsed,quality==='high',flightShadows);groundCover.update(target,elapsed,quality==='high');
       audio.update(state.speed,flying?flightControls.forward:controls.throttle,paused,{...controls,gear:carState.gear,rpm:carState.rpm,lift:flightControls.lift,verticalSpeed:flying?flight!.state.verticalSpeed:0});
-      for(const impact of physics!.takeImpacts())if(!paused)audio.impact(classifyImpact(impact),impact.severity);
+      for(const strike of physics!.takeStorrowStrikes())if(!paused){ui.toast('You Got Storrowed!');audio.storrowed(strike.severity);}
+      for(const impact of physics!.takeImpacts())if(!paused&&!carState.storrowed)audio.impact(classifyImpact(impact),impact.severity);
       for(const speed of streetLife.takeHits())if(!paused)audio.impact('pedestrian',speed);
       scene.updateMatrixWorld();renderer.info.reset();world!.updateReflections(target,elapsed,flying?helicopter.group:walking?player.group:riding?bike.group:playerCar!.group);
       if(warmNightPasses){const shown=switchedLights.map(light=>light.visible);for(const lampsOnly of [false,true]){switchedLights.forEach(light=>{light.visible=!lampsOnly||light instanceof THREE.PointLight;});graphics!.render(0);}switchedLights.forEach((light,i)=>{light.visible=shown[i];});warmNightPasses=false;}
       graphics!.render(dt);frameCount++;fpsTimer+=raw;frameMs=raw*1000;if(fpsTimer>=.5){fps=Math.round(frameCount/fpsTimer);averageFrameMs=fpsTimer/frameCount*1000;frameCount=0;fpsTimer=0;}
-      ui.update(state,{fps,distance,travelMode,quality,groundHeight:sampleElevation(city,state.x,state.z),performance:{fps,frameMs:averageFrameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,traffic:traffic!.count,transit:transit!.count,pedestrians:streetLife.count},gear:carState.gear,rpm:carState.rpm,wheelieRemaining:carState.wheelieRemaining,altitude:flying?state.y-sampleElevation(city,state.x,state.z):0,verticalSpeed:flying?flight!.state.verticalSpeed:0});saveTimer+=dt;if(saveTimer>5){saveTimer=0;save();}
+      ui.update(state,{fps,distance,travelMode,quality,groundHeight:sampleElevation(city,state.x,state.z),performance:{fps,frameMs:averageFrameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,traffic:traffic!.count,transit:transit!.count,pedestrians:streetLife.count},gear:carState.gear,rpm:carState.rpm,wheelieRemaining:carState.wheelieRemaining,storrowed:carState.storrowed,altitude:flying?state.y-sampleElevation(city,state.x,state.z):0,verticalSpeed:flying?flight!.state.verticalSpeed:0});saveTimer+=dt;if(saveTimer>5){saveTimer=0;save();}
       if(journal.startedAt&&now-lastSessionCapture>=15000)captureSession();
       if(scheduleNext)requestAnimationFrame(tick);
     };

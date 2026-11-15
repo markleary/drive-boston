@@ -4,6 +4,7 @@ import { DEFAULT_CAR, PLAYER_CARS, type PlayerCarId } from '../simulation/player
 import { createMcLarenGeometry, createMcLarenWheelGeometry } from './mclaren-gt.ts';
 import {create720SGeometry,create720SWheelGeometry} from './mclaren-720s.ts';
 import {createSupraGeometry,createSupraWheelGeometry} from './supra-mk4.ts';
+import {createMovingTruck} from './moving-truck.ts';
 import type { VehicleState } from '../types';
 
 export type VehicleStyle = 'coupe' | 'sedan' | 'crossover' | 'van' | 'hatchback';
@@ -322,6 +323,7 @@ export function createMassachusettsPlateMaterial(registration = '4BK 026') {
 }
 
 export function createCar(id:PlayerCarId=DEFAULT_CAR) {
+  if(id==='moving-truck')return createMovingTruck();
   const gt=id==='mclaren-gt',m720=id==='mclaren-720s',supra=id==='supra-mk4',stock=id===DEFAULT_CAR,spec=PLAYER_CARS[id];
   const group = new THREE.Group(); group.name = gt?'PlayerMcLarenGT':m720?'PlayerMcLaren720S':supra?'PlayerSupraMk4':'PlayerCoupe';group.userData.carId=id;
   const materials: Record<VehicleSurface, THREE.MeshStandardMaterial> = {
@@ -392,7 +394,7 @@ export function createCar(id:PlayerCarId=DEFAULT_CAR) {
   }
   let fallbackWheelAngle = 0;
   return {
-    group,setCameraPosition,get bodyVisible(){return bodyVisible;},
+    group,setCameraPosition,setDamage(_amount:number,_direction=1){},get bodyVisible(){return bodyVisible;},
     update(state: VehicleState, night: boolean, dt = 1 / 60) {
       const s = state as RenderState;
       group.position.set(s.x, s.y, s.z);

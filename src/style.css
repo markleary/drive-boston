@@ -293,3 +293,5 @@ html,body{height:100dvh}
 /* On foot the flight pad's altitude pair reads Run and Jump. */
 .flight-pad .touch-btn.word{font-size:10px;font-weight:700;letter-spacing:.06em}
 #interface.touch-enabled .flight-pad .touch-btn.word{font-size:10px}
+
+.storrow-recovery{position:absolute;left:50%;top:120px;transform:translateX(-50%);padding:10px 16px;border:1px solid #f7ba5a88;border-radius:8px;background:#262d2eef;color:#ffe2ad;font-size:13px;box-shadow:0 4px 22px #0003;white-space:nowrap}.storrow-recovery kbd{margin-left:12px}.touch-enabled .storrow-recovery{top:150px}.touch-enabled .storrow-recovery kbd{display:none}

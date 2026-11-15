@@ -1,5 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, isPerformanceCar, carGear, carRpm, type PlayerCarId } from '../simulation/player-cars.ts';
+import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, MOVING_TRUCK, isPerformanceCar, carGear, carRpm, type PlayerCarId } from '../simulation/player-cars.ts';
+import {lowClearanceAt} from '../simulation/low-clearance.ts';
+import {storrowRecoveryCandidates,type StorrowRecoveryPose} from '../simulation/storrow-recovery.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad} from '../simulation/roads.ts';
 import type { CityData, DriveInput, VehicleState } from '../types';
@@ -27,12 +29,16 @@ export interface PhysicsVehicleState extends VehicleState {
   lean: number;
   wheelie: number;
   wheelieRemaining: number;
+  storrowDamage: number;
+  storrowDirection: number;
+  storrowed: boolean;
 }
 
 /** One hard knock on the player chassis: the velocity change of that physics
  * step beyond gravity (m/s), the speed before it, and the colliders touching
  * the chassis so the caller can tell a car from a bus, a wall or the ground. */
 export interface Impact { severity: number; speed: number; colliders: number[]; }
+export interface StorrowStrike { severity:number; direction:number; }
 /** Velocity change per step that counts as an impact rather than a bump. The
  * suspension cannot exceed about .7 m/s per step, so curbs stay silent. */
 export const IMPACT_THRESHOLD = 1.2;
@@ -56,6 +62,13 @@ export class DrivingPhysics {
   private shiftRemaining=0;
   get vehicleType(): 'car' | 'ultrabee' { return this.bike ? 'ultrabee' : 'car'; }
   readonly chassisCollider: RAPIER.Collider;
+  private truckColliders:RAPIER.Collider[]=[];
+  private cargoCollider?:RAPIER.Collider;
+  private storrow?:{damage:number;direction:number;elapsed:number;anchor?:RAPIER.RigidBody;exit:{x:number;z:number;yaw:number;roadId?:string};exits?:StorrowRecoveryPose[];};
+  private storrowStrikes:StorrowStrike[]=[];
+  private truckApproachSpeed=0;
+  private truckApproachAge=0;
+  takeStorrowStrikes(){const events=this.storrowStrikes;this.storrowStrikes=[];return events;}
   /** Additional mesh/structure geometry used by flight's continuous sweeps. */
   readonly detailedColliders = new Set<number>();
   private readonly surfaceCleanup=new Map<number,()=>void>();
@@ -132,10 +145,26 @@ export class DrivingPhysics {
 
   private configureCar() {
     const spec=this.carSpec,id=this.selectedCar,performance=isPerformanceCar(id),drive=performance?CAR_POWERTRAINS[id]:null;
+    this.clearTruckBody();
     this.chassisCollider.setTranslationWrtParent({x:0,y:-.06,z:0});
     this.chassisCollider.setShape(new RAPIER.Cuboid(spec.halfWidth, performance?.19:.23, spec.halfLength));
     this.chassisCollider.setMassProperties(spec.mass, {x:0,y:performance?-.15:-.17,z:drive?.cgZ??0}, id==='mclaren-gt'?{x:2500,y:2850,z:750}:performance?{x:spec.mass*1.63,y:spec.mass*1.86,z:spec.mass*.49}:{x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
     this.body.setLinearDamping(spec.linearDamping); this.body.setAngularDamping(1.6);
+    if(id==='moving-truck'){
+      const chassis=MOVING_TRUCK.chassis;
+      this.chassisCollider.setTranslationWrtParent(chassis.center);
+      this.chassisCollider.setShape(new RAPIER.Cuboid(chassis.halfExtents.x,chassis.halfExtents.y,chassis.halfExtents.z));
+      // A loaded cargo body carries its centre of mass above the frame. The
+      // larger inertia resists twitchy yaw while allowing suspension pitch/roll.
+      this.chassisCollider.setMassProperties(spec.mass,{x:0,y:.38,z:-.55},{x:spec.mass*5.2,y:spec.mass*5.5,z:spec.mass*1.25},{x:0,y:0,z:0,w:1});
+      for(const part of [MOVING_TRUCK.cab,MOVING_TRUCK.cargo]){
+        const h=part.halfExtents,c=part.center;
+        const collider=this.world.createCollider(RAPIER.ColliderDesc.cuboid(h.x,h.y,h.z).setTranslation(c.x,c.y,c.z).setMass(0).setFriction(.65).setRestitution(.015),this.body);
+        this.truckColliders.push(collider);
+      }
+      this.cargoCollider=this.truckColliders[1];
+      this.body.setAngularDamping(2.1);
+    }
     this.controller = this.world.createVehicleController(this.body);
     this.controller.indexUpAxis = 1;
     this.controller.setIndexForwardAxis = 2;
@@ -148,7 +177,7 @@ export class DrivingPhysics {
         this.controller.setWheelSuspensionCompression(i, spec.compression);
         this.controller.setWheelSuspensionRelaxation(i, spec.relaxation);
         this.controller.setWheelMaxSuspensionTravel(i, spec.travel);
-        this.controller.setWheelMaxSuspensionForce(i, 12500);
+        this.controller.setWheelMaxSuspensionForce(i, id==='moving-truck'?48000:12500);
         this.controller.setWheelFrictionSlip(i, spec.friction);
         this.controller.setWheelSideFrictionStiffness(i, 1.05);
       }
@@ -172,10 +201,13 @@ export class DrivingPhysics {
     if (kind === this.vehicleType) return;
     const state = this.getState();
     this.world.removeVehicleController(this.controller);
+    this.clearTruckBody();
     this.bike = kind === 'ultrabee' ? new BikeDynamics(this.world, this.body, this.chassisCollider) : undefined;
     if (this.bike) this.controller = this.bike.controller; else this.configureCar();
     this.body.recomputeMassPropertiesFromColliders();
-    this.reset(state.x, state.z, state.yaw, sampleVehicleSurface(this.city,state.x,state.z,state.y).road?.id);
+    const roadId=sampleVehicleSurface(this.city,state.x,state.z,state.y).road?.id;
+    if(this.canResetAt(state.x,state.z,state.yaw,roadId))this.reset(state.x,state.z,state.yaw,roadId);
+    else this.recoverFromCrash(state);
   }
 
   addStaticMesh(vertices: Float32Array, indices: Uint32Array) {
@@ -272,11 +304,86 @@ export class DrivingPhysics {
     const collider=this.world.createCollider(descriptor);this.detailedColliders.add(collider.handle);return collider;
   }
 
+  private clearStorrow(){
+    if(this.storrow?.anchor)this.world.removeRigidBody(this.storrow.anchor);
+    this.storrow=undefined;this.storrowStrikes=[];this.truckApproachSpeed=0;this.truckApproachAge=0;
+  }
+
+  private clearTruckBody(){
+    this.clearStorrow();
+    for(const collider of this.truckColliders)this.world.removeCollider(collider,true);
+    this.truckColliders=[];this.cargoCollider=undefined;
+  }
+
+  /** A tall box contacting a solid above an otherwise open lane is a bridge
+   * strike. Side walls, vehicles, pavement and upside-down contacts do not
+   * qualify. Rapier supplies the actual contact and stopping impulse. */
+  private detectStorrow(before:PhysicsVehicleState,severity:number){
+    const cargo=this.cargoCollider!;
+    if(1-2*(before.rotation.x**2+before.rotation.z**2)<.8)return;
+    let hit:RAPIER.Collider|undefined,point:{x:number;y:number;z:number}|undefined;
+    this.world.contactPairsWith(cargo,other=>{
+      if(hit||other.isSensor()||other.parent()&&!other.parent()!.isFixed()||this.terrainColliders.has(other.handle))return;
+      const consider=(p:{x:number;y:number;z:number}|null)=>{
+        if(!p||p.y<before.y+1.7)return;
+        // At this same horizontal point, a clear space below the impact
+        // distinguishes an overhead beam from a wall or a support column.
+        if(other.intersectsShape(new RAPIER.Cuboid(.14,.55,.14),{x:p.x,y:before.y+.3,z:p.z},{x:0,y:0,z:0,w:1}))return;
+        hit=other;point={x:p.x,y:p.y,z:p.z};
+      };
+      this.world.contactPair(cargo,other,manifold=>{
+        for(let i=0;i<manifold.numSolverContacts();i++){
+          consider(manifold.solverContactPoint(i));if(hit)break;
+        }
+      });
+      // Persistent CCD contacts against a thin triangle-mesh rib can have
+      // manifold contacts but zero solver points. Query their world-space
+      // witness directly instead of losing a real stopped cargo-box strike.
+      if(!hit){const contact=cargo.contactCollider(other,.03);if(contact)consider(contact.point2);}
+    });
+    if(!hit||!point)return;
+    const direction=before.speed<0?-1:1,site=lowClearanceAt(this.city,point.x,point.z,2);
+    let exits:StorrowRecoveryPose[]|undefined;
+    let exit={x:before.x,z:before.z,yaw:before.yaw,roadId:sampleVehicleSurface(this.city,before.x,before.z,before.y).road?.id};
+    if(site&&Math.abs(before.y-site.roadY-this.carSpec.spawnHeight)<1.5){
+      exits=storrowRecoveryCandidates(this.city,site,before,direction,this.carSpec.halfLength,this.carSpec.halfWidth);
+    }else{
+      // Other low overpasses (including tunnel portals) use their real solid
+      // extent. Walk the complete truck beyond the struck mesh before repair.
+      const dx=Math.sin(before.yaw)*direction,dz=Math.cos(before.yaw)*direction;
+      for(let distance=8;distance<=1000;distance+=2){
+        const x=before.x+dx*distance,z=before.z+dz*distance;
+        const pose=this.resetPose(x,z,before.yaw,exit.roadId),center=this.colliderCenter(cargo,pose.position,pose.rotation);
+        if(!hit.intersectsShape(cargo.shape,center,pose.rotation)){exit={...exit,x:x+dx*12,z:z+dz*12};break;}
+      }
+    }
+    this.storrow={damage:clamp(.35+Math.abs(before.speed)*.032,.35,1),direction,elapsed:0,exit,exits};
+    this.storrowStrikes.push({severity:Math.max(severity,Math.abs(before.speed)),direction});
+  }
+
   step(input: DriveInput, dt: number) {
     if (!Number.isFinite(dt) || dt <= 0) return;
     const timestep = Math.min(dt, 1 / 30);
     this.world.timestep = timestep;
     const state = this.getState();
+    if(this.cargoCollider){
+      if(Math.abs(state.speed)>.25){this.truckApproachSpeed=state.speed;this.truckApproachAge=.3;}
+      else this.truckApproachAge=Math.max(0,this.truckApproachAge-timestep);
+    }
+    if(this.storrow){
+      this.storrow.elapsed+=timestep;
+      input={throttle:0,brake:1,steer:0,handbrake:true};
+      // Let the initial high contact load pitch the truck and compress its
+      // suspension, then constrain the crushed box to the bridge. The joint
+      // keeps the wreck wedged even if the surrounding tile streams away.
+      if(this.storrow.elapsed>=.16&&!this.storrow.anchor){
+        const p=this.body.translation(),q=this.body.rotation();
+        const anchor=this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(p.x,p.y,p.z).setRotation(q));
+        this.world.createImpulseJoint(RAPIER.JointData.fixed({x:0,y:0,z:0},{x:0,y:0,z:0,w:1},{x:0,y:0,z:0},{x:0,y:0,z:0,w:1}),anchor,this.body,true);
+        this.storrow.anchor=anchor;
+        this.body.setLinvel({x:0,y:0,z:0},true);this.body.setAngvel({x:0,y:0,z:0},true);
+      }
+    }
     if (this.bike) {
       this.bike.step(input, timestep, state.speed, state.yaw);
       this.steering=this.bike.steering;this.braking=this.bike.braking;this.gear=state.speed<-.3?-1:1;this.rpm=0;
@@ -289,7 +396,7 @@ export class DrivingPhysics {
     // Slightly tighter arcs at parking and road speeds; cap lateral demand near .87g.
     const steeringLimit = carSteeringLimit(speed,spec);
     const desiredSteer = clamp(input.steer, -1, 1) * steeringLimit;
-    this.steering += (desiredSteer - this.steering) * (1 - Math.exp(-8 * timestep));
+    this.steering += (desiredSteer - this.steering) * (1 - Math.exp(-(id==='moving-truck'?3.2:8) * timestep));
     const speedLimit = throttle >= 0 ? spec.maxForwardSpeed : spec.maxReverseSpeed;
     this.pedal += (throttle-this.pedal)*(1-Math.exp(-(Math.abs(throttle)>Math.abs(this.pedal)?22:14)*timestep));
     if(Math.abs(throttle)<.001&&Math.abs(this.pedal)<.005)this.pedal=0;
@@ -325,7 +432,7 @@ export class DrivingPhysics {
       const slidingTurn=input.handbrake&&Math.abs(input.steer)>.25&&Math.abs(speed)>3;
       this.controller.setWheelSideFrictionStiffness(i, slidingTurn && i >= 2 ? 0.45 : 1.05);
     }
-    this.controller.updateVehicle(timestep, undefined, undefined, collider => collider.handle !== this.chassisCollider.handle);
+    this.controller.updateVehicle(timestep, undefined, undefined, collider => collider.parent()?.handle !== this.body.handle);
     if(input.handbrake&&Math.abs(throttle)<.05&&Math.abs(speed)<.2&&this.controller.wheelIsInContact(2)&&this.controller.wheelIsInContact(3)){
       // At rest, the locked tires supply static friction against the component
       // of gravity along the road. Rapier's wheel impulse precedes world gravity;
@@ -353,6 +460,13 @@ export class DrivingPhysics {
     // one step. Record what the chassis touched so the sound matches the object.
     const after = this.body.linvel(), gravity = this.world.gravity;
     const severity = Math.hypot(after.x - before.x - gravity.x * timestep, after.y - before.y - gravity.y * timestep, after.z - before.z - gravity.z * timestep);
+    // Trimesh CCD can stop the body one step before solver contacts become
+    // available. Retain that approach speed briefly so the next contact still
+    // registers, including a truck creeping into the beam on the throttle.
+    if(this.cargoCollider&&!this.storrow&&(Math.abs(state.speed)>.1||this.truckApproachAge>0||Math.abs(input.throttle)>.1)){
+      const contactSpeed=Math.abs(state.speed)>.25?state.speed:this.truckApproachAge>0?this.truckApproachSpeed:input.throttle*.3;
+      this.detectStorrow({...state,speed:contactSpeed},severity);
+    }
     if (severity >= IMPACT_THRESHOLD) {
       const colliders: number[] = []; let px = 0, py = 0, pz = 0, points = 0;
       this.world.contactPairsWith(this.chassisCollider, other => {
@@ -371,7 +485,7 @@ export class DrivingPhysics {
       // crest, landing a jump) keep Rapier's own response; the bike keeps its
       // rider balance.
       const horizontal = Math.hypot(after.x - before.x - gravity.x * timestep, after.z - before.z - gravity.z * timestep);
-      if (!this.bike && points && horizontal >= 3) {
+      if (!this.bike && !this.cargoCollider && points && horizontal >= 3) {
         const com = this.body.worldCom(), up = { x: 2 * (q0.x * q0.y - q0.w * q0.z), y: 1 - 2 * (q0.x * q0.x + q0.z * q0.z), z: 2 * (q0.y * q0.z + q0.w * q0.x) };
         const { lift, scale, limit } = CRASH_KICK, rx = px / points - com.x + up.x * lift, ry = py / points - com.y + up.y * lift, rz = pz / points - com.z + up.z * lift;
         const mass = this.body.mass(), jx = (after.x - before.x - gravity.x * timestep) * mass, jy = (after.y - before.y - gravity.y * timestep) * mass, jz = (after.z - before.z - gravity.z * timestep) * mass;
@@ -385,16 +499,27 @@ export class DrivingPhysics {
     const q = this.body.rotation();
     const upY = 1 - 2 * (q.x * q.x + q.z * q.z);
     this.overturnedTime = upY < 0.2 ? this.overturnedTime + timestep : 0;
-    if (!Number.isFinite(p.x + p.y + p.z) || p.y < sampleDriveSurface(this.city,p.x,p.z,p.y).height - 8 || this.overturnedTime > 2.5 ||
+    if (!this.storrow&&(!Number.isFinite(p.x + p.y + p.z) || p.y < sampleDriveSurface(this.city,p.x,p.z,p.y).height - 8 || this.overturnedTime > 2.5 ||
         p.x < this.bounds.minX - 24 || p.x > this.bounds.maxX + 24 ||
-        p.z < this.bounds.minZ - 24 || p.z > this.bounds.maxZ + 24) {
+        p.z < this.bounds.minZ - 24 || p.z > this.bounds.maxZ + 24)) {
       this.recoverFromCrash(p);
     }
   }
 
   /** The player's reset (R): set the vehicle upright on the nearest clear road
    * at its level, the same placement as an overturned car's recovery. */
-  resetToRoad(){this.recoverFromCrash(this.body.translation());}
+  resetToRoad(){
+    if(this.storrow){
+      const exit=this.storrow.exit,dx=Math.sin(exit.yaw)*this.storrow.direction,dz=Math.cos(exit.yaw)*this.storrow.direction;
+      // Prefer the far side of this same crossing, retaining lane/direction.
+      // Longer search covers a queue immediately beyond the bridge.
+      const candidates=this.storrow.exits??Array.from({length:16},(_,i)=>({...exit,x:exit.x+dx*i*4,z:exit.z+dz*i*4}));
+      for(const at of candidates){
+        if(this.canResetAt(at.x,at.z,at.yaw,at.roadId,true)){this.reset(at.x,at.z,at.yaw,at.roadId);return;}
+      }
+    }
+    this.recoverFromCrash(this.body.translation());
+  }
   /** Bring the vehicle to the nearest clear road at `position`'s level, as when the player walked away from it and wants it back. */
   resetNear(position:{x:number;y:number;z:number}){this.recoverFromCrash({x:position.x,y:position.y+.5,z:position.z});}
 
@@ -406,7 +531,7 @@ export class DrivingPhysics {
     if([position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
       const crashSurface=sampleVehicleSurface(this.city,position.x,position.z,position.y);
       // Keep recovery inside the already-streamed neighborhood (and on a survey mesh's traces only after a crash on one, where the mesh is loaded).
-      const road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,survey:!!crashSurface.road?.surveyDeck,accept:spot=>{
+      const accept=(spot:{x:number;z:number;yaw:number;road:CityData['roads'][number]})=>{
         if(spot.x<this.bounds.minX+1||spot.x>this.bounds.maxX-1||spot.z<this.bounds.minZ+1||spot.z>this.bounds.maxZ-1)return false;
         const surface=sampleDriveSurface(this.city,spot.x,spot.z,undefined,spot.road.id),n=surface.normal;
         // Level compatibility is a constraint, not a distance tradeoff. Compare
@@ -414,8 +539,19 @@ export class DrivingPhysics {
         const level=surface.height-(n.x*(position.x-spot.x)+n.z*(position.z-spot.z))/Math.max(.5,n.y);
         if(Math.abs(level-crashSurface.height)>1.25)return false;
         const center={x:spot.x-.06*n.x,y:surface.height+spawnHeight/Math.max(.5,n.y)-.06*n.y,z:spot.z-.06*n.z};
-        return !this.world.intersectionWithShape(center,rotationFromNormal(n,spot.yaw),this.chassisCollider.shape,undefined,undefined,this.chassisCollider,this.body);
-      }});
+        return !this.world.intersectionWithShape(center,rotationFromNormal(n,spot.yaw),this.chassisCollider.shape,undefined,undefined,this.chassisCollider,this.body)&&this.canResetAt(spot.x,spot.z,spot.yaw,spot.road.id);
+      };
+      let road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,survey:!!crashSurface.road?.surveyDeck,accept});
+      // A bike can fit beneath a bridge where the selected truck cannot. A
+      // single projection on that road is blocked, but a nearby station on the
+      // same level is safe; search along it before using the saved rescue pose.
+      if(!Number.isFinite(road.distance)&&this.cargoCollider){
+        const heading=this.getState().yaw;
+        for(let distance=8;distance<=80&&!Number.isFinite(road.distance);distance+=8)for(const sign of [1,-1]){
+          road=closestRoad(this.city,position.x+Math.sin(heading)*distance*sign,position.z+Math.cos(heading)*distance*sign,false,{height:position.y,maxDistance:12,accept});
+          if(Number.isFinite(road.distance))break;
+        }
+      }
       if(Number.isFinite(road.distance)){
         const yaw=road.road.oneway===0&&Math.cos(road.yaw-this.getState().yaw)<0?road.yaw+Math.PI:road.yaw;
         this.reset(road.x,road.z,yaw,road.road.id);return;
@@ -440,6 +576,7 @@ export class DrivingPhysics {
       braking: this.braking,gear:this.gear,rpm:this.rpm,vehicle:this.vehicleType,carId:this.carId,
       halfLength:this.bike?.8:this.carSpec.halfLength,halfWidth:this.bike?.4:this.carSpec.halfWidth,
       lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
+      storrowDamage:this.storrow?.damage??0,storrowDirection:this.storrow?.direction??1,storrowed:!!this.storrow,
     };
   }
 
@@ -465,24 +602,31 @@ export class DrivingPhysics {
     return{normal,position:{x,y:surface.height+(this.bike?ULTRA_BEE.spawnHeight:this.carSpec.spawnHeight)/Math.max(.5,normal.y),z},rotation:rotationFromNormal(normal,yaw)};
   }
 
+  private colliderCenter(collider:RAPIER.Collider,position:{x:number;y:number;z:number},q:{x:number;y:number;z:number;w:number}){
+    const v=collider.translationWrtParent()??{x:0,y:0,z:0};
+    const tx=2*(q.y*v.z-q.z*v.y),ty=2*(q.z*v.x-q.x*v.z),tz=2*(q.x*v.y-q.y*v.x);
+    return{x:position.x+v.x+q.w*tx+q.y*tz-q.z*ty,y:position.y+v.y+q.w*ty+q.z*tx-q.x*tz,z:position.z+v.z+q.w*tz+q.x*ty-q.y*tx};
+  }
+
   /** Check a saved arrival against loaded static geometry before moving the car.
    * Query each collider directly: newly streamed colliders are absent from
    * Rapier's broad phase until world.step(), which must not run inside a wall. */
-  canResetAt(x:number,z:number,yaw:number,roadId?:string){
+  canResetAt(x:number,z:number,yaw:number,roadId?:string,includeTraffic=false){
     if(![x,z,yaw].every(Number.isFinite))return false;
-    const {position,rotation,normal}=this.resetPose(x,z,yaw,roadId),offset=this.chassisCollider.translationWrtParent()?.y??0;
-    const center={x:position.x+normal.x*offset,y:position.y+normal.y*offset,z:position.z+normal.z*offset};
+    const {position,rotation}=this.resetPose(x,z,yaw,roadId);
+    const shapes=[this.chassisCollider,...this.truckColliders].map(collider=>({shape:collider.shape,center:this.colliderCenter(collider,position,rotation)}));
     let clear=true;
     this.world.forEachCollider(collider=>{
-      if(!clear||collider.handle===this.chassisCollider.handle||collider.isSensor())return;
-      const parent=collider.parent();if(parent&&!parent.isFixed())return;
-      if(collider.intersectsShape(this.chassisCollider.shape,center,rotation))clear=false;
+      if(!clear||collider.parent()?.handle===this.body.handle||collider.isSensor())return;
+      const parent=collider.parent();if(!includeTraffic&&parent&&!parent.isFixed())return;
+      if(shapes.some(({shape,center})=>collider.intersectsShape(shape,center,rotation)))clear=false;
     });
     return clear;
   }
 
   reset(x: number, z: number, yaw: number, roadId?:string) {
     if (![x, z, yaw].every(Number.isFinite)) return;
+    this.clearStorrow();
     this.poseRevision++;
     this.rescue = { x, z, yaw,roadId };
     const {position,rotation}=this.resetPose(x,z,yaw,roadId);
