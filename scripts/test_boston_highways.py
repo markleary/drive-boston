@@ -284,7 +284,7 @@ class NodeTest(unittest.TestCase):
   child=plan([[10,0],[10,10],[10,20]],main=False);child.id='child';child.ends=[('node',parent,1),('street',[])]
   other=plan([[100,0],[110,0]],main=False);other.id='unrelated';other.ends=[('street',[]),('street',[])];other.y=[3.,3.]
   calls=[]
-  def stale(p):return p is parent or (p is child and abs(child.y[0]-parent.y[1])>5e-4)
+  def stale(p):return (p is parent and calls.count('parent')<4) or (p is child and abs(child.y[0]-parent.y[1])>5e-4)
   def solve(p):
    calls.append(p.id)
    if p is parent:p.y[1]+=0.072 # a crossing constraint updates the parent after the child's previous binding
@@ -294,6 +294,44 @@ class NodeTest(unittest.TestCase):
   self.assertEqual(child.y[0],parent.y[1],'the last parent solve must reach the dependent endpoint, with no tolerance increase')
   self.assertEqual(calls,['parent','child']*4)
   self.assertEqual(other.y,[3.,3.],'an already current unrelated route is not re-solved')
+
+ def test_late_ramps_fail_closed_when_the_last_solve_invalidates_an_earlier_dependency(self):
+  a=plan([[0,0],[10,0]],main=False);a.id='cyclic-a'
+  b=plan([[10,0],[20,0]],main=False);b.id='cyclic-b'
+  def stale(p):return p.y[0]!=(b.y[0]+1 if p is a else a.y[0]+1)
+  def solve(p):p.y[0]=b.y[0]+1 if p is a else a.y[0]+1
+  with self.assertRaisesRegex(AssertionError,'late ramp dependencies did not settle: cyclic-a'):
+   H.settle_late_ramps([a,b],stale,solve)
+  self.assertEqual(b.y[0],8,'stop after the bounded solve, including a final whole-graph stale check')
+
+ def test_late_ramps_refuse_a_dependency_that_needs_a_fifth_solve(self):
+  p=plan([[0,0],[10,0]],main=False);p.id='five-pass-ramp'
+  with self.assertRaisesRegex(AssertionError,'five-pass-ramp'):
+   H.settle_late_ramps([p],lambda p:p.y[0]<5,lambda p:p.y.__setitem__(0,p.y[0]+1))
+  self.assertEqual(p.y[0],4)
+
+ def test_overlap_fit_residual_is_distinct_from_an_outdated_parent_binding(self):
+  parent=plan([[0,0],[10,0],[20,0]],main=False);parent.id='parent'
+  child=plan([[0,0],[10,1],[20,5]],main=False);child.id='child';child.ends=[('node',parent,0),('street',[])]
+  leads={'child':[(parent,0)]};bound=H.ramp_dependency_targets(child,leads,set());child.y=[.02]*3
+  self.assertFalse(H.stale_ramp_dependencies(child,bound,leads,set()),'a persistent fit residual has not changed the heights supplied to the solver')
+  calls=[]
+  H.settle_late_ramps([child],lambda p:H.stale_ramp_dependencies(p,bound,leads,set()),lambda p:calls.append(p.id),lambda p:True)
+  self.assertEqual(calls,['child']*4,'retain the existing bounded refinement attempts without calling their residual stale')
+  parent.y[1]=.01
+  self.assertTrue(H.stale_ramp_dependencies(child,bound,leads,set()),'an interior parent overlap changed even though its endpoint did not')
+  bound=H.ramp_dependency_targets(child,leads,set());parent.y[0]=.01
+  self.assertTrue(H.stale_ramp_dependencies(child,bound,leads,set()),'a changed parent endpoint must also be rebound')
+  self.assertTrue(H.stale_ramp_dependencies(child,{},leads,set()),'a newly introduced dependency must be bound')
+
+ def test_direct_node_overlap_is_watched_without_a_sibling_lead(self):
+  parent=plan([[0,0],[10,0],[20,0]],main=False);parent.id='parent'
+  child=plan([[0,0],[10,1],[20,5]],main=False);child.id='child';child.ends=[('node',parent,0),('street',[])]
+  bound=H.ramp_dependency_targets(child,{},set());parent.y[1]=.01
+  self.assertTrue(H.stale_ramp_dependencies(child,bound,{},set()),'the parent interior is read by match_overlap even with no sibling leads')
+  child.ends=[('street',[]),('node',parent,0)]
+  bound=H.ramp_dependency_targets(child,{},set());parent.y[1]=.02
+  self.assertFalse(H.stale_ramp_dependencies(child,bound,{},set()),'an end on the beginning of its trunk binds only that endpoint')
 
  def ground(self,x,z):return 2.0 if x>=95 else 1.8 if x<=26 else -2.5
  def roads(self):

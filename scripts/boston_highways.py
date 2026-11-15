@@ -792,17 +792,41 @@ def hold_surface(plan):
  plan.floor=floor
 
 
-def settle_late_ramps(ordered,stale,solve):
+def ramp_dependency_targets(plan,leads,trunks):
+ """The parent heights read by a ramp, independent of its spline's fit residual."""
+ targets={}
+ for e,kind in enumerate(plan.ends):
+  if kind and kind[0]=='node' and (plan,e) not in trunks and kind[1].y is not None:
+   targets[('node',e)]=float(kind[1].y[kind[2]])
+   if not (e==1 and kind[2]==0):
+    for k,y in I.overlap(plan,e,kind[1]):targets[('nodeOverlap',e,k)]=y
+ for other,e in leads.get(plan.id,()):
+  for k,y in I.overlap(plan,e,other):targets[('overlap',other.id,e,k)]=y
+ return targets
+
+
+def stale_ramp_dependencies(plan,bound,leads,trunks):
+ targets=ramp_dependency_targets(plan,leads,trunks)
+ return targets.keys()!=bound.keys() or any(abs(y-bound[k])>5e-4 for k,y in targets.items())
+
+
+def settle_late_ramps(ordered,stale,solve,refine=lambda plan:False):
  """Refresh dependent profiles after each parent is solved, including in the last sweep.
 
  A precomputed list of stale ramps misses a child that was current at the
  start of the sweep but whose parent changes earlier in that same sweep.
+ `refine` retains the bounded attempts to improve a spline's fit to overlap
+ constraints. Those residuals are checked by the geometry validators; they
+ do not mean its dependency inputs changed. The final invariant instead
+ requires every node/lead binding to describe the current parent profiles.
  """
  for _ in range(4):
   changed=False
   for plan in ordered:
-   if stale(plan):solve(plan);changed=True
+   if stale(plan) or refine(plan):solve(plan);changed=True
   if not changed:break
+ unresolved=[plan.id for plan in ordered if stale(plan)]
+ assert not unresolved,f'late ramp dependencies did not settle: {", ".join(unresolved)}'
 
 
 def branch_lift(trunk,ramps):
@@ -1778,7 +1802,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
    for i,s in enumerate(plan.along):
     dist=s if e==0 else plan.along[-1]-s
     if taper>I.LANDING_TAPER and dist<taper:plan.allowance[i]=min(plan.allowance[i],dist/taper)
- leads=defaultdict(list)
+ leads=defaultdict(list);bound={}
  def bind_ramp(plan):
   # What a ramp is solved between: its ends, the stations held to the roads it leaves, joins or follows, and its bounds.
   plan.fixed={};land(plan)
@@ -1811,6 +1835,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
      if need>-math.inf:plan.floor[i]=max(plan.floor[i],need)
   # It stays as high where a ramp leaves it at a vertex of its own as that ramp must be to lie on the street it lands on.
   lift,ids=branch_lift(plan,ramps);plan.raised={'for':ids,'short':raise_floor(plan,lift)} if lift else None
+  bound[plan.id]=ramp_dependency_targets(plan,leads,trunks)
  def settle_ramp(plan):
   I.solve(plan,report)
   # Held to the road it follows at the stations beside its end as well, or squeezed between its bounds further on, the spline
@@ -1828,14 +1853,14 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
      i=0 if e==0 else -1;shared=I.overlap(a,e,b) if key(a.points[i])==key(b.points[i]) else []
      if shared:lower,upper=(a,b) if sum(y-a.y[j] for j,y in shared)>0 else (b,a);leads[lower.id].append((upper,e))
  # A ramp solved before the road it joins or follows was last solved in the sweep starts a centimetre off it: solve those once more.
- def stale(plan):
+ def refine(plan):
   for e,kind in enumerate(plan.ends):
    # (an end on a carriageway or a tunnel road that it misses is squeezed, not late: those were solved before every ramp)
    if kind[0]=='node' and (plan,e) not in trunks and kind[1].y is not None and abs(plan.y[0 if e==0 else -1]-kind[1].y[kind[2]])>5e-4:return True
   return any(abs(plan.y[k]-y)>5e-4 for o,f in leads[plan.id] for k,y in I.overlap(plan,f,o))
  def resolve_late(plan):
   report['infeasible']=[x for x in report['infeasible'] if x['road']!=plan.id];solve_ramp(plan)
- settle_late_ramps(I.ordered(ramps,leads,trunks),stale,resolve_late)
+ settle_late_ramps(I.ordered(ramps,leads,trunks),lambda plan:stale_ramp_dependencies(plan,bound[plan.id],leads,trunks),resolve_late,refine)
  # Close the survey's cut over the tunnels, then read the ground again: the lids decide what is covered.
  def finish():
   lidded=lids(plans,surface,surface_lines,city['elevation'],graded,buildings)
