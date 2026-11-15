@@ -13,7 +13,10 @@ export function inheritRoadHeadlights(source:THREE.Material|undefined,target:THR
 
 /** Project the fleet's low beams onto the visible pavement. Each fragment
  * checks only beams crossing its cell, with no extra scene lights or draws. */
-export function createRoadHeadlights(capacity:number){
+export function createRoadHeadlights(fleet:number){
+  // Cell texels hold one-based ids in a byte, so at most 255 beams are drawn a frame: the cars added first (the fleet
+  // adds them in its own order), each given the next id. A beam that reaches no cell of the grid takes none.
+  const capacity=Math.min(255,fleet);let next=0;
   const cells=new Uint8Array(GRID_SIZE*GRID_SIZE*SLOTS);
   const counts=new Uint8Array(GRID_SIZE*GRID_SIZE);
   const poses=new Float32Array(capacity*3*4);
@@ -100,12 +103,12 @@ export function createRoadHeadlights(capacity:number){
       origin.set(Math.floor(x/CELL_SIZE)-GRID_SIZE/2,Math.floor(z/CELL_SIZE)-GRID_SIZE/2);
       counts.fill(0);
       cells.fill(0);
+      next=0;
     },
-    add(index:number,matrix:THREE.Matrix4,halfLength:number,width:number){
+    add(matrix:THREE.Matrix4,halfLength:number,width:number){
       const [rx,ry,rz,,ux,uy,uz,,fx,fy,fz,,x,y,z]=matrix.elements;
       if(uy<.7)return; // overturned cars aren't aimed at the pavement
       const noseX=x+fx*halfLength,noseZ=z+fz*halfLength,spacing=width*.35;
-      poses.set([noseX,y+fy*halfLength,noseZ,spacing,fx,fy,fz,0,rx,ry,rz,0],index*12);
 
       const nearWidth=spacing+BEAM_EDGE,farWidth=nearWidth+BEAM_LENGTH*BEAM_SPREAD;
       const tipX=noseX+fx*BEAM_LENGTH,tipZ=noseZ+fz*BEAM_LENGTH;
@@ -116,10 +119,13 @@ export function createRoadHeadlights(capacity:number){
       const right=Math.min(GRID_SIZE-1,Math.floor(Math.max(noseX+nearX,tipX+farX)/CELL_SIZE)-origin.x);
       const top=Math.max(0,Math.floor(Math.min(noseZ-nearZ,tipZ-farZ)/CELL_SIZE)-origin.y);
       const bottom=Math.min(GRID_SIZE-1,Math.floor(Math.max(noseZ+nearZ,tipZ+farZ)/CELL_SIZE)-origin.y);
+      if(left>right||top>bottom||next>=capacity)return;
+      const id=next++;
+      poses.set([noseX,y+fy*halfLength,noseZ,spacing,fx,fy,fz,0,rx,ry,rz,0],id*12);
       for(let row=top;row<=bottom;row++)for(let col=left;col<=right;col++){
         const cell=row*GRID_SIZE+col,slot=counts[cell];
         if(slot===SLOTS)continue;
-        cells[cell*SLOTS+slot]=index+1;
+        cells[cell*SLOTS+slot]=id+1;
         counts[cell]++;
       }
     },

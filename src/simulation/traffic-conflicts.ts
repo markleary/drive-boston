@@ -23,11 +23,8 @@ export function footprintsOverlap(a:Pose,fa:Footprint,b:Pose,fb:Footprint){
   const al=fa.halfLength+CONFLICT.lengthMargin,aw=fa.halfWidth+CONFLICT.widthMargin,bl=fb.halfLength+CONFLICT.lengthMargin,bw=fb.halfWidth+CONFLICT.widthMargin;
   const afx=Math.sin(a.yaw),afz=Math.cos(a.yaw),bfx=Math.sin(b.yaw),bfz=Math.cos(b.yaw),dx=b.x-a.x,dz=b.z-a.z;
   // Forward (sin, cos) and right (cos, -sin) of each car.
-  for(const [ux,uz] of [[afx,afz],[afz,-afx],[bfx,bfz],[bfz,-bfx]]){
-    const ra=al*Math.abs(afx*ux+afz*uz)+aw*Math.abs(afz*ux-afx*uz),rb=bl*Math.abs(bfx*ux+bfz*uz)+bw*Math.abs(bfz*ux-bfx*uz);
-    if(Math.abs(dx*ux+dz*uz)>ra+rb)return false;
-  }
-  return true;
+  const apart=(ux:number,uz:number)=>Math.abs(dx*ux+dz*uz)>al*Math.abs(afx*ux+afz*uz)+aw*Math.abs(afz*ux-afx*uz)+bl*Math.abs(bfx*ux+bfz*uz)+bw*Math.abs(bfz*ux-bfx*uz);
+  return !(apart(afx,afz)||apart(afz,-afx)||apart(bfx,bfz)||apart(bfz,-bfx));
 }
 
 /** Bounds of each run of `RUN` consecutive poses of a trajectory, so a contact
@@ -38,6 +35,14 @@ function bounds(b:Trajectory){
   const n=b.poses.length;box=new Float64Array(Math.ceil(n/RUN)*4);
   for(let r=0;r*RUN<n;r++){let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;for(let k=r*RUN;k<Math.min(n,r*RUN+RUN);k++){const q=b.poses[k];x0=Math.min(x0,q.x);x1=Math.max(x1,q.x);z0=Math.min(z0,q.z);z1=Math.max(z1,q.z);}box[r*4]=x0;box[r*4+1]=x1;box[r*4+2]=z0;box[r*4+3]=z1;}
   runBounds.set(b,box);return box;
+}
+/** Whether the boxes of every pose of `a` and of `b`, grown by `reach`, are apart: then no pose of one comes within
+ * reach of a pose of the other on both axes. */
+function boxesApart(a:Trajectory,b:Trajectory,reach:number){
+  const p=bounds(a),q=bounds(b);let ax0=Infinity,ax1=-Infinity,az0=Infinity,az1=-Infinity,bx0=Infinity,bx1=-Infinity,bz0=Infinity,bz1=-Infinity;
+  for(let r=0;r<p.length;r+=4){ax0=Math.min(ax0,p[r]);ax1=Math.max(ax1,p[r+1]);az0=Math.min(az0,p[r+2]);az1=Math.max(az1,p[r+3]);}
+  for(let r=0;r<q.length;r+=4){bx0=Math.min(bx0,q[r]);bx1=Math.max(bx1,q[r+1]);bz0=Math.min(bz0,q[r+2]);bz1=Math.max(bz1,q[r+3]);}
+  return ax0>bx1+reach||bx0>ax1+reach||az0>bz1+reach||bz0>az1+reach;
 }
 function touchesAny(p:Pose,a:Footprint,b:Trajectory,reach:number){
   const box=bounds(b),n=b.poses.length;
@@ -52,6 +57,7 @@ function touchesAny(p:Pose,a:Footprint,b:Trajectory,reach:number){
  * (0 when it already does), or undefined when the routes stay clear. */
 export function firstContact(a:Trajectory,b:Trajectory){
   const reach=Math.hypot(a.halfLength+CONFLICT.lengthMargin,a.halfWidth+CONFLICT.widthMargin)+Math.hypot(b.halfLength+CONFLICT.lengthMargin,b.halfWidth+CONFLICT.widthMargin);
+  if(boxesApart(a,b,reach))return;
   for(let k=0;k<a.poses.length;k++){
     if(!touchesAny(a.poses[k],a,b,reach))continue;
     if(k===0)return 0;

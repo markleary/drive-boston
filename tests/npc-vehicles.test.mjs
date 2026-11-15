@@ -90,7 +90,7 @@ test('near/far batches retain actor transforms and paint across different silhou
  try{
   NPC_VEHICLES.forEach((spec,i)=>{fleet.bind(i,spec.type);fleet.draw(i,matrix.makeTranslation(i*10,2,3),new THREE.Color(spec.colors[0]),i%2?150:20);});fleet.flush();
   const near=group.children.find(m=>m.name==='NPC near paint'),far=group.children.find(m=>m.name==='NPC far paint');
-  for(let i=0;i<5;i++){near.getMatrixAt(i,out);assert.equal(out.elements[12],i*10);assert.equal(near.getVisibleAt(i),i%2===0);assert.equal(far.getVisibleAt(i),i%2===1);}
+  for(let i=0;i<5;i++){(i%2?far:near).getMatrixAt(i,out);assert.equal(out.elements[12],i*10,'the shown level carries the transform');assert.equal(near.getVisibleAt(i),i%2===0);assert.equal(far.getVisibleAt(i),i%2===1);}
   fleet.setNight(true);assert.ok(group.children.find(m=>m.name==='NPC near lamp').material.emissiveIntensity>2);
  }finally{fleet.dispose();assert.equal(group.children.length,0);}
 });
@@ -122,8 +122,14 @@ test('all five models roll around their axle pivots, reverse, stop, and steer on
    const near=group.children.find(m=>m.name==='NPC near rubber'),far=group.children.find(m=>m.name==='NPC far rubber');
    for(let w=0;w<4;w++){
     expected.copy(body).multiply(new THREE.Matrix4().makeTranslation(pivots[w]));if(w<2)expected.multiply(new THREE.Matrix4().makeRotationY(steer));expected.multiply(new THREE.Matrix4().makeRotationX(.4/spec.wheelRadius));
-    near.getMatrixAt(near.userData.npcInstances[i][w+1],wheel);assert.ok(wheel.elements.every((n,k)=>Math.abs(n-expected.elements[k])<2e-6),`${spec.type} wheel ${w} spins around its own center`);
-    far.getMatrixAt(far.userData.npcInstances[i][w+1],wheel);assert.ok(wheel.elements.every((n,k)=>Math.abs(n-expected.elements[k])<2e-6),'both LODs retain the same wheel phase');
+    far.getMatrixAt(far.userData.npcInstances[i][w+1],wheel);assert.ok(wheel.elements.every((n,k)=>Math.abs(n-expected.elements[k])<2e-6),`${spec.type} wheel ${w} spins around its own center`);
+   }
+   // Only the shown level is placed; coming near again, the near wheels take up the same phase.
+   fleet.draw(i,body,new THREE.Color('white'),0,steer);
+   for(let w=0;w<4;w++){
+    expected.copy(body).multiply(new THREE.Matrix4().makeTranslation(pivots[w]));if(w<2)expected.multiply(new THREE.Matrix4().makeRotationY(steer));expected.multiply(new THREE.Matrix4().makeRotationX(.4/spec.wheelRadius));
+    near.getMatrixAt(near.userData.npcInstances[i][w+1],wheel);assert.ok(wheel.elements.every((n,k)=>Math.abs(n-expected.elements[k])<2e-6),'both LODs retain the same wheel phase');
+    assert.equal(near.getVisibleAt(near.userData.npcInstances[i][w+1]),true);assert.equal(far.getVisibleAt(far.userData.npcInstances[i][w+1]),false,'one level shown at a time');
    }
    fleet.draw(i,body,new THREE.Color('white'),150,steer);far.getMatrixAt(far.userData.npcInstances[i][1],wheel);const stopped=wheel.clone();fleet.draw(i,body,new THREE.Color('white'),0,steer);near.getMatrixAt(near.userData.npcInstances[i][1],wheel);assert.deepEqual(wheel.elements,stopped.elements,'stationary cars do not spin');
    position.sub(new THREE.Vector3(0,0,.4).applyQuaternion(q));body.compose(position,q,scale);fleet.draw(i,body,new THREE.Color('white'),0);

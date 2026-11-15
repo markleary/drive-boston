@@ -47,6 +47,7 @@ import { createGamepadReader, padDriveInput,padWalkInput, padFlightInput } from 
 import { closestRoad } from './simulation/roads';
 import { routeGraph } from './simulation/navigation';
 import { createTraffic } from './simulation/traffic';
+import { DEFAULT_PEDESTRIAN_DENSITY, DEFAULT_TRAFFIC_DENSITY, PEDESTRIAN_DENSITY, TRAFFIC_DENSITY, type DensityLevel } from './simulation/npc-density';
 import {createConstruction} from './simulation/construction';
 import {planConstructionZones} from './simulation/construction-zones';
 import {prepareNPCVehicles} from './render/npc-vehicles';
@@ -76,6 +77,10 @@ async function boot(){
   let transit:ReturnType<typeof createTransit>|undefined;
   let prudential:ReturnType<typeof addPrudentialCrown>|undefined;let metroLandmarks:ReturnType<typeof addMetroLandmarkDetails>|undefined;let tdGarden:ReturnType<typeof addTdGardenDetails>;
   let populateNeighborhood=()=>{};let setParkedNight=(_night:boolean)=>{};
+  // Ambient population settings; the interface hands over the stored ones while it is created, before the fleet exists.
+  let trafficDensity:DensityLevel=DEFAULT_TRAFFIC_DENSITY,pedestrianDensity:DensityLevel=DEFAULT_PEDESTRIAN_DENSITY,setWalkerDensity=(_factor:number)=>{};
+  // A resized pool rebuilds its instanced meshes: the renderer's scans of the scene look again (a half step never meets the tile streamer's whole ones).
+  const resized=()=>{const version=scene.userData.version;scene.userData.version=(typeof version==='number'?version:0)+.5;populateNeighborhood();};
   const keys=new Set<string>(),audio=new DriveAudio(mobile);let cameraSnap=true,lookOffset=0,orbitPitch=.3,zoom=1;
   // One poll per frame: the interface takes menu presses first, then driving, flight and camera read the same frame.
   const gamepad=createGamepadReader();let pad=gamepad.idle(),padLook=0,padLookBack=false;
@@ -123,6 +128,8 @@ async function boot(){
     onStart(){audio.start();journal.start();captureSession();},
     onSound(enabled){audio.enabled=enabled;},
     onQuality(mode){quality=mode;graphics?.setQuality(mode);world?.setQuality(mode==='high');},
+    onTrafficDensity(level){if(level===trafficDensity)return;trafficDensity=level;if(traffic){traffic.setDensity(TRAFFIC_DENSITY[level]);resized();}},
+    onPedestrianDensity(level){if(level===pedestrianDensity)return;pedestrianDensity=level;setWalkerDensity(PEDESTRIAN_DENSITY[level]);resized();},
     onDestination(id){
       const landmark=city.landmarks.find(l=>l.id===id);if(!landmark||!physics)return;
       if(travelMode!=='helicopter'&&landmark.driveStart){const start=landmark.driveStart;void travelTo(start.x,start.z,()=>{physics!.reset(start.x,start.z,start.yaw,start.roadId);if(travelMode==='walk')walker!.placeBeside(physics!.getState());});return;}
@@ -272,12 +279,13 @@ async function boot(){
     const construction=createConstruction(scene,city,physics,constructionZones,{hasGround:(x,z)=>!streamer||streamer.loaded.has(`${Math.floor(x/city.tiles!.size)}_${Math.floor(z/city.tiles!.size)}`)});
     construction.update(physics.getState());
     physics.setCar(carId);playerCar=createCar(carId);scene.add(playerCar.group);const bike=createBike();scene.add(bike.group);bike.group.visible=false;
-    traffic=createTraffic(scene,city,physics,constructionZones,{deckDrawn:streamer?.deckDrawn,mobile,headlights:world.roadHeadlights});
+    traffic=createTraffic(scene,city,physics,constructionZones,{deckDrawn:streamer?.deckDrawn,mobile,headlights:world.roadHeadlights,density:TRAFFIC_DENSITY[trafficDensity]});
     transit=createTransit(scene,city,physics,transitData);
     const railData=await railRequest,rail=railData?createRailTracks(scene,city,physics,railData,{mobile}):undefined;
     flight=createHelicopterFlight(city,physics);const helicopter=createHelicopter();scene.add(helicopter.group);helicopter.group.visible=false;
     walker=createWalker(city,physics);const player=createPlayerModel(scene);player.group.visible=false;
-    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile,tiles:world.streamer,mobile});
+    const streetLife=createStreetLife(scene,city,physics,constructionZones,{camera,poseHidden:!mobile,tiles:world.streamer,mobile,density:PEDESTRIAN_DENSITY[pedestrianDensity]});
+    setWalkerDensity=factor=>streetLife.setDensity(factor);
     // cars standing in the surface lots near the player (the stalls of the resident tiles); their lamps follow the lighting with the kerbside cars'
     const parkingLots=createParkingLots(scene,city,physics,{tiles:world.streamer,mobile});
     setParkedNight=night=>{streetLife.setNight(night);parkingLots.setNight(night);};setParkedNight((lighting as LightingMode)==='night');

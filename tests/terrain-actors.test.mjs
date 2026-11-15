@@ -1,4 +1,4 @@
-import './helpers/npc-fleet.mjs';
+import {trafficMatrix} from './helpers/npc-fleet.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -29,11 +29,10 @@ test('ambient actors and collision bodies share the measured road grade',async()
   try{
     traffic.update(1/60,physics.getState());physics.step({throttle:0,brake:1,steer:0,handbrake:true},1/60);
     const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),rotation=new THREE.Quaternion(),scale=new THREE.Vector3();
-    const trafficMesh=scene.getObjectByName('AmbientTraffic').children[0];
     const bodies=[];physics.world.forEachRigidBody(body=>{if(body.isKinematic())bodies.push(body);});
     assert.equal(bodies.length,traffic.count);
     for(let i=0;i<traffic.count;i++){
-      trafficMesh.getMatrixAt(i,matrix);matrix.decompose(position,rotation,scale);
+      trafficMatrix(scene,i,matrix);matrix.decompose(position,rotation,scale);
       assert.ok(Math.abs(position.y-ground(position.x,position.z))<.002,'traffic mesh contact point must follow the ground');
       const up=new THREE.Vector3(0,1,0).applyQuaternion(rotation);
       assert.ok(up.dot(expectedUp)>.99999,'traffic must pitch and roll with the road');
@@ -93,8 +92,8 @@ test('the fixed traffic fleet follows a distant neighborhood outside a protected
   assert.ok(destination,'the expanded map must include Mission Hill');
   const physics=await DrivingPhysics.create(city),scene=new THREE.Scene(),traffic=createTraffic(scene,city,physics);
   try{
-    const mesh=scene.getObjectByName('AmbientTraffic').children[0],matrix=new THREE.Matrix4();
-    const positions=()=>Array.from({length:traffic.count},(_,i)=>{mesh.getMatrixAt(i,matrix);return{x:matrix.elements[12],z:matrix.elements[14]};});
+    const matrix=new THREE.Matrix4();
+    const positions=()=>Array.from({length:traffic.count},(_,i)=>{trafficMatrix(scene,i,matrix);return{x:matrix.elements[12],z:matrix.elements[14]};});
     traffic.update(1/60,physics.getState());
     let previous=positions();
     assert.equal(traffic.count,77,'the map should retain a fixed seventy-seven-vehicle desktop budget');

@@ -1,4 +1,4 @@
-import './helpers/npc-fleet.mjs';
+import { trafficMatrix } from './helpers/npc-fleet.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
@@ -137,10 +137,9 @@ test('60 Hz and 120 Hz physics produce similar forward travel', async () => {
 });
 
 function trafficPositions(scene, count) {
-  const mesh = scene.getObjectByName('AmbientTraffic').children[0];
   const matrix = new THREE.Matrix4();
   return Array.from({ length: count }, (_, index) => {
-    mesh.getMatrixAt(index, matrix);
+    trafficMatrix(scene, index, matrix);
     assert.ok(matrix.elements.every(Number.isFinite));
     return [matrix.elements[12], matrix.elements[14]];
   });
@@ -154,7 +153,7 @@ test('ambient traffic stops before a parked player and stays within imported roa
   try {
     traffic.update(STEP, physics.getState());
     const matrix = new THREE.Matrix4();
-    scene.getObjectByName('AmbientTraffic').children[0].getMatrixAt(0, matrix);
+    trafficMatrix(scene, 0, matrix);
     const position = new THREE.Vector3(), quaternion = new THREE.Quaternion();
     matrix.decompose(position, quaternion, new THREE.Vector3());
     const direction = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion);

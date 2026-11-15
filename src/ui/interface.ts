@@ -1,6 +1,7 @@
 import {DEFAULT_CAR, PLAYER_CARS, isPlayerCarId, type PlayerCarId} from '../simulation/player-cars.ts';
 import type { CameraMode, CityData, DriveInput, LightingMode, Point2, TravelMode, VehicleState } from '../types';
 import type { QualityMode } from '../render/graphics';
+import {DEFAULT_PEDESTRIAN_DENSITY,DEFAULT_TRAFFIC_DENSITY,isDensityLevel,type DensityLevel} from '../simulation/npc-density.ts';
 import { areaAt, indexAreas } from './geography';
 import {createDiagnostics} from './diagnostics';
 import type {HUDPerformanceData} from './diagnostic-report';
@@ -31,6 +32,9 @@ export interface InterfaceCallbacks {
   onQuality?(mode: QualityMode): void;
   onCar?(id:PlayerCarId):void;
   onTravelMode?(mode: TravelMode): void;
+  /** How many ambient cars and sidewalk walkers the city keeps (npc-density.ts). */
+  onTrafficDensity?(level: DensityLevel): void;
+  onPedestrianDensity?(level: DensityLevel): void;
 }
 
 export interface InterfaceStats {
@@ -130,6 +134,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
         <span class="setting-label">Your view</span><div class="segments" aria-label="Camera"><button data-camera="chase" class="active" aria-pressed="true">Chase</button><button data-camera="hood" aria-pressed="false">Hood</button><button data-camera="aerial" aria-pressed="false">Aerial</button></div>
         <span class="setting-label">City sound</span><div class="segments" aria-label="City sound"><button data-sound="on" class="active" aria-pressed="true">Sound on</button><button data-sound="off" aria-pressed="false">Muted</button></div>
         <span class="setting-label">Graphics</span><div class="segments" aria-label="Graphics quality"><button data-quality="high" class="active" aria-pressed="true">Detailed</button><button data-quality="balanced" aria-pressed="false">Balanced</button></div>
+        <span class="setting-label">City traffic</span><div class="segments" aria-label="Traffic density"><button data-traffic-density="low" class="active" aria-pressed="true">Low</button><button data-traffic-density="medium" class="" aria-pressed="false">Medium</button><button data-traffic-density="high" class="" aria-pressed="false">High</button></div>
+        <span class="setting-label">Pedestrians</span><div class="segments" aria-label="Pedestrian density"><button data-pedestrian-density="low" class="" aria-pressed="false">Low</button><button data-pedestrian-density="medium" class="active" aria-pressed="true">Medium</button><button data-pedestrian-density="high" class="" aria-pressed="false">High</button></div>
         <span class="setting-label">HUD diagnostics</span><div class="segments" aria-label="HUD diagnostics"><button data-hud="performance" aria-pressed="false">Performance <kbd>P</kbd></button><button data-hud="debug" aria-pressed="false">Debug <kbd>&#96;</kbd></button></div>
         <div class="controls-grid" id="controls-help"><span>Accelerate / brake & reverse</span><span><kbd>W</kbd> <kbd>S</kbd></span><span>Steer</span><span><kbd>A</kbd> <kbd>D</kbd></span><span>Handbrake</span><kbd>Space</kbd><span>Car / Ultra Bee / helicopter / on foot</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></span><span>Map / change camera</span><span><kbd>M</kbd> <kbd>C</kbd></span><span>Horn / mute sound</span><span><kbd>F</kbd> <kbd>N</kbd></span><span>Reset car / hide interface</span><span><kbd>R</kbd> <kbd>H</kbd></span><span>Pause</span><kbd>Esc</kbd></div>
         <div class="panel-actions"><button class="primary" id="resume-drive">Keep driving ${svg('arrow')}</button><button class="text-btn" id="reset-drive">Reset car</button></div><div style="margin-top:20px"><button class="text-btn" id="open-credits">About this city</button></div>
@@ -558,6 +564,21 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     el('car-description').textContent=PLAYER_CARS[id].description;
     callbacks.onCar?.(id);
     if(persist)try{localStorage.setItem('boston-player-car-v1',id);}catch{/* Optional preference. */}
+  }
+  // Ambient population: the buttons, the stored preference and the game's setting together.
+  const densities={traffic:{attr:'trafficDensity',key:'boston-traffic-density-v1',noun:'Traffic',notify:(level:DensityLevel)=>callbacks.onTrafficDensity?.(level)},
+    pedestrian:{attr:'pedestrianDensity',key:'boston-pedestrian-density-v1',noun:'Pedestrians',notify:(level:DensityLevel)=>callbacks.onPedestrianDensity?.(level)}} as const;
+  function setDensity(kind:keyof typeof densities,level:DensityLevel,persist=false){
+    const {attr,key,notify}=densities[kind];
+    host.querySelectorAll<HTMLButtonElement>(`[data-${kind}-density]`).forEach(button=>{const active=button.dataset[attr]===level;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
+    notify(level);
+    if(persist)try{localStorage.setItem(key,level);}catch{/* Optional preference. */}
+  }
+  for(const kind of ['traffic','pedestrian'] as const){
+    const {attr,key,noun}=densities[kind];
+    host.querySelectorAll<HTMLButtonElement>(`[data-${kind}-density]`).forEach(button=>on(button,'click',()=>{const level=button.dataset[attr];if(isDensityLevel(level)){setDensity(kind,level,true);toast(`${noun}: ${level}`);}}));
+    let saved:string|null=null;try{saved=localStorage.getItem(key);}catch{/* Optional preference. */}
+    setDensity(kind,isDensityLevel(saved)?saved:kind==='traffic'?DEFAULT_TRAFFIC_DENSITY:DEFAULT_PEDESTRIAN_DENSITY);
   }
   host.querySelectorAll<HTMLButtonElement>('[data-car]').forEach(button=>on(button,'click',()=>{if(isPlayerCarId(button.dataset.car)){setCar(button.dataset.car,true);toast(`${PLAYER_CARS[button.dataset.car].name} selected`);}}));
   try{const saved=localStorage.getItem('boston-player-car-v1');if(isPlayerCarId(saved))setCar(saved);}catch{/* Optional preference. */}

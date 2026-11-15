@@ -22,6 +22,7 @@ import { outsideGreenwayPath } from '../simulation/greenway.ts';
 import { drawnStreets, STALL_REACH, type StreetTile } from '../simulation/drawn-streets.ts';
 import { roadwayEdge } from '../simulation/street-furniture.ts';
 import { tileKey } from '../simulation/tile-format.ts';
+import { shrinkPool } from '../simulation/npc-density.ts';
 
 interface Segment { road: Road; a: Point2; b: Point2; length: number; tx: number; tz: number; index: number; }
 interface WalkRoute { road: string; start: Point2; end: Point2; length: number; yaw: number; /** A stretch of a park path, not of a street's sidewalk. */ park?: boolean; /** A stretch outside the city, where a walker of the pool stands until a neighbourhood calls it. */ waiting?: boolean; }
@@ -74,6 +75,7 @@ function spreadByBlock<T>(items:T[],point:(item:T)=>Point2,size=650):T[]{
 
 export interface StreetLifeOptions {
   mobile?: boolean;
+  /** The walker pool and every neighborhood's target, as a multiple of the base pool (npc-density.ts). */ density?: number;
   /** The main view: walkers outside it (and out of reach of it with their shadows) are left out of its draws. */ camera?: THREE.Camera;
   /** False where no other camera draws the walkers (a phone has no reflection captures): those out of view are not posed either. */ poseHidden?: boolean;
   /** A metro's streamed tiles: the park paths of the resident ones are walked too (a whole-city package lists its paths itself). */ tiles?: StreetLifeTiles;
@@ -90,6 +92,9 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   const furnitureGroup = new THREE.Group(); furnitureGroup.name = 'ParkingMeters'; group.add(furnitureGroup);
   const ownedMaterials = new Set<THREE.Material>();
   const activity = createActivityProfile(city);
+  // The population setting scales the pool and every target together; at 1 they are the base pool's.
+  let factor = options.density ?? 1;
+  const capacity = () => Math.max(1, Math.round(PEDESTRIAN_CAPACITY * factor)), targetAt = (x: number, z: number) => Math.round(activity(x, z).pedestrians * factor);
   let seed = 21761;
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
   const metro = isMetroCity(city) ? city : undefined, covered = coverageTester(city);
@@ -287,9 +292,31 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     for (const built of options.tiles?.loaded.values() ?? []) { let entries = tilePaths.get(built.tile); if (!entries) tilePaths.set(built.tile, entries = boxed(built.tile.parkPaths)); collect(entries); }
     for (const route of mallWalks()) if (within(route)) result.push(route);
   }
+  // Above the base density one stretch is not enough for the walkers a block calls for: each is walked as two halves
+  // (a stretch of 16 m or more), the same objects on every call, so a walker's stretch is known by identity. A
+  // stretch is taken while a walker is on it, on the stretch it is half of, or on either of its halves (`walked`).
+  const halvesOf = new WeakMap<WalkRoute, WalkRoute[]>(), parentOf = new WeakMap<WalkRoute, WalkRoute>();
+  const halves = (route: WalkRoute) => {
+    if (route.length < 16) return [route];
+    let pair = halvesOf.get(route);
+    if (!pair) {
+      pair = [[0, .5], [.5, 1]].map(([from, to]) => {
+        const begin = from + (from ? .35 : 0) / route.length, end = to - (to < 1 ? .35 : 0) / route.length;
+        const a: Point2 = [lerp(route.start[0], route.end[0], begin), lerp(route.start[1], route.end[1], begin)], b: Point2 = [lerp(route.start[0], route.end[0], end), lerp(route.start[1], route.end[1], end)];
+        const half: WalkRoute = { ...route, start: a, end: b, length: gap(a, b) }; parentOf.set(half, route); return half;
+      });
+      halvesOf.set(route, pair);
+    }
+    return pair;
+  };
+  const walked = (except?: StreetPedestrian) => {
+    const on = new Set<WalkRoute>(); for (const person of pedestrians) if (person !== except) on.add(person.route);
+    return (route: WalkRoute) => on.has(route) || on.has(parentOf.get(route)!) || !!halvesOf.get(route)?.some(half => on.has(half));
+  };
   const routesNear = (x: number, z: number, radius: number) => {
     if (tiled) residents = [...tiled.loaded.keys()].join(' ');
-    const result: WalkRoute[] = []; for (const segment of segmentsNear(x, z, Number.isFinite(radius) ? radius + 60 : radius)) result.push(...routesFor(segment)); parkRoutesNear(x, z, radius, result); return result;
+    const result: WalkRoute[] = []; for (const segment of segmentsNear(x, z, Number.isFinite(radius) ? radius + 60 : radius)) result.push(...routesFor(segment)); parkRoutesNear(x, z, radius, result);
+    return factor > 1 ? result.flatMap(halves) : result;
   };
   const spawnStreet=nearestStreet(city.spawn.x,city.spawn.z);
   // Spend most of the bounded pool on the neighborhood around the camera. The
@@ -299,12 +326,12 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     const point=routeCenter(route),distance=gap(point,[city.spawn.x,city.spawn.z]);
     return {route,distance,score:distance+(route.road===spawnStreet?-90:0)-(route.park?PARK_DRAW:0)+random()*24,activity:activity(...point)};
   }).sort((a,b)=>a.score-b.score);
-  const initialTarget=activity(city.spawn.x,city.spawn.z).pedestrians;
+  const initialTarget=targetAt(city.spawn.x,city.spawn.z),size=capacity();
   const localRoutes=ranked.filter(r=>r.distance<330).slice(0,initialTarget);
   const distantRoutes=ranked.filter(r=>r.distance>600).sort((a,b)=>(a.activity.level==='busy'?-1500:0)+a.distance-(b.activity.level==='busy'?-1500:0)-b.distance);
   const pedestrians: StreetPedestrian[] = [];
   for (const { route } of [...localRoutes,...distantRoutes]) {
-    if (pedestrians.length >= PEDESTRIAN_CAPACITY) break;
+    if (pedestrians.length >= size) break;
     const speed=.87+random()*.42,t=.2+random()*.6,phase=t*route.length/speed;
     const x=lerp(route.start[0],route.end[0],t),z=lerp(route.start[1],route.end[1],t);
     const position = new THREE.Vector3(x, sampleElevation(city,x,z)+.035, z);
@@ -315,15 +342,39 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   }
   // With streamed tiles only the tiles about the spawn are resident yet, and no walk beyond them is verified: the
   // rest of the pool waits far outside the city, each on a stretch of its own, until a neighbourhood calls it (refill).
-  for (let i = 0; tiled && pedestrians.length < PEDESTRIAN_CAPACITY; i++) {
-    const start: Point2 = [city.bounds.minX - 3000 - i * 4, city.bounds.minZ - 3000], route: WalkRoute = { road: '', start, end: [start[0], start[1] + 10], length: 10, yaw: 0, waiting: true };
-    pedestrians.push({ id: pedestrians.length, road: '', start, end: route.end, route, position: new THREE.Vector3(start[0], sampleElevation(city, start[0], start[1]) + .035, start[1]),
-      yaw: 0, speed: .87 + random() * .42, height: .94 + random() * .11, width: .93 + random() * .15, phase: 0, bag: random() < .42, scarf: random() < .28, outfit: pedestrians.length % 5 });
-  }
+  let waitingStretches = 0;
+  const waitingWalker = (): StreetPedestrian => {
+    const start: Point2 = [city.bounds.minX - 3000 - waitingStretches++ * 4, city.bounds.minZ - 3000], route: WalkRoute = { road: '', start, end: [start[0], start[1] + 10], length: 10, yaw: 0, waiting: true };
+    return { id: pedestrians.length, road: '', start, end: route.end, route, position: new THREE.Vector3(start[0], sampleElevation(city, start[0], start[1]) + .035, start[1]),
+      yaw: 0, speed: .87 + random() * .42, height: .94 + random() * .11, width: .93 + random() * .15, phase: 0, bag: random() < .42, scarf: random() < .28, outfit: pedestrians.length % 5 };
+  };
+  while (tiled && pedestrians.length < size) pedestrians.push(waitingWalker());
 
-  const count = pedestrians.length;
-  const pedestrianModel = createPedestrianModel(peopleGroup,pedestrians,ownedMaterials,{mainCamera:options.camera});
-  const shown = new Uint8Array(count), viewFrustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), reach = new THREE.Sphere(new THREE.Vector3(), WALKER_REACH), poseHidden = options.poseHidden ?? true;
+  let count = pedestrians.length;
+  let pedestrianModel = createPedestrianModel(peopleGroup,pedestrians,ownedMaterials,{mainCamera:options.camera});
+  let shown = new Uint8Array(count),lastObserver: { x: number; z: number } | undefined;
+  /** Resize the walker pool to `next` times the base pool (npc-density.ts). Shrinking thins the observer's
+   * neighborhood to its new target (`shrinkPool`); growing adds walkers waiting outside the city, which the refill (or populateAt) calls into the
+   * neighborhood. The instanced model is rebuilt for the new pool. */
+  function setDensity(next: number) {
+    if (next === factor) return;
+    factor = next; const size = capacity();
+    if (pedestrians.length > size) {
+      const from = lastObserver ?? city.spawn;
+      const kept = shrinkPool(pedestrians, size, person => Math.hypot(person.position.x - from.x, person.position.z - from.z), 350, targetAt(from.x, from.z));
+      pedestrians.length = 0; pedestrians.push(...kept);
+    }
+    while (pedestrians.length < size) pedestrians.push(waitingWalker());
+    pedestrians.forEach((person, index) => { person.id = index; });
+    pedestrianModel.dispose();
+    for (const object of [...peopleGroup.children]) {
+      if (object instanceof THREE.Mesh) { object.geometry.dispose(); for (const material of [object.material].flat() as THREE.Material[]) { material.dispose(); ownedMaterials.delete(material); } }
+      peopleGroup.remove(object);
+    }
+    count = pedestrians.length; shown = new Uint8Array(count);
+    pedestrianModel = createPedestrianModel(peopleGroup, pedestrians, ownedMaterials, { mainCamera: options.camera });
+  }
+  const viewFrustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), reach = new THREE.Sphere(new THREE.Vector3(), WALKER_REACH), poseHidden = options.poseHidden ?? true;
 
   // Kerbside parking: the original streets in the survey, or in a metro any named
   // street or avenue of parking width within reach of the spawn. With streamed tiles the cars stand by the kerb
@@ -435,21 +486,21 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   let elapsed = 0,relocationTime=0,relocations=0;
   function population(observer:{x:number;z:number}){
     const profile=activity(observer.x,observer.z);
-    return {level:profile.level,target:profile.pedestrians,
+    return {level:profile.level,target:targetAt(observer.x,observer.z),
       local:pedestrians.filter(p=>Math.hypot(p.position.x-observer.x,p.position.z-observer.z)<350).length,
       nearby:pedestrians.filter(p=>Math.hypot(p.position.x-observer.x,p.position.z-observer.z)<125).length,total:pedestrians.length};
   }
   function refill(observer:{x:number;z:number},player?:{x:number;z:number},immediate=false){
     const {local,target}=population(observer);if(local>=target)return;
-    const street=nearestStreet(observer.x,observer.z),minDistance=immediate?30:125;
+    const street=nearestStreet(observer.x,observer.z),minDistance=immediate?30:125,taken=walked();
     const available=routesNear(observer.x,observer.z,320).map(route=>{
       const point=routeCenter(route),distance=Math.hypot(point[0]-observer.x,point[1]-observer.z);
       return {route,distance,score:distance+(route.road===street?-90:0)-(route.park?PARK_DRAW:0)+random()*35};
-    }).filter(({route,distance})=>distance>minDistance&&distance<320&&!pedestrians.some(p=>p.route===route)).sort((a,b)=>a.score-b.score);
+    }).filter(({route,distance})=>distance>minDistance&&distance<320&&!taken(route)).sort((a,b)=>a.score-b.score);
     const distant=pedestrians.filter(p=>Math.hypot(p.position.x-observer.x,p.position.z-observer.z)>600&&(!player||Math.hypot(p.position.x-player.x,p.position.z-player.z)>20));
     let moved=0;
     for(const {route} of available){
-      if(moved>=Math.min(target-local,immediate?PEDESTRIAN_CAPACITY:4)||moved>=distant.length)break;
+      if(moved>=Math.min(target-local,immediate?Infinity:Math.ceil(4*factor))||moved>=distant.length)break;
       const t=.2+random()*.6,x=lerp(route.start[0],route.end[0],t),z=lerp(route.start[1],route.end[1],t);
       if(Math.hypot(x-observer.x,z-observer.z)<minDistance||Math.hypot(x-observer.x,z-observer.z)>330||
         (player&&Math.hypot(x-player.x,z-player.z)<10)||pedestrians.some(p=>Math.hypot(p.position.x-x,p.position.z-z)<2.5))continue;
@@ -473,7 +524,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   function resumeWalking(person:StreetPedestrian,x:number,z:number){
     const along=(route:WalkRoute)=>{const dx=route.end[0]-route.start[0],dz=route.end[1]-route.start[1],t=Math.max(0,Math.min(1,((x-route.start[0])*dx+(z-route.start[1])*dz)/(dx*dx+dz*dz||1)));return {t,distance:Math.hypot(x-route.start[0]-dx*t,z-route.start[1]-dz*t)};};
     let route=person.route,best=along(route);
-    if(best.distance>5)for(const other of routesNear(x,z,60)){const fit=along(other);if(fit.distance<best.distance&&!pedestrians.some(p=>p!==person&&p.route===other)){route=other;best=fit;}}
+    if(best.distance>5){const taken=walked(person);for(const other of routesNear(x,z,60)){const fit=along(other);if(fit.distance<best.distance&&!taken(other)){route=other;best=fit;}}}
     person.route=route;person.road=route.road;person.start=route.start;person.end=route.end;
     person.phase=-elapsed+best.t*route.length/person.speed;person.yaw=route.yaw;
     person.rejoin={dx:x-lerp(route.start[0],route.end[0],best.t),dz:z-lerp(route.start[1],route.end[1],best.t),t:0};
@@ -488,6 +539,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
     updateParked(observer);
     elapsed = time ?? elapsed + Math.max(0, Math.min(.1, dt));
     relocationTime+=Math.max(0,dt);
+    if(observer)lastObserver=observer;
     if(observer&&relocationTime>.3){
       relocationTime=0;
       refill(observer,player);
@@ -531,7 +583,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
   }
   update(0, 0);
   return {
-    group, pedestrians, parked, count, get parkedCount(){return parked.length;}, get meterCount(){return meterCount;}, update,populateAt,population,get relocations(){return relocations;},
+    group, pedestrians, parked, get count(){return count;}, setDensity, get parkedCount(){return parked.length;}, get meterCount(){return meterCount;}, update,populateAt,population,get relocations(){return relocations;},
     /** The verified walks about a point (diagnostics and tests): none yet where a tile they need is not resident. */
     walksNear:routesNear,
     /** Vehicle speeds of the walkers struck since the previous call; the caller plays their sounds. */
