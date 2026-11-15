@@ -55,6 +55,31 @@ test('open terrain without any mapped parks receives torn-grass tracks',()=>{
   }finally{marks.dispose();}
 });
 
+test('Fells trails scuff soil while roads, bridges, paved walks and woodland holes retain rubber',()=>{
+  const woods={id:'fells',name:'Middlesex Fells Reservation',rings:[square(-60,-60,120),square(20,-5,10)]};
+  const trail={id:'trail',points:[[-100,0],[100,0]],width:3};
+  const bridge={id:'bridge',points:[[-50,-30],[50,-30]],width:3,bridge:true};
+  const road={id:'street',name:'Street',points:[[0,-100],[0,100]],width:6,oneway:0};
+  const world={...city,parks:[woods],water:[],roads:[road]};
+  const paths=[trail,bridge],tile={tx:0,tz:0,size:1000,pavements:[],sidewalks:[],driveways:[],islands:[],parkPaths:paths};
+  // The same behavior is required for the legacy map and streamed tile paths.
+  for(const sample of [createTireSurfaceSampler({...world,parkPaths:paths}),createTireSurfaceSampler(world,()=>[tile])]){
+    assert.equal(sample(-30,0,0),'grass','natural tread uses brown soft-ground marks');
+    assert.equal(sample(0,0,0),'pavement','a real road crossing the dirt trail wins');
+    assert.equal(sample(25,0,0),'pavement','the renderer retains paving through woodland holes');
+    assert.equal(sample(80,0,0),'pavement','the same path is paved beyond the woodland boundary');
+    assert.equal(sample(-30,0,-30),'pavement','bridge paths retain their hard deck surface');
+    const marks=createTireTracks(new THREE.Scene(),world,sample);
+    try{
+      marks.update([contact(-30)],0,0);marks.update([contact(-29)],1/60,0);
+      assert.equal(marks.stats().grass,1);assert.equal(marks.stats().pavement,0,'braking produces soil tread rather than rubber stripes');
+    }finally{marks.dispose();}
+  }
+  assert.equal(createTireSurfaceSampler({...world,parks:[{...woods,name:'City park'}],parkPaths:[trail]})(-30,0,0),'pavement','ordinary city park walks remain paved');
+  const pavedTile={...tile,sidewalks:[{rings:[square(-33,-3,6)]}]};
+  assert.equal(createTireSurfaceSampler(world,()=>[tile,pavedTile])(-30,0,0),'pavement','surveyed paving in another tile takes precedence over a natural trail');
+});
+
 test('trails fade, stay bounded and break across lifts, teleports, resets and surface changes',()=>{
   const scene=new THREE.Scene(),marks=createTireTracks(scene,city,(x)=>x<5?'pavement':'grass',8);
   let time=0;

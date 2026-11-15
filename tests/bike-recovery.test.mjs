@@ -10,6 +10,7 @@ import {loadCentralCity} from './helpers/metro-city.mjs';
 const released={throttle:0,brake:0,steer:0,handbrake:false};
 const road=(id,z,oneway=0)=>({id,name:id,width:10,oneway,points:[[-400,z],[400,z]]});
 const flat={bounds:{minX:-1000,maxX:1000,minZ:-1000,maxZ:1000},buildings:[],roads:[road('Start',-200),road('Crash road',200,-1)],spawn:{x:-200,z:-200,yaw:Math.PI/2}};
+const path=(id,z,width=2)=>({id,width,points:[[-300,z],[300,z]],kind:'path'});
 function advance(p,seconds,input={}){for(let i=0;i<Math.round(seconds*60);i++)p.step({...released,...input},1/60);return p.getState();}
 const upY=s=>1-2*(s.rotation.x*s.rotation.x+s.rotation.z*s.rotation.z);
 function layOnSide(p,{x,y,z},yaw=0,roll=Math.PI/2){
@@ -139,4 +140,71 @@ test('nearest-road constraints preserve horizontal lookups while considering hei
     {...road('Ground in next cell',0),points:[[129,-100],[129,100]]},
   ]};
   assert.equal(closestRoad(edge,120,0,false,{height:.2}).road.id,'Ground in next cell','height-aware lookup must search past the nearest horizontal cell');
+});
+
+test('a fallen Ultra Bee recovers onto the closer woodland trail and can ride away',async()=>{
+  const city={...flat,parkPaths:[path('Woodland trail',250)]},p=await create(city);
+  try{
+    layOnSide(p,{x:110,y:.25,z:253},Math.PI/2);
+    const recovered=advance(p,4);
+    assert.ok(Math.abs(recovered.x-110)<.2&&Math.abs(recovered.z-250)<.2,'use the trail three meters away rather than the road fifty meters away');
+    assert.ok(upY(recovered)>.98&&Math.abs(recovered.speed)<.1);
+    assert.ok([0,1].every(i=>p.controller.wheelIsInContact(i)),'both wheels contact the natural terrain');
+    const moving=advance(p,1,{throttle:1});
+    assert.ok(moving.x>recovered.x+2&&Math.abs(moving.z-250)<.5,'resume riding along the trail');
+  }finally{p.dispose();}
+});
+
+test('manual bike recovery uses city park walks, but a closer road wins and cars stay on roads',async()=>{
+  const city={...flat,parkPaths:[{...path('Paved park walk',225,4),kind:'footway'}]};
+  for(const kind of ['ultrabee','car']){
+    const p=await create(city,kind);
+    try{
+      p.body.setTranslation({x:110,y:1,z:228},true);p.resetToRoad();
+      assert.ok(Math.abs(p.getState().z-(kind==='ultrabee'?225:200))<.01);
+      p.body.setTranslation({x:110,y:1,z:204},true);p.resetToRoad();
+      assert.ok(Math.abs(p.getState().z-200)<.01,'return to the closer road even when a park walk is nearby');
+    }finally{p.dispose();}
+  }
+});
+
+test('a blocked path recovery point moves along the path into clear space',async()=>{
+  const city={...flat,parkPaths:[path('Trail',250)]},p=await create(city);
+  try{
+    p.world.createCollider(RAPIER.ColliderDesc.cuboid(1.5,1,1.5).setTranslation(110,1,250));
+    p.world.step();p.body.setTranslation({x:110,y:1,z:253},true);p.resetToRoad();
+    const recovered=p.getState();
+    assert.ok(Math.abs(recovered.z-250)<.01&&Math.abs(recovered.x-110)>=4.9,'skip the boulder and recover nearby on the same trail');
+    assert.ok(p.canResetAt(recovered.x,recovered.z,recovered.yaw,undefined,true),'the recovered body clears all collision shapes');
+  }finally{p.dispose();}
+});
+
+test('park path recovery works without any roads and removes unloaded tile fragments',async()=>{
+  const p=await create({...flat,roads:[]});
+  try{
+    const removeWest=p.registerParkPaths([{...path('shared-trail',250),points:[[-300,250],[0,250]]}]);
+    const removeEast=p.registerParkPaths([{...path('shared-trail',250),points:[[0,250],[300,250]]}]);
+    p.body.setTranslation({x:110,y:1,z:253},true);p.resetToRoad();
+    assert.ok(Math.abs(p.getState().x-110)<.01&&Math.abs(p.getState().z-250)<.01);
+    removeEast();p.reset(flat.spawn.x,flat.spawn.z,flat.spawn.yaw);
+    p.body.setTranslation({x:110,y:1,z:253},true);p.resetToRoad();
+    assert.ok(Math.abs(p.getState().x)<.01,'the surviving fragment is considered independently of the unloaded fragment with the same id');
+    removeWest();p.reset(flat.spawn.x,flat.spawn.z,flat.spawn.yaw);
+    p.body.setTranslation({x:110,y:1,z:253},true);p.resetToRoad();
+    assert.ok(Math.abs(p.getState().x-flat.spawn.x)<.01&&Math.abs(p.getState().z-flat.spawn.z)<.01,'no stale path survives tile unload');
+  }finally{p.dispose();}
+});
+
+test('bike path recovery keeps footbridge decks distinct from paths underneath',async()=>{
+  const bridge={...path('High park bridge',250,3),bridge:true,elevations:[8,8]},ground=path('Ground trail',251);
+  const city={...flat,parkPaths:[bridge,ground]},p=await create(city);
+  try{
+    for(const height of [0,8]){
+      p.body.setTranslation({x:110,y:height+.6,z:250},true);p.resetToRoad();
+      const recovered=advance(p,1);
+      assert.ok(Math.abs(recovered.z-(height?250:251))<.2,'select the path on the current level');
+      assert.ok(Math.abs(recovered.y-height-.577)<.15,'do not jump to the bridge or fall beneath it');
+      assert.ok(upY(recovered)>.98&&[0,1].every(i=>p.controller.wheelIsInContact(i)));
+    }
+  }finally{p.dispose();}
 });

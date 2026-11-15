@@ -3,8 +3,9 @@ import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, MOVING_TRUCK, isPerformanceC
 import {lowClearanceAt} from '../simulation/low-clearance.ts';
 import {storrowRecoveryCandidates,storrowRetreatCandidates,storrowSolidRecoveryPlan,type StorrowRecoveryPlan} from '../simulation/storrow-recovery.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
-import {closestRoad} from '../simulation/roads.ts';
-import type { CityData, DriveInput, VehicleState } from '../types';
+import {closestRoad,pointInside} from '../simulation/roads.ts';
+import {parkRecoveryCandidates} from '../simulation/park-recovery.ts';
+import type { CityData, DriveInput, ParkPath, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
 import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, sampleVehicleSurface, registerDriveSurface, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
 import {footbridgeRoad,footbridgeSupports,FOOTBRIDGE_COLUMN} from '../simulation/footbridges.ts';
@@ -72,6 +73,7 @@ export class DrivingPhysics {
   /** Additional mesh/structure geometry used by flight's continuous sweeps. */
   readonly detailedColliders = new Set<number>();
   private readonly surfaceCleanup=new Map<number,()=>void>();
+  private readonly parkPathGroups=new Set<{paths:readonly ParkPath[]}>();
   readonly meshBuildingIds: ReadonlySet<string>;
   private steering = 0;
   private braking = false;
@@ -123,7 +125,10 @@ export class DrivingPhysics {
     // Upper decks are closed solids, separate from the original terrain. Wheel
     // rays can support either level while underpass cars retain their own ground.
     for(const road of city.roads??[])if(!this.streaming||road.tunnel)this.addRoadDeck(city,road);
-    if(!this.streaming)for(const path of city.parkPaths??[])this.addFootbridge(city,path);
+    if(!this.streaming){
+      for(const path of city.parkPaths??[])this.addFootbridge(city,path);
+      this.registerParkPaths(city.parkPaths??[]);
+    }
 
     // Convex footprints are deliberately conservative collision proxies. Exact
     // static meshes can instead be supplied by the renderer with addStaticMesh.
@@ -220,6 +225,13 @@ export class DrivingPhysics {
     ({vertices,indices}=clipTunnelPortals(this.city,vertices,indices));
     const collider = this.world.createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0));
     this.terrainColliders.add(collider.handle); return collider;
+  }
+
+  /** A tile's paths become recovery destinations with its landscape collision,
+   * and leave with that tile, so a bike cannot reset onto unloaded terrain. */
+  registerParkPaths(paths:readonly ParkPath[]){
+    const group={paths};this.parkPathGroups.add(group);
+    return()=>{this.parkPathGroups.delete(group);};
   }
 
   /** Same closed arched slab as the park renderer; tile disposal removes both
@@ -511,8 +523,8 @@ export class DrivingPhysics {
     }
   }
 
-  /** The player's reset (R): set the vehicle upright on the nearest clear road
-   * at its level, the same placement as an overturned car's recovery. */
+  /** The player's reset (R): the same safe placement as crash recovery.
+   * The Ultra Bee can also return to a closer park trail or walkway. */
   resetToRoad():'retreated'|'blocked'|undefined{
     if(this.storrow){
       // Prefer the far side of this same crossing, retaining lane/direction.
@@ -533,16 +545,16 @@ export class DrivingPhysics {
     }
     this.recoverFromCrash(this.body.translation());
   }
-  /** Bring the vehicle to the nearest clear road at `position`'s level, as when the player walked away from it and wants it back. */
+  /** Bring the vehicle to the nearest safe road (or bike path) at `position`, as when the player walked away from it and wants it back. */
   resetNear(position:{x:number;y:number;z:number}){this.recoverFromCrash({x:position.x,y:position.y+.5,z:position.z});}
 
-  /** An overturned, fallen or lost vehicle (car or bike) is set upright on the
-   * nearest clear road at the crash's level; the last explicit reset point is
-   * only the fallback when no local road qualifies. */
+  /** Recover locally, preferring a closer safe path for the Ultra Bee. Roads
+   * retain their level constraints; the saved pose is only a final fallback. */
   private recoverFromCrash(position:{x:number;y:number;z:number}){
     const spawnHeight=this.bike?ULTRA_BEE.spawnHeight:this.carSpec.spawnHeight;
-    if([position.x,position.y,position.z].every(Number.isFinite)&&this.city.roads?.length){
+    if([position.x,position.y,position.z].every(Number.isFinite)){
       const crashSurface=sampleVehicleSurface(this.city,position.x,position.z,position.y);
+      const heading=this.getState().yaw;
       // Keep recovery inside the already-streamed neighborhood (and on a survey mesh's traces only after a crash on one, where the mesh is loaded).
       const accept=(spot:{x:number;z:number;yaw:number;road:CityData['roads'][number]})=>{
         if(spot.x<this.bounds.minX+1||spot.x>this.bounds.maxX-1||spot.z<this.bounds.minZ+1||spot.z>this.bounds.maxZ-1)return false;
@@ -555,11 +567,34 @@ export class DrivingPhysics {
         return !this.world.intersectionWithShape(center,rotationFromNormal(n,spot.yaw),this.chassisCollider.shape,undefined,undefined,this.chassisCollider,this.body)&&this.canResetAt(spot.x,spot.z,spot.yaw,spot.road.id);
       };
       let road=closestRoad(this.city,position.x,position.z,false,{height:position.y,maxDistance:200,survey:!!crashSurface.road?.surveyDeck,accept});
+      if(this.bike){
+        const paths=[...this.parkPathGroups].flatMap(group=>group.paths);
+        for(const spot of parkRecoveryCandidates(paths,position.x,position.z,Math.min(200,road.distance))){
+          // A road wins an equal-distance junction. Bridge paths must still
+          // have their physical deck registered; ordinary paths use terrain.
+          if(spot.distance>=road.distance)break;
+          if(spot.x<this.bounds.minX+1||spot.x>this.bounds.maxX-1||spot.z<this.bounds.minZ+1||spot.z>this.bounds.maxZ-1)continue;
+          const roadId=spot.path.bridge?`footbridge:${spot.path.id}`:undefined;
+          const surface=sampleDriveSurface(this.city,spot.x,spot.z,undefined,roadId),n=surface.normal;
+          if((roadId&&surface.road?.id!==roadId)||n.y<.55)continue;
+          if(roadId){
+            const level=surface.height-(n.x*(position.x-spot.x)+n.z*(position.z-spot.z))/Math.max(.5,n.y);
+            if(Math.abs(level-crashSurface.height)>1.25)continue;
+          }else{
+            // Ground trails can climb uneven hills. Compare support at the
+            // crash, not a distant tangent plane, while retaining overpasses.
+            if(Math.abs(crashSurface.height-sampleElevation(this.city,position.x,position.z))>1.25)continue;
+            if(this.city.water?.some(w=>w.rings[0]?.length&&pointInside([spot.x,spot.z],w.rings[0])&&!w.rings.slice(1).some(r=>pointInside([spot.x,spot.z],r))))continue;
+          }
+          const yaw=Math.cos(spot.yaw-heading)<0?spot.yaw+Math.PI:spot.yaw;
+          if(!this.canResetAt(spot.x,spot.z,yaw,roadId,true))continue;
+          this.reset(spot.x,spot.z,yaw,roadId);return;
+        }
+      }
       // A bike can fit beneath a bridge where the selected truck cannot. A
       // single projection on that road is blocked, but a nearby station on the
       // same level is safe; search along it before using the saved rescue pose.
       if(!Number.isFinite(road.distance)&&this.cargoCollider){
-        const heading=this.getState().yaw;
         for(let distance=8;distance<=80&&!Number.isFinite(road.distance);distance+=8)for(const sign of [1,-1]){
           road=closestRoad(this.city,position.x+Math.sin(heading)*distance*sign,position.z+Math.cos(heading)*distance*sign,false,{height:position.y,maxDistance:12,accept});
           if(Number.isFinite(road.distance))break;
@@ -660,6 +695,7 @@ export class DrivingPhysics {
 
   dispose() {
     for(const cleanup of this.surfaceCleanup.values())cleanup();this.surfaceCleanup.clear();
+    this.parkPathGroups.clear();
     this.world.free();
   }
 }

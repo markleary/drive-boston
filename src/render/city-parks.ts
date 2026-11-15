@@ -13,6 +13,9 @@ import { DrapedSurface } from './draped-surface.ts';
 import { PartBatches, TriangleWriter, box, type Part } from './geometry-writer';
 import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
+import { createFellsGroundMaterial, naturalTrailInto } from './fells-surfaces.ts';
+import { parkSurfaceRuns, type ParkSurfaceRun } from '../simulation/fells-trails.ts';
+import { fellsRoadsideSteps, fellsRoadsideReserved, fellsRoadsideRockAt } from './fells-roadside.ts';
 import { insideEmbracePlaza } from './the-embrace';
 import {parkSurfaceSteps,shoreBankSteps,WATER_SURFACE_OFFSET} from './area-surfaces.ts';
 import {boundingSphereSteps} from './paced-geometry.ts';
@@ -49,7 +52,7 @@ function distanceToSegment(p:Point2,a:Point2,b:Point2){
   return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dz);
 }
 
-let parkMaterials:{lawn:THREE.Material;gardenLawn:THREE.Material;forestFloor:THREE.Material;pathMaterial:THREE.Material;waterMaterial:THREE.Material;iron:THREE.Material;wood:THREE.Material;stone:THREE.Material;lampGlass:THREE.Material}|undefined;
+let parkMaterials:{lawn:THREE.Material;gardenLawn:THREE.Material;forestFloor:THREE.Material;trailMaterial:THREE.Material;pathMaterial:THREE.Material;waterMaterial:THREE.Material;iron:THREE.Material;wood:THREE.Material;stone:THREE.Material;lampGlass:THREE.Material}|undefined;
 export interface ParkOptions {
   /** The visible shoreline slopes share their mesh with wheel collision. */
   onShore?:(vertices:Float32Array,indices:Uint32Array)=>void;
@@ -118,11 +121,11 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   // heights decide at grazing angles; an unbiased lawn would overwrite the
   // concrete of a paved island the parks layer also lists as parkway land.
   const ground=<T extends THREE.Material>(m:T)=>{m.polygonOffset=true;m.polygonOffsetFactor=1;m.polygonOffsetUnits=3;return m;};
-  parkMaterials??={lawn:ground(createGrassMaterial('#c7cfb0')),gardenLawn:ground(createGrassMaterial('#ccd5b6')),forestFloor:ground(createGrassMaterial('#a2a087')),pathMaterial:ground(new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96})),
+  parkMaterials??={lawn:ground(createGrassMaterial('#c7cfb0')),gardenLawn:ground(createGrassMaterial('#ccd5b6')),forestFloor:ground(createFellsGroundMaterial()),trailMaterial:ground(createFellsGroundMaterial(true)),pathMaterial:ground(new THREE.MeshStandardMaterial({color:'#c6baa4',roughness:.96})),
     waterMaterial:createWaterMaterial(),
     iron:new THREE.MeshStandardMaterial({color:'#303f36',metalness:.35,roughness:.65}),wood:new THREE.MeshStandardMaterial({color:'#876b45',roughness:.91}),stone:new THREE.MeshStandardMaterial({color:'#baaf96',roughness:.91}),
     lampGlass:new THREE.MeshStandardMaterial({color:'#f4e9ca',emissive:'#ffdba1',emissiveIntensity:.25,roughness:.35})};
-  const {lawn,gardenLawn,forestFloor,pathMaterial,waterMaterial,iron,wood,stone,lampGlass}=parkMaterials;
+  const {lawn,gardenLawn,forestFloor,trailMaterial,pathMaterial,waterMaterial,iron,wood,stone,lampGlass}=parkMaterials;
   const treeBudget=options.budgets?.trees??760,benchBudget=options.budgets?.benches??140;
   const batches=new PartBatches(240),matrix=new THREE.Matrix4();
   const part=(g:Part,m:THREE.Material,x:number,y:number,z:number,yaw=0)=>{batches.part(g,m,matrix.makeRotationY(yaw).setPosition(x,y,z));};
@@ -157,11 +160,20 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       if(geometry.attributes.position.count)waterSheets.push(applyWaterMotion(geometry,waterMotion(water,'source' in surface?surface:undefined)));else geometry.dispose();
     }
   }
-  if(bankPositions.length){
-    const bank=yield* shoreBankSteps(bankPositions,pace),vertices=bank.getAttribute('position').array as Float32Array,ids=new Uint32Array(vertices.length/3);for(let i=0;i<ids.length;i++)ids[i]=i;
+  // Forest ponds share the leaf bed of their surroundings, including the
+  // terrain fitted between the water plane and bank. City ponds retain lawn.
+  const woodlandBanks:number[]=[],lawnBanks:number[]=[];
+  for(let i=0;i<bankPositions.length;i+=9){
+    const x=(bankPositions[i]+bankPositions[i+3]+bankPositions[i+6])/3,z=(bankPositions[i+2]+bankPositions[i+5]+bankPositions[i+8])/3;
+    const target=woodland.some(area=>insideArea([x,z],area))?woodlandBanks:lawnBanks;
+    for(let j=0;j<9;j++)target.push(bankPositions[i+j]);
+  }
+  for(const [positions,material,name] of [[lawnBanks,lawn,'Sloping water banks'],[woodlandBanks,forestFloor,'Leaf-covered forest pond banks']] as const){
+    if(!positions.length)continue;
+    const bank=yield* shoreBankSteps(positions,pace),vertices=bank.getAttribute('position').array as Float32Array,ids=new Uint32Array(vertices.length/3);for(let i=0;i<ids.length;i++)ids[i]=i;
     if(due(pace))yield;
     options.onShore?.(vertices,ids);
-    const mesh=new THREE.Mesh(bank,lawn);mesh.name='Sloping water banks';mesh.receiveShadow=true;group.add(mesh);
+    const mesh=new THREE.Mesh(bank,material);mesh.name=name;mesh.receiveShadow=true;group.add(mesh);
   }
   for(const [surface,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[woods,forestFloor,'Fells forest floor'],[plazas,pathMaterial,'Plazas']] as const){
     if(!surface.stats.polygons)continue;
@@ -174,13 +186,15 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     const merged=mergeGeometries(waterSheets,false);waterSheets.forEach(g=>g.dispose());
     if(merged){yield* boundingSphereSteps(merged,pace);const mesh=new THREE.Mesh(merged,waterMaterial);mesh.name='Water';mesh.receiveShadow=true;mesh.userData.noAO=true;group.add(mesh);}
   }
-  let bridges=0,benches=0,lamps=0,piers=0;
+  let bridges=0,benches=0,lamps=0,piers=0,naturalTrails=0;
+  const surfaceRuns=new Map<ParkPath,ParkSurfaceRun[]>();
   // The Mall's walks are its own (commonwealth-mall.ts): the surveyed polygon where there is one, concrete where not.
   const onMall=mallPathTest(parks);
   for(const path of paths){
     if(path.points.length<2)continue;
     if(due(pace))yield;
     const bridge='bridge' in path&&path.bridge;
+    surfaceRuns.set(path,parkSurfaceRuns(path,woodland));
     if(!bridge&&onMall(path))continue;
     if(bridge){
       const road=footbridgeRoad(city,path);if(!road)continue;bridges++;
@@ -206,7 +220,11 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       }
       for(const t of footbridgeTreads(road,path))part(box(t.width,t.height,t.depth),stone,t.x,t.y,t.z,t.yaw);
     }else{
-      for(const points of outsideGreenwayPath(path.points)){const p=points[0];drapedRibbonInto(batches.at(pathMaterial,p[0],p[1]),city,points,path.width,.052);}
+      for(const run of surfaceRuns.get(path)??[]){
+        if(run.natural){
+          const p=run.points[0];naturalTrailInto(batches.at(trailMaterial,p[0],p[1]),city,run.points,path.width);naturalTrails++;
+        }else for(const points of outsideGreenwayPath(run.points)){const p=points[0];drapedRibbonInto(batches.at(pathMaterial,p[0],p[1]),city,points,path.width,.052);}
+      }
     }
   }
   // Spatially index roads, buildings and paths so landscape preparation stays
@@ -239,7 +257,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
   const clipped=(p:CityArea):Bounds=>{const b=areaBounds(p);return bounds?{minX:Math.max(b.minX,bounds.minX),maxX:Math.min(b.maxX,bounds.maxX),minZ:Math.max(b.minZ,bounds.minZ),maxZ:Math.min(b.maxZ,bounds.maxZ)}:b;};
-  let woodlandTrees=0;
+  let woodlandTrees=0,sharedWoodlandTrees=0;
   if(woodland.length){
     const extents=woodland.map(clipped);
     const woodlandBounds={
@@ -251,23 +269,27 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       const b=extents[i];
       return p[0]>=b.minX&&p[0]<b.maxX&&p[1]>=b.minZ&&p[1]<b.maxZ&&insideArea(p,a);
     });
-    const clear=(p:Point2,reach:number,solid:boolean)=>{
+    const clear=(p:Point2,reach:number,solid:boolean,brush=false)=>{
       const shore=solid?reach+1:1;
       return !inTunnelApproach(city,...p)
-        && !(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance+(s.trail&&!solid?0:reach))
+        && !fellsRoadsideReserved(city,p[0],p[1],reach)
+        && !fellsRoadsideRockAt(city,p[0],p[1],brush ? .15 : solid ? reach : .55)
+        && !(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance-(brush?(s.trail?1.45:2.75):0)+(solid?reach:s.trail?0:Math.min(reach,1.5)))
         && !(buildings.get(key(...p))??[]).some(b=>pointInside(p,b)||nearRing(p,b,reach))
         && !waterBounds.some(w=>p[0]>=w.minX-shore&&p[0]<=w.maxX+shore&&p[1]>=w.minZ-shore&&p[1]<=w.maxZ+shore
           && (insideArea(p,w.area)||w.area.rings.some(r=>nearRing(p,r,shore))));
     };
-    woodlandTrees=yield* fellsWoodlandSteps(city,group,{bounds:woodlandBounds,contains,clear,
-      viewHeight:options.fellsViewHeight??fellsViewHeight(city),onRock:options.onRock,pace});
+    woodlandTrees=yield* fellsWoodlandSteps(city,group,{bounds:woodlandBounds,contains,clear,clearBrush:(p,reach)=>clear(p,reach,true,true),
+      viewHeight:options.fellsViewHeight??fellsViewHeight(city),onRock:options.onRock,pace,
+      onTrees:trees=>{treePoints.push(...trees);sharedWoodlandTrees+=trees.length;}});
+    yield* fellsRoadsideSteps(city,group,{bounds,onSolids:options.onSolids,onRock:options.onRock,pace});
   }
   const limits=selected.map(p=>{const b=clipped(p),area=Math.max(0,b.maxX-b.minX)*Math.max(0,b.maxZ-b.minZ);return /public garden/i.test(p.name)?190:/fens/i.test(p.name)?190:Math.min(bounds?60:35,Math.round(area/1300));});
   for(const [index,park] of selected.entries()){
     if(due(pace))yield;
     if(isFellsWoodland(park)||park.name===BOSTON_COMMON||isPlannedMallLawn(park))continue;
     const b=clipped(park),limit=limits[index];let count=0;if(b.maxX<=b.minX||b.maxZ<=b.minZ)continue;
-    for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length<treeBudget;attempt++){
+    for(let attempt=0;attempt<limit*25&&count<limit&&treePoints.length-sharedWoodlandTrees<treeBudget;attempt++){
       const p:Point2=[b.minX+random()*(b.maxX-b.minX),b.minZ+random()*(b.maxZ-b.minZ)];if(!insideArea(p,park)||!safe(p))continue;
       const cx=Math.floor(p[0]/10),cz=Math.floor(p[1]/10);let near=false;
       for(let x=cx-1;x<=cx+1;x++)for(let z=cz-1;z<=cz+1;z++)if((treeCells.get(`${x},${z}`)??[]).some(q=>Math.hypot(p[0]-q[0],p[1]-q[1])<8))near=true;
@@ -296,7 +318,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   // Benches and restrained lamps sit beside real paths. Count is fixed per
   // length rather than per OSM segment, preventing dense clusters at junctions.
   for(const path of paths){
-    if('bridge' in path&&path.bridge||onMall(path)==='block')continue;
+    if('bridge' in path&&path.bridge||onMall(path)==='block'||surfaceRuns.get(path)?.some(run=>run.natural))continue;
     if(due(pace))yield;
     let next=22+random()*25,distance=0;
     for(let i=1;i<path.points.length&&benches<benchBudget;i++){
@@ -319,12 +341,12 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       distance+=length;
     }
   }
-  for(const mesh of batches.meshes()){mesh.castShadow=mesh.material!==pathMaterial;mesh.receiveShadow=true;group.add(mesh);}
+  for(const mesh of batches.meshes()){mesh.castShadow=mesh.material!==pathMaterial&&mesh.material!==trailMaterial;mesh.receiveShadow=true;group.add(mesh);}
   const greenwayGroup=yield* greenwayDetailSteps(city,options);if(greenwayGroup.userData.parcels)group.add(greenwayGroup);
   if(christianSciencePlaza){
     yield* christianSciencePlazaSteps(city,group,options);
   }
-  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,bridges,footbridgePiers:piers,trees:treePoints.length+woodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
+  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,naturalTrails,bridges,footbridgePiers:piers,trees:treePoints.length+woodlandTrees-sharedWoodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
   (options.target??scene).add(group);return group;
 }
 
