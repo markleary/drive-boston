@@ -449,7 +449,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   function reset() {
     const result=callbacks.onReset();
     if(result==='blocked'){toast('Road blocked. Try R again when clear.');return;}
-    clearStorrowed();toast(result==='retreated'?'Truck repaired · Back before the entrance.':travelMode === 'helicopter' ? 'Ready to lift off.' : travelMode === 'walk' ? 'Back on the sidewalk.' : 'Back on the road.');
+    clearStorrowed();toast(result==='retreated'?'Truck repaired · Back before the entrance.':travelMode === 'helicopter' ? 'Ready to lift off.' : travelMode === 'walk' ? 'Back on the sidewalk.' : travelMode === 'bike' ? 'Ready to ride.' : 'Back on the road.');
   }
   /** Routes to the street nearest (x,z), from the map or a test. Returns the snapped point, or null away from every street. */
   function setDestination(x:number,z:number){

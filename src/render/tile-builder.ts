@@ -102,7 +102,7 @@ export interface BuiltTile {
 }
 export type TileStage = 'survey' | 'terrain' | 'roads' | 'curbs' | 'structures' | 'buildings' | 'props' | 'signals' | 'parks' | 'details';
 /** `scenery`: everything after the terrain and decks. The streamer hides it while the tile builds beyond clear view, so its meshes are neither drawn nor uploaded before the static batches replace them. */
-export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; ownedMaterials?: THREE.Material[]; surveyDeck?: string; structuresReady?: boolean; scenery?: THREE.Group; }
+export interface PartialTile { group: THREE.Group; colliders: RAPIER.Collider[]; key: string; tile: CityTile; ownedMaterials?: THREE.Material[]; surveyDeck?: string; structuresReady?: boolean; scenery?: THREE.Group; releaseParkPaths?:()=>void; }
 
 /** Run a paced helper as one named stage: each pause it takes becomes a yield of that stage. */
 function* stage<T>(name: TileStage, steps: Generator<void, T>): Generator<TileStage, T> { let r = steps.next(); while (!r.done) { yield name; r = steps.next(); } return r.value; }
@@ -575,6 +575,7 @@ export function createTileBuilder(ctx: TileContext) {
       for (const mesh of landscape) for (const part of meshChunks(mesh.vertices, mesh.indices)) { if (due(pace)) yield 'parks'; colliders.push(physics.addStaticMesh(part.vertices, part.indices)); }
       // Park fences and monuments stand as boxes, a few dozen a frame.
       for (let i = 0; i < furnishings.length; i += 64) { if (due(pace)) yield 'parks'; colliders.push(...physics.addParapets(furnishings.slice(i, i + 64))); }
+      partial.releaseParkPaths=physics.registerParkPaths(tile.parkPaths);
       stats.parkTrees = parks.userData.trees ?? 0;
     }
     yield 'parks';
@@ -633,7 +634,7 @@ export function createTileBuilder(ctx: TileContext) {
     }
     stats.colliders = colliders.length; stats.buildMs = Math.round(performance.now() - began);
     group.userData = { ...group.userData, tile: key, ...stats };
-    const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps: [...lamps, ...highwayLamps], posts, signals: placements, stats, dispose: () => dispose(built, owned) };
+    const built: BuiltTile = { key, tile, group, bounds, colliders, meshes, lamps: [...lamps, ...highwayLamps], posts, signals: placements, stats, dispose: () => {partial.releaseParkPaths?.();dispose(built, owned);} };
     return built;
   }
 
@@ -646,6 +647,7 @@ export function createTileBuilder(ctx: TileContext) {
 
   /** Abandon a tile whose build was interrupted: whatever stages ran are undone. */
   function abandon(partial: PartialTile) {
+    partial.releaseParkPaths?.();
     physics.removeColliders(partial.colliders);
     partial.colliders.length = 0;
     removeTileBuildings(city, partial.tile); removeBuildingPlans(city, partial.tile.buildings); for (const b of partial.tile.buildings) ctx.buildingMap.delete(b.id);

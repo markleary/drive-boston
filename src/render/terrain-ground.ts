@@ -73,7 +73,7 @@ export function drapedRibbonInto(sink:TriangleSink,city:CityData,points:Point2[]
  * `right[i]`, left being the ribbon's +normal side, [-dz, dx] of the direction
  * of travel): the curb-bounded roadway of scripts/street_surfaces.py and its
  * sidewalk bands. Draped, wound and shaded exactly like a ribbon. */
-export function drapedStripInto(sink:TriangleSink,city:CityData,left:Point2[],right:Point2[],offset:number,surface?:(x:number,z:number)=>number){
+export function drapedStripInto(sink:TriangleSink,city:CityData,left:Point2[],right:Point2[],offset:number,surface?:(x:number,z:number)=>number,normalizedAcross=false){
   let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
   for(const edge of [left,right])for(const [x,z]of edge){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}
   drapedSurfaceInto(sink,city,offset,surface,[minX,maxX,minZ,maxZ],(corner,quad)=>{
@@ -85,7 +85,7 @@ export function drapedStripInto(sink:TriangleSink,city:CityData,left:Point2[],ri
       const along=Math.max(1,Math.ceil(length/2)),across=Math.max(1,Math.ceil(width/2));
       const vertex=(slot:number,t:number,v:number)=>{
         const lx=l0[0]+(l1[0]-l0[0])*t,lz=l0[1]+(l1[1]-l0[1])*t,rx=r0[0]+(r1[0]-r0[0])*t,rz=r0[1]+(r1[1]-r0[1])*t;
-        corner(slot,rx+(lx-rx)*v,rz+(lz-rz)*v,v*width/5,(distance+t*length)/5);
+        corner(slot,rx+(lx-rx)*v,rz+(lz-rz)*v,normalizedAcross?v:v*width/5,(distance+t*length)/5);
       };
       for(let j=0;j<along;j++)for(let k=0;k<across;k++){vertex(0,j/along,k/across);vertex(5,(j+1)/along,k/across);vertex(10,j/along,(k+1)/across);vertex(15,(j+1)/along,(k+1)/across);quad();}
       distance+=length;
