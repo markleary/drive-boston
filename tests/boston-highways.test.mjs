@@ -53,6 +53,8 @@ test('an entrance sign stands over the ramp beyond its street landing, in the op
   const gantry=entranceGantry(sign);
   assert.deepEqual(gantry.posts.map(p=>[p.x,+p.z.toFixed(2)]),[[21,-3.55],[21,3.55]],'a post behind each wall of the slot');
   assert.ok(Math.abs(gantry.bottom-(sign.approach.y+ENTRANCE_CLEARANCE))<1e-9&&Math.abs(gantry.top-gantry.bottom-ENTRANCE_PANEL.height)<1e-9&&ENTRANCE_CLEARANCE>=5,'the panel hangs clear of a truck on the ramp');
+  const raised=entranceGantry(sign,(_x,z)=>z>0?2:1);
+  assert.ok(raised.bottom>=6.4&&raised.bottom-sign.approach.y>=5,'the panel also clears the higher surface street beside a descending ramp');
   // No landing: the ramp's first metres. Under a roof or on a ramp too short for it there is none, and none without the ramp.
   assert.equal(planEntranceSigns([ramp({tunnel:{clearance:4.2,covered:[[130,240]]}})])[0].station,GANTRY_SETBACK);
   assert.deepEqual(planEntranceSigns([ramp({tunnel:{clearance:4.2,covered:[[15,240]],surfaceLandings:[[0,12]]}})]),[]);
@@ -560,7 +562,7 @@ test('the Longfellow exit at Charles Circle lies on Cambridge Street where it ru
 
 test('the Dartmouth Street entrance is signed overhead: 90 West, New York, on a gantry at the mouth of its slot',()=>{
   const signs=planEntranceSigns(city.roads);assert.deepEqual(signs.map(s=>s.rampId),['i90-wb-entrance-copley']);
-  const [sign]=signs,road=sign.road,landing=road.tunnel.surfaceLandings[0][1],roof=Math.min(...road.tunnel.covered.map(c=>c[0])),gantry=entranceGantry(sign);
+  const [sign]=signs,road=sign.road,landing=road.tunnel.surfaceLandings[0][1],roof=Math.min(...road.tunnel.covered.map(c=>c[0])),gantry=entranceGantry(sign,(x,z)=>sampleElevation(city,x,z));
   assert.ok(sign.station>landing+5&&sign.station<landing+15&&sign.station<roof-60,`the gantry stands ${sign.station} m along the ramp, at its mouth`);
   assert.ok(entranceSignStands(city,sign),'nothing stands in the panel or on a post\'s place: the tile builds it');
   // The panel clears the ramp and the street beside it; each post stands on the island's ground behind a wall of the slot,

@@ -1,0 +1,14 @@
+{
+  "checks": [
+    "437 generator tests passed, including bounded convergence of trunk/branch feedback, fail-closed detection of unresolved ramp dependencies, and changing endpoint and interior overlap targets.",
+    "902 physics/runtime tests passed, including complete tunnel drives, underpass clearance, ramp connections, roof and building collision, mesh winding, barriers and streaming.",
+    "All eight locations recaptured with matching poses against pristine baseline commit 8b799e1. Both screenshot runs completed neighborhood streaming and recorded zero browser, shader or WebGL errors.",
+    "The production build and full npm run validate:data passed, including generator replay, building geometry, street landings, tunnel joins, terrain, rail and far-massing checks.",
+    "Map-wide regression audit passed: 25,086 roads, 648,375 profile samples, 265 tiles and 480 tile seams; no new or worsened profile or fixed-constraint findings.",
+    "Street-furniture audit passed: no placement conflicts across all 265 tiles and no collisions in 10,462,711 pedestrian-path samples.",
+    "Generator constraint comparison found no new or worsened findings; the highway generator's infeasible-join findings fell from four to three.",
+    "Independent review of the building, tunnel, ramp, barrier and sign changes found no further defects.",
+    "17 browser scenarios passed; all three affected entrance, Museum and Central Artery scenarios also passed after the final controller and traffic-isolation corrections."
+  ],
+  "limitations": "Changes are local and have not been deployed. The baseline already contains 18 road-profile findings and 11 fixed-constraint conflicts; these remain visible in before/road-audit.json and after/road-audit.json and were not worsened. Automated checks and the eight-location visual review found no new regressions; this does not establish that every pre-existing map defect is resolved."
+}

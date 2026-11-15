@@ -148,17 +148,20 @@ test('a car on Dartmouth Street drives down the open ramp into the Turnpike, and
   // The Dartmouth Street entrance is signed overhead, as it is on the street: 90 West, New York, on a gantry at the ramp's mouth.
   if(id==='i90-wb-entrance-copley')await expect.poll(()=>page.evaluate(()=>(window as any).__backbay.scene.getObjectByName('Entrance sign: i90-wb-entrance-copley')?.children.map((c:any)=>c.name)??null),{timeout:60000}).toEqual(['I-90 WEST · New York','Gantry and sign backing']);
   await page.screenshot({path:testInfo.outputPath(`${shot}.png`)});
-  // Steered along the ramp at a town pace: it must stay on the roadway all the way under the roof, never left up on the ground over it.
+  // Steered along the ramp, slowing for its tight surface turn: it must stay
+  // on the roadway all the way under the roof. Transfer only the car state;
+  // a full city snapshot makes this feedback loop lag behind a moving car.
   const keys=new Set<string>(),set=async(k:string,on:boolean)=>{if(on&&!keys.has(k)){await page.keyboard.down(k);keys.add(k);}else if(!on&&keys.has(k)){await page.keyboard.up(k);keys.delete(k);}};
   let worst=0,reached=0,drop=0,last:number|undefined;
   try{
    for(let t=0;t<900;t++){
-    const s=(await snapshot(page)).state,on=nearest([ramp],s.x,s.z),ahead=along(ramp,Math.min(total,on.at+7));
+    const s=await page.evaluate(()=>(window as any).__backbay.snapshot().state),on=nearest([ramp],s.x,s.z),ahead=along(ramp,Math.min(total,on.at+7));
     let turn=Math.atan2(ahead.x-s.x,ahead.z-s.z)-s.yaw;while(turn>Math.PI)turn-=2*Math.PI;while(turn<-Math.PI)turn+=2*Math.PI;
     if(on.at>1&&on.at<total-1){worst=Math.max(worst,Math.abs(s.y-.66-on.y),on.distance/4);if(last!==undefined)drop=Math.max(drop,last-s.y);last=s.y;}
     reached=Math.max(reached,on.at);
     if(on.at>=goal)break;
-    await set('w',s.speed<9);await set('a',turn>.06);await set('d',turn<-.06);
+    const target=Math.abs(turn)>.12?4:7;
+    await set('w',s.speed<target-.2);await set('s',s.speed>target+.5);await set('a',turn>.06);await set('d',turn<-.06);
     await page.waitForTimeout(100);
    }
   }finally{for(const k of [...keys])await page.keyboard.up(k);}

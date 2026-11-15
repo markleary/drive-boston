@@ -60,6 +60,8 @@ test('beyond its reach, at another level, beside a same-way deck, a surveyed roa
   city=fixture([deck('a-north',line(0,0,-LENGTH)),deck('b-ramp',line(-WIDTH+.5,0,-LENGTH),{kind:'motorway_link'})]);
   assert.ok(city.roads.every(r=>medianBarriers(city,r).length===0));
   assert.equal(railed(city,city.roads[0],-1)+railed(city,city.roads[1],1),0,'no rail between a carriageway and the ramp that shares its pavement');
+  city=pair(.3,{kind:'motorway_link'});
+  assert.ok(city.roads.every(r=>medianBarriers(city,r).length===0),'an opposing ramp is not the other carriageway of a highway median');
   // A deck with a surveyed roadway (Storrow Drive) is a street's pavement on its ground: no row, and nothing changes beside it.
   city=pair(-.3,{roadway:line(0,0,0).map(()=>[WIDTH/2,-WIDTH/2])});
   assert.ok(city.roads.every(r=>medianBarriers(city,r).length===0));

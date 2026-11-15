@@ -1,0 +1,36 @@
+{
+  "bostonHighways": {
+    "infeasible": {
+      "before": 4,
+      "after": 3,
+      "changedOrNew": []
+    },
+    "unresolved": {
+      "before": 2,
+      "after": 2,
+      "changedOrNew": []
+    },
+    "steep": {
+      "before": 1,
+      "after": 1,
+      "changedOrNew": []
+    }
+  },
+  "i93North": {
+    "infeasible": {
+      "before": 6,
+      "after": 6,
+      "changedOrNew": []
+    },
+    "unresolved": {
+      "before": 0,
+      "after": 0,
+      "changedOrNew": []
+    },
+    "steep": {
+      "before": 0,
+      "after": 0,
+      "changedOrNew": []
+    }
+  }
+}

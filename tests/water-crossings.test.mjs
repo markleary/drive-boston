@@ -66,7 +66,16 @@ test('long unsplit source segments receive repeated supports and keep lower stre
 test('the surveyed Nashua viaducts have ground-reaching piers while the Zakim water span and tunnel end stay untouched',async()=>{
  const tile=await loadTile(metro,0,-3,read),b=tile.buildings.find(b=>b.landmark==='zakim-bridge'),data=tile.geometry.get(b.id),before=new Float32Array(data.positions);
  const supports=surveyViaductSupports(metro,data);
- assert.ok(supports.length>100);assert.ok(supports.filter(p=>p.x>600&&p.x<1200&&p.z>-2100).length>20,'supports must reach the floating ramps in the screenshots');
+ assert.ok(supports.length>100);
+ // The duplicate lower Leverett loops have been replaced by source road
+ // profiles. Keep the genuine upper I-93 viaduct's two elevated carriageways
+ // supported, instead of requiring extra columns beneath the retired loops.
+ for(const [x,z]of [[1058.5,-1990],[1032.9,-1956],[1061,-1956]]){
+  const pier=supports.find(p=>Math.hypot(p.x-x,p.z-z)<5&&p.top>25&&p.top<30);
+  assert.ok(pier,`retained upper viaduct at ${x},${z} keeps its ground-reaching pier`);
+  assert.ok(pier.bottom<=sampleElevation(metro,pier.x,pier.z), 'the upper viaduct pier reaches the ground');
+ }
+ assert.ok(!supports.some(p=>Math.hypot(p.x-790,p.z+1800)<70),'no orphan pier remains beneath the retired duplicate lower loop');
  assert.ok(supports.every(p=>p.z<=-1580&&p.top-p.bottom>=4));assert.deepEqual(data.positions,before,'the original cable bridge mesh must remain unchanged');
 });
 

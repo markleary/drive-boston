@@ -36,6 +36,33 @@ class RoadStructureClearanceTests(unittest.TestCase):
   r=roads(0);r[1]['bridge']={'sourceLayer':1};r[1]['elevations']=[0,0]
   self.assertEqual(validate_bridge_clearance(r,lambda x,z:0),0)
 
+ def test_coincident_source_vertices_at_different_levels_need_clearance(self):
+  r=roads(0);r[0].update(points=[[-10,0],[0,0],[10,0]],elevations=[0,0,0],startLevel=1,endLevel=1)
+  r[1]['points']=[[0,-10],[0,0]]
+  with self.assertRaisesRegex(ValueError,'upper above lower'):validate_bridge_clearance(r,lambda x,z:0)
+
+ def test_a_generated_record_keeps_source_levels_at_each_junction(self):
+  r=roads(0);r[0].update(points=[[-10,0],[0,0],[10,0]],elevations=[0,0,0],startLevel=1,endLevel=1)
+  r[1]['points']=[[0,-10],[0,0]]
+  r[0]['bridge']['sourceLevels']=[0,0,1]
+  self.assertEqual(validate_bridge_clearance(r,lambda x,z:0),0,'a record containing a raised span still retains its at-grade source junction')
+  r[0]['bridge']['sourceLevels']=[0,1,1]
+  with self.assertRaisesRegex(ValueError,'upper above lower'):validate_bridge_clearance(r,lambda x,z:0)
+  r[0]['bridge']['sourceLevels']=[0,1]
+  with self.assertRaisesRegex(AssertionError,'every profile station'):validate_bridge_clearance(r,lambda x,z:0)
+
+ def test_explicit_connected_junction_end_meets_a_street_at_its_actual_height(self):
+  r=roads(0);r[0].update(points=[[-10,0],[0,0]],elevations=[1,0],startLevel=0,endLevel=1)
+  r[0]['bridge']['kind']='connected-junction';r[1]['points']=[[0,-10],[0,0],[0,10]]
+  self.assertEqual(validate_bridge_clearance(r,lambda x,z:0),0)
+  r[0]['elevations'][-1]=1
+  with self.assertRaisesRegex(ValueError,'upper above lower'):validate_bridge_clearance(r,lambda x,z:0)
+
+ def test_connected_junction_metadata_does_not_exempt_an_interior_crossing(self):
+  r=roads(0);r[0].update(points=[[-10,0],[0,0],[10,0]],elevations=[0,0,0],startLevel=1,endLevel=1)
+  r[0]['bridge']['kind']='connected-junction';r[1]['points']=[[0,-10],[0,0],[0,10]]
+  with self.assertRaisesRegex(ValueError,'upper above lower'):validate_bridge_clearance(r,lambda x,z:0)
+
  def test_tagged_bridge_cannot_silently_lose_its_profile(self):
   r=roads();r[0].pop('elevations')
   with self.assertRaisesRegex(ValueError,'no deck profile'):validate_bridge_clearance(r,lambda x,z:0)

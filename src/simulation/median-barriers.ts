@@ -53,7 +53,7 @@ const deckParty=(road:Road)=>isHighwayDeck(road)&&!road.roadway;
  * record of a carriageway that is railed along the ground (`decksLieOpen` in tunnels.ts says which roads are not; the
  * Turnpike's carriageways are). Its own wall is not built along the median (`medianSpans`, `tunnelGeometry`). */
 const cutParty=(city:CityData,road:Road)=>!!road.tunnel&&!!road.highway&&road.lanes!==undefined&&!!road.elevations&&!decksLieOpen(city,road);
-const party=(city:CityData,road:Road)=>road.tunnel?cutParty(city,road):deckParty(road);
+const party=(city:CityData,road:Road)=>road.kind==='motorway'&&(road.tunnel?cutParty(city,road):deckParty(road));
 /** A deck's ends on a street: the first `MOUTH_REACH` metres from one are the street's junction, as for its rails. */
 const landings=(road:Road)=>[road.startLevel===0?road.points[0]:undefined,road.endLevel===0?road.points[road.points.length-1]:undefined].filter((p):p is Point2=>p!==undefined);
 

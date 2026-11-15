@@ -36,7 +36,12 @@ def repair(city):
  north_link={**dam,'id':NORTH_LINK,'kind':'trunk_link','points':dam['points'][:cut+1]}
  dam['points']=dam['points'][cut:]
  road={'id':LINK,'name':'Charles River Dam Road','kind':'tertiary_link','points':resample([join,south['points'][0]]),'width':10,'oneway':1}
- city['roads']=[r for r in city['roads'] if r['id'] not in (LINK,NORTH_LINK)]+[road,north_link]
+ # A downstream repair must preserve the positions these links had when the
+ # highway stages read them. Removing and appending them moves them behind
+ # I-93 on every rerun, so unwinding the later stage no longer recovers the
+ # road order its replay expects even though every profile is unchanged.
+ replacements={LINK:road,NORTH_LINK:north_link};present=set(by_id)
+ city['roads']=[replacements.get(r['id'],r) for r in city['roads']]+[r for id,r in replacements.items() if id not in present]
  distances=stations(north['points']);total=distances[-1]
  north['deckWidths']=[round(north['width']+(dam['pavedWidth']-north['width'])*max(0,1-(total-s)/30),5) for s in distances]
  north.setdefault('deckTangents',{})['end']=[b[k]-a[k] for k in (0,1)]

@@ -940,8 +940,9 @@ def sidewalk_polygons(features,xy,coverage,parks=(),stats=None,stale=None):
 
 
 def open_parts(road):
- """The stretches of a record with stored heights that lie at the ground's own level as (points, widest pavement):
- the whole of a deck, and of a tunnel record the stretches no roof covers (one without `covered` is roofed all along)."""
+ """Unroofed stretches as (points, widest pavement): the whole of a deck, and
+ the uncovered parts of a tunnel (no `covered` means roofed all along). A deck
+ can stand above terrain; ground-surface callers must also check its height."""
  points=road['points'];widths=road.get('deckWidths') or [road['width']]*len(points)
  if not road.get('tunnel'):return [(points,max(widths))]
  covered=road['tunnel'].get('covered')
@@ -955,7 +956,7 @@ def open_parts(road):
  return out
 
 
-def bare_curbs(headers,decks,step=1.0):
+def bare_curbs(headers,decks,step=1.0,ground=lambda x,z:0.0):
  """The stretches of every tile's curbs with nothing attached: {tile key: flat [curb, from, to, ...]}, the curb's
  place in the tile's list and centimetres along it, and their total length in metres.
 
@@ -967,25 +968,54 @@ def bare_curbs(headers,decks,step=1.0):
  of this script measures the roadways to them. `decks` are the roads with stored heights and the tunnel records
  (their pavement is no polygon of the tiles). A tunnel record holds a curb only where it runs in the open (open_parts):
  under a roof its pavement is not the ground the curb stands on, and a curb over a tunnel was drawn alone on the
- grass above it."""
+ grass above it. An ordinary deck holds a ground curb only within half a metre
+ of the terrain at that curb: an elevated roadway's XY footprint is no surface
+ beside a curb below it. Open cuts still hold their surface-level lips."""
  surfaces=[]
  for tile in headers.values():
   for field in ('streetPavement','streetSidewalks','deckPavement','islands','driveways'):
    surfaces+=[Polygon(rings[0],rings[1:]) for rings in tile.get(field) or [] if len(rings[0])>=3]
   surfaces+=[Polygon(w['rings'][0],w['rings'][1:]) for w in tile['sidewalks'] if len(w['rings'][0])>=3]
   surfaces+=[LineString(q['points']).buffer(q.get('width',2)/2,cap_style=2) for q in tile.get('parkPaths',[]) if len(q.get('points',[]))>=2]
- surfaces+=[LineString(q).buffer(w/2,cap_style=2) for r in decks if len(r['points'])>=2 for q,w in open_parts(r)]
+ owners=[None]*len(surfaces)
+ for road in decks:
+  if len(road['points'])<2:continue
+  line=LineString(road['points']);along=np.r_[0,np.cumsum(np.linalg.norm(np.diff(road['points'],axis=0),axis=1))]
+  for q,w in open_parts(road):
+   surfaces.append(LineString(q).buffer(w/2,cap_style=2));owners.append(None if road.get('tunnel') else (line,along,road['elevations']))
  tree=STRtree(surfaces);out={};total=0.0
  for key,tile in headers.items():
   flat=[]
   for index,curb in enumerate(tile['curbs']):
    if len(curb)<2:continue
    line=LineString(curb);n=max(1,int(line.length//step));piece=line.length/n
-   pts=shapely.line_interpolate_point(line,(np.arange(n)+.5)*piece);held=np.zeros(n,bool);held[tree.query(pts,predicate='dwithin',distance=ATTACH)[0]]=True
+   pts=shapely.line_interpolate_point(line,(np.arange(n)+.5)*piece);held=np.zeros(n,bool)
+   samples,nearby=tree.query(pts,predicate='dwithin',distance=ATTACH)
+   for surface in np.unique(nearby):
+    at=samples[nearby==surface];owner=owners[surface]
+    if owner is not None:
+     path,distances,heights=owner;points=pts[at]
+     y=np.interp(shapely.line_locate_point(path,points),distances,heights)
+     at=at[np.abs(y-np.array([ground(p.x,p.y) for p in points]))<=.5]
+    held[at]=True
    for a,b in runs(~held):
     if (b-a)*piece>=BARE_RUN:flat+=[index,int(round(a*piece*100)),int(round(b*piece*100))];total+=(b-a)*piece
   if flat:out[key]=flat
  return out,total
+
+
+def update_bare_curbs(headers,city,data_dir):
+ """Refresh curb visibility from the final pavement polygons and graded terrain."""
+ from i93_north import Terrain
+ grid=city['elevation'];ground=Terrain(grid,np.frombuffer(gzip.decompress((data_dir/grid['file']).read_bytes()),dtype='<i2'))
+ sidecars=[r for name in city.get('tunnels',{}).get('files',[]) or [city['tunnels']['file']] if (data_dir/name).exists() for r in json.loads((data_dir/name).read_text())['roads']] if city.get('tunnels') else []
+ bare,length=bare_curbs(headers,[r for r in city['roads'] if r.get('elevations')]+sidecars,ground=ground)
+ for key,tile in headers.items():
+  tile.pop('bareCurbs',None)
+  if key in bare:tile['bareCurbs']=bare[key]
+  # Keep the replayed source fields last in both surface and mesh-only builds.
+  for name in [k for k in tile if k.startswith('reviewed')]:tile[name]=tile.pop(name)
+ return {'bareCurbs':sum(len(v)//3 for v in bare.values()),'bareCurbMetres':round(length)}
 
 
 def tile_key(tx,tz):return f'{tx}_{tz}'
@@ -1233,14 +1263,8 @@ def install(data_dir,source_dir,xy,log=print):
   else:del tile['parking']
  log('Parking stalls',stalls,'in',len(parking[0]),'surface lots',flush=True)
  # A curb with no roadway, sidewalk, island, lot, deck or path beside it is not drawn (bare_curbs): it stays in the tile for the next run's measuring.
- sidecars=[r for name in city.get('tunnels',{}).get('files',[]) or [city['tunnels']['file']] if (data_dir/name).exists() for r in json.loads((data_dir/name).read_text())['roads']] if city.get('tunnels') else []
- bare,bare_length=bare_curbs(headers,[r for r in city['roads'] if r.get('elevations')]+sidecars)
- for key,tile in headers.items():
-  tile.pop('bareCurbs',None)
-  if key in bare:tile['bareCurbs']=bare[key]
-  # (the reviewed inputs' own keys stay last, where replaying them on the installed header puts them: reviewed_road_inputs)
-  for name in [k for k in tile if k.startswith('reviewed')]:tile[name]=tile.pop(name)
- log('Curbs with nothing attached, left undrawn',round(bare_length),'m in',sum(len(v)//3 for v in bare.values()),'stretches',flush=True)
+ bare_stats=update_bare_curbs(headers,city,data_dir)
+ log('Curbs with nothing attached, left undrawn',bare_stats['bareCurbMetres'],'m in',bare_stats['bareCurbs'],'stretches',flush=True)
  changed=[]
  for key in city['tiles']['keys']:
   header,payload=unpack(tile_dir/f't_{key}.bin')
@@ -1252,7 +1276,7 @@ def install(data_dir,source_dir,xy,log=print):
  pp=data_dir/'provenance.json';provenance=json.loads(pp.read_text())
  removed=prune_package(data_dir,city,headers,provenance)
  city_path.write_text(json.dumps(city,separators=(',',':'))+'\n')
- summary={'surveyCurbs':survey,'townCurbs':added,'copyCurbMetres':round(copy_cut),'townSideSurveyCurbs':copy_survey,'staleCurbs':len(stale),'staleCurbMetres':round(stale_length),'movedCenterlines':moved_roads,'movedStations':moved,'parkEdgeStations':masked,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'staleSidewalks':walk_stats['stale'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'borderPavements':borders,'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'houseDriveways':len(lanes),'curbCuts':len(cuts),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'highwayAprons':len(aprons),'streetLandings':landings['landings'],'landedStreets':landings['streets'],'carriedStreets':landings['carried'],'landingMetres':landings['metres'],'landingLips':landings['lips'],'parkingStalls':stalls,'bareCurbs':sum(len(v)//3 for v in bare.values()),'bareCurbMetres':round(bare_length),'faces':stats}
+ summary={'surveyCurbs':survey,'townCurbs':added,'copyCurbMetres':round(copy_cut),'townSideSurveyCurbs':copy_survey,'staleCurbs':len(stale),'staleCurbMetres':round(stale_length),'movedCenterlines':moved_roads,'movedStations':moved,'parkEdgeStations':masked,'sidewalkPolygons':len(walks),'outlineStrips':walk_stats['outlines'],'staleSidewalks':walk_stats['stale'],'sidewalkParts':sum(len(t['sidewalks']) for t in headers.values()),'pavements':sum(len(t['pavements']) for t in headers.values()),'borderPavements':borders,'measuredRoads':measured,'islands':stats['islands'],'islandParts':sum(len(t['islands']) for t in headers.values()),'driveways':len(drives),'houseDriveways':len(lanes),'curbCuts':len(cuts),'pavedFaces':stats['driveways'],'drivewayParts':sum(len(t['driveways']) for t in headers.values()),'highwayAprons':len(aprons),'streetLandings':landings['landings'],'landedStreets':landings['streets'],'carriedStreets':landings['carried'],'landingMetres':landings['metres'],'landingLips':landings['lips'],'parkingStalls':stalls,**bare_stats,'faces':stats}
  provenance['streetMeshes']={'version':1,**mesh_stats}
  import house_driveways
  from boston_highways import STREET_FLUSH

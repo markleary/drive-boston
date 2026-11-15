@@ -14,9 +14,8 @@ export interface DeckParapet{x:number;y:number;z:number;yaw:number;slope:number;
 const TOP=.9,FOOT=.3,MIN_WIDTH=.45,MAX_WIDTH=1.2,CELL=4;
 
 /** Transverse rails set back from the survey's open deck ends near Cambridge
- * Street. The raised west fork narrows beside the lower southbound deck;
- * the separate ramp below the east side has a survey-only end. Both spans
- * join the side parapets without crossing either modeled carriageway. */
+ * Street. Only close an end while no generated road continues it at the
+ * survey height; an incomplete survey is not evidence of a closed ramp. */
 const CHARLESTOWN_ENDS=[
   {a:[-195.1,-3619.65],b:[-183.9,-3618.53],y:32.224},
   {a:[-158.4,-3492.05],b:[-148.05,-3490.55],y:16.974},
@@ -173,7 +172,7 @@ export function* surveyDeckParapetSteps(city:CityData,data:TileBuildingGeometry,
   }
   for(const {a,b,y} of CHARLESTOWN_ENDS){
     const dx=b[0]-a[0],dz=b[1]-a[1],x=(a[0]+b[0])/2,z=(a[1]+b[1])/2;
-    if(!level(x,z,y))continue;
+    if(!level(x,z,y)||roads(x,z,decks).some(h=>Math.abs(h-y)<=.4))continue;
     out.push({x,y:y+(TOP-FOOT)/2,z,yaw:Math.atan2(dx,dz),slope:0,length:Math.hypot(dx,dz),width:.6,height:TOP+FOOT});
   }
   return{parapets:out,classify};

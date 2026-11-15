@@ -40,6 +40,22 @@ class AssembleTest(unittest.TestCase):
   with self.assertRaises(AssertionError):H.assemble({'features':[feature(1,[[0,0],[30,0]]),feature(2,[[31,0],[60,0]])],'ways':[]},H.R('t','Test',[1,2]))
 
 
+class BendTest(unittest.TestCase):
+ def test_a_tight_digitized_turn_is_eased_without_narrowing_or_moving_junctions(self):
+  # A tiny turning radius in a densely surveyed bus-loop corner folds the
+  # inner edge even though adjacent centerline points are well ordered.
+  points=[[0,8],[0,5],[0,3],[.15,2],[.55,1],[1.2,.25],[2.1,-.2],[3.1,-.5],[5,-1],[8,-2]];widths=[7.0]*len(points)
+  self.assertTrue(H.ribbon_folds(points,widths))
+  eased=H.ease_ribbon_bends(points,widths,{1,8})
+  self.assertFalse(H.ribbon_folds(eased,widths));self.assertEqual(widths,[7.0]*len(points))
+  for i in (0,1,8,9):self.assertEqual(eased[i],points[i])
+  self.assertLess(max(math.dist(a,b) for a,b in zip(points,eased)),3.5)
+  self.assertEqual(H.ease_ribbon_bends(eased,widths,{1,8}),eased,'replaying an already safe source curve changes nothing')
+ def test_valid_alignments_stay_exact_and_unrepairable_pinned_corners_fail_closed(self):
+  points=line(20);self.assertEqual(H.ease_ribbon_bends(points,[7]*20),points)
+  with self.assertRaises(AssertionError):H.ease_ribbon_bends([[0,5],[0,1],[1,0],[5,0]],[10]*4,range(4))
+
+
 class WidthTest(unittest.TestCase):
  def twins(self,gap):
   a=plan(line(20),[18.8]*20,lanes=4);b=plan([[x,gap] for x,_ in line(20)][::-1],[18.8]*20,lanes=4)
@@ -85,6 +101,17 @@ class BuildingTest(unittest.TestCase):
   p=plan(line(60));p.edge=[2.0 if 20<=i<30 else 0.0 for i in range(60)];self.classified(p)
   self.assertEqual(H.runs(p.tunnel),[[19,30]]);self.assertFalse(any(p.covered))
   q=plan(line(60),levels=[1]*60);q.edge=list(p.edge);self.classified(q);self.assertFalse(any(q.tunnel),'a raised deck beside higher ground stays a deck')
+ def test_a_reviewed_raised_span_keeps_its_deck_and_carves_the_building_above_it(self):
+  p=plan(line(60),levels=[1]*60);p.rises=[(0,59,4.5)];p.y=[5.0]*60
+  tower={'id':'station','tile':'0_0','name':'Station','base':1.0,'height':40.0,'shape':box(30,-30,90,30),'hull':box(30,-30,90,30)}
+  p.buildings=[tower];p.hulls=[tower]
+  for i in range(10,31):p.built[i]=[0];p.above[i]=[0]
+  self.classified(p);self.assertFalse(any(p.tunnel),'the raised loop remains a deck through the station')
+  over=H.buildings_over([p],lambda x,z:0.0)
+  self.assertEqual(len(over['passages']),1);self.assertEqual([m['id'] for m in over['mesh']],['station'])
+  passage=over['passages'][0];self.assertGreaterEqual(passage['ceiling'],5+p.clearance+H.ROOF)
+  p.rises=[];self.classified(p);self.assertTrue(any(p.tunnel),'source level alone does not opt out of ground classification')
+  p.rises=[(0,59,4.5)];p.high=[5.0]*60;self.classified(p);self.assertTrue(any(p.tunnel),'a slab buried in terrain cannot opt out')
  def test_what_the_buildings_over_a_road_need(self):
   p=plan([[i*3.0,0.0] for i in range(40)],main=False);p.id='ramp';p.tangents=I.tangents(p.points);p.y=[4.0-.1*i for i in range(40)]
   tall={'id':'tower','tile':'0_0','name':'Tower','base':3.0,'height':60.0,'shape':box(30,-20,90,20),'hull':box(30,-20,90,20)}
@@ -151,11 +178,37 @@ class SeamTest(unittest.TestCase):
   # (highway_roadways.apply keeps the line a carriageway has by its own curbs before its median moves it: 8 cm do not rename a record)
   moved.fitted=[[i*3.0,0.0] for i in range(40)];self.assertEqual(H.records([moved],hoods)[0][0]['name'],'I-90 East · Fenway')
 
+ def test_explicit_gore_source_level_matches_parent_but_unrelated_crossing_stays_stacked(self):
+  from road_structure_clearance import validate_bridge_clearance
+  parent=plan([[-12,0],[0,0],[12,0]],levels=[0,0,0]);parent.id='main'
+  def record(p):
+   p.spec={'bridge':'storrow','kind':'motorway'};p.tunnel=[False]*len(p.points)
+   return H.record(p,0,len(p.points)-1,p.id,(1,1),'Test')
+  trunk=record(parent)
+  for kind in ('gore','node'):
+   for end in (0,1):
+    with self.subTest(kind=kind,end=end):
+     points=[[0,0],[0,6],[0,12]]
+     if end:points.reverse()
+     ramp=plan(points,levels=[1,1,1],main=False);ramp.id='ramp';ramp.ends=[None,None];ramp.ends[end]=(kind,parent,1)
+     rec=record(ramp);i=0 if end==0 else 2
+     self.assertEqual(rec['bridge']['sourceLevels'],[0,1,1] if end==0 else [1,1,0])
+     self.assertEqual(ramp.level,[1,1,1],'serializing junction topology does not mutate the source plan')
+     self.assertEqual((rec['bridge']['sourceLayer'],rec['startLevel'],rec['endLevel']),(1,1,1),'raw layer and runtime deck levels stay intact')
+     self.assertEqual(validate_bridge_clearance([trunk,rec],lambda x,z:0),0,'an explicit shared-height ramp gore is a junction')
+     lower={'id':'underpass','points':[[-5,6],[0,6],[5,6]]}
+     with self.assertRaisesRegex(ValueError,'ramp above underpass'):
+      validate_bridge_clearance([trunk,rec,lower],lambda x,z:0)
+     ramp.ends=[None,None];unjoined=record(ramp)
+     with self.assertRaisesRegex(ValueError,'ramp above main'):
+      validate_bridge_clearance([trunk,unjoined],lambda x,z:0)
+
  def test_a_street_joining_a_deck_at_its_height_splits_the_record(self):
   p=plan(line(40));p.id='storrow-eb';p.spec={'id':'storrow-eb','bridge':'storrow','kind':'motorway'};p.ways=[{'name':'Storrow Drive East','tags':{}}];p.ends=[None,None];p.on_deck=[False,False]
   p.tunnel=[False]*40;p.covered=[False]*40;p.junctions=[(20,-.2),(30,-2.0)]
   decks,tunnels,ids=H.records([p],[])
   self.assertEqual([r['points'][0] for r in decks],[[0.0,0.0],[60.0,0.0]],'split where the street meets it within JOIN of its height, not under the one 2 m below')
+  self.assertTrue(all(r['bridge']['sourceLevels']==[0]*len(r['points']) for r in decks),'runtime raised endpoints do not replace the actual source junction levels')
 
 
 class BankTest(unittest.TestCase):
@@ -226,6 +279,82 @@ class CopyTest(unittest.TestCase):
 
 class NodeTest(unittest.TestCase):
  """Carlton Street: the span and the two legs it parts into are three bridge ways that meet over the bank of the cut."""
+ def test_a_child_reads_its_parent_after_the_parent_is_updated_in_the_last_sweep(self):
+  parent=plan([[0,0],[10,0],[20,0]],main=False);parent.id='parent';parent.ends=[('street',[]),('street',[])]
+  child=plan([[10,0],[10,10],[10,20]],main=False);child.id='child';child.ends=[('node',parent,1),('street',[])]
+  other=plan([[100,0],[110,0]],main=False);other.id='unrelated';other.ends=[('street',[]),('street',[])];other.y=[3.,3.]
+  calls=[]
+  def stale(p):return (p is parent and calls.count('parent')<4) or (p is child and abs(child.y[0]-parent.y[1])>5e-4)
+  def solve(p):
+   calls.append(p.id)
+   if p is parent:p.y[1]+=0.072 # a crossing constraint updates the parent after the child's previous binding
+   else:p.y[0]=parent.y[1]
+  H.settle_late_ramps(I.ordered([child,other,parent],{},set()),stale,solve)
+  self.assertAlmostEqual(parent.y[1],.288)
+  self.assertEqual(child.y[0],parent.y[1],'the last parent solve must reach the dependent endpoint, with no tolerance increase')
+  self.assertEqual(calls,['parent','child']*4)
+  self.assertEqual(other.y,[3.,3.],'an already current unrelated route is not re-solved')
+
+ def test_late_ramps_fail_closed_when_the_last_solve_invalidates_an_earlier_dependency(self):
+  a=plan([[0,0],[10,0]],main=False);a.id='cyclic-a'
+  b=plan([[10,0],[20,0]],main=False);b.id='cyclic-b'
+  def stale(p):return p.y[0]!=(b.y[0]+1 if p is a else a.y[0]+1)
+  def solve(p):p.y[0]=b.y[0]+1 if p is a else a.y[0]+1
+  with self.assertRaisesRegex(AssertionError,'late ramp dependencies did not settle: cyclic-a'):
+   H.settle_late_ramps([a,b],stale,solve)
+  self.assertEqual(b.y[0],40,'stop after four refinement and sixteen dependency sweeps, including a final whole-graph stale check')
+
+ def test_late_ramps_settle_convergent_trunk_branch_feedback_after_refinement(self):
+  trunk=plan([[0,0],[10,0]],main=False);trunk.id='trunk'
+  branch=plan([[0,0],[10,1]],main=False);branch.id='branch'
+  trunk.ends=[('node',branch,0),('street',[])];branch.ends=[('node',trunk,0),('street',[])]
+  trunks={(trunk,0)};bound={'trunk':{},'branch':{}};calls=[]
+  def solve(p):
+   bound[p.id]=H.ramp_dependency_targets(p,{},trunks);calls.append(p.id)
+   p.y=[(branch.y[0]+1)/2]*2 if p is trunk else list(trunk.y)
+  stale=lambda p:H.stale_ramp_dependencies(p,bound[p.id],{},trunks)
+  H.settle_late_ramps(I.ordered([branch,trunk],{},trunks),stale,solve)
+  self.assertGreater(calls.count('trunk'),4,'the dependency-only phase must finish the feedback between cover and the branch endpoint')
+  self.assertAlmostEqual(trunk.y[0],1,delta=.001)
+  self.assertTrue(all(abs(a-b)<=5e-4 for a,b in zip(branch.y,trunk.y)))
+  self.assertFalse(any(stale(p) for p in (trunk,branch)))
+
+ def test_overlap_fit_residual_is_distinct_from_an_outdated_parent_binding(self):
+  parent=plan([[0,0],[10,0],[20,0]],main=False);parent.id='parent'
+  child=plan([[0,0],[10,1],[20,5]],main=False);child.id='child';child.ends=[('node',parent,0),('street',[])]
+  leads={'child':[(parent,0)]};bound=H.ramp_dependency_targets(child,leads,set());child.y=[.02]*3
+  self.assertFalse(H.stale_ramp_dependencies(child,bound,leads,set()),'a persistent fit residual has not changed the heights supplied to the solver')
+  calls=[]
+  H.settle_late_ramps([child],lambda p:H.stale_ramp_dependencies(p,bound,leads,set()),lambda p:calls.append(p.id),lambda p:True)
+  self.assertEqual(calls,['child']*4,'retain the existing bounded refinement attempts without calling their residual stale')
+  parent.y[1]=.01
+  self.assertTrue(H.stale_ramp_dependencies(child,bound,leads,set()),'an interior parent overlap changed even though its endpoint did not')
+  bound=H.ramp_dependency_targets(child,leads,set());parent.y[0]=.01
+  self.assertTrue(H.stale_ramp_dependencies(child,bound,leads,set()),'a changed parent endpoint must also be rebound')
+  self.assertTrue(H.stale_ramp_dependencies(child,{},leads,set()),'a newly introduced dependency must be bound')
+
+ def test_direct_node_overlap_is_watched_without_a_sibling_lead(self):
+  parent=plan([[0,0],[10,0],[20,0]],main=False);parent.id='parent'
+  child=plan([[0,0],[10,1],[20,5]],main=False);child.id='child';child.ends=[('node',parent,0),('street',[])]
+  bound=H.ramp_dependency_targets(child,{},set());parent.y[1]=.01
+  self.assertTrue(H.stale_ramp_dependencies(child,bound,{},set()),'the parent interior is read by match_overlap even with no sibling leads')
+  child.ends=[('street',[]),('node',parent,0)]
+  bound=H.ramp_dependency_targets(child,{},set());parent.y[1]=.02
+  self.assertFalse(H.stale_ramp_dependencies(child,bound,{},set()),'an end on the beginning of its trunk binds only that endpoint')
+
+ def test_free_trunk_end_tracks_the_node_height_used_by_cover(self):
+  trunk=plan([[0,0],[10,0],[20,0]],main=False);trunk.id='trunk'
+  branch=plan([[0,0],[10,1],[20,5]],main=False);branch.id='branch'
+  trunk.ends=[('node',branch,0),('street',[])];trunks={(trunk,0)}
+  bound=H.ramp_dependency_targets(trunk,{},trunks)
+  self.assertEqual(bound,{('node',0):0.},'prepare reads the endpoint even though the trunk is solved without a fixed overlap')
+  branch.y[1]=.02
+  self.assertFalse(H.stale_ramp_dependencies(trunk,bound,{},trunks),'the branch interior is not read as a trunk overlap constraint')
+  branch.y[0]=.01
+  self.assertTrue(H.stale_ramp_dependencies(trunk,bound,{},trunks),'a later branch solve invalidates the endpoint supplied to cover')
+  with self.assertRaisesRegex(AssertionError,'late ramp dependencies did not settle: trunk'):
+   H.settle_late_ramps([trunk],lambda p:H.stale_ramp_dependencies(p,bound,{},trunks),lambda p:None)
+
  def ground(self,x,z):return 2.0 if x>=95 else 1.8 if x<=26 else -2.5
  def roads(self):
   piece=lambda id,points:{'id':id,'name':'Fork Street','points':points,'width':12,'oneway':0,'elevations':[round(self.ground(*points[0])+(self.ground(*points[-1])-self.ground(*points[0]))*i/(len(points)-1),4) for i in range(len(points))],'startLevel':0,'endLevel':0,'bridge':{'id':f'structure-{id}','thickness':.75,'clearanceEstimated':True,'kind':'elevated'}}
@@ -309,6 +438,29 @@ class HollowTest(unittest.TestCase):
 
 
 class LidTest(unittest.TestCase):
+ def test_cover_continuity_audit_separates_open_cuts_from_false_skylights(self):
+  p=plan(line(101),levels=[-1]*101);p.tunnel=[True]*101;p.covered=[not 40<=i<=55 for i in range(101)];p.candidate=[True]*101
+  with self.assertRaisesRegex(AssertionError,'isolated unroofed bore'):H.validate_cover_continuity([p])
+  p.candidate[48]=False;H.validate_cover_continuity([p])
+  p.candidate[48]=True;p.covered=[i<40 for i in range(101)];H.validate_cover_continuity([p])
+
+ def test_thin_cover_inside_a_bore_is_not_a_portal(self):
+  def prepared(main=True):
+   p=plan(line(101),levels=[-1]*101,main=main)
+   p.rises=[];p.buried=[False]*101;p.wet=[False]*101;p.over=[{} for _ in range(101)];p.sunk={};p.rim={}
+   p.low=[10.0 if i<40 or i>55 else 7.0 for i in range(101)];p.edge=list(p.low);p.terrain=list(p.low)
+   return p
+  p=prepared();H.cover(p,(3.0,3.0))
+  self.assertLess(p.ceiling[48],p.low[48]-p.clearance-H.ROOF,'a carriageway keeps a roof across an isolated thin stretch')
+  mapped=prepared();mapped.buried=[True]*101;mapped.edge=[12.0]*101
+  H.cover(mapped,(3.0,3.0))
+  self.assertAlmostEqual(mapped.ceiling[48],12-mapped.clearance-H.ROOF-H.COVER,
+   msg='a mapped bore uses the surrounding surface; its survey dent is repaired after the connected profiles are solved')
+  ramp=prepared(False);H.cover(ramp,(3.0,3.0));self.assertTrue(math.isinf(ramp.ceiling[48]),'ramps keep their endpoint-constrained descent')
+  p=prepared();p.level=[0]*10+[-1]*91;p.low[:35]=[3.0]*35;p.edge=list(p.low);p.terrain=list(p.low)
+  H.cover(p,(None,3.0))
+  self.assertTrue(math.isinf(p.ceiling[12]),'a real open approach remains open')
+
  def test_a_short_hole_between_two_roofed_stretches_is_closed_whole_or_left(self):
   grid={'width':40,'height':20,'cellSize':6.0,'originX':-30.0,'originZ':-60.0,'scale':.01};heights=np.full(40*20,300,dtype=np.int16)
   hollow=[gj*40+gi for gj in (9,10,11) for gi in (14,15)];heights[hollow]=0   # the survey's cut left open over the road at x 54 to 60
@@ -318,6 +470,29 @@ class LidTest(unittest.TestCase):
   shed={'hull':box(58,-2,62,2),'base':1.0};self.assertIsNone(H.close_gaps([p],[],[],grid,heights,lambda bounds:[shed]),'not over the base of a building standing in the hole')
   street={'id':'s','name':'Low Street','points':[[57,-40],[57,40]],'width':8};self.assertIsNone(H.close_gaps([p],[street],[LineString(street['points'])],grid,heights,lambda bounds:[]),'nor over a street lying in it')
   p.covered=[not 10<=i<=30 for i in range(40)];self.assertIsNone(H.close_gaps([p],[],[],grid,heights,lambda bounds:[]),'a longer open stretch is a real one')
+
+ def test_mapped_bore_fill_preserves_an_open_road_above_it(self):
+  grid={'width':40,'height':20,'cellSize':6.0,'originX':-30.0,'originZ':-60.0,'scale':.01};heights=np.full(800,300,dtype=np.int16)
+  hollow=[gj*40+gi for gj in (9,10,11) for gi in range(11,20)];heights[hollow]=0
+  p=plan(line(40),levels=[-1]*40);p.y=[-3.0]*40;p.tunnel=[True]*40;p.candidate=[True]*40;p.buried=[True]*40;p.covered=[not 10<=i<=30 for i in range(40)]
+  upper=plan([[x,6.] for x,_ in line(40)]);upper.y=[2.0]*40;upper.candidate=[False]*40;upper.tunnel=[False]*40;upper.covered=[False]*40
+  out=H.close_gaps([p,upper],[],[],grid,heights,lambda bounds:[])
+  self.assertIsNotNone(out,'a long dent in an explicitly mapped bore is repaired without lowering its ramps')
+  ground=I.Terrain(grid,out)
+  for i in range(9,32):
+   self.assertGreaterEqual(min(ground(float(x),float(z)) for x,z in H.cross_sections(p,.5)[i]),p.y[i]+p.clearance+H.ROOF+.05)
+  self.assertTrue((out[hollow]*.01<upper.y[0]+upper.clearance).all(),'the upper road remains open to the sky')
+  upper.y=[-4.0]*40
+  self.assertIsNone(H.close_gaps([p,upper],[],[],grid,heights,lambda bounds:[]),'an unrelated lower open road cannot be roofed by filling the bore')
+
+ def test_mapped_bore_shares_only_the_overlapping_coplanar_branch(self):
+  grid={'width':40,'height':20,'cellSize':6.0,'originX':-30.0,'originZ':-60.0,'scale':.01};heights=np.full(800,300,dtype=np.int16)
+  hollow=[gj*40+gi for gj in (9,10,11) for gi in range(11,20)];heights[hollow]=0
+  p=plan(line(40),levels=[-1]*40);p.y=[-3.0]*40;p.tunnel=[True]*40;p.candidate=[True]*40;p.buried=[True]*40;p.covered=[not 10<=i<=30 for i in range(40)]
+  branch=plan(line(40),levels=[-1]*15+[0]*25,main=False);branch.y=list(p.y);branch.candidate=[False]*40;branch.tunnel=[True]*40;branch.covered=[False]*40;branch.ends=[('gore',p,0),None]
+  self.assertIsNotNone(H.close_gaps([p,branch],[],[],grid,heights,lambda bounds:[]),'matching pavement shares the mapped roof at its underground merge')
+  branch.y=[-3.0 if i<16 else -2.7 for i in range(40)]
+  self.assertIsNone(H.close_gaps([p,branch],[],[],grid,heights,lambda bounds:[]),'a rising portal inside MERGE cannot be filled merely because the branch joined underground')
 
 
 class CutTest(unittest.TestCase):
@@ -361,7 +536,7 @@ class LandingTest(unittest.TestCase):
   free=plan(line(30),[7.0]*30,main=False,lanes=1);self.assertFalse(any(free.street),'no route is held without a reviewed landing')
  def test_the_two_reviewed_landings(self):
   held={r['id']:r['landing'] for r in H.ROUTES if 'landing' in r};self.assertEqual(held,{'i90-wb-entrance-copley':12,'i90-eb-entrance-135':24})
-  self.assertEqual({r['id']:r['width'] for r in H.ROUTES if 'width' in r},{'i90-wb-entrance-copley':6.0},"the survey's slot between Huntington Avenue's carriageways")
+  self.assertEqual({r['id']:r['width'] for r in H.ROUTES if 'width' in r},{'i90-wb-entrance-copley':6.0,'storrow-leverett-east':6.8,'storrow-leverett-west':8.6},"the Copley slot and the reviewed two-lane Museum approaches keep their widths")
 
 
 class OnStreetTest(unittest.TestCase):

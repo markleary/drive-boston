@@ -45,6 +45,13 @@ async function follow(page:Page,road:Road,start:number,end:number,maxSpeed=9){
 test('Central Artery desktop interiors, surface ramp, Zakim connection and south closure',async({page,request},testInfo)=>{
   test.setTimeout(300000);await page.setViewportSize({width:1600,height:900});const errors:string[]=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)|Shader Error/i.test(m.text()))errors.push(m.text());});
+  // Follow the fixed roadway without an NPC collision tipping the test car
+  // onto another vehicle. Population remains enabled in the highway and
+  // streaming browser cases; this case measures geometry and portal clearance.
+  await page.route(/\/data\/(?:city|central-artery|boston-highways)\.json(?:\?.*)?$/,async route=>{
+    const response=await route.fetch(),data=await response.json();for(const road of data.roads)road.traffic=false;
+    await route.fulfill({response,json:data});
+  });
   const data=await(await request.get('/data/central-artery.json')).json(),roads=data.roads as Road[];
   // The tunnel layer also draws the Turnpike's and Storrow Drive's walled cuts and tunnels (boston-highways.json).
   const highway=((await(await request.get('/data/boston-highways.json')).json()).roads as Road[]).length;

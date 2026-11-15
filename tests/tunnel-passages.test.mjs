@@ -8,6 +8,7 @@ import {roadProjection,sampleRoadElevation} from '../src/simulation/road-surface
 import {pointInside} from '../src/simulation/roads.ts';
 import {tunnelCoveredAt,tunnelStations,inOpenSkyClearance} from '../src/simulation/tunnels.ts';
 import {orientedBox} from '../src/simulation/oriented-box.ts';
+import {sampleElevation} from '../src/simulation/terrain.ts';
 import {sourceFootingGeometry,addSourceFooting} from '../src/render/source-footings.ts';
 import {tileSourceGeometry} from '../src/render/tile-geometry.ts';
 import {read,readJson} from './helpers/metro-city.mjs';
@@ -49,7 +50,12 @@ test(`${building.name} streamed facade and roof triangles leave the vehicle corr
   for(const triangle of triangles(adapted,kind)){
    adaptedArea+=area(triangle);const center=[0,1,2].map(k=>triangle.reduce((sum,p)=>sum+p[k],0)/3);
    assert.equal(inPassage(...center),false,'adapted shell must not refill a tunnel passage');
-   assert.ok(deckClearance(center[0],center[2],true,true)>7.5,`nothing of the shell stands over or beside an open-air ramp (${center.map(v=>v.toFixed(1))})`);
+   // At a bend/portal the mitered footprint is not perpendicular to either
+   // centerline segment. Use the actual clearance union: a point just behind
+   // the portal can project onto the previous segment just before its cover.
+   // Float32 world coordinates round a clipped boundary by fractions of a
+   // millimetre. Only a point strictly inside all four 1 mm probes is intruding.
+   assert.equal([[.001,0],[-.001,0],[0,.001],[0,-.001]].every(([x,z])=>inOpenSkyClearance(city,center[0]+x,center[2]+z)),false,`nothing of the shell stands in the open-air clearance (${center.map(v=>v.toFixed(1))})`);
   }
  }
  assert.ok(originalArea-adaptedArea>10,'a finite part of the actual obstructing source shell is removed');
@@ -82,4 +88,87 @@ test('each passage building has one far hull, boxed by the pieces its detailed s
   // Only the 2 m raster's edge cells may overhang the cleared columns.
   assert.ok(open<samples*.08,`the far boxes of ${building.name} stay off the open ramps (${open}/${samples})`);
  }
+});
+
+function shellHit(data,origin,direction){
+ const ray=new THREE.Ray(new THREE.Vector3(...origin),new THREE.Vector3(...direction)),target=new THREE.Vector3();let nearest=Infinity;
+ for(const t of triangles(data,'facade')){
+  if(ray.intersectTriangle(...t.map(p=>new THREE.Vector3(...p)),true,target))nearest=Math.min(nearest,target.distanceTo(ray.origin));
+ }
+ return nearest;
+}
+
+test('a clipped building receives outward-facing reveal walls on both sides of an open ramp',()=>{
+ // The road cuts through a whole box. Both remaining roof pieces must become
+ // solids, including the piece <25 m across that the old heuristic discarded.
+ const geometry=new THREE.BoxGeometry(20,30,40).translate(0,15,0),position=geometry.attributes.position.array,indices=geometry.index.array;
+ const facade=[],roof=[];
+ for(let i=0;i<indices.length;i+=3){const ids=Array.from(indices.subarray(i,i+3));(ids.every(n=>position[n*3+1]===30)?roof:facade).push(...ids);}
+ const city={roads:[{id:'open',name:'Open ramp',width:4,points:[[-30,0],[30,0]],elevations:[-1,-1],tunnel:{clearance:4,covered:[]}}]};
+ const adapted=prepareBuildingTunnelPassage(city,{id:[...TUNNEL_PASSAGE_BUILDING_IDS][0],baseElevation:0},{positions:position,facade:Uint32Array.from(facade),roof:Uint32Array.from(roof)});
+ for(const z of [-1,1])for(const x of [-8,0,8])for(const y of [2,15,28]){
+  const distance=shellHit(adapted,[x,y,z*5],[0,0,z]);
+  assert.ok(Math.abs(distance-5.01)<.02,`new cut wall faces the ramp at ${x},${y},${z}: ${distance}`);
+ }
+ assert.equal(shellHit(adapted,[-25,15,0],[1,0,0]),Infinity,'the complete open-air corridor remains clear');
+ // Another, covered ramp crosses the new reveal below its roof. The solid
+ // closure must use the same finite bore subtraction as the original shell.
+ const crossing={id:'covered',name:'Covered crossing',width:4,points:[[0,-30],[0,30]],elevations:[1,3],tunnel:{clearance:4}};
+ const crossed=prepareBuildingTunnelPassage({roads:[...city.roads,crossing]},{id:[...TUNNEL_PASSAGE_BUILDING_IDS][0],baseElevation:0},{positions:position,facade:Uint32Array.from(facade),roof:Uint32Array.from(roof)});
+ assert.equal(shellHit(crossed,[0,4,5],[0,0,1]),Infinity,'finite crossing stays open through both the reveal and original exterior wall');
+ assert.ok(Math.abs(shellHit(crossed,[0,10,5],[0,0,1])-5.01)<.02,'solid resumes above the covered bore');
+ assert.ok(Math.abs(shellHit(crossed,[5,4,5],[0,0,1])-5.01)<.02,'solid stays beside the covered bore');
+ // A real elevated source wing retains its open space below its soffit;
+ // a closure cannot blindly extrude its roof all the way to the building datum.
+ const elevated=new THREE.BoxGeometry(20,20,40).translate(0,20,0),ep=elevated.attributes.position.array,ei=elevated.index.array,ef=[],er=[];
+ for(let i=0;i<ei.length;i+=3){const ids=Array.from(ei.subarray(i,i+3));(ids.every(n=>ep[n*3+1]===30)||ids.every(n=>ep[n*3+1]===10)?er:ef).push(...ids);}
+ const wing=prepareBuildingTunnelPassage(city,{id:[...TUNNEL_PASSAGE_BUILDING_IDS][0],baseElevation:0},{positions:ep,facade:Uint32Array.from(ef),roof:Uint32Array.from(er)});
+ assert.equal(shellHit(wing,[0,5,5],[0,0,1]),Infinity,'an elevated wing does not grow a wall below its source soffit');
+ assert.ok(Math.abs(shellHit(wing,[0,15,5],[0,0,1])-5.01)<.02,'the wing itself receives a closed side');
+ elevated.dispose();geometry.dispose();
+});
+
+for(const id of TUNNEL_PASSAGE_BUILDING_IDS){
+ const building=raw.buildings.find(b=>b.id===id),adapted=loaded.geometry.get(id);
+ test(`${building.name} retained cut roofs have visible walls beneath their exposed edges`,()=>{
+  let checked=0;
+  for(const t of triangles(adapted,'roof')){
+   const normal=new THREE.Vector3().crossVectors(new THREE.Vector3(...t[1]).sub(new THREE.Vector3(...t[0])),new THREE.Vector3(...t[2]).sub(new THREE.Vector3(...t[0])));
+   if(normal.y<=0)continue;
+   for(let j=0;j<3;j++){
+    const a=t[j],b=t[(j+1)%3],dx=b[0]-a[0],dz=b[2]-a[2],length=Math.hypot(dx,dz);if(length<.1)continue;
+    const x=(a[0]+b[0])/2,z=(a[2]+b[2])/2,nx=-dz/length,nz=dx/length;
+    const left=inOpenSkyClearance(city,x+nx*.025,z+nz*.025),right=inOpenSkyClearance(city,x-nx*.025,z-nz*.025);if(left===right)continue;
+    const sign=left?1:-1,y=(a[1]+b[1])/2-1;
+    if(y<(building.baseElevation??0)+.2||inPassage(x,y,z))continue;
+    const distance=shellHit(adapted,[x+nx*sign*.1,y,z+nz*sign*.1],[-nx*sign,0,-nz*sign]);
+    assert.ok(distance<.13,`open shell at ${[x,y,z].map(v=>v.toFixed(2))}: ${distance}`);checked++;
+   }
+  }
+  assert.ok(checked>3,'exercise multiple exposed roof boundaries in the actual survey');
+ });
+}
+
+
+test('closed passage-building shells leave surrounding street lanes unobstructed',()=>{
+ const ray=new THREE.Ray(),target=new THREE.Vector3();let probes=0;
+ for(const id of TUNNEL_PASSAGE_BUILDING_IDS){
+  const building=raw.buildings.find(b=>b.id===id),data=loaded.geometry.get(id),faces=triangles(data,'facade').map(t=>t.map(p=>new THREE.Vector3(...p)));
+  const xs=building.footprint.map(p=>p[0]),zs=building.footprint.map(p=>p[1]),minX=Math.min(...xs)-20,maxX=Math.max(...xs)+20,minZ=Math.min(...zs)-20,maxZ=Math.max(...zs)+20;
+  for(const road of city.roads){
+   if(road.elevations||road.tunnel)continue;
+   for(let i=1;i<road.points.length;i++){
+    const a=road.points[i-1],b=road.points[i];if(Math.max(a[0],b[0])<minX||Math.min(a[0],b[0])>maxX||Math.max(a[1],b[1])<minZ||Math.min(a[1],b[1])>maxZ)continue;
+    const dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<.01)continue;
+    for(const offset of [0,-Math.max(0,road.width/2-1),Math.max(0,road.width/2-1)])for(let s=0;s<length;s+=2)for(const height of [1,3]){
+     const x=a[0]+dx*s/length-dz/length*offset,z=a[1]+dz*s/length+dx/length*offset;
+     ray.set(new THREE.Vector3(x,sampleElevation(city,x,z)+height,z),new THREE.Vector3(dx/length,0,dz/length));probes++;
+     for(const face of faces){
+      if(ray.intersectTriangle(...face,false,target))assert.ok(target.distanceTo(ray.origin)>Math.min(2,length-s)+.001,`${building.name} obstructs ${road.name} ${road.id} at ${target.toArray()}`);
+     }
+    }
+   }
+  }
+ }
+ assert.ok(probes>100,'check the ordinary streets around both adapted buildings');
 });

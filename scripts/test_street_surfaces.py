@@ -322,6 +322,14 @@ class BareCurbTest(unittest.TestCase):
  def test_a_deck_on_the_ground_holds_its_curb_and_a_short_gap_is_no_stretch(self):
   deck={'points':[[0,-3],[40,-3]],'width':6,'elevations':[0,0]};self.assertEqual(ss.bare_curbs({'0_0':self.tile(curbs=[[[0,0],[40,0]]])},[deck])[0],{})
   parts=[[[[0,0],[19,0],[19,-6],[0,-6]]],[[[20.5,0],[40,0],[40,-6],[20.5,-6]]]];self.assertEqual(ss.bare_curbs({'0_0':self.tile(curbs=[[[0,0],[40,0]]],streetPavement=parts)},[])[0],{},'a metre and a half between two roadways')
+ def test_an_elevated_deck_does_not_hold_a_curb_in_the_grass_below_it(self):
+  tile=lambda:{'0_0':self.tile(curbs=[[[0,0],[40,0]]])};deck={'points':[[0,-3],[40,-3]],'width':6,'elevations':[8,8]}
+  self.assertEqual(ss.bare_curbs(tile(),[deck])[0],{'0_0':[0,0,4000]})
+  self.assertEqual(ss.bare_curbs(tile(),[deck],ground=lambda x,z:7.94)[0],{},'absolute elevation is not height above ground')
+  self.assertEqual(ss.bare_curbs(tile(),[{**deck,'elevations':[0,8]}])[0],{'0_0':[0,300,4000]},'only the actual at-grade landing holds its curb')
+  self.assertEqual(ss.bare_curbs(tile(),[deck],ground=lambda x,z:7.94 if z==0 else 0.0)[0],{},'sample the curb terrain, not the lower ground under the deck centre')
+  surfaces={'0_0':self.tile(curbs=[[[0,0],[40,0]]],streetPavement=[[[[0,0],[40,0],[40,-6],[0,-6]]]])}
+  self.assertEqual(ss.bare_curbs(surfaces,[deck])[0],{},'an independent surface street under the viaduct still holds its curb')
  def test_a_tunnel_record_holds_a_curb_only_where_it_runs_in_the_open(self):
   tile=lambda:{'0_0':self.tile(curbs=[[[0,0],[40,0]]])};cut={'points':[[0,-3],[10,-3],[20,-3],[30,-3],[40,-3]],'width':6,'elevations':[-5]*5}
   self.assertEqual(ss.bare_curbs(tile(),[{**cut,'tunnel':{'clearance':4.2,'covered':[]}}])[0],{},'a walled cut open to the sky: the curb is its edge')

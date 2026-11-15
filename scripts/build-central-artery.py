@@ -120,6 +120,41 @@ def fit_deck_widths(roads):
   for i in range(len(values)-2,-1,-1):values[i]=min(values[i],values[i+1]+.1*(ss[i+1]-ss[i]))
   if min(values)<road['width']-.001:road['deckWidths']=[round(v,4) for v in values]
 
+def keep_bore_covered(points,ys,width,ground,clearance=6.0):
+ """A terrain depression inside a buried bore is not another surface portal.
+
+ Keep the profile under its full-width roof between its first and last buried
+ stations, with grade-limited approaches to each lower ceiling. Actual surface
+ entrances at the ends keep their original profiles. This runs before publishing
+ junction heights, so joining ramps inherit the lowered bore instead of stepping
+ across it. The small reserve covers merge crossfall and profile quantization.
+ """
+ ss=stations(points);road={'points':points,'elevations':ys,'width':width}
+ limits=[min(ground(p),*(ground([q[0],q[2]]) for q in section))-clearance for p,section in zip(points,deck_sections(road))]
+ buried=[i for i,(y,limit) in enumerate(zip(ys,limits)) if y<=limit]
+ if len(buried)<2:return ys
+ first,last=buried[0],buried[-1];out=list(ys)
+ for i in range(first,last+1):
+  if ys[i]<=limits[i]:continue
+  ceiling=limits[i]-.2
+  # Keep one basin under a depression instead of a sharp dip per survey cell.
+  # In particular, a ramp merging alongside it must be able to share its grade
+  # across its width, not meet a V-shaped kink between consecutive stations.
+  for j in range(first+1,last):out[j]=min(out[j],ceiling+.115*max(0,abs(ss[j]-ss[i])-60))
+ # The first and last buried stations already have a roof. Keep their heights
+ # and the complete open approaches beyond them: spreading a 60 m basin into
+ # a surveyed bridge overlap leaves one wheel on its retained deck and the
+ # other on a lower generated slab. Blend the interior basin from those fixed
+ # roof stations at the same grade bound, trimming its plateau where needed.
+ for j in range(first+1,last):
+  # An existing coplanar branch can climb slightly faster than this basin's
+  # conservative grade (the crossing solver permits 11.95%). Never lift that
+  # already valid profile away from the parent pavement it was matched to.
+  out[j]=min(ys[j],max(out[j],ys[first]-.115*(ss[j]-ss[first]),ys[last]-.115*(ss[last]-ss[j])))
+ if any(out[i]>limits[i]+.0001 for i in range(first,last+1)):
+  raise ValueError('Continuous tunnel cover cannot meet its fixed portal approaches')
+ return out
+
 def fit_deck_edges(roads,records,specs,ground):
  by_id={r['id']:r for r in roads}
  for road,record,spec in zip(roads,records,specs):
@@ -345,6 +380,7 @@ def build(city,source,heights):
     ys[i]=min(ys[i],floor+(ys[i]-floor)*weight)
   ys,underpasses=fit_surface_underpasses(city,route,points,ys,ground)
   ys,surface_crossings=clear_surface_crossings(city,points,ss,route['width'],ys,landings,ground)
+  ys=keep_bore_covered(points,ys,route['width'],ground)
   ys=[round(y,4) for y in ys]
   # Full-width burial is calculated after merge crossfall and width fitting.
   tunnel={'clearance':5.2,'covered':[]}
