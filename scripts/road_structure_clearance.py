@@ -14,6 +14,41 @@ from shapely.strtree import STRtree
 MIN_CLEARANCE=2.5
 
 
+def vertex_level(road,index):
+ """Source topology at a vertex, independent of the estimated deck height.
+
+ Boston's centerlines retain coincident XY nodes at overpasses. Their endpoint
+ levels distinguish those nodes from a junction; a shared coordinate alone does
+ not join a lifted deck to the street underneath it.
+ """
+ if not road.get('elevations'):return 0
+ levels=road.get('bridge',{}).get('sourceLevels')
+ if levels is not None:
+  assert len(levels)==len(road['points']),f'{road["id"]}: source levels must follow every profile station'
+  return levels[index]
+ if index==0:return road.get('startLevel')
+ if index==len(road['points'])-1:return road.get('endLevel')
+ levels=[road.get(k) for k in ('startLevel','endLevel')]
+ return max(levels) if all(v is not None for v in levels) else None
+
+
+def shared_junction(a,b,point,ground=None):
+ for i,p in enumerate(a['points']):
+  if math.dist(point,p)>=.05:continue
+  for j,q in enumerate(b['points']):
+   if math.dist(point,q)>=.05:continue
+   x,y=vertex_level(a,i),vertex_level(b,j)
+   if x is None or y is None or x==y:return True
+   # A normalized ramp landing may retain its OSM bridge layer while the
+   # street it joins has only endpoint levels. The explicit junction profile
+   # is evidence of a connection only at that ramp's end and at the same
+   # actual height. This does not exempt an overpass's coincident XY node.
+   normalized=any(r.get('bridge',{}).get('kind')=='connected-junction' and k in (0,len(r['points'])-1) for r,k in ((a,i),(b,j)))
+   if normalized and (ground is not None or (a.get('elevations') and b.get('elevations'))):
+    if abs(road_height(a,point,ground)-road_height(b,point,ground))<=.1:return True
+ return False
+
+
 def road_height(road,point,ground):
  elevations=road.get('elevations')
  if not elevations:return ground(*point)
@@ -45,9 +80,7 @@ def clearance_issues(roads,ground,minimum=MIN_CLEARANCE):
    if other_layer>=layer:continue
    for crossing in crossing_points(lines[i].intersection(lines[j])):
     p=[crossing.x,crossing.y]
-    # Shared source vertices are connected junctions. Only independent
-    # crossings require clearance; resampling retains those source vertices.
-    if any(math.dist(p,q)<.05 for q in upper['points']) and any(math.dist(p,q)<.05 for q in lower['points']):continue
+    if shared_junction(upper,lower,p,ground):continue
     checked+=1
     clearance=road_height(upper,p,ground)-upper['bridge'].get('thickness',.75)-road_height(lower,p,ground)
     if clearance<minimum-.01:issues.append({'upper':upper['id'],'lower':lower['id'],'point':[round(v,3) for v in p],'clearance':round(clearance,3)})

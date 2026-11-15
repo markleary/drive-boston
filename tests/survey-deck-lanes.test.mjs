@@ -39,7 +39,10 @@ test('dashes are 3 m on 9 m and follow the deck height',()=>{
 
 test('the Zakim and the Charlestown viaduct are traced carriageway by carriageway',()=>{
  let length=0;for(const {stations} of carriageways)for(let i=1;i<stations.length;i++)length+=Math.hypot(stations[i].x-stations[i-1].x,stations[i].z-stations[i-1].z);
- assert.ok(carriageways.length>=30&&length>12000,`${carriageways.length} carriageways, ${length.toFixed(0)} m`);
+ // Eight walks belonged to the disconnected lower Leverett loop copies.
+ // Their reviewed components are replaced by connected generated roads.
+ const replacement=zakim.leverettSourceReplacement;assert.equal(replacement?.removedTriangles,2656);assert.equal(replacement.components.length,11);
+ assert.ok(carriageways.length>=25&&length>11000,`${carriageways.length} carriageways, ${length.toFixed(0)} m`);
  // The reported spot on the cable-stayed mainline: a four-lane deck between the median and the outer barrier.
  const {station,distance}=nearest(1160.28,-1851.65);
  assert.ok(distance<12);assert.equal(station.lanes,4);assert.ok(station.half*2>17&&station.half*2<22,`${(station.half*2).toFixed(1)} m`);
@@ -124,9 +127,9 @@ test('the southbound tunnel approach has no detached survey deck or stray parape
  }
 });
 
-test('the two open survey ends at Cambridge Street have transverse concrete rails',()=>{
+test('only the uncontinued survey end at Cambridge Street has a transverse concrete rail',()=>{
  const index=surveyDeckIndex(data),through=[...metro.roads,...metro.surveyRoads].filter(r=>r.id.startsWith('i93-')&&r.traffic!==false);
- for(const [x,z,y] of [[-189.5,-3619.09,32.224],[-153.225,-3491.30,16.974]]){
+ for(const [x,z,y] of [[-189.5,-3619.09,32.224]]){
   const rail=parapets.find(p=>Math.hypot(p.x-x,p.z-z)<.2&&p.length>10);
   assert.ok(rail,`an end rail spans the deck at ${x}, ${z}`);
   for(const t of [-.4,0,.4]){
@@ -141,6 +144,9 @@ test('the two open survey ends at Cambridge Street have transverse concrete rail
    }
   }
  }
+ const exit=metro.roads.find(r=>r.id==='i93-nb-exit-20');assert.ok(exit,'the active Exit 20 continues the lower surveyed ramp');
+ assert.ok(roadProjection(exit,-153.225,-3491.30).distance<1);
+ assert.ok(!parapets.some(p=>Math.hypot(p.x+153.225,p.z+3491.30)<.2&&p.length>10),'no transverse rail blocks the completed exit');
 });
 
 test('parapets close the east edge of the Charlestown viaduct the survey leaves open',()=>{
@@ -187,7 +193,8 @@ test('dressing the Zakim pauses between small units of work, for a paced tile bu
  const scan=pauses(surveyDeckParapetSteps(metro,data,trace.value.carriageways.map(c=>c.stations)));
  assert.equal(scan.value.parapets.length,parapets.length);assert.ok(scan.n>=2*stations,`${scan.n} pauses classifying both edges of ${stations} stations`);
  const surface=pauses(addSurveyDeckSurfaceSteps(new THREE.Group(),metro,data,{asphalt:new THREE.MeshBasicMaterial(),paint:new THREE.MeshBasicMaterial()},trace.value));
- assert.ok(surface.n>=stations/8&&surface.value.userData.faces>1000,`${surface.n} pauses paving ${surface.value.userData.faces} pieces`);
+ assert.ok(surface.n>=stations/8,`${surface.n} pauses paving ${surface.value.userData.faces} pieces`);
+ assert.equal(surface.value.userData.faces,surveyDeckPavement(metro,data,carriageways.map(c=>c.stations)).length,'the paced renderer emits every retained pavement piece');
  // The parapet boxes go 32 at a time, then become meshes, drawn as the one-shot call draws them.
  const triangles=g=>{let n=0;g.traverse(o=>{if(o.geometry)n+=o.geometry.getAttribute('position').count/3;});return n;};
  const boxes=pauses(addSurveyDeckParapetSteps(new THREE.Group(),parapets,new THREE.MeshBasicMaterial())),once=addSurveyDeckParapets(new THREE.Group(),parapets,new THREE.MeshBasicMaterial());

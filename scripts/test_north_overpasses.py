@@ -1,10 +1,27 @@
 import copy,unittest
 import numpy as np
-from north_overpasses import APPROACH,DECK,SITES,applies,deck_piece,node,restore,split_line
+from north_overpasses import APPROACH,DECK,SITES,applies,before_stage,deck_piece,node,restore,split_line,trench
 from water_crossings import owned
 
 
 class NorthOverpassTests(unittest.TestCase):
+ def test_lower_road_at_a_shared_xy_node_is_cut_not_promoted_to_a_deck(self):
+  from water_crossings import grid_sampler
+  grid={'width':151,'height':151,'cellSize':2,'originX':-150,'originZ':-150}
+  values=np.zeros(151*151);ground=grid_sampler(grid,values);ground.values=values
+  roads=[{'id':'bridge','name':'Upper','points':[[-30,0],[0,0],[30,0]],'width':10,
+          'elevations':[1,1,1],'startLevel':1,'endLevel':1,'bridge':{'thickness':.75}},
+         {'id':'lower','name':'Lower','points':[[0,-140],[0,0],[0,140]],'width':10}]
+  site={'id':'shared-node','upper':['bridge'],'lower':['lower']}
+  idx,heights,report,replaced,added,whole,kept=trench(site,roads,{r['id']:r for r in roads},grid,ground,lambda bounds:[])
+  result=values.copy();result[idx]=heights;sample=grid_sampler(grid,result)
+  self.assertGreaterEqual(1-.75-sample(0,0),4.29)
+  self.assertEqual(replaced,{},'the lower street sharing a source vertex is not a bridge approach')
+  self.assertEqual(roads[0]['elevations'],[1,1,1],'keep the upper deck and its connected approaches')
+  self.assertAlmostEqual(sample(0,-140),0)
+  ys=[sample(0,z) for z in range(-140,141)]
+  self.assertLessEqual(max(abs(a-b) for a,b in zip(ys,ys[1:])),.061)
+
  def test_split_line_shares_the_split_point_and_drops_coincident_vertices(self):
   head,tail=split_line([[0,0],[10,0],[20,0]],15)
   self.assertEqual(head,[[0,0],[10,0],[15.0,0.0]]);self.assertEqual(tail,[[15.0,0.0],[20,0]])
@@ -30,6 +47,13 @@ class NorthOverpassTests(unittest.TestCase):
   restore(repaired,heights,record)
   self.assertEqual(repaired,original);self.assertEqual(heights.tolist(),[10,20,30])
   restore(repaired,heights,None);self.assertEqual(repaired,original)
+
+ def test_earlier_stage_replay_sees_original_ground_in_metres(self):
+  roads=[{'id':'bridge','elevations':[1,1]}];heights=np.array([.1,-4.3,.3])
+  record={'terrain':{'vertices':[1],'heights':[20]},'sourceProfiles':[{'road':'bridge','elevations':[2,2]}]}
+  earlier,values=before_stage(roads,heights,record,.01)
+  self.assertEqual(values.tolist(),[.1,.2,.3]);self.assertEqual(earlier[0]['elevations'],[2,2])
+  self.assertEqual(heights.tolist(),[.1,-4.3,.3]);self.assertEqual(roads[0]['elevations'],[1,1])
 
  def test_the_steps_own_decks_are_left_to_it_by_the_earlier_stages(self):
   for kind in (APPROACH,DECK):self.assertTrue(owned({'name':'Florence Street','bridge':{'id':'structure-osm-80482630-0','kind':kind}}))

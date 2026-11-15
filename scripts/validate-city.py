@@ -302,8 +302,11 @@ if i93:
 def pre_elevation(x,z):return elevation(x,z,pre_heights)
 if north_overpasses.applies(pre_roads):
  recorded=provenance.get('northOverpasses');assert recorded,'provenance must describe the northern overpass repairs; run level-north-overpasses.py'
- staged=i93_north.staged_heights(base_grid,i93) if i93 else None
+ staged=i93_north.staged_heights(base_grid,i93) if i93 else base_grid
  assert north_overpasses.replay(data_dir,{**city,'roads':pre_roads},recorded,staged),'northern overpass streets, decks or terrain differ from a replay of their recorded sources; run level-north-overpasses.py'
+ # Water and land approaches precede these trenches. Their replay must see
+ # the original surface, not the later cut beneath their bridge decks.
+ pre_roads,pre_heights=north_overpasses.before_stage(pre_roads,pre_heights,recorded,grid.get('scale',.01))
 water_polygons,water_level=water_inputs(city);decks=level_water_crossings(pre_roads,water_polygons,pre_elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
 recorded=provenance.get('waterCrossingDecks');assert recorded and [c['roads'] for c in recorded['chains']]==[c['roads'] for c in decks['chains']] and all(abs(x-y)<.001 for a,b in zip(recorded['chains'],decks['chains']) for x,y in zip(a['deck'],b['deck'])),'provenance must describe the installed water-crossing decks'

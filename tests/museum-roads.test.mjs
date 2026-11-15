@@ -40,28 +40,54 @@ test('splitting the dam traffic junction preserves continuous measured pavement 
  for(const side of ['left','right'])assert.ok(Math.hypot(a[side].at(-1)[0]-b[side][0][0],a[side].at(-1)[1]-b[side][0][1])<.001,`${side} pavement edge meets across tile owners`);
 });
 
-test('all three Museum approaches overlap the actual survey floor and retain bounded grades',()=>{
- for(const entry of source.routes){
-  const road=city.roads.find(r=>r.id===entry.id);assert.equal(road.traffic,false);
-  for(let i=1;i<road.points.length;i++)assert.ok(Math.abs(road.elevations[i]-road.elevations[i-1])/Math.hypot(road.points[i][0]-road.points[i-1][0],road.points[i][1]-road.points[i-1][1])<.13,`${road.id} grade`);
-  const indices=entry.reverse?Array.from({length:9},(_,i)=>i):Array.from({length:9},(_,i)=>road.points.length-9+i);
-  for(const i of indices)assert.ok(Math.abs(road.elevations[i]-surveyHeight(road.points[i],road.elevations[i])-.025)<.08,`${road.id} survey floor at ${i}`);
+const connections=[
+ {id:'storrow-leverett-east',street:'13128-0-0',parent:'leverett-connector-north',reverse:false},
+ {id:'storrow-leverett-west',street:'13133-0-0',parent:'leverett-connector-south',reverse:true},
+];
+function connection(entry){
+ const parts=city.roads.filter(r=>r.id===entry.id||r.id.startsWith(entry.id+'-'));
+ assert.ok(parts.length,`missing ${entry.id}`);
+ const start=parts.find(r=>!parts.some(other=>other!==r&&other.points.at(-1).every((x,k)=>x===r.points[0][k])));
+ assert.ok(start,`one source-directed chain for ${entry.id}`);
+ const chain=[start];
+ while(chain.length<parts.length){
+  const next=parts.find(r=>!chain.includes(r)&&r.points[0].every((x,k)=>x===chain.at(-1).points.at(-1)[k]));
+  assert.ok(next,`continuous ${entry.id} across deck and tunnel records`);chain.push(next);
+ }
+ return chain;
+}
+
+test('Museum underpasses keep source levels and the duplicate raised survey slabs are gone',()=>{
+ for(const entry of source.routes)assert.ok(!city.roads.some(r=>r.id===entry.id),'old raised survey approach retired');
+ for(const entry of connections){
+  const chain=connection(entry);assert.ok(chain.some(r=>r.tunnel&&r.tunnel.covered.length),'source underpass has a roof');
+  for(const road of chain)for(let i=1;i<road.points.length;i++){
+   const d=Math.hypot(road.points[i][0]-road.points[i-1][0],road.points[i][1]-road.points[i-1][1]);
+   assert.ok(Math.abs(road.elevations[i]-road.elevations[i-1])/d<.131,`${road.id} bounded grade`);
+   // The shared roadway generator limits each pavement edge to 1:8, with
+   // 5 cm rounding tolerance. Check the installed geometry, including roofs.
+   assert.ok(Math.abs(road.deckWidths[i]-road.deckWidths[i-1])/2<=Math.max(.5,d)/8+.05,`${road.id} gradual width transition`);
+  }
+  const end=entry.reverse?chain[0]:chain.at(-1),i=entry.reverse?0:end.points.length-1,parent=city.roads.find(r=>r.id===entry.parent);
+  const j=parent.points.findIndex(p=>p.every((x,k)=>x===end.points[i][k]));assert.ok(j>=0,'joins an existing connector vertex');
+  assert.ok(Math.abs(end.elevations[i]-parent.elevations[j])<.001,'same elevation at the join');
+  assert.ok(Math.abs(end.deckWidths[i]-parent.deckWidths[j])<.01,'same width at the join');
+ }
+ for(const p of [[617,-1845],[800,-1790],[670,-1809]]){
+  ray.set(new THREE.Vector3(p[0],40,p[1]),new THREE.Vector3(0,-1,0));
+  assert.ok(!ray.intersectObject(survey).some(h=>h.point.y>12&&h.point.y<24),`no detached duplicate survey floor at ${p}`);
  }
 });
 
-for(const entry of source.routes)for(const reverse of [false,true])test(`drive ${entry.id} through street and survey joins ${reverse?'reverse':'forward'}`,async()=>{
- const road=city.roads.find(r=>r.id===entry.id);
- const deck=road.points.map((p,i)=>({x:p[0],z:p[1],y:road.elevations[i]}));if(entry.reverse)deck.reverse();
- const ground=city.roads.find(r=>r.id===(entry.parent??entry.landingRoad));let groundPoints;
- if(entry.parent){
-  const start=deck[0];let closest=0;
-  for(let i=1;i<ground.points.length;i++)if(Math.hypot(ground.points[i][0]-start.x,ground.points[i][1]-start.z)<Math.hypot(ground.points[closest][0]-start.x,ground.points[closest][1]-start.z))closest=i;
-  groundPoints=ground.points.slice(Math.max(0,closest-8),closest);
- }else groundPoints=entry.landingIndex===0?ground.points.slice(0,4).reverse():ground.points.slice(-4);
- const street=dense(groundPoints.map(p=>({x:p[0],z:p[1],y:sampleRoadElevation(city,ground,...p)})));
- const mouth=entry.mouth.at(-1),extended=[];
- for(let d=3;d<=9;d+=3){const p=[mouth.x+mouth.tx*d,mouth.z+mouth.tz*d];extended.push({x:p[0],z:p[1],y:surveyHeight(p,mouth.y)});}
- const route=dense([...street,...deck,...extended]);if(reverse)route.reverse();
+for(const entry of connections)for(const reverse of [false,true])test(`drive ${entry.id} through street, tunnel and connector joins ${reverse?'reverse':'forward'}`,async()=>{
+ const chain=connection(entry),deck=chain.flatMap((r,k)=>r.points.slice(k?1:0).map((p,j)=>({x:p[0],z:p[1],y:r.elevations[j+(k?1:0)]})));
+ if(entry.reverse)deck.reverse();
+ const street=city.roads.find(r=>r.id===entry.street),parent=city.roads.find(r=>r.id===entry.parent);
+ const streetPoints=entry.reverse?street.points.slice(0,4).reverse():street.points.slice(-4);
+ const last=deck.at(-1),j=parent.points.findIndex(p=>p[0]===last.x&&p[1]===last.z);
+ const indices=entry.reverse?Array.from({length:5},(_,k)=>j-1-k):Array.from({length:5},(_,k)=>j+1+k);
+ const continuation=indices.filter(i=>i>=0&&i<parent.points.length).map(i=>({x:parent.points[i][0],z:parent.points[i][1],y:parent.elevations[i]}));
+ const route=dense([...streetPoints.map(p=>({x:p[0],z:p[1],y:sampleRoadElevation(city,street,...p)})),...deck,...continuation]);if(reverse)route.reverse();
  await drive(route,entry.id);
 });
 

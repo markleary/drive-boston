@@ -203,6 +203,11 @@ SPLIT_MERGE=[-896.935,-4751.959]   # 540052144 joins 542171987 at this interior 
 # Ramp records in solve order: a group's trunk first, so the pieces after it find
 # their shared split node already profiled.
 RAMPS=[
+ # This exit starts on the retained Charlestown survey deck, south of the
+ # northbound mainline's generated mouth. Its missing tail is still an active
+ # two-lane ramp in the source: continue it to Cambridge Street, not a closure.
+ {'id':'i93-nb-exit-20','name':'I-93 North · Exit 20 Sullivan Square / Somerville','ways':[8640907,48983187],
+  'surveyStart':'cambridgeStreetNorthbound','streetEnd':[-130.348,-3684.057],'grade':.09},
  {'id':'i93-nb-exit-21','name':'I-93 North · Exit 21 Route 28','ways':[9429564,354700640]},
  {'id':'i93-nb-exit-21-medford','name':'I-93 North · Exit 21 to Somerville and Medford','ways':[9429161]},
  {'id':'i93-nb-exit-21-assembly','name':'I-93 North · Exit 21 to Malden and Assembly Square','ways':[89920110]},
@@ -243,6 +248,7 @@ METHOD=('OpenStreetMap I 93 carriageways and motorway_link ramps from the cached
  'decks solved as smoothing splines over the graded terrain with street and water clearances above and overpass clearances beneath; '
  'graded grid cut under the overpasses (street corridors and buildings kept); concrete closures inside the Medford/Stoneham coverage edge; '
  'southbound lower deck held beneath the surveyed Charlestown viaduct onto the Zakim, with the City Square ramp pieces it replaces cut from the survey mesh; '
+ 'active exits at incomplete survey ends continued from measured mouth heights and widths onto their source street junctions; '
  'survey traces joining the Central Artery tunnel bores and the Cross Street entrance to the decks for traffic and GPS')
 
 
@@ -997,7 +1003,9 @@ def trace_records(source,main,joins,neighborhoods,surface=None):
  return out
 
 
-def ramp_plans(ways):
+def ramp_plans(ways,survey):
+ """Source ramps, including tails that begin on a measured survey mouth.
+ A survey start keeps its overlap's height and width throughout later solves."""
  out=[]
  for spec in RAMPS:
   points,owner=concat(ways,spec['ways'])
@@ -1005,8 +1013,22 @@ def ramp_plans(ways):
    at=spec.get('from') or spec.get('until');d=LineString(points).project(Point(at))
    points,owner=cut_line(points,owner,start=d) if 'from' in spec else cut_line(points,owner,end=d)
    points[0 if 'from' in spec else -1]=list(at)
+  if 'streetEnd' in spec:
+   # Cached extracts from different dates can put a ramp's street junction a
+   # few metres from the package vertex. Blend onto that reviewed street node.
+   end=spec['streetEnd'];delta=np.asarray(end)-np.asarray(points[-1]);assert np.linalg.norm(delta)<10,f'{spec["id"]} street landing is too far from its source'
+   along=stations(points);points=[[round(p[k]+float(delta[k])*smooth((s-along[-1]+BLEND)/BLEND),3) for k in (0,1)] for p,s in zip(points,along)];points[-1]=list(end)
+  fixed={}
+  if 'surveyStart' in spec:points,owner,fixed=survey_join(points,owner,survey['rampMouths'][spec['surveyStart']])
   rp,ro=resample_owned(points,owner);lanes=[lanes_of(ways,o,True) for o in ro]
-  plan=Plan(spec['id'],rp,ro,taper(rp,[RAMP_WIDTHS[l] for l in lanes],40),RAMP_GRADE,lanes);plan.spec=spec;out.append(plan)
+  widths=taper(rp,[RAMP_WIDTHS[l] for l in lanes],40)
+  if fixed:
+   held=[i for i,p in enumerate(rp) if tuple(p) in fixed];last=held[-1];along=stations(rp)
+   for i in held:widths[i]=2*fixed[tuple(rp[i])][1]
+   for i in range(last+1,len(rp)):
+    w=smooth((along[i]-along[last])/BLEND);widths[i]=widths[last]*(1-w)+widths[i]*w
+  plan=Plan(spec['id'],rp,ro,widths,spec.get('grade',RAMP_GRADE),lanes);plan.spec=spec
+  plan.survey_fixed={i:fixed[tuple(p)][0] for i,p in enumerate(rp) if tuple(p) in fixed};out.append(plan)
  return out
 
 
@@ -1025,7 +1047,7 @@ def widen_ramps(ramps,main,existing,ground,footprints):
   streets=[lines[j].buffer(existing[j]['width']/2+(0 if existing[j].get('elevations') else CORRIDOR))
    for j in tree.query(plan.line,predicate='dwithin',distance=reach+street_reach)]
   nearby=STRtree([*houses,*streets,*(shape for other,shape in obstacles.items() if other is not plan)])
-  extra=[RAMP_SHOULDER]*len(plan.points);extra[0]=extra[-1]=0
+  extra=[0. if i in getattr(plan,'survey_fixed',{}) else RAMP_SHOULDER for i in range(len(plan.points))];extra[0]=extra[-1]=0
   for i,(a,b) in enumerate(zip(plan.points,plan.points[1:])):
    segment=LineString([a,b]);half=max(plan.widths[i:i+2])/2
    gap=min((segment.distance(nearby.geometries[j]) for j in nearby.query(segment,predicate='dwithin',distance=half+RAMP_SHOULDER+RAMP_EDGE_MARGIN)),default=math.inf)
@@ -1177,12 +1199,12 @@ def build(city,source,graded,water,survey=None,twins=True):
  for r in existing:
   for i,p in enumerate(r['points']):streets.setdefault(key(p),[]).append((r,i))
  report={'crossings':[],'unresolved':[],'grades':{},'infeasible':[],'newCrossings':[],'surveyConflicts':[]}
- main=carriageways(source,city,ways);ramps=ramp_plans(ways);plans=[*main.values(),*ramps];raster,triangles=survey(main['sb']) if survey else (None,None)
+ main=carriageways(source,city,ways);ramps=ramp_plans(ways,source['survey']);plans=[*main.values(),*ramps];raster,triangles=survey(main['sb']) if survey else (None,None)
  for plan in plans:constrain_existing(plan,ways,ground,existing,lines,tree,water,report)
  if raster is not None:survey_constraints(main['sb'],raster)
  for plan in ramps:
   for e in (0,1):
-   p=plan.points[0 if e==0 else -1];kind=classify(p,plan,main,ramps,streets)
+   p=plan.points[0 if e==0 else -1];kind=('survey',) if e==0 and plan.survey_fixed else classify(p,plan,main,ramps,streets)
    assert kind,f'{plan.id} {"starts" if e==0 else "ends"} off the network at {p}'
    plan.ends[e]=kind
    if kind[0]=='street':
@@ -1230,9 +1252,10 @@ def build(city,source,graded,water,survey=None,twins=True):
  leads=defaultdict(list)
  def bind(plan):
   # What a ramp is solved between: its ends, the stations held to the roads it leaves, joins or follows, and its bounds.
-  plan.fixed={}
+  plan.fixed=dict(plan.survey_fixed)
   for e,kind in enumerate(plan.ends):
    i=0 if e==0 else len(plan.points)-1
+   if kind[0]=='survey':continue
    if kind[0]=='street':r,j=kind[1][0];plan.fixed[i]=round(road_height(r,r['points'][j],ground),4)
    elif (plan,e) in trunks:continue
    elif kind[1].y is not None:plan.fixed[i]=round(kind[1].y[kind[2]],4);match_overlap(plan,e,kind[1])
@@ -1612,6 +1635,8 @@ def install(city,source,heights,footprints,mesh=None,joins=None):
  def survey(plan):
   mark.update(mesh.cut(cut_region(source['survey'],plan),cut_digest(source['survey'],plan)))
   mesh.repair_portal_approach()
+  from museum_survey import retire_duplicate_loops
+  retire_duplicate_loops(mesh)
   return mesh.raster(),mesh.triangles()
  water=water_inputs(city);main,ramps,report=build(city,source,heights,water,survey if mesh else None);plans=[*main.values(),*ramps]
  bad=[p for p,ok in report['grades'].items() if not ok];assert not bad,f'I-93 profiles exceed their grade: {bad}'
@@ -1644,7 +1669,8 @@ def install(city,source,heights,footprints,mesh=None,joins=None):
   'curveMeters':round(float(sb.along[sb.survey[0]]-sb.along[sb.curve]),1),'joinOverlapMeters':round(float(sb.along[sb.survey[1]]-sb.along[sb.survey[0]]),1)} if held else None
  record={'method':METHOD,'survey':SURVEY_ID,
   'carriageways':{p.id:{'lengthMeters':lengths[p.id],'pieces':sum(r['id'].startswith(p.id+'-') and r['kind']=='motorway' for r in recs),'lanes':sorted(set(p.lanes))} for p in main.values()},
-  'ramps':len(ramps),'closed':[{'road':r['id'],'end':r['closed'],'point':r['points'][-1 if r['closed']=='end' else 0]} for r in recs if r.get('closed')],
+  'ramps':len(ramps),'surveyLandings':[{'road':p.id,'point':[*p.points[0],p.y[0]],'overlapMeters':round(float(p.along[max(p.survey_fixed)]),3)} for p in ramps if p.survey_fixed],
+  'closed':[{'road':r['id'],'end':r['closed'],'point':r['points'][-1 if r['closed']=='end' else 0]} for r in recs if r.get('closed')],
   'overrides':sorted(OVER_EXISTING),'crossings':report['crossings'],'newCrossings':report['newCrossings'],
   'infeasible':[{k:(float(v) if isinstance(v,np.floating) else v) for k,v in i.items()} for i in report['infeasible']],'unresolved':report['unresolved'],
   'approachPieces':[{'road':p['id'],'lengthMeters':round(stations(p['points'])[-1],2)} for p in pieces],'notCarried':notes,
@@ -1663,7 +1689,7 @@ def replay(data_dir,city,record,source,footprints,installed=None):
  again,out,result=install({**city,'roads':roads},source,heights,footprints,SurveyMesh(data_dir,city),tunnel_joins(data_dir,city))
  by_id={r['id']:r for r in city['roads']};touched=set(again['roads']['added'])|{r['id'] for r in again['roads']['sources']}
  same=[r['id'] for r in out]==[r['id'] for r in city['roads']] and all(r.get(f)==by_id[r['id']].get(f) for r in out if r['id'] in touched for f in FIELDS)
- return same and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','surveyCut','lowerDeck','traces','twins'))
+ return same and np.array_equal(result,installed) and all(again[k]==record.get(k) for k in ('terrain','roads','surveyCut','lowerDeck','traces','twins','surveyLandings'))
 
 
 def validate(city,record,joins,ground):
@@ -1701,12 +1727,16 @@ def validate(city,record,joins,ground):
  for chain in (nb,sb):
   for a,b in zip(chain,chain[1:]):assert a.get('deckTangents',{}).get('end')==b.get('deckTangents',{}).get('start')!=None,f"{a['id']} and {b['id']} must share their seam tangent"
  landings=0
+ survey_landings={s['road']:s for s in record.get('surveyLandings',[])}
  for r in roads:
   if r['kind']!='motorway_link' or r.get('surveyDeck') or not r['id'].startswith(PREFIX):continue
   for i in (0,-1):
    key=(round(r['points'][i][0],3),round(r['points'][i][1],3));y=r['elevations'][i]
    joined=[o for o in roads if o is not r and any(q==r['points'][i] and abs(o['elevations'][j]-y)<=.01 for j,q in enumerate(o['points']))]
    if joined:continue
+   if i==0 and r['id'] in survey_landings:
+    s=survey_landings[r['id']];assert at(r,0,s['point']) and s['overlapMeters']>=SURVEY_OVERLAP-3,f"{r['id']} must overlap its measured survey mouth"
+    continue
    street=[(o,j) for o,j in vertices.get(key,()) if abs((o['elevations'][j] if o.get('elevations') else ground(*o['points'][j]))-y)<=.1]
    assert street,f"{r['id']} {'starts' if i==0 else 'ends'} at {r['points'][i]} on no carriageway, ramp or street vertex at its height"
    assert r['startLevel' if i==0 else 'endLevel']==0,f"{r['id']} lands on a street with a lifted end";landings+=1

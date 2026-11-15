@@ -22,7 +22,7 @@ export function isTunnelPassageFar(tile:string,building:FarBuilding){return TUNN
 /** The far hull of a passage building after the same open-sky cut as its shell,
  * as rectangles for the far city to box: the hull is rasterised at 2 m in its
  * own oriented frame, cells inside an open-air clearance column go, connected
- * pieces under REMNANT_SPAN go (as the detailed remnants do), and each piece is
+ * pieces under REMNANT_SPAN are omitted at this distant level of detail, and each piece is
  * cut into 4 m slabs along the long axis with one rectangle per run of kept
  * cells across each slab, so no box spans the cleared ramps. */
 export function farPassageFootprints(city:Pick<CityData,'roads'>,building:FarBuilding):Point2[][]{
@@ -56,29 +56,72 @@ export function farPassageFootprints(city:Pick<CityData,'roads'>,building:FarBui
 export function clipBuildingTunnelPassage(city:CityData,building:Pick<Building,'id'>,mesh:TunnelMesh):TunnelMesh{
   return TUNNEL_PASSAGE_BUILDING_IDS.has(building.id)?clipTunnelClearance(city,mesh.vertices,mesh.indices):mesh;
 }
-export function prepareBuildingTunnelPassage(city:CityData,building:Pick<Building,'id'>,data:TileBuildingGeometry):TileBuildingGeometry{
+export function prepareBuildingTunnelPassage(city:CityData,building:Pick<Building,'id'|'baseElevation'>,data:TileBuildingGeometry):TileBuildingGeometry{
   if(!TUNNEL_PASSAGE_BUILDING_IDS.has(building.id))return data;
   const facade=clipBuildingTunnelPassage(city,building,{vertices:data.positions,indices:Uint32Array.from(data.facade)});
   const roof=clipBuildingTunnelPassage(city,building,{vertices:data.positions,indices:Uint32Array.from(data.roof)});
   if(facade.vertices===data.positions&&roof.vertices===data.positions)return data;
   const positions=new Float32Array(facade.vertices.length+roof.vertices.length);positions.set(facade.vertices);positions.set(roof.vertices,facade.vertices.length);
   const offset=facade.vertices.length/3,roofIndices=Uint32Array.from(roof.indices,i=>i+offset);
-  const keep=keptPieces(positions,[facade.indices,roofIndices],[[data.positions.length/3,offset],[offset+data.positions.length/3,positions.length/3]]);
-  return{positions,facade:facade.indices.filter((_,i)=>keep[Math.floor(i/3)]),roof:roofIndices.filter((_,i)=>keep[facade.indices.length/3+Math.floor(i/3)])};
+  // A shell cut is a solid-model operation. Clipping its existing triangles
+  // only opens a surface: it cannot supply the newly exposed walls. Removing
+  // connected fragments afterward is also unsafe because survey triangles and
+  // clipped faces meet at T-junctions, not necessarily shared vertices.
+  const clipped={positions,facade:facade.indices,roof:roofIndices};
+  return closeOpenSkyCuts(city,building,clipped);
 }
-/** Connected shell pieces narrower than this that the clearance cut touched are dropped. */
+/** The far approximation drops pieces smaller than one small building. */
 export const REMNANT_SPAN=25;
-/** Per triangle (facade then roof), whether its welded piece stays: a piece the
- * cut left standing beside an open ramp, open on its cut side, reads as a
- * free-standing sliver tower, while untouched rooftop units stay.
- * `added` lists each index list's range of vertices created by the cut. */
-function keptPieces(positions:Float32Array,lists:Uint32Array[],added:[number,number][]){
-  const weld=new Map<string,number>(),parent:number[]=[],root=(n:number):number=>parent[n]===n?n:(parent[n]=root(parent[n]));
-  const node=(v:number)=>{const k=`${positions[v*3].toFixed(3)},${positions[v*3+1].toFixed(3)},${positions[v*3+2].toFixed(3)}`;let n=weld.get(k);if(n===undefined){n=parent.length;parent.push(n);weld.set(k,n);}return n;};
-  const triangles:{nodes:number[];cut:boolean}[]=[];
-  lists.forEach((indices,l)=>{for(let i=0;i<indices.length;i+=3){const vs=[indices[i],indices[i+1],indices[i+2]],nodes=vs.map(node);parent[root(nodes[1])]=root(nodes[0]);parent[root(nodes[2])]=root(nodes[0]);triangles.push({nodes,cut:vs.some(v=>v>=added[l][0]&&v<added[l][1])});}});
-  const pieces=new Map<number,{minX:number;maxX:number;minZ:number;maxZ:number;cut:boolean}>();
-  for(const [k,n] of weld){const [x,,z]=k.split(',').map(Number),r=root(n),p=pieces.get(r)??{minX:x,maxX:x,minZ:z,maxZ:z,cut:false};p.minX=Math.min(p.minX,x);p.maxX=Math.max(p.maxX,x);p.minZ=Math.min(p.minZ,z);p.maxZ=Math.max(p.maxZ,z);pieces.set(r,p);}
-  for(const t of triangles)if(t.cut)pieces.get(root(t.nodes[0]))!.cut=true;
-  return triangles.map(t=>{const p=pieces.get(root(t.nodes[0]))!;return !p.cut||Math.hypot(p.maxX-p.minX,p.maxZ-p.minZ)>=REMNANT_SPAN;});
+
+/** Close the vertical cut faces below retained roofs. Every edge is tested on
+ * both sides against the clearance union, so interior triangulation edges and
+ * the boundaries between overlapping ramp volumes do not grow extra walls.
+ * A centimetre into the retained solid avoids coplanar subtraction tolerances;
+ * the same finite bore cut then opens the lower part of each reveal as needed.
+ * Source roof tiers retain their own heights, including sloping roof edges,
+ * and surveyed soffits bound the bottom of an elevated wing. */
+export function closeOpenSkyCuts(city:CityData,building:Pick<Building,'id'|'baseElevation'>,data:TileBuildingGeometry):TileBuildingGeometry{
+  const p=data.positions,base=building.baseElevation??0,reveals:number[]=[],seen=new Set<string>();
+  const floors:number[][]=[];
+  for(let i=0;i<data.roof.length;i+=3){
+    const a=data.roof[i]*3,b=data.roof[i+1]*3,c=data.roof[i+2]*3;
+    if((p[b+2]-p[a+2])*(p[c]-p[a])-(p[b]-p[a])*(p[c+2]-p[a+2])< -1e-5)floors.push([a,b,c]);
+  }
+  const bottom=(x:number,z:number,top:number)=>{
+    let y=base;
+    for(const [a,b,c] of floors){
+      const bx=p[b]-p[a],bz=p[b+2]-p[a+2],cx=p[c]-p[a],cz=p[c+2]-p[a+2],det=bx*cz-bz*cx;
+      const u=((x-p[a])*cz-(z-p[a+2])*cx)/det,v=(bx*(z-p[a+2])-bz*(x-p[a]))/det;
+      if(u< -1e-5||v< -1e-5||u+v>1+1e-5)continue;
+      const floor=p[a+1]+u*(p[b+1]-p[a+1])+v*(p[c+1]-p[a+1]);
+      if(floor<top-.03)y=Math.max(y,floor);
+    }
+    return y;
+  };
+  for(let i=0;i<data.roof.length;i+=3){
+    const ids=[data.roof[i],data.roof[i+1],data.roof[i+2]];
+    const a=ids[0]*3,b=ids[1]*3,c=ids[2]*3;
+    // A downward soffit or nearly vertical source face cannot support a new wall.
+    const up=(p[b+2]-p[a+2])*(p[c]-p[a])-(p[b]-p[a])*(p[c+2]-p[a+2]);
+    if(up<1e-5)continue;
+    for(let j=0;j<3;j++){
+      const a=ids[j]*3,b=ids[(j+1)%3]*3,dx=p[b]-p[a],dz=p[b+2]-p[a+2],length=Math.hypot(dx,dz);
+      if(length<.01||Math.min(p[a+1],p[b+1])<=base+.03)continue;
+      const mx=(p[a]+p[b])/2,mz=(p[a+2]+p[b+2])/2,nx=-dz/length,nz=dx/length;
+      const left=inOpenSkyClearance(city,mx+nx*.025,mz+nz*.025),right=inOpenSkyClearance(city,mx-nx*.025,mz-nz*.025);
+      if(left===right)continue;
+      const key=[a,b].map(n=>[p[n],p[n+1],p[n+2]].map(v=>v.toFixed(3)).join(',')).sort().join('|');
+      if(seen.has(key))continue;seen.add(key);
+      // Face toward the removed volume, with its back just inside the solid.
+      const sign=left?1:-1,ox=-nx*sign*.01,oz=-nz*sign*.01;
+      const va=[p[a]+ox,bottom(p[a]+ox,p[a+2]+oz,p[a+1]),p[a+2]+oz],vb=[p[b]+ox,bottom(p[b]+ox,p[b+2]+oz,p[b+1]),p[b+2]+oz],vc=[p[b]+ox,p[b+1],p[b+2]+oz],vd=[p[a]+ox,p[a+1],p[a+2]+oz];
+      if(sign>0)reveals.push(...va,...vb,...vc,...va,...vc,...vd);
+      else reveals.push(...va,...vc,...vb,...va,...vd,...vc);
+    }
+  }
+  if(!reveals.length)return data;
+  const vertices=new Float32Array(reveals),cut=clipTunnelClearance(city,vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
+  const positions=new Float32Array(p.length+cut.vertices.length);positions.set(p);positions.set(cut.vertices,p.length);
+  const facade=new Uint32Array(data.facade.length+cut.indices.length);facade.set(data.facade);facade.set(Uint32Array.from(cut.indices,i=>i+p.length/3),data.facade.length);
+  return{positions,facade,roof:data.roof};
 }

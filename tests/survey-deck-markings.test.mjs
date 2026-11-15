@@ -38,17 +38,11 @@ test('Zakim and Charlestown paint has no short zigzags from the surveyed deck wa
  }
 });
 
-test('a deck constraint near the Zakim ramp merge does not create a sharp paint fallback',()=>{
- const runs=uncovered(metro,carriageways.map(c=>c.stations)),distance=s=>Math.hypot(s.x-766.24,s.z+2184.80);
- const run=runs.find(stations=>stations.some(s=>distance(s)<.01));assert.ok(run,'the reported ramp merge is covered');
- const index=run.findIndex(s=>distance(s)<.01),aligned=smoothMarkingStations(run,onDeck);
- // The smooth frame at this spot meets a surveyed protrusion. Replacing only
- // that frame with the raw measurement made a 44 cm jog in 15 cm-wide paint.
- // Include the approach neighbours so the correction cannot move the jog.
- for(let i=index;i>=index-4;i--){
-  assert.equal(run[i-1].lanes,2);assert.equal(run[i].lanes,2);assert.equal(run[i+1].lanes,2);
-  assert.ok(jogAt(aligned,i)<.15,`ramp shoulder paint jogs ${(jogAt(aligned,i)*100).toFixed(1)} cm near ${run[i].x.toFixed(2)}, ${run[i].z.toFixed(2)}`);
- }
+test('the retired duplicate Leverett loop does not retain floating shoulder paint',()=>{
+ // This former paint-regression fixture was on the disconnected loop copy
+ // at 31.624 m; a separate retained ramp crosses here at 22.69 m.
+ assert.ok(!carriageways.some(c=>c.stations.some(s=>Math.hypot(s.x-766.24,s.z+2184.80)<2&&Math.abs(s.y-31.624)<1)),'no paint walk on the retired upper loop copy');
+ assert.ok(carriageways.some(c=>c.stations.some(s=>Math.hypot(s.x-766.24,s.z+2184.80)<2&&Math.abs(s.y-22.69)<1)),'the independent crossing ramp remains');
 });
 
 test('an isolated deck-edge constraint is approached smoothly without moving paint off the deck',()=>{
@@ -175,8 +169,9 @@ test('alignment keeps paint on the surveyed ramps and preserves oblique merge en
   }
   return true;
  };
- let checked=0;
+ let checked=0,retained=0;
  for(const run of uncovered(metro,carriageways.map(c=>c.stations))){
+  retained+=run.length;
   const aligned=smoothMarkingStations(run,onDeck);
   const counts=aligned.map(s=>{
    const shoulder=Math.max(.3,(s.half*2-s.lanes*3.65)/2);
@@ -194,7 +189,7 @@ test('alignment keeps paint on the surveyed ramps and preserves oblique merge en
    checked++;assert.ok(supported(aligned[i]),`paint crosses a deck edge or obstruction at ${run[i].x.toFixed(2)}, ${run[i].z.toFixed(2)}`);
   }
  }
- assert.ok(checked>5500,'checked retained painted stretches across the mainlines and narrow ramps');
+ assert.ok(checked>retained*.85&&checked>4500,`checked ${checked}/${retained} retained frames across the mainlines and narrow ramps`);
 });
 
 test('short or narrow marking runs keep their extents and remain finite',()=>{

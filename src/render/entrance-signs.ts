@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ENTRANCE_CLEARANCE, ENTRANCE_PANEL, entranceGantry, type EntranceSign } from '../simulation/entrance-signs.ts';
+import { ENTRANCE_PANEL, entranceGantry, type EntranceSign } from '../simulation/entrance-signs.ts';
 
 const FACE_WIDTH = 576, FACE_HEIGHT = FACE_WIDTH * ENTRANCE_PANEL.height / ENTRANCE_PANEL.width;
 const GREEN = '#006347', WHITE = '#f3f4e9';
@@ -72,13 +72,13 @@ function entranceFace(sign: EntranceSign) {
 /** A gantry over the ramp's mouth: a post behind each wall of its slot, a truss between them and the panel on it,
  * its face turned toward the traffic coming off the street. The face material is the caller's to dispose. */
 export function createEntranceSign(sign: EntranceSign, groundAt: (x: number, z: number) => number, steel: THREE.Material) {
-  const { x, y, z, yaw } = sign.approach, gantry = entranceGantry(sign), { width, height } = ENTRANCE_PANEL;
+  const { x, y, z, yaw } = sign.approach, gantry = entranceGantry(sign, groundAt), { width, height } = ENTRANCE_PANEL;
   const group = new THREE.Group();
   group.name = `Entrance sign: ${sign.rampId}`;
   group.position.set(x, y, z);
   // Local +x is the right of travel and +z faces the approaching traffic.
   group.rotation.y = yaw + Math.PI;
-  const mid = ENTRANCE_CLEARANCE + height / 2, beamY = mid + .2, beamHeight = .8, top = beamY + beamHeight / 2 + .18;
+  const mid = gantry.bottom - y + height / 2, beamY = mid + .2, beamHeight = .8, top = beamY + beamHeight / 2 + .18;
   const material = entranceFace(sign);
   const face = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
   face.name = `I-${sign.shield} ${sign.direction} · ${sign.lines.join(' / ')}`;

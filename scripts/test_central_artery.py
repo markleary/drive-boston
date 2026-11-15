@@ -9,6 +9,38 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('central_artery',ROOT/'scripts/build-central-artery.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
+class ContinuousCoverTest(unittest.TestCase):
+ def test_a_ground_dip_inside_a_bore_lowers_its_profile_not_its_roof(self):
+  points=[[float(i),0.] for i in range(301)];ys=[-8.0]*301
+  ground=lambda p:-3.0 if 140<=p[0]<=160 else 0.0
+  out=module.keep_bore_covered(points,ys,6.4,ground)
+  self.assertEqual((out[0],out[-1]),(ys[0],ys[-1]),'fixed graph endpoints remain exact')
+  for p,y in zip(points,out):self.assertLessEqual(y+6,ground(p)+1e-9,'continuous roof clearance')
+  self.assertLessEqual(max(abs(b-a) for a,b in zip(out,out[1:])),.1150001)
+  self.assertLess(max(out[100:200])-min(out[100:200]),.0001,'one basin through a merge, not a V-shaped dip per grid cell')
+ def test_an_open_surface_approach_stays_open(self):
+  points=[[float(i),0.] for i in range(201)];ys=[-i*.05 for i in range(201)]
+  self.assertEqual(module.keep_bore_covered(points,ys,6.4,lambda p:0.),ys)
+ def test_an_internal_basin_keeps_the_entire_existing_open_approach(self):
+  points=[[float(i),0.] for i in range(401)];ys=[max(-8.,12-.1*i) for i in range(401)]
+  ground=lambda p:-3. if 220<=p[0]<=240 else 0.
+  out=module.keep_bore_covered(points,ys,6.4,ground)
+  self.assertEqual(out[:181],ys[:181],'the surveyed approach and its first buried station stay exact')
+  self.assertEqual(out[-1],ys[-1])
+  for p,y in zip(points[180:],out[180:]):self.assertLessEqual(y+6,ground(p)+1e-9)
+  self.assertLessEqual(max(abs(b-a) for a,b in zip(out,out[1:])),.1150001)
+  self.assertLessEqual(max(out[220:241]),-9.2,'the inner roof dip still gets its full clearance reserve')
+ def test_impossible_cover_does_not_pull_down_a_fixed_portal(self):
+  points=[[float(i),0.] for i in range(101)];ys=[-8.]*101
+  with self.assertRaisesRegex(ValueError,'fixed portal approaches'):
+   module.keep_bore_covered(points,ys,6.4,lambda p:-8. if 10<=p[0]<=12 else 0.)
+ def test_cover_repair_never_lifts_a_branch_off_its_existing_merge_profile(self):
+  points=[[float(i),0.] for i in range(301)]
+  ys=[-8. if i<200 else -8.-.1*(i-200) if i<220 else -10. if i<280 else -10.+.119*(i-280) for i in range(301)]
+  out=module.keep_bore_covered(points,ys,6.4,lambda p:-5. if 145<=p[0]<=155 else 0.)
+  self.assertTrue(all(a<=b for a,b in zip(out,ys)),'a roof repair can lower the interior but cannot lift an existing coplanar landing')
+  self.assertEqual(out[280:],ys[280:],'the existing 11.9% merge is not replaced with a shallower, raised approach')
+
 class CentralArterySourceTest(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
@@ -135,6 +167,11 @@ class CentralArterySourceTest(unittest.TestCase):
    for station,section in zip(module.stations(road['points']),module.deck_sections(road)):
     if not any(a-.001<=station<=b+.001 for a,b in road['tunnel']['covered']):continue
     for x,y,z in section:self.assertLessEqual(y+6,module.sample_grid(self.city['elevation'],self.heights,[x,z])+.0001,road['id'])
+ def test_buried_bores_do_not_reopen_for_isolated_terrain_depressions(self):
+  for road in self.roads:
+   self.assertLessEqual(len(road['tunnel']['covered']),1,(road['id'],'an internal terrain dip must not become another portal'))
+  atlantic=self.by_id['central-artery-atlantic-north-on']
+  self.assertAlmostEqual(atlantic['tunnel']['covered'][-1][1],module.stations(atlantic['points'])[-1],delta=.001,msg='the Atlantic ramp joins Essex under its continuous roof')
  def test_overlapping_opposing_bores_have_independent_clearance(self):
   north,south=self.roads[:2];south_line=LineString(south['points']);checked=0
   for point,y in zip(north['points'],north['elevations']):

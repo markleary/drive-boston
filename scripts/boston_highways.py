@@ -292,6 +292,18 @@ TURNPIKE=[
  R('i90-wb-from-i93-south','I-90 West · Entrance from I-93 South and Purchase Street',[14775,8515],level=-1),
  R('i90-eb-exit-134','I-90 East · Exit 134 I-93 North / South Station',[10260]),
  R('i90-eb-exit-134-south-station','I-90 East · Exit 134A to South Station',[10265,11019]),
+ # Named bridge pieces were imported by build-metro, but their unnamed rising
+ # branch and the return loop between the two elevated ends were omitted with
+ # all other unnamed roads. Keep those source links in the same profile solve
+ # as the exit they branch from, instead of leaving two bridge ends in the air.
+ R('i90-eb-exit-134-station-connector','I-90 East · South Station Connector',[11016],join={'end':'11072-0-0'}),
+ # Layer 1 at both ends and throughout the return loop: retain a raised deck
+ # between the named bridge mouths instead of following the ground into a
+ # false open tunnel. The estimated minimum rise leaves 3.75 m under its slab;
+ # its endpoint heights and overlapping pavement come from the named decks.
+ R('i90-station-connector-turn','I-90 · South Station Connector',[11071],
+  join={'start':'11072-0-0','end':'11031-0-0'},
+  spans=[{'from':[1462.219,173.588],'to':[1443.774,175.905],'rise':4.5}]),
  R('i90-eb-exit-134-i93-north','I-90 East · Exit 134B to I-93 North',[11038,11013,8622,11014]),
  R('i90-to-i93-north','I-90 · Entrance to I-93 North',[8437]),
  R('i90-wb-exit-135','I-90 West · Exit 135 South Boston / I-93 North',[8624]),
@@ -373,6 +385,14 @@ STORROW=[
  SR('storrow-wb-exit-charles-circle','Storrow Drive West · Exit to Charles Circle / Government Center',[11054,11053,11052,8895]),
  SR('storrow-wb-exit-charles-circle-longfellow','Storrow Drive West · Exit to the Longfellow Bridge',[8460]),
  SR('storrow-wb-entrance-charles-circle','Storrow Drive West · Entrance from Charles Circle',[11146,11055,11056]),
+ # The Leverett survey contains obsolete, disconnected copies of these lower
+ # ramps. Layer 8 records their Science Park underpass; do not raise that
+ # underpass to the survey's unrelated 16 m slab. The complete source paths
+ # meet the already restored active Leverett Connector in its own datum.
+ SR('storrow-leverett-east','Storrow Drive East · Leverett Connector',[13135,8452,14455,8962,8795],lanes=2,width=6.8,grade=.13,
+  join={'end':'leverett-connector-north'}),
+ SR('storrow-leverett-west','Storrow Drive West · Leverett Circle',[13145,9115,10431,8834,9005],lanes=2,width=8.6,grade=.13,
+  join={'start':'leverett-connector-south'}),
 ]
 ROUTES=TURNPIKE+STORROW
 # OpenStreetMap ways the routes use: the Turnpike through the Brookline sliver at the Boston University Bridge.
@@ -543,29 +563,81 @@ class Plan(I.Plan):
 
 
 class Fixed:
- """An existing road with a profile (a Central Artery tunnel road) that new ramps start or end on."""
+ """An existing profiled tunnel or explicitly selected deck that a new ramp joins."""
  def __init__(self,road):
   self.id=road['id'];self.road=road;self.points=[list(p) for p in road['points']];self.y=list(road['elevations']);self.along=np.asarray(stations(self.points));self.line=LineString(self.points)
-  self.widths=list(road.get('deckWidths') or [road['width']]*len(self.points));self.tangents=I.tangents(self.points);self.clearance=road['tunnel']['clearance']
+  self.widths=list(road.get('deckWidths') or [road['width']]*len(self.points));self.tangents=I.tangents(self.points);self.clearance=road.get('tunnel',{}).get('clearance',0)
  def at(self,d):return float(np.interp(d,self.along,self.y))
  def width_at(self,d):return float(np.interp(d,self.along,self.widths))
  def nearest(self,p):return int(np.argmin([(q[0]-p[0])**2+(q[1]-p[1])**2 for q in self.points]))
 
 
+def ribbon_folds(points,widths,margin=.5):
+ """Segments whose inner edge turns backwards, including the parapet margin."""
+ p=np.asarray(points,float);t=np.asarray(I.tangents(points));half=(np.asarray(widths,float)/2+margin)[:,None]
+ n=np.stack([-t[:,1],t[:,0]],axis=1)*half;a=p-n;b=p+n
+ def up(u,v):return u[:,1]*v[:,0]-u[:,0]*v[:,1]
+ return np.flatnonzero(np.minimum(up(b[:-1]-a[:-1],a[1:]-a[:-1]),up(b[1:]-b[:-1],a[1:]-b[:-1]))<.05).tolist()
+
+
+def ease_ribbon_bends(points,widths,pinned=()):
+ """Locally ease source bends too tight for their pavement, without narrowing it.
+ Vertical profile radii do not prevent an inner pavement edge folding over at
+ a densely digitized corner. Fair only the nearby unpinned stations until both
+ triangles face up, including room for the parapet. Keep source junctions and
+ ends exact, and refuse a repair that moves a station outside half its width.
+ Straight or already valid source alignments are returned byte-for-byte.
+ """
+ p=np.asarray(points,float);original=p.copy();fixed={0,len(p)-1}|set(pinned)
+ for _ in range(256):
+  bad=ribbon_folds(p,widths)
+  if not bad:return points if _==0 else p.tolist()
+  active={j for i in bad for j in range(max(1,i-3),min(len(p)-1,i+5)) if j not in fixed};next_=p.copy()
+  for j in active:
+   left=math.dist(p[j],p[j-1]);right=math.dist(p[j+1],p[j]);middle=(p[j-1]*right+p[j+1]*left)/(left+right)
+   next_[j]=np.round(p[j]+.4*(middle-p[j]),3)
+  assert np.any(next_!=p),'Pinned road junctions leave no room to ease a folded pavement'
+  assert np.all(np.hypot(*(next_-original).T)<=np.asarray(widths)/2),'Source bend needs a reviewed alignment outside its pavement'
+  p=next_
+ raise AssertionError('Source bend cannot carry its pavement without a folded edge')
+
+
 def plans_of(source,city,routes):
  """Unsolved plans of the routes, each with its pseudo ways (plan.ways) and levels (plan.level)."""
  outline=Polygon(city['coverage'][0]);out=[]
+ junctions={key(p) for r in city['roads'] for p in r['points']}|{key(f['points'][i]) for f in source['features'] for i in (0,-1)}
  for spec in routes:
   points,owner,ways=assemble(source,spec);main=spec.get('main')
   if spec.get('closed')=='start':points,owner=I.cut_line(points,owner,start=I.barrier_station(points,outline,False))
   if spec.get('closed')=='end':points,owner=I.cut_line(points,owner,end=I.barrier_station(points,outline,True))
   rp,ro=I.resample_owned(points,owner);lanes=[int(ways[o]['tags']['lanes']) for o in ro]
+  # Municipal and OSM centerlines can differ at a reviewed handoff. Bind to
+  # an actual existing vertex, preserving the parent road and blending only
+  # the last 45 m of the incoming source alignment. Never snap by proximity
+  # without an explicit route-level parent: stacked roadways share XY.
+  joins={}
+  for end,parent_id in spec.get('join',{}).items():
+   e=0 if end=='start' else len(rp)-1;parent=next(r for r in city['roads'] if r['id']==parent_id)
+   j=min(range(len(parent['points'])),key=lambda j:math.dist(parent['points'][j],rp[e]));target=parent['points'][j]
+   assert math.dist(target,rp[e])<15,f'{spec["id"]} {end}: source handoff moved outside its corridor'
+   along=stations(rp);offset=[target[k]-rp[e][k] for k in (0,1)]
+   for p,s in zip(rp,along):
+    distance=s if e==0 else along[-1]-s;weight=I.smooth(1-distance/45)
+    for k in (0,1):p[k]=round(p[k]+offset[k]*weight,3)
+   rp[e]=list(target);joins[end]=(parent,j)
   parkway=spec['bridge']=='storrow'   # no shoulders: the lanes and a kerb's width
   if parkway:widths=I.taper(rp,[(l-1)*LANE+3.0 for l in lanes],60) if main else [5.6]*len(rp)
   else:widths=I.taper(rp,[I.mainline_width(l) for l in lanes],80) if main else I.taper(rp,[I.RAMP_WIDTHS[min(2,l)] for l in lanes],40)
   if 'width' in spec:widths=[float(spec['width'])]*len(rp)   # reviewed against the curb survey
+  for end,(parent,j) in joins.items():
+   width=(parent.get('deckWidths') or [parent['width']]*len(parent['points']))[j];along=stations(rp)
+   for i,s in enumerate(along):
+    distance=s if end=='start' else along[-1]-s;weight=I.smooth(1-distance/45)
+    widths[i]+=weight*(width-widths[i])
+  rp=ease_ribbon_bends(rp,widths,{i for i,p in enumerate(rp) if key(p) in junctions})
   level=[int(ways[o]['tags']['layer']) for o in ro]
   plan=Plan(spec['id'],rp,ro,widths,spec.get('grade',I.MAINLINE_GRADE if main else TUNNEL_RAMP_GRADE if min(level)<0 or spec.get('level',0)<0 else I.RAMP_GRADE),lanes)
+  plan.existing_joins={0 if end=='start' else 1:Fixed(parent) for end,(parent,_) in joins.items()}
   if not main or parkway:plan.radius=I.RAMP_RADIUS
   plan.under=STORROW_UNDER if parkway else CLEAR_UNDER;plan.spec=spec;plan.ways=ways;plan.main=bool(main);plan.level=[spec['level']]*len(level) if 'level' in spec else level
   plan.clearance=STORROW_CLEARANCE if spec['bridge']=='storrow' else CLEARANCE;plan.rises=[];plan.buried=[bool(spec.get('buried'))]*len(rp)
@@ -720,6 +792,19 @@ def hold_surface(plan):
  plan.floor=floor
 
 
+def settle_late_ramps(ordered,stale,solve):
+ """Refresh dependent profiles after each parent is solved, including in the last sweep.
+
+ A precomputed list of stale ramps misses a child that was current at the
+ start of the sweep but whose parent changes earlier in that same sweep.
+ """
+ for _ in range(4):
+  changed=False
+  for plan in ordered:
+   if stale(plan):solve(plan);changed=True
+  if not changed:break
+
+
 def branch_lift(trunk,ramps):
  """{station of `trunk`: least height} for the ramps that leave or join it at a vertex of its own (a 'node' end) and have
  a street surface to lie on (street_surface): where a ramp is held to the trunk (their overlap, i93_north.overlap) it must
@@ -840,10 +925,9 @@ def cover(plan,ends=(None,None)):
  """Targets and ceilings of the stations below source level 0. Against the straight line between the heights
  where the road is at grade, a station whose ground lies within OPEN_MAX over the line is the road's own open
  cut: it follows its floor and anchors the natural line (natural). Against that line the ground elsewhere is
- thick enough to roof the road (clearance, ROOF and COVER over the line) or thin. A thin stretch shorter than
- PORTAL_ZONE is a portal's slope or a gap in the survey: the road keeps the line there, in the open. A longer
- one is real ground under a carriageway, which goes down under it (but for its first EDGE metres beside an open
- stretch); a ramp stays on the line, in the open. A station under mapped water stays under its bed, one under a
+ thick enough to roof the road (clearance, ROOF and COVER over the line) or thin. A thin stretch connected to
+ an open cut may form a portal slope; an isolated thin stretch inside a carriageway remains covered, regardless
+ of length. A ramp retains its endpoint-constrained descent. A station under mapped water stays under its bed, one under a
  surface street under the street, one under a building under the building's base (the roof slab against it); a
  station of a street stretch (street_stretch) is on its street, not under anything; the
  stage closes the survey's cut under a building, and under a street that has sunk into it (plan.sunk), over the
@@ -858,8 +942,9 @@ def cover(plan,ends=(None,None)):
  for a,b,rise in plan.rises:
   for i in range(a,b+1):plan.floor[i]=max(plan.floor[i],plan.low[i]+rise)
  solid=[under[i] and (plan.buried[i] or plan.wet[i] or bool(plan.over[i]) or bool(plan.above[i])) for i in range(n)]
- # A reviewed tunnel (`buried`) lies under the ground beside it: the highest across its width within two cells along
- # the road, since the 6 m survey shows a tunnel this shallow as a dent and smears its portals.
+ # The survey smears a narrow ramp excavation into the roof of a mapped bore.
+ # Its surrounding surface sets the roof target; close_gaps restores the roof
+ # ground after the connected profiles have been solved together.
  edge=np.asarray(plan.edge);ridge=[float(edge[int(np.searchsorted(along,along[i]-12,'left')):int(np.searchsorted(along,along[i]+12,'right'))].max()) for i in range(n)]
  line=natural(plan,ends,[False]*n);open_=[under[i] and not solid[i] and low[i]-line[i]<OPEN_MAX for i in range(n)];floor=[False]*n
  for a,b in runs(open_):
@@ -880,7 +965,11 @@ def cover(plan,ends=(None,None)):
  open_=floor;line=natural(plan,ends,open_);plan.natural=line;thin=[under[i] and not open_[i] and not solid[i] and low[i]-line[i]<need+COVER for i in range(n)];portal=[False]*n
  for a,b in runs(thin):
   left=a>0 and (open_[a-1] or not under[a-1]);right=b<n-1 and (open_[b+1] or not under[b+1]);short=along[b]-along[a]<PORTAL_ZONE
-  for i in range(a,b+1):portal[i]=short or not plan.main or (left and along[i]-along[a]<EDGE) or (right and along[b]-along[i]<EDGE)
+  # Thin survey cover is not evidence of a carriageway portal. Only a stretch
+  # connected to a genuine open cut or an above-ground section may be left open;
+  # an isolated dip must keep the bore below its roof. Ramps retain their
+  # endpoint-constrained descent, which may not yet fit beneath a roof.
+  for i in range(a,b+1):portal[i]=not plan.main or ((left or right) and (short or (left and along[i]-along[a]<EDGE) or (right and along[b]-along[i]<EDGE)))
  # From its street landing a road comes down at its grade: a ceiling it cannot be under yet is part of its descent, in the open.
  reach=[-math.inf]*n
  for e in (0,1):
@@ -980,31 +1069,55 @@ def close_gaps(plans,streets,lines,grid,heights,buildings):
  Road's) is no portal: the grid rises over its roadway, and a cell beside it, to the roof slab plus COVER. A hole
  is closed whole or left: not where a vertex would rise over the base of a building standing there, where a
  surface street lies lower, or within a cell of an open stretch of any road of the stage. Returns the new int16
- grid, or None when nothing changes."""
+ grid, or None when nothing changes. A mapped buried bore may have a longer
+ survey dent. Its overlapping, coplanar branch shares the roof at the merge;
+ beside it, fill stays below every open road's ceiling so its excavation stays
+ open. The complete bore must fit beneath the capped fill or none is applied."""
  scale=grid.get('scale',.01);W=grid['width'];C=grid['cellSize'];ox,oz=grid['originX'],grid['originZ'];holes=[]
  for plan in plans:
   n=len(plan.points)
   for a,b in runs([plan.tunnel[i] and plan.level[i]<0 and not plan.covered[i] for i in range(n)]):
-   if a==0 or b==n-1 or not (plan.covered[a-1] and plan.covered[b+1]) or plan.along[b+1]-plan.along[a-1]>CLOSE:continue
+   mapped=all(getattr(plan,'buried',[False]*n)[a:b+1])
+   if a==0 or b==n-1 or not (plan.covered[a-1] and plan.covered[b+1]) or (plan.along[b+1]-plan.along[a-1]>CLOSE and not mapped):continue
    level=max(plan.y[i]+plan.clearance+ROOF+COVER for i in range(a-1,b+2));shape=LineString(plan.points[a-1:b+2]).buffer(max(plan.widths[a-1:b+2])/2+.5+C,cap_style='flat')
    x0,z0,x1,z1=shape.bounds;gi,gj=np.meshgrid(np.arange(int((x0-ox)//C),int((x1-ox)//C)+2),np.arange(int((z0-oz)//C),int((z1-oz)//C)+2))
-   inside=shapely.contains_xy(shape,ox+gi.ravel()*C,oz+gj.ravel()*C);holes.append(((gj.ravel()*W+gi.ravel())[inside].astype(np.int64),level))
+   inside=shapely.contains_xy(shape,ox+gi.ravel()*C,oz+gj.ravel()*C);holes.append(((gj.ravel()*W+gi.ravel())[inside].astype(np.int64),level,plan,mapped,a-1,b+1))
  if not holes:return None
- vs=np.unique(np.concatenate([v for v,_ in holes]));gx=ox+(vs%W)*C;gz=oz+(vs//W)*C;pts=shapely.points(gx,gz);cap=np.full(len(vs),math.inf);kept=np.zeros(len(vs),bool);current=heights[vs].astype(np.float64)*scale
+ vs=np.unique(np.concatenate([v for v,*_ in holes]));gx=ox+(vs%W)*C;gz=oz+(vs//W)*C;pts=shapely.points(gx,gz);cap=np.full(len(vs),math.inf);current=heights[vs].astype(np.float64)*scale
  beside=list(buildings((float(gx.min())-C,float(gz.min())-C,float(gx.max())+C,float(gz.max())+C)))
  if beside:
   for q,j in zip(*STRtree([b['hull'].buffer(C) for b in beside]).query(pts,predicate='within')):cap[int(q)]=min(cap[int(q)],beside[int(j)]['base'])
- for plan in plans:
-  for a,b in runs([not c for c in plan.candidate]):
-   if b>a:kept|=shapely.contains_xy(LineString(plan.points[a:b+1]).buffer(max(plan.widths[a:b+1])/2+C,cap_style='flat'),gx,gz)
  near=np.full(len(vs),math.inf)   # the lowest a street's corridor lets a vertex stand: its own ground
  for j in STRtree(lines).query(shapely.union_all(pts).envelope,predicate='intersects').tolist():
   hit=shapely.distance(lines[j],pts)<=streets[j]['width']/2+I.CORRIDOR+C;near[hit]=np.minimum(near[hit],current[hit])
  result=None
- for v,level in holes:
+ for v,level,owner,mapped,first,last in holes:
+  kept=np.zeros(len(vs),bool);open_ceiling=np.full(len(vs),math.inf)
+  for plan in plans:
+   shared=np.zeros(len(plan.points),bool)
+   if mapped:
+    for e,kind in enumerate(getattr(plan,'ends',[])):
+     j=0 if e==0 else len(plan.points)-1
+     if kind and kind[0] in ('gore','node') and kind[1] is owner and plan.level[j]<0:
+      at=shapely.line_locate_point(owner.line,shapely.points(plan.points));distance=shapely.distance(owner.line,shapely.points(plan.points))
+      overlap=distance<=(np.asarray(plan.widths)+np.interp(at,owner.along,owner.widths))/2
+      shared|=(np.abs(plan.along-plan.along[j])<=MERGE)&overlap&(np.abs(np.asarray(plan.y)-np.interp(at,owner.along,owner.y))<LANDING_LIP)
+   for a,b in runs([not c and not shared[i] for i,c in enumerate(plan.candidate)]):
+    if b<=a:continue
+    mask=shapely.contains_xy(LineString(plan.points[a:b+1]).buffer(max(plan.widths[a:b+1])/2+C,cap_style='flat'),gx,gz)
+    if mapped and mask.any():
+     # Highway cuts are excavated after the terrain is repaired. Keep their
+     # ground below the ceiling, so classification cannot roof an open portal.
+     d=shapely.line_locate_point(plan.line,pts);ceiling=np.interp(d,plan.along,plan.y)+plan.clearance-.05
+     open_ceiling[mask]=np.minimum(open_ceiling[mask],ceiling[mask])
+    elif not mapped:kept|=mask
   k=np.searchsorted(vs,v);low=current[k]<level-.05
   if (low&(kept[k]|(cap[k]<level-.05)|(near[k]<level-.05))).any() or not low.any():continue
-  result=heights.copy() if result is None else result;result[v[low]]=np.maximum(result[v[low]],int(round(level/scale)))
+  candidate=(heights if result is None else result).copy();levels=np.minimum(level,open_ceiling[k]);candidate[v[low]]=np.maximum(candidate[v[low]],np.floor(levels[low]/scale).astype(heights.dtype))
+  if mapped:
+   ground=I.Terrain(grid,candidate);sections=cross_sections(owner,.5)
+   if any(min(ground(float(x),float(z)) for x,z in sections[i])<owner.y[i]+owner.clearance+ROOF+.05 for i in range(first,last+1)):continue
+  result=candidate
  return result
 
 
@@ -1057,6 +1170,7 @@ def constrain_roads(plan,ground,existing,lines,tree,water,report):
    if line.distance(Point(q))<=reach:out.append(road_height(other,q,ground))
   return out
  for other,d,half,p,k in crossing_windows(plan,existing,lines,tree):
+  if any(other['id']==parent.id and (d if e==0 else plan.along[-1]-d)<MERGE for e,parent in getattr(plan,'existing_joins',{}).items()):continue
   h=road_height(other,p,ground);mine=plan.level[k];deck=bool(other.get('elevations'));theirs=other.get('bridge',{}).get('sourceLayer',1) if deck else 0
   # A deck that starts or ends on the ground at this vertex is a ramp leaving or joining the road here (the Bowker Overpass off Storrow Drive), not a bridge over it.
   if deck and any(math.dist(p,other['points'][i])<.05 and other.get(f)==0 for i,f in ((0,'startLevel'),(-1,'endLevel'))):report['junctions'].append({'road':plan.id,'name':other['name'],'other':other['id'],'point':[round(v,2) for v in p]});continue
@@ -1668,6 +1782,7 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
  def bind_ramp(plan):
   # What a ramp is solved between: its ends, the stations held to the roads it leaves, joins or follows, and its bounds.
   plan.fixed={};land(plan)
+  for e,parent in getattr(plan,'existing_joins',{}).items():I.match_overlap(plan,e,parent)
   for e,kind in enumerate(plan.ends):
    i=0 if e==0 else len(plan.points)-1
    if kind[0] in ('street','cap') or (plan,e) in trunks:continue
@@ -1718,10 +1833,9 @@ def build(city,source,graded,ungraded,water,buildings,tunnels=(),routes=None,twi
    # (an end on a carriageway or a tunnel road that it misses is squeezed, not late: those were solved before every ramp)
    if kind[0]=='node' and (plan,e) not in trunks and kind[1].y is not None and abs(plan.y[0 if e==0 else -1]-kind[1].y[kind[2]])>5e-4:return True
   return any(abs(plan.y[k]-y)>5e-4 for o,f in leads[plan.id] for k,y in I.overlap(plan,f,o))
- for _ in range(4):
-  late=[plan for plan in I.ordered(ramps,leads,trunks) if stale(plan)]
-  if not late:break
-  for plan in late:report['infeasible']=[x for x in report['infeasible'] if x['road']!=plan.id];solve_ramp(plan)
+ def resolve_late(plan):
+  report['infeasible']=[x for x in report['infeasible'] if x['road']!=plan.id];solve_ramp(plan)
+ settle_late_ramps(I.ordered(ramps,leads,trunks),stale,resolve_late)
  # Close the survey's cut over the tunnels, then read the ground again: the lids decide what is covered.
  def finish():
   lidded=lids(plans,surface,surface_lines,city['elevation'],graded,buildings)
@@ -1824,8 +1938,16 @@ def classify_ground(plan):
  plan.conflict=[any(building_relation(plan,i,plan.buildings[j],y[i]) is None for j in plan.built[i]) for i in range(n)]
  plan.fits=[not plan.conflict[i] and any(building_relation(plan,i,plan.buildings[j],y[i])=='under' for j in plan.above[i]) for i in range(n)]
  walled=[plan.level[i]<=0 and plan.edge[i]-y[i]>=WALLED for i in range(n)]
+ # A reviewed raised span can pass through a survey building (a station's
+ # elevated bus loop). The passage compiler cuts that building independently;
+ # an above-ground slab must not become a roofless excavation down to terrain.
+ # Require both the explicit rise and clearance under the whole pavement, so
+ # merely tagging a source road level 1 cannot hide a real ground obstruction.
+ raised=[False]*n
+ for a,b,rise in getattr(plan,'rises',()):
+  for i in range(a,b+1):raised[i]=plan.level[i]>0 and rise>THICKNESS and y[i]-plan.high[i]>=THICKNESS
  # Like a deep stretch, a walled or roofed one takes one more station at each end, so the decks beside it start on clear ground.
- for a,b in runs([plan.fits[i] or plan.conflict[i] or walled[i] or plan.forced[i] for i in range(n)]):
+ for a,b in runs([plan.fits[i] or (plan.conflict[i] and not raised[i]) or walled[i] or plan.forced[i] for i in range(n)]):
   for i in range(max(0,a-1),min(n-1,b+1)+1):plan.tunnel[i]=True
  for a,b in runs([not t for t in plan.tunnel]):
   if a>0 and b<n-1 and plan.along[b]-plan.along[a]<GAP and all(plan.level[i]<=0 for i in range(a,b+1)):
@@ -1867,6 +1989,22 @@ def covered_intervals(plan,a,b):
   s0,s1=float(plan.along[a+i])-base,float(plan.along[a+j])-base
   if s1-s0>=MIN_COVERED:out.append([round(s0,3),round(s1,3)])
  return out
+
+
+def validate_cover_continuity(plans):
+ """Reject isolated skylights in underground carriageways, across record seams.
+
+ A true open cut has non-candidate stations anchored to its own surveyed floor;
+ a thin-ground gap whose stations are all tunnel candidates is not a portal.
+ Check complete plans so splitting one road into records cannot hide the gap.
+ """
+ for plan in plans:
+  if not plan.main:continue
+  n=len(plan.points)
+  for a,b in runs([plan.tunnel[i] and not plan.covered[i] for i in range(n)]):
+   if a==0 or b==n-1 or not(plan.covered[a-1] and plan.covered[b+1]):continue
+   if all(plan.level[i]<0 and plan.candidate[i] for i in range(a,b+1)):
+    raise AssertionError(f'{plan.id} has an isolated unroofed bore at {plan.along[a]:.1f}..{plan.along[b]:.1f} m')
 
 
 def station_layers(plan):return list(plan.level)
@@ -1912,7 +2050,18 @@ def record(plan,a,b,id,levels,name):
   rec['tunnel']={'clearance':plan.clearance,'covered':covered_intervals(plan,a,b)}
   rec['highway']=spec['bridge']
  else:
-  rec['bridge']={'id':spec['bridge'],'kind':KIND,'thickness':THICKNESS,'clearanceEstimated':True,'sourceLayer':max(plan.level[a:b+1]) if b>a else plan.level[a]}
+  source_levels=list(plan.level[a:b+1])
+  # A source ramp can retain level 1 through its gore on a level-0 mainline.
+  # The profile solver explicitly joins those roads; serialize that shared
+  # vertex on the parent's source level, without changing either the raw
+  # layer or the runtime deck levels. Coincident XY elsewhere is not a join.
+  for end,kind in enumerate(getattr(plan,'ends',())):
+   i=0 if end==0 else n-1
+   if a<=i<=b and kind and kind[0] in ('gore','node') and isinstance(kind[1],I.Plan):
+    parent,j=kind[1],kind[2]
+    assert key(plan.points[i])==key(parent.points[j]),f'{plan.id}: explicit join lost its source vertex'
+    source_levels[i-a]=parent.level[j]
+  rec['bridge']={'id':spec['bridge'],'kind':KIND,'thickness':THICKNESS,'clearanceEstimated':True,'sourceLayer':max(plan.level[a:b+1]) if b>a else plan.level[a],'sourceLevels':source_levels}
   # The surveyed roadway beside the deck's lanes (highway_roadways.py): its edges left and right of the centre line at each station that has one.
   edges=getattr(plan,'roadway',None)
   if edges and any(edges[i] for i in range(a,b+1)):rec['roadway']=[list(edges[i]) if edges[i] else None for i in range(a,b+1)]
@@ -2105,9 +2254,11 @@ def before_stage(roads,heights,record,scale=.01):
 
 
 def before_road_stages(roads,heights,provenance,scale=.01):
- """Copies of the package roads and graded grid as the stages before the highway stages (Interstate 93, then this
- one) left them, for the checks and replays of those earlier stages on an installed package."""
- roads,heights=before_stage(roads,heights,provenance.get('bostonHighways'),scale);return I.before_stage(roads,heights,provenance.get('i93North'),scale)
+ """Inputs for water/land-stage checks, undoing later stages in reverse order."""
+ import north_overpasses as N
+ roads,heights=before_stage(roads,heights,provenance.get('bostonHighways'),scale)
+ roads,heights=I.before_stage(roads,heights,provenance.get('i93North'),scale)
+ return N.before_stage(roads,heights,provenance.get('northOverpasses'),scale)
 
 
 def landed_decks(roads,records,ground):
@@ -2172,6 +2323,13 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  the tunnel sidecar roads, the cut grid, the solved plans). `buildings` is the package's TileBuildings and
  `removed` the structures an earlier run took out of it (buildings_over)."""
  from water_crossings import water_inputs
+ # Old Museum repairs raised source underpasses onto the duplicate survey
+ # slab. Their source-correct replacements are part of this stage now. Keep
+ # the originals in the inverse record so earlier stages replay on exactly
+ # the roads they saw, including when upgrading an existing package.
+ original=city['roads'];source_index={r['id']:i for i,r in enumerate(original)}
+ retired=[{'index':i,'road':copy.deepcopy(r),'of':['storrow-leverett-east','storrow-leverett-west']} for i,r in enumerate(original) if r.get('bridge',{}).get('kind')=='museum-survey-approach']
+ city={**city,'roads':[r for r in city['roads'] if r.get('bridge',{}).get('kind')!='museum-survey-approach']}
  grid=city['elevation'];water=water_inputs(city);ground=I.Terrain(grid,heights);raw=I.Terrain(grid,ungraded);source_roads=city['roads'];removed=list(removed)
  # Level the street bridges over the cut first: the road beneath is then solved under the bridges as they will stand.
  pre=plans_of(source,city,ROUTES if routes is None else routes)
@@ -2179,6 +2337,7 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
  # (a street the segments start at level 0 on a bridge node over the road is that bridge's ramp)
  # (a second source's copy of a bridge over the road leaves the package first: the road is not solved under it)
  kept,copies=bridge_copies(source_roads,pre)
+ copies=sorted([{**entry,'index':source_index[entry['road']['id']]} for entry in copies]+retired,key=lambda entry:entry['index'])
  seamed,seams,seam_notes,seam_pieces=bridge_seams(kept,pre,ground)
  levelled,flattened,overpasses=level_overpasses(seamed,pre,ground)
  # then again from a first solve: where the road lies lower than its ground suggested, the bridge comes down to what it needs
@@ -2200,6 +2359,7 @@ def install(city,source,heights,ungraded,buildings,tunnels=(),routes=None,remove
   # A ramp pinned at both ends between the roads it joins may pass its grade a little; more than GRADE_SLACK is a broken profile.
   grades={p.id:max(abs(p.y[i+1]-p.y[i])/max(.5,float(p.along[i+1]-p.along[i])) for i in range(len(p.y)-1)) for p in plans}
   bad={p.id:round(grades[p.id],3) for p in plans if grades[p.id]>p.grade+GRADE_SLACK};assert not bad,f'highway profiles exceed their grade: {bad}'
+  validate_cover_continuity(plans)
   steep=[{'road':p.id,'grade':round(grades[p.id],4),'limit':p.grade} for p in plans if grades[p.id]>p.grade+1e-4]
   under=sorted({c['under'] for c in report['crossings'] if 'under' in c});by_id={p.id:p for p in plans};joined={id(r) for p in plans for r in p.joined}
   # A deck the ground still stands in becomes a walled cut there, and the grid is cut again for the decks that remain.

@@ -113,6 +113,17 @@ test('northbound exit 23 leaves the carriageway at its gore and lands on the str
  await drive(dense(join(before,stations(ramp[0]),stations(ramp[1]),landing)),ramp[0].id);
 });
 
+test('northbound Exit 20 continues the incomplete Charlestown survey down to Cambridge Street',async()=>{
+ const ramp=['i93-nb-exit-20','i93-nb-exit-20-2'].map(id=>byId.get(id));assert.ok(ramp.every(Boolean),'both source ways are generated');
+ const first=ramp[0],last=ramp.at(-1);assert.ok(first.points[0][1]>-3460&&last.points.at(-1)[1]<-3680,'the continuation overlaps the retained survey before reaching Cambridge Street');
+ assert.equal(first.lanes,2);assert.equal(last.endLevel,0);assert.ok(same(first.points.at(-1),last.points[0]));
+ const end=last.points.at(-1),street=index.roads.find(r=>r.name==='Cambridge Street'&&r.points.some(p=>same(p,end)));assert.ok(street,'the exit reaches a real street node');
+ assert.ok(Math.abs(last.elevations.at(-1)-sampleRoadElevation(index,street,...end))<.15,'no step at the street landing');
+ // Drive across the measured survey mouth, the old transverse cap and the
+ // newly completed tail: a geometry-only endpoint check missed all three.
+ await drive(dense(join(...ramp.map(stations))),first.id,{survey:true});
+});
+
 test('the northbound carriageway ends at barriers the car cannot pass, short of the closed end',async()=>{
  const end=nb.at(-1);assert.equal(end.closed,'end');assert.equal(sb[0].closed,'start');
  const route=dense(join(tail(stations(nb.at(-2)),80),stations(end))),total=length(stations(end));

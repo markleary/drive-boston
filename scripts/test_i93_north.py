@@ -1,5 +1,5 @@
 """Interstate 93 stage pieces (scripts/i93_north.py) on small synthetic inputs."""
-import pathlib,tempfile,unittest
+import json,pathlib,tempfile,unittest
 import numpy as np
 from shapely.geometry import box
 import i93_north as I
@@ -55,6 +55,31 @@ class MergeTest(unittest.TestCase):
   plan=type('P',(),{'tangents':[(1.0,0.0)]*4+[(.6,.8)]+[(0.0,1.0)]*5})()
   self.assertEqual(I.seam_tangents({},plan,0,4,10),{'deckTangents':{'end':[.6,.8]}})
   self.assertEqual(I.seam_tangents({},plan,4,9,10),{'deckTangents':{'start':[.6,.8]}});self.assertEqual(I.seam_tangents({},plan,0,9,10),{})
+
+
+class SurveyRampTest(unittest.TestCase):
+ def continuation(self):
+  source=json.loads((pathlib.Path(__file__).resolve().parents[1]/'public/data/i93-north-source.json').read_text())
+  plan=next(p for p in I.ramp_plans({w['id']:w for w in source['ways']},source['survey']) if p.id=='i93-nb-exit-20')
+  return plan,source['survey']['rampMouths']['cambridgeStreetNorthbound']
+
+ def test_active_exit_20_keeps_the_survey_overlap_and_reaches_cambridge_street(self):
+  plan,mouth=self.continuation();first,last=min(plan.survey_fixed),max(plan.survey_fixed)
+  self.assertGreater(plan.along[last]-plan.along[first],I.SURVEY_OVERLAP-3)
+  self.assertEqual(plan.points[last],mouth[0][:2]);self.assertEqual(plan.points[-1],[-130.348,-3684.057])
+  self.assertGreater(plan.along[-1]-plan.along[last],190,'complete the missing source tail, not another short cap')
+  for i in plan.survey_fixed:
+   measured=next(s for s in mouth if s[:2]==plan.points[i])
+   self.assertAlmostEqual(plan.survey_fixed[i],measured[2]+I.LIFT,places=4);self.assertAlmostEqual(plan.widths[i],measured[3]*2)
+  self.assertTrue(all(l==2 for l in plan.lanes));self.assertLess(turn(plan.points),22,'the source tail blends to the street without a right-angle snap')
+
+ def test_continuation_holds_its_measured_slope_and_width_before_descending(self):
+  plan,_=self.continuation();plan.fixed=dict(plan.survey_fixed);plan.fixed[len(plan.points)-1]=4.48
+  report={'grades':{},'infeasible':[]};self.assertTrue(I.solve(plan,report));self.assertFalse(report['infeasible'])
+  self.assertLessEqual(float(np.max(np.abs(np.diff(plan.y))/np.diff(plan.along))),plan.grade+.0001)
+  before=list(plan.widths);ground=type('Ground',(),{'across':lambda self,p,t,half:0})()
+  I.widen_ramps([plan],[],[],ground,lambda bounds:[])
+  self.assertTrue(all(plan.widths[i]==before[i] for i in plan.survey_fixed),'a shoulder cannot widen an overlap beyond the retained survey pavement')
 
 
 def curvature(along,y):

@@ -2,6 +2,7 @@ import type { CityData, Road } from '../types';
 import { buildingAt } from './city-tiles.ts';
 import { deckUndersideAt } from './road-surfaces.ts';
 import { tunnelCoveredAt, tunnelPointAt, tunnelStations } from './tunnels.ts';
+import { sampleElevation } from './terrain.ts';
 
 /** The overhead sign at a highway entrance: a green panel on a gantry over the ramp's mouth, as the Turnpike posts
  * them where a ramp leaves a city street. The legends are reviewed, one row an entrance, like the exit legends
@@ -30,6 +31,8 @@ export const GANTRY_SETBACK = 9;
 /** Panel size (metres) and the headroom under it over the ramp. */
 export const ENTRANCE_PANEL = { width: 3.6, height: 3 };
 export const ENTRANCE_CLEARANCE = 5.1;
+/** The entrance's surface street must clear the same panel as the descending ramp. */
+export const ENTRANCE_GROUND_CLEARANCE = 4.4;
 /** A post stands this far outside the ramp's pavement edge: behind the wall of its slot. */
 export const POST_OFFSET = .55;
 
@@ -56,15 +59,16 @@ export function planEntranceSigns(roads: readonly Road[]): EntranceSign[] {
 }
 
 /** Where a sign's two posts stand (world x, z; `across` metres left of travel) and the heights of its panel over the datum. */
-export function entranceGantry(sign: EntranceSign) {
+export function entranceGantry(sign: EntranceSign, groundAt?: (x: number, z: number) => number) {
   const { x, y, z, yaw, width } = sign.approach, reach = width / 2 + POST_OFFSET;
   const posts = [1, -1].map(side => ({ x: x + Math.cos(yaw) * side * reach, z: z - Math.sin(yaw) * side * reach, across: side * reach }));
-  return { posts, reach, bottom: y + ENTRANCE_CLEARANCE, top: y + ENTRANCE_CLEARANCE + ENTRANCE_PANEL.height };
+  const bottom = Math.max(y + ENTRANCE_CLEARANCE, ...(groundAt ? posts.map(p => groundAt(p.x, p.z) + ENTRANCE_GROUND_CLEARANCE) : []));
+  return { posts, reach, bottom, top: bottom + ENTRANCE_PANEL.height };
 }
 
 /** Whether a sign can stand where it is planned: no bridge in its panel's way and no building on a post's place
  * (a building is its stored hull here, as for street furniture, so a sprawling complex beside the ramp counts). */
 export function entranceSignStands(city: CityData, sign: EntranceSign) {
-  const gantry = entranceGantry(sign), { x, y, z } = sign.approach;
+  const gantry = entranceGantry(sign, (x, z) => sampleElevation(city, x, z)), { x, y, z } = sign.approach;
   return deckUndersideAt(city, x, z, y + 2.5) >= gantry.top + 1 && !gantry.posts.some(post => buildingAt(city, post.x, post.z));
 }

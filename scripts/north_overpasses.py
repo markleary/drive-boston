@@ -1,4 +1,12 @@
-"""Northern grade separations whose source decks close on the road beneath.
+"""Grade separations whose source decks close on the road beneath.
+
+The Boston GIS also splits both roads at the same XY at Western Avenue and
+the River Street Bridge over Soldiers Field Road. The deck's source level is
+1 while Soldiers Field Road stays at 0. Water-deck levelling skipped these as
+shared junctions, and terrain grading erased the lower road's dip. Preserve
+the connected bridge and its approaches and solve a continuous trench along
+both lower carriageways, just as for the northern underpasses below. Raising
+the short River Street approach instead would require a 72% grade.
 
 build-metro.py profiles a town bridge over a road from the DEM at its two ends:
 OpenStreetMap's layer orders a crossing but gives no height, so a deck between
@@ -78,6 +86,10 @@ EXTEND=60       # longest stretch of a street the walk may carry on a deck
 APPROACH='north-overpass-approach'
 DECK='north-overpass-deck'  # bridge kind of a valley deck the embankment carries at the rim grade
 SITES=[
+ {'id':'western-avenue-soldiers-field','name':'Western Avenue over Soldiers Field Road, Allston','mode':'trench',
+  'upper':['9450-0-0','10309-0-0'],'lower':['11818-0-0','11821-0-0','11819-0-0','8483-0-0']},
+ {'id':'river-street-soldiers-field','name':'River Street Bridge over Soldiers Field Road, Allston','mode':'trench',
+  'upper':['10286-0-0','10287-0-0'],'lower':['11818-0-0','11806-0-0','11819-0-0','11805-0-0']},
  {'id':'sweetser-circle','name':'Sweetser Circle over the Revere Beach Parkway, Everett','mode':'trench',
   'upper':['osm-9080000-0','osm-9080041-0','osm-9080044-0','osm-9080740-0'],'lower':['osm-50526412-0','osm-641810692-0']},
  {'id':'mystic-valley-parkway-main-street','name':'Mystic Valley Parkway over Main Street, Medford','mode':'trench',
@@ -218,7 +230,9 @@ def extend_decks(site,roads,grid,floor,ground,lowered):
   seen.add(key)
   for road_id,e in sorted(ends[key]):
    road=by_id[road_id]
-   if road_id in walked or road.get('elevations') or road.get('tunnel'):continue
+   # GIS also splits the lower carriageway at an overpass's XY node. Its
+   # explicitly lowered road is not an approach landing on the upper deck.
+   if road_id in walked or road_id in lowered or road.get('elevations') or road.get('tunnel'):continue
    walked.add(road_id);line=road['points'] if e==0 else road['points'][::-1];samples,total=walk(line,grid,floor,half_width(road))
    last=max((s for s,hit in samples if hit),default=None)
    if last is None:continue
@@ -398,6 +412,19 @@ def restore(roads,heights,record):
  for source in record.get('sourceProfiles',[]):by_id[source['road']]['elevations']=list(source['elevations'])
  terrain=record.get('terrain')
  if terrain and terrain['vertices']:heights[np.asarray(terrain['vertices'],dtype=np.int64)]=np.asarray(terrain['heights'],dtype=heights.dtype)
+
+
+def before_stage(roads,heights,record,scale=.01):
+ """Restore metre-valued inputs for checks of earlier water/land stages.
+
+ The recorded terrain inverse is in integer grid units. Keep the installed
+ package untouched, and apply its scale exactly once to the copied grid.
+ """
+ roads=copy.deepcopy(roads);values=np.asarray(heights).copy()
+ if not record:return roads,values
+ terrain=record.get('terrain') or {};restore(roads,values,{**record,'terrain':None})
+ if terrain.get('vertices'):values[np.asarray(terrain['vertices'],dtype=np.int64)]=np.asarray(terrain['heights'])*scale
+ return roads,values
 
 
 def stations(points,spacing=2):
