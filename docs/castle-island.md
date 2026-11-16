@@ -31,8 +31,17 @@ Run with the project's Python environment (NumPy and Shapely):
 
 Run this **after** `build-water-surfaces.py` when regenerating the geographic package. Inputs are the shipped `city.json`, elevation grid and tile `5_1`; source caches and network access are unnecessary. Outputs are the revised water-surface partition in `public/data/city.json` and `src/data/castle-island.json`. Repeated generation is byte-stable.
 
+For a staged package, pass its directory and keep the generated sidecar alongside it until installing both outputs:
+
+```sh
+.venv-data/bin/python scripts/build-castle-island.py --data-dir /tmp/boston-staging --output /tmp/boston-staging/castle-island.json
+```
+
+All three inputs then come from the staging directory; the checked-in package and runtime sidecar are untouched. Install the staged sidecar at `src/data/castle-island.json` with the matching geographic package.
+
 ```sh
 npm run build
+.venv-data/bin/python -m unittest discover -s scripts -p 'test_castle_island.py'
 node --test tests/castle-island.test.mjs tests/waterfront.test.mjs tests/water-shores.test.mjs tests/water-level.test.mjs tests/waterfront-surfaces.test.mjs
 npm run preview -- --port 4181
 PORT=4181 WALK=1 node scripts/capture-castle-island.mjs
@@ -41,4 +50,4 @@ PORT=4181 MOBILE=1 node scripts/capture-castle-island.mjs
 
 The capture script takes inspection views of the bay, fort, harbor facade and gateway, checks browser errors and tile/context health, and optionally walks through the entrance. Inspection cameras disable distance fog while taking their stills so the complete bay can be examined; normal gameplay fog is restored immediately. Mobile checks use browser emulation, not physical iPhone/iPad hardware.
 
-Local verification on 16 November 2026: production build, full city-package validation, waterfront geometry validation and 24 targeted geometry, water, shoreline and resource-lifetime checks passed. Desktop Chrome walked through the gateway and up the fort ramp; desktop and emulated mobile captures reported no browser errors, failed tiles or WebGL context losses. Fresh generation from the original water partition matches the output generated from the checked-in inputs, and a repeat run is byte-identical. All 40 coastal water partitions are valid and nonoverlapping; millimetre rounding changes the union by less than one square metre across the original approximately 51 square kilometre coastal feature.
+Local verification on 16 November 2026: production build, full city-package validation, waterfront geometry validation and targeted geometry, water, shoreline and resource-lifetime checks passed. Regression checks verify that staged generation reads its own city, elevation and tile inputs without changing installed files, and that repeated tile reloads reuse landscape materials while releasing geometry. Desktop Chrome walked through the gateway and up the fort ramp; desktop and emulated mobile captures reported no browser errors, failed tiles or WebGL context losses. Fresh generation from the original water partition matches the output generated from the checked-in inputs, and a repeat run is byte-identical. All 40 coastal water partitions are valid and nonoverlapping; millimetre rounding changes the union by less than one square metre across the original approximately 51 square kilometre coastal feature.

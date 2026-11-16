@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import { loadMetroCity, windowCity } from './helpers/metro-city.mjs';
-import { buildCastleIsland } from '../src/render/castle-island.ts';
+import { buildCastleIsland, castleIslandLandscapeSteps } from '../src/render/castle-island.ts';
+import { disposeTileResources } from '../src/render/tile-resources.ts';
 import { FORT_ID, FORT_FLOOR, fortOutline, fortCourt, fortTerrainCuts, gatePoint } from '../src/simulation/castle-island.ts';
 import { pointInside } from '../src/simulation/roads.ts';
 import { parkSurface } from '../src/render/area-surfaces.ts';
@@ -69,5 +70,25 @@ test('the entrance approach stays above the convex terrain across its full walki
  for(let depth=-23;depth<-1;depth+=.5)for(const side of [-1.8,0,1.8]){
   const p=gatePoint(side,depth),hits=down(collision,...p);assert.ok(hits.length);
   assert.ok(hits[0].point.y>=sampleElevation(city,...p)+.04,`approach buried at ${side}, ${depth}`);
+ }
+});
+
+test('streaming Castle Island repeatedly reuses landscape materials and releases tile geometry',()=>{
+ const materials=new Set();let materialDisposals=0;
+ for(let cycle=0;cycle<3;cycle++){
+  const group=new THREE.Group(),geometries=new Set();
+  drain(castleIslandLandscapeSteps(city,group,{bounds:{minX:4250,maxX:5420,minZ:1150,maxZ:2170}}));
+  group.traverse(object=>{
+   if(!(object instanceof THREE.Mesh))return;
+   geometries.add(object.geometry);
+   if(cycle===0&&!materials.has(object.material)){
+    materials.add(object.material);object.material.addEventListener('dispose',()=>materialDisposals++);
+   }
+   assert.ok(materials.has(object.material),'reload must reuse the existing landscape finish');
+  });
+  assert.equal(materials.size,3);assert.ok(geometries.size>=3);
+  let geometryDisposals=0;for(const geometry of geometries)geometry.addEventListener('dispose',()=>geometryDisposals++);
+  disposeTileResources(group);
+  assert.equal(geometryDisposals,geometries.size);assert.equal(materialDisposals,0);
  }
 });

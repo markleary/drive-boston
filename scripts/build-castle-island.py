@@ -5,6 +5,7 @@ Run after build-water-surfaces.py. Keeps hydro coverage, roads and tiles intact;
 partitions the enclosed Pleasure Bay water level and writes the detail sidecar.
 Heights/detail treatments are visual interpretations; see docs/castle-island.md.
 """
+import argparse
 import gzip
 import json
 from pathlib import Path
@@ -16,7 +17,11 @@ from shapely.ops import unary_union
 from tileformat import read_tile
 
 ROOT = Path(__file__).resolve().parents[1]
-FILE = ROOT / 'public/data/city.json'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--data-dir', type=Path, default=ROOT/'public/data')
+parser.add_argument('--output', type=Path, default=ROOT/'src/data/castle-island.json', help='Detail sidecar destination')
+args = parser.parse_args()
+FILE = args.data_dir / 'city.json'
 city = json.loads(FILE.read_text())
 
 def parts(geometry, kind='Polygon'):
@@ -37,7 +42,7 @@ hydro = Polygon(water['rings'][0], water['rings'][1:])
 # merged it into the harbor through the causeway's narrow water-control openings.
 bay = set_precision(Polygon(park['rings'][1]).intersection(hydro), .001)
 grid = city['elevation']
-heights = np.frombuffer(gzip.decompress((ROOT/'public/data'/grid['file']).read_bytes()), dtype='<i2').reshape(grid['height'],grid['width']) * grid.get('scale', .01)
+heights = np.frombuffer(gzip.decompress((args.data_dir/grid['file']).read_bytes()), dtype='<i2').reshape(grid['height'],grid['width']) * grid.get('scale', .01)
 # Broad interior, away from beaches and causeway interpolation: the modal DEM
 # plateau is the enclosed basin's level, not the lower tidal harbor's plane.
 values = []
@@ -55,9 +60,8 @@ for surface in old:
 surfaces.extend({'source':'castle-island-pleasure-bay','name':'Pleasure Bay','level':level,'rings':rings(p)} for p in parts(bay))
 assert unary_union([Polygon(s['rings'][0],s['rings'][1:]) for s in surfaces]).symmetric_difference(hydro).area < 1
 water['surfaces'] = surfaces
-FILE.write_text(json.dumps(city,separators=(',',':'))+'\n')
 
-_, buildings = read_tile(ROOT/'public/data/tiles/t_5_1.bin')
+_, buildings = read_tile(args.data_dir/'tiles/t_5_1.bin')
 fort = next(b for b in buildings if b.get('landmark') == 'fort-independence')
 v = fort['positions']
 footprint = unary_union([Polygon([(v[k][0],v[k][2]) for k in face]) for face in fort['roof']]).simplify(.06, preserve_topology=True)
@@ -80,5 +84,6 @@ data = {'source':'Boston GIS Castle Island park/hydro and DBT2 fort survey; see 
         'bay':{'level':level,'rings':[rings(p) for p in parts(bay)]},'waterCuts':cuts,
         'beach':[rings(p) for p in parts(beach)],
         'coast':[[[round(x,3),round(z,3)] for x,z in line.coords] for line in coast_lines]}
-(ROOT/'src/data/castle-island.json').write_text(json.dumps(data,separators=(',',':'))+'\n')
+FILE.write_text(json.dumps(city,separators=(',',':'))+'\n')
+args.output.write_text(json.dumps(data,separators=(',',':'))+'\n')
 print(json.dumps({'bayArea':round(bay.area),'bayLevel':level,'fortArea':round(wall.area),'courtArea':round(court.area),'coastSegments':len(coast_lines),'beachArea':round(beach.area)},indent=2))

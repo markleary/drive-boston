@@ -159,17 +159,21 @@ export function buildCastleIsland(city: CityData) {
   return result;
 }
 
+// Like the other park finishes, these survive tile eviction and are reused on
+// reload. Only the generated landscape geometry belongs to a streamed tile.
+let landscapeMaterials:{sand:THREE.Material;stone:THREE.Material;cap:THREE.Material}|undefined;
+
 /** Tile-owned beach and low stone shore defenses retain the existing paths. */
 export function* castleIslandLandscapeSteps(city:CityData,group:THREE.Group,options:{bounds?:{minX:number;maxX:number;minZ:number;maxZ:number};pace?:Pace}) {
   const {bounds,pace}=options;
   if(bounds&&(bounds.maxX<4250||bounds.minX>5420||bounds.maxZ<1150||bounds.minZ>2170))return;
-  const sand=finish('#c5b994');
+  const {sand,stone,cap}=landscapeMaterials??={sand:finish('#c5b994'),stone:finish('#99998b'),cap:finish('#c3bba6')};
   for(const rings of data.beach){
     const geometry=yield* parkSurfaceSteps(city,rings.map(points),{bounds,offset:.036,pace});
     if(!geometry.attributes.position.count){geometry.dispose();continue;}
     const mesh=new THREE.Mesh(geometry,sand);mesh.name='Pleasure Bay sand beach';mesh.receiveShadow=true;group.add(mesh);
   }
-  const model=new LandmarkModel('Castle Island seawalls','castle-island-seawalls',0,0,0,0),stone=finish('#99998b'),cap=finish('#c3bba6');
+  const model=new LandmarkModel('Castle Island seawalls','castle-island-seawalls',0,0,0,0);
   for(const line of data.coast)for(let i=1;i<line.length;i++){
     if(due(pace))yield;
     const a=line[i-1] as Point2,b=line[i] as Point2,x=(a[0]+b[0])/2,z=(a[1]+b[1])/2;
