@@ -114,6 +114,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const tobinBridge=addTobinBridgeDetails(scene,city,materials.asphalt);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
   const tunnels=addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;
   const conley=addConleyTerminal(scene,city,{mobile:options.mobile});buildingCollisions.push(...conley.collisions);roadStructures.userData.conley=conley.group.userData;
+  if(architecturalLandmarks?.castleIsland)roadStructures.userData.castleIsland=architecturalLandmarks.castleIsland.group.userData;
   if(architecturalLandmarks?.fishPier)roadStructures.userData.fishPier=architecturalLandmarks.fishPier.group.userData;
   if(architecturalLandmarks?.schrafft)roadStructures.userData.schrafft=architecturalLandmarks.schrafft.group.userData;
   if(architecturalLandmarks?.citgo)roadStructures.userData.citgo=architecturalLandmarks.citgo.group.userData;

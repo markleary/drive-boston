@@ -1,0 +1,158 @@
+{
+  "errors": [],
+  "mobile": true,
+  "fps": 4,
+  "drawCalls": 199,
+  "triangles": 571963,
+  "graphicsContext": {
+    "lost": false,
+    "losses": 0,
+    "builds": 1
+  },
+  "tiles": {
+    "loadRadius": 450,
+    "unloadRadius": 700,
+    "maxFetches": 1,
+    "releasedBytes": 59073944,
+    "releasedAttributes": 454,
+    "loaded": 4,
+    "residentGroups": 4,
+    "keys": [
+      "4_1",
+      "5_1",
+      "5_0",
+      "4_0"
+    ],
+    "fetching": 0,
+    "pending": 0,
+    "downloaded": 0,
+    "failed": 0,
+    "underConstruction": 0,
+    "structured": [],
+    "speed": 0,
+    "budgetMs": 2.3,
+    "tileSize": 1000,
+    "available": 265,
+    "farBuildings": 174878,
+    "buildings": 152,
+    "exactMeshes": 0,
+    "triangles": 7107,
+    "roads": 29,
+    "structures": 0,
+    "trees": 235,
+    "lamps": 111,
+    "signs": 1,
+    "signals": 0,
+    "parkTrees": 180,
+    "storefronts": 0,
+    "facades": 0,
+    "rooftops": 0,
+    "porches": 7,
+    "colliders": 175,
+    "buildMs": 4666,
+    "cpuMs": 1592,
+    "stageMs": {
+      "terrain": 273,
+      "structures": 0,
+      "roads": 195,
+      "curbs": 0,
+      "buildings": 14,
+      "props": 21,
+      "signals": 0,
+      "parks": 1069,
+      "details": 3,
+      "finish": 18
+    },
+    "tiles": [
+      {
+        "key": "4_1",
+        "buildings": 126,
+        "triangles": 5937,
+        "buildMs": 728,
+        "cpuMs": 728,
+        "stageMs": {
+          "terrain": 90.2999997138977,
+          "structures": 0.20000028610229492,
+          "roads": 174.2999997138977,
+          "curbs": 0,
+          "buildings": 11.300000190734863,
+          "props": 18.699999809265137,
+          "signals": 0.10000038146972656,
+          "parks": 414.69999980926514,
+          "details": 1.6999998092651367,
+          "finish": 16.200000286102295
+        }
+      },
+      {
+        "key": "5_1",
+        "buildings": 12,
+        "triangles": 343,
+        "buildMs": 308,
+        "cpuMs": 308,
+        "stageMs": {
+          "terrain": 85.5,
+          "structures": 0,
+          "roads": 5.699999809265137,
+          "curbs": 0,
+          "buildings": 0.9000000953674316,
+          "props": 0.3000001907348633,
+          "signals": 0.09999990463256836,
+          "parks": 215.2999997138977,
+          "details": 0.20000028610229492,
+          "finish": 0.40000009536743164
+        }
+      },
+      {
+        "key": "5_0",
+        "buildings": 7,
+        "triangles": 229,
+        "buildMs": 1298,
+        "cpuMs": 296,
+        "stageMs": {
+          "terrain": 46.99999952316284,
+          "structures": 0,
+          "roads": 8.700000286102295,
+          "curbs": 0,
+          "buildings": 0.5,
+          "props": 0.6999998092651367,
+          "signals": 0,
+          "parks": 238.89999914169312,
+          "details": 0.20000028610229492,
+          "finish": 0.2999997138977051
+        },
+        "finishDistance": 400,
+        "structuresDistance": 400
+      },
+      {
+        "key": "4_0",
+        "buildings": 7,
+        "triangles": 598,
+        "buildMs": 2332,
+        "cpuMs": 260,
+        "stageMs": {
+          "terrain": 50.299999713897705,
+          "structures": 0,
+          "roads": 6,
+          "curbs": 0,
+          "buildings": 1.1000003814697266,
+          "props": 1.0999999046325684,
+          "signals": 0,
+          "parks": 200.2000002861023,
+          "details": 0.40000009536743164,
+          "finish": 1.0999999046325684
+        },
+        "finishDistance": 427,
+        "structuresDistance": 427
+      }
+    ]
+  },
+  "castleIsland": {
+    "buildingId": "BOS-AQD15-29RFX-598N6",
+    "triangles": 7351,
+    "bastions": 5,
+    "openCourtyard": true,
+    "publicEntrance": true,
+    "bayLevel": -3.14,
+    "accuracy": "Survey plan; estimated heights, masonry, earthworks, pier, monument and shelter details"
+  }
+}

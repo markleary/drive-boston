@@ -1,5 +1,8 @@
 import type {CityArea,Point2} from '../types';
-import {hardQuayAt,nearestQuay} from '../simulation/waterfront.ts';
+import {hardQuayAt as waterfrontQuayAt,nearestQuay} from '../simulation/waterfront.ts';
+
+import {castleIslandShoreDistance} from '../simulation/castle-island.ts';
+const hardQuayAt=(x:number,z:number,reach=.12)=>waterfrontQuayAt(x,z,reach)||castleIslandShoreDistance(x,z)<reach;
 
 export const SHORE_WIDTH=3;
 export const SHORE_FADE=.75;
@@ -67,5 +70,5 @@ export function waterShore(water:CityArea,source=water.rings):WaterShore{
   // A named site can own only part of a long source hydro edge. Test the
   // queried location as well as the edge midpoint, so that partial quays do
   // not inherit the natural bank of the rest of the original segment.
-  const result:WaterShore={rings,width,distance:(x,z)=>hardQuayAt(x,z,4.5)?Infinity:softDistance(x,z),hard:(x,z)=>hardQuayAt(x,z,4.5),hardDepth:(x,z)=>nearestQuay(x,z).distance-4.5};sources.set(source,result);return result;
+  const result:WaterShore={rings,width,distance:(x,z)=>hardQuayAt(x,z,4.5)?Infinity:softDistance(x,z),hard:(x,z)=>hardQuayAt(x,z,4.5),hardDepth:(x,z)=>Math.min(nearestQuay(x,z).distance,castleIslandShoreDistance(x,z))-4.5};sources.set(source,result);return result;
 }
