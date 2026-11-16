@@ -93,7 +93,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     // never reveals the edge of the tiled area from the air.
     const range=terrainRange(city),surround=new THREE.Mesh(new THREE.PlaneGeometry(60000,60000).rotateX(-Math.PI/2),new THREE.MeshLambertMaterial({color:'#b9bea8'}));
     surround.position.set((city.bounds.minX+city.bounds.maxX)/2,range.min-2,(city.bounds.minZ+city.bounds.maxZ)/2);surround.name='Metro surround';surround.userData.noAO=true;scene.add(surround);
-    architecturalLandmarks=addArchitecturalLandmarks(scene,metro);
+    architecturalLandmarks=addArchitecturalLandmarks(scene,metro,!!options.mobile);
     buildingCollisions.push(...architecturalLandmarks.collisions);
     far=createFarCity(scene,city,!!options.mobile,architecturalLandmarks.farHulls);
     const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
@@ -115,6 +115,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const tunnels=addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;
   const conley=addConleyTerminal(scene,city,{mobile:options.mobile});buildingCollisions.push(...conley.collisions);roadStructures.userData.conley=conley.group.userData;
   if(architecturalLandmarks?.fishPier)roadStructures.userData.fishPier=architecturalLandmarks.fishPier.group.userData;
+  if(architecturalLandmarks?.schrafft)roadStructures.userData.schrafft=architecturalLandmarks.schrafft.group.userData;
+  if(architecturalLandmarks?.citgo)roadStructures.userData.citgo=architecturalLandmarks.citgo.group.userData;
 
   /** The original single-survey build: every road, curb, building and prop at once. */
   async function buildWholeCity(){
@@ -324,6 +326,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     skyEnvironment?.dispose();skyEnvironment=pmrem.fromScene(environmentScene,.04,.1,2000);
     scene.environment=skyEnvironment.texture;skyUniforms.showSunDisc.value=true;
     architecturalLandmarks?.encore?.setLighting(night);
+    architecturalLandmarks?.schrafft?.setLighting(night);
+    architecturalLandmarks?.citgo?.setLighting(night);
     architecturalLandmarks?.encore?.setReflection(skyEnvironment.texture);
     sun.color.set(mode==='golden'?0xffd5a6:mode==='day'?0xfff3df:0x8eaad8);
     sun.intensity=night?.16:mode==='golden'?3.6:3.4;hemi.intensity=night?.24:.68;
@@ -348,6 +352,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     });
   }
   function update(position:THREE.Vector3,time:number,stream=true,flightShadows=false,camera?:THREE.Camera,flying=false){
+    architecturalLandmarks?.schrafft?.update(time);
+    architecturalLandmarks?.citgo?.update(time);
     updateWater(time);
     underground=!!tunnelAt(city,position.x,position.z,position.y)?.covered;
     const fog=scene.fog as THREE.Fog;
