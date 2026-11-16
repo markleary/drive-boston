@@ -28,7 +28,7 @@ def repair_leverett(city,source,heights):
   for distance in distances:
    from_mouth=total-distance if north else distance
    widths.append(round(mouth['width']+(route['width']-mouth['width'])*min(1,from_mouth/25),5))
-  tangent=mouth['routeDirection'];road={'id':route['id'],'name':route['name'],'kind':'motorway','traffic':False,'points':points,'width':route['width'],'oneway':1,'elevations':[round(interpolate(controls,d),4) for d in distances],'deckWidths':widths,'deckTangents':{'end' if north else 'start':tangent},'startLevel':0 if north else 1,'endLevel':1 if north else 0,'bridge':{'id':route['id'],'kind':KIND,'thickness':route['thickness'],'clearanceEstimated':True}}
+  tangent=mouth['routeDirection'];road={'id':route['id'],'name':route['name'],'kind':'motorway','points':points,'width':route['width'],'oneway':1,'elevations':[round(interpolate(controls,d),4) for d in distances],'deckWidths':widths,'deckTangents':{'end' if north else 'start':tangent},'startLevel':0 if north else 1,'endLevel':1 if north else 0,'bridge':{'id':route['id'],'kind':KIND,'thickness':route['thickness'],'clearanceEstimated':True}}
   if route.get('supportExclusions'):road['bridge']['supportExclusions']=[list(p) for p in route['supportExclusions']]
   city['roads'].append(road);result.append(road['id'])
  return {'roads':result,'method':'Active OSM Leverett Connector paths from unchanged survey mouths to existing municipal street landings; estimated continuous profiles beneath the upper surveyed viaduct','surveyModel':source['surveyModel'],'sourceWays':[w['id'] for w in source['ways']]}
@@ -39,7 +39,7 @@ def validate_leverett(city,source,heights):
  for route in source['routes']:
   road=by_id.get(route['id']);assert road is not None,f"Missing active Leverett continuation {route['id']}"
   assert road['points']==resample(route['points']),'Leverett source alignment changed'
-  assert road.get('traffic') is False,'Source-survey continuation must not create an isolated ambient traffic route'
+  assert road.get('traffic') is not False,'The completed Leverett routes must carry ambient traffic'
   mouth=route['surveyMouth'];i=mouth['index'];j=0 if i==-1 else -1
   assert road['points'][i]==mouth['point'] and abs(road['elevations'][i]-mouth['height'])<.001,'Leverett survey mouth detached'
   assert road['points'][j]==route['landing']['point'],'Leverett street landing moved'

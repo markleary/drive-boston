@@ -39,7 +39,7 @@ Connector, and the City Square ramp pieces the lower deck replaces).
   drivable survey, so `i93-zakim-*` traces (`surveyDeck`, bridge kind TRACE)
   follow the traced stations LIFT above the survey surface from the Central
   Artery tunnel bores' ends to the I-93 decks (and from the Leverett Connector,
-  GPS only), sharing the neighbouring records' end points exactly. The tracer
+  also for traffic), sharing the neighbouring records' end points exactly. The tracer
   splits carriageways where the deck changes, so JOINT metres either side of each
   split are replaced by a curve. The tunnel's Cross Street entrance ends beside
   the northbound bore at the mouth; its trace curves onto the northbound trace
@@ -206,7 +206,7 @@ RAMPS=[
  # OSM tags the real westward exit as motorway, not motorway_link. Continue it
  # from the lower-deck split onto the existing southbound Leverett Connector.
  {'id':'i93-sb-exit-18','name':'I-93 South · Exit 18 Leverett Circle / Storrow Drive','ways':[42158398,354960826,1527986232,48983197],
-  'until':[329.783,-2592.463],'alignmentEnd':'leverettSouthbound','viaduct':True,'traffic':False},
+  'until':[329.783,-2592.463],'alignmentEnd':'leverettSouthbound','viaduct':True},
  # This exit starts on the retained Charlestown survey deck, south of the
  # northbound mainline's generated mouth. Its missing tail is still an active
  # two-lane ramp in the source: continue it to Cambridge Street, not a closure.
@@ -984,7 +984,7 @@ def trace_records(source,main,joins,neighborhoods,surface=None):
  """Road records over the drivable survey (`surveyDeck`, never drawn: the mesh is the
  road) for traffic, GPS and the HUD street name: the northbound carriageway from the
  tunnel's end to the northbound deck, split where the Leverett Connector ramp joins
- it (GPS only, like the connector), the tunnel's Cross Street entrance onto the
+ it, the tunnel's Cross Street entrance onto the
  northbound trace (with `surface`, the survey's top), and the Zakim's southbound
  carriageway from the lower deck to the tunnel. One record per traced piece (split
  at MAX_PIECE); each chain starts and ends exactly on the record it continues."""
@@ -1007,7 +1007,6 @@ def trace_records(source,main,joins,neighborhoods,surface=None):
    rec={'id':f'{prefix}-{k+1:02d}','name':name.format(place),'kind':kind,'points':[[round(p[0],4),round(p[1],4)] for p in seg],
     'width':max(w),'oneway':1,'lanes':lanes,'elevations':[round(p[2],4) for p in seg],'startLevel':1,'endLevel':1,'deckWidths':w,
     'bridge':{'id':'i93','kind':TRACE,'thickness':THICKNESS,'clearanceEstimated':True,'sourceLayer':3},'surveyDeck':SURVEY_ID}
-   if prefix=='i93-zakim-leverett-nb':rec['traffic']=False
    out.append(rec)
  return out
 
@@ -1624,7 +1623,6 @@ def records(main,ramps,ways,neighborhoods):
   for k,(a,b) in enumerate(zip(marks,marks[1:])):
    levels=(0 if r.landing[0] and a==0 else 1,0 if r.landing[1] and b==len(r.points)-1 else 1)
    rec=seam_tangents(deck_record(r.id if k==0 else f'{r.id}-{k+1}',r.spec['name'],'motorway_link',r,a,b,r.lanes[a],lay[a],levels),r,a,b,len(r.points))
-   if r.spec.get('traffic') is False:rec['traffic']=False
    if r.spec.get('alignmentEnd') and b==len(r.points)-1:rec.setdefault('deckTangents',{})['end']=[round(t,5) for t in r.tangents[-1]]
    out.append(rec)
  return out
@@ -1767,7 +1765,7 @@ def validate(city,record,joins,ground):
    assert kind==(TRACE if r.get('surveyDeck') else KIND) and (r.get('surveyDeck') in (None,SURVEY_ID)),f"{r['id']} bridge kind"
    assert (2<=r['lanes']<=5) if r['kind']=='motorway' else (r['kind']=='motorway_link' and 1<=r['lanes']<=2),f"{r['id']} lanes"
    assert r['name'].startswith('I-93 ') or (r['name']=='Leverett Connector' and r in lev),f"{r['id']} name"
-   assert ('traffic' not in r) or ((r in lev or re.fullmatch(r'i93-sb-exit-18(?:-\d+)?',r['id'])) and r['traffic'] is False),f"{r['id']} traffic flag"
+   assert 'traffic' not in r,f"{r['id']} must remain in the connected traffic network"
   else:assert r['bridge']['kind']==APPROACH,f"{r['id']} is not an I-93 street approach"
  closed=sorted((r['id'],r['closed']) for r in roads if r.get('closed'));assert closed==sorted([(nb[-1]['id'],'end'),(sb[0]['id'],'start')]),f'I-93 closures: {closed}'
  for chain in (nb,sb,znb,zsb,lev,cross):

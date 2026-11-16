@@ -3,7 +3,6 @@ import test from 'node:test';
 import * as THREE from 'three';
 import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {bridgeSupports,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
-import {roadGraph} from '../src/simulation/traffic.ts';
 import {tileCollisionIndices} from '../src/render/tile-geometry.ts';
 import {loadMetroCity,windowCity,readJson,installExactMeshes} from './helpers/metro-city.mjs';
 
@@ -35,16 +34,15 @@ function dense(points){
  return[...out,points.at(-1)];
 }
 
-test('Leverett mouths match their retained survey or generated continuation and stay out of ambient traffic',()=>{
- const edges=roadGraph(city).edges;
+test('Leverett mouths match their retained survey or generated continuation and allow ambient traffic',()=>{
  for(const entry of source.routes){
   const road=city.roads.find(r=>r.id===entry.id);assert.ok(road);
-  assert.equal(road.traffic,false);assert.ok(!edges.some(e=>e.road.id===road.id));
+  assert.notEqual(road.traffic,false);
   if(entry.direction==='south'){
    const incoming=city.roads.find(r=>r.id==='i93-sb-exit-18-2');assert.ok(incoming,'the source-aligned exit replaces the disconnected survey ramp');
    assert.deepEqual(incoming.points.at(-1),road.points[0]);assert.ok(Math.abs(incoming.elevations.at(-1)-road.elevations[0])<.001);
    assert.equal(incoming.deckWidths.at(-1),road.deckWidths[0]);assert.deepEqual(incoming.deckTangents.end,road.deckTangents.start);
-   assert.equal(incoming.traffic,false);continue;
+   assert.notEqual(incoming.traffic,false);continue;
   }
   const start=entry.direction==='north'?road.points.length-8:0,end=entry.direction==='north'?road.points.length:8;
   for(let i=start;i<end;i++){
