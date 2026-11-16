@@ -38,7 +38,9 @@ export interface MetroLandmarkDetails { group: THREE.Group; collisions: { id: st
 // The TD Garden has its own finishes, signs and lights (td-garden.ts): one mesh holds the arena and both Causeway
 // Street towers, so a crown under its 155 m parapet or a plate on its longest wall lands nowhere near the arena.
 const SIGNS: Record<string, string> = { 'quincy-market': 'QUINCY MARKET', 'museum-of-science': 'MUSEUM OF SCIENCE', 'harvard-stadium': 'HARVARD STADIUM', 'jfk-library': 'JOHN F. KENNEDY LIBRARY', 'convention-center': 'BOSTON CONVENTION & EXHIBITION CENTER', 'logan-terminal': 'LOGAN AIRPORT' };
-const CROWNS = new Set(['custom-house', 'millennium-tower', 'stata-center', 'convention-center']);
+// The convention center's footprint includes low wings. Its maximum roof
+// height only occurs on part of the shell, so a perimeter band would float.
+const CROWNS = new Set(['custom-house', 'millennium-tower', 'stata-center']);
 const MONUMENTS: Record<string, { kind: 'obelisk' | 'tower' | 'round'; height: number; width: number; color: string; minimumSurveyed: number }> = {
   'bunker-hill-monument': { kind: 'obelisk', height: 67, width: 9.1, color: '#a09e96', minimumSurveyed: 40 },
   'dorchester-heights-monument': { kind: 'tower', height: 35, width: 7.5, color: '#e8e6df', minimumSurveyed: 20 },
