@@ -189,7 +189,9 @@ test('alignment keeps paint on the surveyed ramps and preserves oblique merge en
    checked++;assert.ok(supported(aligned[i]),`paint crosses a deck edge or obstruction at ${run[i].x.toFixed(2)}, ${run[i].z.toFixed(2)}`);
   }
  }
- assert.ok(checked>retained*.85&&checked>4500,`checked ${checked}/${retained} retained frames across the mainlines and narrow ramps`);
+ // The removed Charlestown shell contributed two long, easily painted runs;
+ // the remaining survey has a larger share of narrow, unpainted ramp frames.
+ assert.ok(checked>retained*.8&&checked>3900,`checked ${checked}/${retained} retained frames across the mainlines and narrow ramps`);
 });
 
 test('short or narrow marking runs keep their extents and remain finite',()=>{

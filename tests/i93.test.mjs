@@ -3,6 +3,7 @@ import test from 'node:test';
 import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {sampleRoadElevation,sampleVehicleSurface} from '../src/simulation/road-surfaces.ts';
 import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
+import {anchorAt,planRoute} from '../src/simulation/navigation.ts';
 import {loadMetroCity,windowCity,installExactMeshes} from './helpers/metro-city.mjs';
 
 // Interstate 93 north of the tunnel on the shipped package: the car crosses the joins between the
@@ -71,6 +72,27 @@ test('southbound: off the Charlestown lower deck onto the Zakim survey at City S
  const last=sb.at(-1),trace=all.find(r=>r.surveyDeck&&same(r.points[0],last.points.at(-1)));assert.ok(trace,'a survey trace starts where the lower deck ends');
  const route=dense(join(tail(stations(last),150),head(stations(trace),70)));
  await drive(route,last.id,{survey:true});
+});
+
+test('southbound Sullivan split carries the mainline below northbound and Exit 18 west to Leverett',async()=>{
+ const ramp=all.filter(r=>/^i93-sb-exit-18(?:-\d+)?$/.test(r.id));assert.equal(ramp.length,2);
+ const gore=ramp[0].points[0],before=sb.find(r=>same(r.points.at(-1),gore)),after=sb.find(r=>same(r.points[0],gore));
+ assert.ok(before&&after,'the actual fork is a shared mainline endpoint');
+ assert.equal(before.elevations.at(-1),ramp[0].elevations[0]);assert.equal(after.elevations[0],ramp[0].elevations[0]);
+ assert.ok(Math.min(...ramp.flatMap(r=>r.points.map(p=>p[0])))<-245,'the exit bends west over the railway');
+ assert.ok(Math.min(...ramp.flatMap(r=>r.elevations))>14,'the connector stays elevated across the rail yard');
+ const connector=byId.get('leverett-connector-south'),last=ramp.at(-1);
+ assert.deepEqual(last.points.at(-1),connector.points[0]);assert.ok(Math.abs(last.elevations.at(-1)-connector.elevations[0])<.001);
+ assert.ok(Math.abs(last.deckWidths.at(-1)-connector.deckWidths[0])<.001,'no width step at the retained connector');
+ const approach=tail(stations(before),140);
+ const p=before.points.at(-5),q=connector.points[50],route=planRoute(index,anchorAt(index,...p,before.elevations.at(-5)+.65),anchorAt(index,...q,connector.elevations[50]+.65));
+ assert.ok(route&&!route.wrongWay&&route.length<1600,'GPS follows the exit directly onto Leverett in the permitted direction');
+ const west=ramp[0].points.reduce((a,b)=>a[0]<b[0]?a:b);
+ assert.ok(route.points.some(p=>Math.hypot(p[0]-west[0],p[1]-west[1])<5),'GPS includes the actual westward branch');
+ await drive(dense(join(approach,head(stations(after),300))),before.id,{survey:true});
+ // Split the long exit into two drives, overlapping its lane-count seam.
+ await drive(dense(join(approach,stations(ramp[0]),head(stations(last),50))),before.id,{survey:true});
+ await drive(dense(join(tail(stations(ramp[0]),40),stations(last),head(stations(connector),50))),last.id,{survey:true});
 });
 
 test('the bike, a car change, a saved arrival and a crash on the Zakim survey keep the vehicle on its deck',async()=>{

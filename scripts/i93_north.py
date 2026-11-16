@@ -203,6 +203,10 @@ SPLIT_MERGE=[-896.935,-4751.959]   # 540052144 joins 542171987 at this interior 
 # Ramp records in solve order: a group's trunk first, so the pieces after it find
 # their shared split node already profiled.
 RAMPS=[
+ # OSM tags the real westward exit as motorway, not motorway_link. Continue it
+ # from the lower-deck split onto the existing southbound Leverett Connector.
+ {'id':'i93-sb-exit-18','name':'I-93 South · Exit 18 Leverett Circle / Storrow Drive','ways':[42158398,354960826,1527986232,48983197],
+  'until':[329.783,-2592.463],'alignmentEnd':'leverettSouthbound','viaduct':True,'traffic':False},
  # This exit starts on the retained Charlestown survey deck, south of the
  # northbound mainline's generated mouth. Its missing tail is still an active
  # two-lane ramp in the source: continue it to Cambridge Street, not a closure.
@@ -832,7 +836,12 @@ def survey_constraints(plan,raster):
  for i in range(plan.curve):
   lo,_,_,_=survey_cells(raster,plan.points[i],plan.tangents[i],plan.widths[i]/2+.5)
   if not len(lo):continue
-  bottom=float(lo.min());plan.ceiling[i]=min(plan.ceiling[i],bottom-CLEAR_UNDER-SURVEY_MARGIN);plan.hold[i]=bottom-CLEAR_UNDER_TARGET-SURVEY_MARGIN;last=i
+  bottom=float(lo.min());plan.ceiling[i]=min(plan.ceiling[i],bottom-CLEAR_UNDER-SURVEY_MARGIN);plan.hold[i]=bottom-CLEAR_UNDER_TARGET-SURVEY_MARGIN
+  # At the first station beneath a deck (also after a gap), start the climb
+  # on the open approach. A soft target alone can jump from street height to
+  # the lower viaduct within the spline's short smoothing window.
+  if last!=i-1:plan.floor[i]=max(plan.floor[i],plan.hold[i])
+  last=i
  if last is None:return
  y0,y1=plan.hold[last],plan.fixed[e]
  for i in range(last+1,e):plan.hold[i]=y0+(y1-y0)*float(plan.along[i]-plan.along[last])/float(plan.along[e]-plan.along[last])
@@ -1012,22 +1021,39 @@ def ramp_plans(ways,survey):
   if 'from' in spec or 'until' in spec:
    at=spec.get('from') or spec.get('until');d=LineString(points).project(Point(at))
    points,owner=cut_line(points,owner,start=d) if 'from' in spec else cut_line(points,owner,end=d)
-   points[0 if 'from' in spec else -1]=list(at)
+   # A restored connector can be slightly off the OSM centreline. Ease that
+   # small offset into the shared endpoint instead of adding a sideways kink.
+   e=0 if 'from' in spec else -1;delta=np.asarray(at)-np.asarray(points[e]);along=stations(points)
+   assert np.linalg.norm(delta)<10,f'{spec["id"]} endpoint is too far from its source'
+   points=[[round(p[k]+float(delta[k])*smooth(1-(s if e==0 else along[-1]-s)/BLEND),3) for k in (0,1)] for p,s in zip(points,along)]
+   points[e]=list(at)
   if 'streetEnd' in spec:
    # Cached extracts from different dates can put a ramp's street junction a
    # few metres from the package vertex. Blend onto that reviewed street node.
    end=spec['streetEnd'];delta=np.asarray(end)-np.asarray(points[-1]);assert np.linalg.norm(delta)<10,f'{spec["id"]} street landing is too far from its source'
    along=stations(points);points=[[round(p[k]+float(delta[k])*smooth((s-along[-1]+BLEND)/BLEND),3) for k in (0,1)] for p,s in zip(points,along)];points[-1]=list(end)
   fixed={}
+  mouth=survey['rampMouths'][spec['alignmentEnd']] if 'alignmentEnd' in spec else None
+  if mouth:
+   # At the retained connector, the survey resolves two narrow parallel
+   # decks more accurately than OSM. Blend back to that measured corridor;
+   # the source line otherwise clips the northbound connector's parapet.
+   line=LineString([s[:2] for s in mouth]);along=stations(points);begin=along[-1]-line.length
+   points=[[round(p[k]*(1-w)+q[k]*w,3) for k in (0,1)] for p,d in zip(points,along)
+    for q,w in [(list(line.interpolate(line.project(Point(p))).coords)[0],smooth((d-begin)/BLEND))]]
   if 'surveyStart' in spec:points,owner,fixed=survey_join(points,owner,survey['rampMouths'][spec['surveyStart']])
   rp,ro=resample_owned(points,owner);lanes=[lanes_of(ways,o,True) for o in ro]
   widths=taper(rp,[RAMP_WIDTHS[l] for l in lanes],40)
+  if mouth:
+   along=stations(rp);run=stations([s[:2] for s in mouth]);begin=along[-1]-line.length
+   widths=[w+(2*float(np.interp(line.project(Point(p)),run,[s[3] for s in mouth]))-w)*smooth((d-begin)/BLEND) for p,d,w in zip(rp,along,widths)]
   if fixed:
    held=[i for i,p in enumerate(rp) if tuple(p) in fixed];last=held[-1];along=stations(rp)
    for i in held:widths[i]=2*fixed[tuple(rp[i])][1]
    for i in range(last+1,len(rp)):
     w=smooth((along[i]-along[last])/BLEND);widths[i]=widths[last]*(1-w)+widths[i]*w
   plan=Plan(spec['id'],rp,ro,widths,spec.get('grade',RAMP_GRADE),lanes);plan.spec=spec
+  plan.survey_widths={i for i,d in enumerate(plan.along) if mouth and d>begin}
   plan.survey_fixed={i:fixed[tuple(p)][0] for i,p in enumerate(rp) if tuple(p) in fixed};out.append(plan)
  return out
 
@@ -1047,7 +1073,7 @@ def widen_ramps(ramps,main,existing,ground,footprints):
   streets=[lines[j].buffer(existing[j]['width']/2+(0 if existing[j].get('elevations') else CORRIDOR))
    for j in tree.query(plan.line,predicate='dwithin',distance=reach+street_reach)]
   nearby=STRtree([*houses,*streets,*(shape for other,shape in obstacles.items() if other is not plan)])
-  extra=[0. if i in getattr(plan,'survey_fixed',{}) else RAMP_SHOULDER for i in range(len(plan.points))];extra[0]=extra[-1]=0
+  extra=[0. if i in getattr(plan,'survey_fixed',{}) or i in getattr(plan,'survey_widths',set()) else RAMP_SHOULDER for i in range(len(plan.points))];extra[0]=extra[-1]=0
   for i,(a,b) in enumerate(zip(plan.points,plan.points[1:])):
    segment=LineString([a,b]);half=max(plan.widths[i:i+2])/2
    gap=min((segment.distance(nearby.geometries[j]) for j in nearby.query(segment,predicate='dwithin',distance=half+RAMP_SHOULDER+RAMP_EDGE_MARGIN)),default=math.inf)
@@ -1061,9 +1087,9 @@ def widen_ramps(ramps,main,existing,ground,footprints):
 
 
 def classify(p,plan,main,ramps,streets):
- """How a ramp end meets the network: a street vertex, a carriageway vertex (gore) or another ramp's end or vertex (node)."""
+ """How a ramp end meets the network: a street or existing deck, a carriageway gore or another ramp's node."""
  k=key(p)
- if k in streets:return ('street',streets[k])
+ if k in streets:return ('deck' if streets[k][0][0].get('elevations') else 'street',streets[k])
  for other in main.values():
   for i,q in enumerate(other.points):
    if key(q)==k:return ('gore',other,i)
@@ -1200,6 +1226,14 @@ def build(city,source,graded,water,survey=None,twins=True):
   for i,p in enumerate(r['points']):streets.setdefault(key(p),[]).append((r,i))
  report={'crossings':[],'unresolved':[],'grades':{},'infeasible':[],'newCrossings':[],'surveyConflicts':[]}
  main=carriageways(source,city,ways);ramps=ramp_plans(ways,source['survey']);plans=[*main.values(),*ramps];raster,triangles=survey(main['sb']) if survey else (None,None)
+ for plan in ramps:
+  if not plan.spec.get('viaduct'):continue
+  for e in (0,-1):
+   for road,j in streets.get(key(plan.points[e]),[]):
+    if not road.get('elevations'):continue
+    width=(road.get('deckWidths') or [road['width']]*len(road['points']))[j];old=plan.widths[e]
+    for i,s in enumerate(plan.along):plan.widths[i]+=(width-old)*smooth(1-(s if e==0 else plan.along[-1]-s)/BLEND)
+    plan.tangents[e]=tuple(road.get('deckTangents',{}).get('start' if j==0 else 'end') or tangents(road['points'])[j])
  for plan in plans:constrain_existing(plan,ways,ground,existing,lines,tree,water,report)
  if raster is not None:survey_constraints(main['sb'],raster)
  for plan in ramps:
@@ -1256,11 +1290,16 @@ def build(city,source,graded,water,survey=None,twins=True):
   for e,kind in enumerate(plan.ends):
    i=0 if e==0 else len(plan.points)-1
    if kind[0]=='survey':continue
-   if kind[0]=='street':r,j=kind[1][0];plan.fixed[i]=round(road_height(r,r['points'][j],ground),4)
+   if kind[0] in ('street','deck'):r,j=kind[1][0];plan.fixed[i]=round(road_height(r,r['points'][j],ground),4)
    elif (plan,e) in trunks:continue
    elif kind[1].y is not None:plan.fixed[i]=round(kind[1].y[kind[2]],4);match_overlap(plan,e,kind[1])
    for o,f in leads[plan.id]:
     if f==e:match_overlap(plan,e,o)
+  if plan.spec.get('viaduct'):
+   # A continuous bridge over the rail yard follows its connected deck ends,
+   # not the bare-earth target between street crossings. Keep the gore's
+   # overlap controls so the branch shares the mainline until it parts.
+   fixed=sorted(plan.fixed);plan.hold=np.interp(plan.along,plan.along[fixed],[plan.fixed[i] for i in fixed]).tolist()
   apply_pairs(plan)
  for sweep in range(3):
   report['infeasible']=[]
@@ -1320,7 +1359,10 @@ def build(city,source,graded,water,survey=None,twins=True):
     if not late:break
    else:raise AssertionError('the ramps of the lifted carriageways did not settle')
   report['twins']['ramps']=sorted(again)
- if raster is not None:report['surveyConflicts']=survey_conflicts(main['sb'],triangles,strip(source['survey']['southbound'][0],KEEP_MARGIN+.5))
+ if raster is not None:
+  report['surveyConflicts']=survey_conflicts(main['sb'],triangles,strip(source['survey']['southbound'][0],KEEP_MARGIN+.5))
+  for plan in ramps:
+   if plan.spec.get('viaduct'):report['surveyConflicts']+=survey_conflicts(plan,triangles,Polygon())
  return main,ramps,report
 
 
@@ -1581,7 +1623,10 @@ def records(main,ramps,ways,neighborhoods):
   lay=station_layers(r,ways);marks=[0]+[i for i in range(1,len(r.points)-1) if r.lanes[i]!=r.lanes[i-1] or lay[i]!=lay[i-1]]+[len(r.points)-1]
   for k,(a,b) in enumerate(zip(marks,marks[1:])):
    levels=(0 if r.landing[0] and a==0 else 1,0 if r.landing[1] and b==len(r.points)-1 else 1)
-   out.append(seam_tangents(deck_record(r.id if k==0 else f'{r.id}-{k+1}',r.spec['name'],'motorway_link',r,a,b,r.lanes[a],lay[a],levels),r,a,b,len(r.points)))
+   rec=seam_tangents(deck_record(r.id if k==0 else f'{r.id}-{k+1}',r.spec['name'],'motorway_link',r,a,b,r.lanes[a],lay[a],levels),r,a,b,len(r.points))
+   if r.spec.get('traffic') is False:rec['traffic']=False
+   if r.spec.get('alignmentEnd') and b==len(r.points)-1:rec.setdefault('deckTangents',{})['end']=[round(t,5) for t in r.tangents[-1]]
+   out.append(rec)
  return out
 
 
@@ -1637,6 +1682,8 @@ def install(city,source,heights,footprints,mesh=None,joins=None):
   mesh.repair_portal_approach()
   from museum_survey import retire_duplicate_loops
   retire_duplicate_loops(mesh)
+  from charlestown_survey import retire_southbound_shell
+  retire_southbound_shell(mesh)
   return mesh.raster(),mesh.triangles()
  water=water_inputs(city);main,ramps,report=build(city,source,heights,water,survey if mesh else None);plans=[*main.values(),*ramps]
  bad=[p for p,ok in report['grades'].items() if not ok];assert not bad,f'I-93 profiles exceed their grade: {bad}'
@@ -1652,6 +1699,11 @@ def install(city,source,heights,footprints,mesh=None,joins=None):
  result,_,_=cut_terrain(plans,grid,heights,roads,footprints,cut)
  widen_ramps(ramps,main.values(),roads,Terrain(grid,result),footprints)
  for p,y in zip(plans,lifted):p.y=y
+ if mesh:
+  for p in ramps:
+   if p.spec.get('viaduct'):
+    conflicts=survey_conflicts(p,mesh.triangles(),Polygon())
+    assert not conflicts,f'{p.id} widened deck meets the retained survey: {conflicts[:6]}'
  # The trench is then cut again for the roads as they lie, and a vertex takes the higher of the two cuts: no deeper under
  # a lifted road than it now needs, nor under its twin beside it, whose ground the lower road's cut had taken down too.
  alone=result;again,_,_=cut_terrain(plans,grid,heights,roads,footprints,cut_plan(plans,grid,heights));result=np.maximum(alone,again)
@@ -1715,7 +1767,7 @@ def validate(city,record,joins,ground):
    assert kind==(TRACE if r.get('surveyDeck') else KIND) and (r.get('surveyDeck') in (None,SURVEY_ID)),f"{r['id']} bridge kind"
    assert (2<=r['lanes']<=5) if r['kind']=='motorway' else (r['kind']=='motorway_link' and 1<=r['lanes']<=2),f"{r['id']} lanes"
    assert r['name'].startswith('I-93 ') or (r['name']=='Leverett Connector' and r in lev),f"{r['id']} name"
-   assert ('traffic' not in r) or (r in lev and r['traffic'] is False),f"{r['id']} traffic flag"
+   assert ('traffic' not in r) or ((r in lev or re.fullmatch(r'i93-sb-exit-18(?:-\d+)?',r['id'])) and r['traffic'] is False),f"{r['id']} traffic flag"
   else:assert r['bridge']['kind']==APPROACH,f"{r['id']} is not an I-93 street approach"
  closed=sorted((r['id'],r['closed']) for r in roads if r.get('closed'));assert closed==sorted([(nb[-1]['id'],'end'),(sb[0]['id'],'start')]),f'I-93 closures: {closed}'
  for chain in (nb,sb,znb,zsb,lev,cross):
@@ -1739,7 +1791,8 @@ def validate(city,record,joins,ground):
     continue
    street=[(o,j) for o,j in vertices.get(key,()) if abs((o['elevations'][j] if o.get('elevations') else ground(*o['points'][j]))-y)<=.1]
    assert street,f"{r['id']} {'starts' if i==0 else 'ends'} at {r['points'][i]} on no carriageway, ramp or street vertex at its height"
-   assert r['startLevel' if i==0 else 'endLevel']==0,f"{r['id']} lands on a street with a lifted end";landings+=1
+   elevated=any(o.get('elevations') for o,j in street)
+   assert r['startLevel' if i==0 else 'endLevel']==int(elevated),f"{r['id']} landing level differs from its continuation";landings+=not elevated
  # No two decks of the stage overlap beside each other (more than OVERLAP_SLACK, or MEDIAN_SLACK running
  # the other way) at different heights short of a crossing.
  decks=[r for r in roads if not r.get('surveyDeck')];lines=[LineString(r['points']) for r in decks];tree=STRtree(lines)

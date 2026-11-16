@@ -7,7 +7,7 @@ import {surveyDeckCarriageways,surveyDeckCarriagewaySteps,surveyDeckIndex,deckLa
 import {surveyDeckParapets,surveyDeckParapetSteps} from '../src/simulation/survey-deck-parapets.ts';
 import {surveyViaductSupportSteps} from '../src/simulation/viaduct-supports.ts';
 import {addSurveyDeckSurface,addSurveyDeckSurfaceSteps,addSurveyDeckParapets,addSurveyDeckParapetSteps,surveyDeckPavement,dashes,uncovered} from '../src/render/survey-deck-surface.ts';
-import {sampleRoadElevation,roadProjection,roadWidthAt,bridgeBarriers} from '../src/simulation/road-surfaces.ts';
+import {sampleRoadElevation,roadProjection,bridgeBarriers} from '../src/simulation/road-surfaces.ts';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
 import {read,readJson} from './helpers/metro-city.mjs';
 const metro=await resolveCity(readJson('city.json'),read);
@@ -42,13 +42,22 @@ test('the Zakim and the Charlestown viaduct are traced carriageway by carriagewa
  // Eight walks belonged to the disconnected lower Leverett loop copies.
  // Their reviewed components are replaced by connected generated roads.
  const replacement=zakim.leverettSourceReplacement;assert.equal(replacement?.removedTriangles,2656);assert.equal(replacement.components.length,11);
- assert.ok(carriageways.length>=25&&length>11000,`${carriageways.length} carriageways, ${length.toFixed(0)} m`);
+ assert.equal(zakim.charlestownSourceReplacement?.removedTriangles,980,'the disconnected upper southbound shell is replaced at generation time');
+ assert.ok(carriageways.length>=23&&length>9000,`${carriageways.length} carriageways, ${length.toFixed(0)} m`);
  // The reported spot on the cable-stayed mainline: a four-lane deck between the median and the outer barrier.
  const {station,distance}=nearest(1160.28,-1851.65);
  assert.ok(distance<12);assert.equal(station.lanes,4);assert.ok(station.half*2>17&&station.half*2<22,`${(station.half*2).toFixed(1)} m`);
  assert.ok(Math.abs(station.y-15.1)<1.5,'on the upper deck, not the street below');
  // North of the river the viaduct keeps its own marked carriageways.
  assert.ok(nearest(57.8,-2889.1).distance<8);assert.ok(nearest(-177.4,-3868.5).distance<8);
+});
+
+test('Sullivan Square has no duplicate upper southbound pavement or barrier across the former ramp mouth',()=>{
+ const index=surveyDeckIndex(data);
+ for(const [x,z,y] of [[-311.58,-4087.18,17.03],[-201.92,-3865.96,29.948],[-188.19,-3618.98,32.224]]){
+  assert.ok(Number.isNaN(index.deck(x,z,y,1)),`no survey road remains at ${x},${z}`);
+ }
+ assert.ok(!parapets.some(p=>Math.hypot(p.x+189.5,p.z+3619.09)<3),'the obsolete transverse closure disappears with its source deck');
 });
 
 test('no two traced carriageways claim the same deck',()=>{
@@ -93,7 +102,7 @@ test('the pavement runs on across the joints between traced carriageways',()=>{
  // Each traced stretch ends square to itself, so the old strip pavement left a
  // bare wedge where two met at an angle; the reported one is north of the Charlestown split.
  const pieces=surveyDeckPavement(metro,data,carriageways.map(c=>c.stations)),index=surveyDeckIndex(data);
- for(const [x,z] of [[-160.4,-3614.0],[-180.7,-3618.6],[-137.7,-3226.0],[348.0,-2631.3]]){
+ for(const [x,z] of [[-160.4,-3614.0],[-137.7,-3226.0],[348.0,-2631.3]]){
   const piece=pieces.find(p=>inside(p,x,z));assert.ok(piece,`the deck at ${x}, ${z} is paved`);
   const y=piece.reduce((t,v)=>t+v[1],0)/piece.length;assert.ok(Math.abs(y-.03-index.surface(x,z,y))<.05,'just above the survey deck');
  }
@@ -127,23 +136,8 @@ test('the southbound tunnel approach has no detached survey deck or stray parape
  }
 });
 
-test('only the uncontinued survey end at Cambridge Street has a transverse concrete rail',()=>{
- const index=surveyDeckIndex(data),through=[...metro.roads,...metro.surveyRoads].filter(r=>r.id.startsWith('i93-')&&r.traffic!==false);
- for(const [x,z,y] of [[-189.5,-3619.09,32.224]]){
-  const rail=parapets.find(p=>Math.hypot(p.x-x,p.z-z)<.2&&p.length>10);
-  assert.ok(rail,`an end rail spans the deck at ${x}, ${z}`);
-  for(const t of [-.4,0,.4]){
-   const a=x+Math.sin(rail.yaw)*rail.length*t,b=z+Math.cos(rail.yaw)*rail.length*t;
-   assert.ok(Number.isFinite(index.deck(a,b,y,.25)),`the rail is backed by deck at ${a}, ${b}`);
-  }
-  for(let t=-.5;t<=.501;t+=.05){
-   const a=x+Math.sin(rail.yaw)*rail.length*t,b=z+Math.cos(rail.yaw)*rail.length*t;
-   for(const road of through){
-    if(roadProjection(road,a,b).distance>roadWidthAt(road,a,b)/2+rail.width/2)continue;
-    assert.ok(Math.abs(y-sampleRoadElevation(metro,road,a,b))>4,`the end rail leaves ${road.id} clear`);
-   }
-  }
- }
+test('the removed southbound shell and continued Exit 20 have no transverse concrete caps',()=>{
+ assert.ok(!parapets.some(p=>Math.hypot(p.x+189.5,p.z+3619.09)<.2&&p.length>10),'no barrier remains above the actual southbound exit');
  const exit=metro.roads.find(r=>r.id==='i93-nb-exit-20');assert.ok(exit,'the active Exit 20 continues the lower surveyed ramp');
  assert.ok(roadProjection(exit,-153.225,-3491.30).distance<1);
  assert.ok(!parapets.some(p=>Math.hypot(p.x+153.225,p.z+3491.30)<.2&&p.length>10),'no transverse rail blocks the completed exit');

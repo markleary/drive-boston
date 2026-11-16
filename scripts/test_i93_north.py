@@ -1,5 +1,6 @@
 """Interstate 93 stage pieces (scripts/i93_north.py) on small synthetic inputs."""
 import json,pathlib,tempfile,unittest
+from unittest.mock import patch
 import numpy as np
 from shapely.geometry import box
 import i93_north as I
@@ -87,6 +88,16 @@ def curvature(along,y):
 
 
 class ProfileTest(unittest.TestCase):
+ def test_the_open_approach_climbs_before_entering_the_lower_survey_deck(self):
+  points=[[float(x),0.] for x in range(0,501,3)];n=len(points)
+  plan=I.Plan('approach',points,[1]*n,[10.]*n,I.MAINLINE_GRADE,[2]*n)
+  plan.curve=120;plan.survey=(150,n-1);plan.fixed={0:.35,150:8.,n-1:8.}
+  def cells(_,p,*args):return (np.array([10.6]) if 180<=p[0]<=330 else np.array([]),None,None,None)
+  with patch.object(I,'survey_cells',side_effect=cells):I.survey_constraints(plan,None)
+  report={'grades':{},'infeasible':[]};self.assertTrue(I.solve(plan,report));self.assertFalse(report['infeasible'])
+  self.assertGreater(plan.y[40],2,'climb on the open approach before the overhead deck')
+  self.assertLessEqual(float(np.max(np.abs(np.diff(plan.y))/np.diff(plan.along))),I.MAINLINE_GRADE+.0001)
+
  def test_ramp_shoulders_use_open_space_and_taper_to_streets_and_buildings(self):
   points=[[float(x),0.] for x in range(0,201,2)]
   ramp=I.Plan('ramp',points,[1]*len(points),[7.]*len(points),I.RAMP_GRADE,[1]*len(points))
