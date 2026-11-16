@@ -32,6 +32,8 @@ import { christianSciencePlazaSteps, christianScienceTrees, isChristianSciencePo
 import { BOSTON_COMMON, commonTrees, FROG_POND, FROG_POND_LEVEL, frogPondApron } from '../simulation/boston-common.ts';
 import { isCommonwealthMall, isPlannedMallLawn, mallPathTest } from '../simulation/commonwealth-mall.ts';
 import { mallDetailSteps, type SolidBox } from './commonwealth-mall.ts';
+import {isPavedWaterfrontPark,waterfrontReserved} from '../simulation/waterfront.ts';
+import {waterfrontDetailSteps} from './waterfront.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -136,7 +138,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     if(due(pace))yield;
     if(/copley square/i.test(park.name))continue; // Detailed existing landscape owns this plaza.
     // Boston types the Commonwealth Avenue Mall with its paved squares; it is a lawn (its walk is a surveyed sidewalk polygon).
-    const list=isFellsWoodland(park)?woods:(/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??''))&&!isCommonwealthMall(park)?plazas:/public garden/i.test(park.name)?gardens:lawns;
+    const list=isFellsWoodland(park)?woods:(isPavedWaterfrontPark(park)||/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??''))&&!isCommonwealthMall(park)?plazas:/public garden/i.test(park.name)?gardens:lawns;
     // A large park covers thousands of DEM cells: its surface is draped a few milliseconds a frame.
     yield* list.add(park.rings);
   }
@@ -252,7 +254,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     return {area,...areaBounds(area)};
   });
   const wet=(p:Point2)=>waterBounds.some(w=>p[0]>=w.minX-2&&p[0]<=w.maxX+2&&p[1]>=w.minZ-2&&p[1]<=w.maxZ+2&&insideArea(p,w.area));
-  const safe=(p:Point2)=>!options.reserved?.(...p)&&!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
+  const safe=(p:Point2)=>!options.reserved?.(...p)&&!waterfrontReserved(...p)&&!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
   const treePoints:(THREE.Vector3|TreePlanting)[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
@@ -346,7 +348,8 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   if(christianSciencePlaza){
     yield* christianSciencePlazaSteps(city,group,options);
   }
-  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,naturalTrails,bridges,footbridgePiers:piers,trees:treePoints.length+woodlandTrees-sharedWoodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
+  const waterfront=yield* waterfrontDetailSteps(city,group,options);
+  group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,naturalTrails,bridges,footbridgePiers:piers,trees:treePoints.length+woodlandTrees-sharedWoodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,waterfront,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
   (options.target??scene).add(group);return group;
 }
 

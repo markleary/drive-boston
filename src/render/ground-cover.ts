@@ -4,9 +4,9 @@ import {pointInside} from '../simulation/roads.ts';
 import {sampleElevation,sampleTerrainNormal} from '../simulation/terrain.ts';
 import {FROG_POND,frogPondApron} from '../simulation/boston-common.ts';
 import {MALL_MONUMENTS,MALL_WALK_HALF,WOMENS_MEMORIAL_RADIUS,mallPathTest} from '../simulation/commonwealth-mall.ts';
-import {seeded,canvasTexture} from './materials';
-import {mergeSpatialGeometries} from './spatial-batches';
-import {insideEmbracePlaza} from './the-embrace';
+import {seeded,canvasTexture} from './materials.ts';
+import {mergeSpatialGeometries} from './spatial-batches.ts';
+import {insideEmbracePlaza} from './the-embrace.ts';
 
 let grassMaps:{color:THREE.Texture;relief:THREE.Texture}|undefined;
 export function createGrassMaterial(tint='#a2af84'){

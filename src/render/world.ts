@@ -45,6 +45,7 @@ import { tunnelAt,inTunnelApproach } from '../simulation/tunnels.ts';
 import { createRoadHeadlights } from './road-headlights';
 import { TRAFFIC_CAPACITY } from '../simulation/npc-vehicle-specs';
 import { TRAFFIC_DENSITY } from '../simulation/npc-density';
+import { addConleyTerminal } from './conley-terminal.ts';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; warm?: Warm; upload?: Upload; }
 
@@ -112,6 +113,8 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const harvardBridge=addHarvardBridgeDetails(scene,city,{mobile:options.mobile});buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
   const tobinBridge=addTobinBridgeDetails(scene,city,materials.asphalt);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
   const tunnels=addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;
+  const conley=addConleyTerminal(scene,city,{mobile:options.mobile});buildingCollisions.push(...conley.collisions);roadStructures.userData.conley=conley.group.userData;
+  if(architecturalLandmarks?.fishPier)roadStructures.userData.fishPier=architecturalLandmarks.fishPier.group.userData;
 
   /** The original single-survey build: every road, curb, building and prop at once. */
   async function buildWholeCity(){
@@ -307,7 +310,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   let mode:LightingMode='golden',underground=false;
   const direction=new THREE.Vector3(-270,255,330);
   function setLighting(next:LightingMode){
-    mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);
+    mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);conley.setLighting(night);
     roadHeadlights.setNight(night);
     sky.visible=!night;environmentSky.visible=!night;
     scene.background=night?new THREE.Color('#07111e'):null;

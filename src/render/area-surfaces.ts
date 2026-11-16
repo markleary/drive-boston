@@ -6,6 +6,7 @@ import {uncoveredWater,uncoveredBank} from './water-pavement.ts';
 import {SHORE_FADE,type WaterShore} from './water-shore.ts';
 import {drain,due,type Pace} from './pacing.ts';
 import {boundingSphereSteps,flatNormalSteps} from './paced-geometry.ts';
+import {inWaterfrontTerrainCut} from './waterfront-terrain.ts';
 // Above lawn decals (.024 m), below ground-road asphalt (.045 m).
 export const WATER_SURFACE_OFFSET=.035;
 const triangulations=new WeakMap<Point2[][],{vertices:THREE.Vector2[];faces:number[][]}>();
@@ -75,8 +76,11 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
     // Intersect each DEM face with a horizontal water plane. A bank can rise
     // through the surface, but must never pull the water's vertices uphill.
     if(water&&flatHeight!==undefined&&poly.length){
-      const out:Point2[]=[];let a=poly.at(-1)!,da=sampleElevation(city,...a)-flatHeight;
-      for(const b of poly){const db=sampleElevation(city,...b)-flatHeight;
+      // A quay retains the land vertically. Let the water reach that surveyed
+      // wall even where a coarse DEM cell blends the pier down into the basin.
+      const depth=(p:Point2)=>inWaterfrontTerrainCut(...p)?-6:Math.min(sampleElevation(city,...p)-flatHeight,shore?.hardDepth?.(...p)??Infinity);
+      const out:Point2[]=[];let a=poly.at(-1)!,da=depth(a);
+      for(const b of poly){const db=depth(b);
         if((da<=0)!==(db<=0)){const t=da/(da-db);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);}
         if(db<=0)out.push(b);a=b;da=db;
       }poly=out;

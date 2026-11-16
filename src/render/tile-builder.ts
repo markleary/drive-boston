@@ -71,6 +71,7 @@ import { housePalette, houseRoof } from './house-styles';
 import { cityParkDetailSteps, areaBoundsOf, type Bounds } from './city-parks';
 import { DrapedSurface } from './draped-surface.ts';
 import { fellsViewHeight } from './fells-woodland.ts';
+import {clipWaterfrontTerrainSteps} from './waterfront-terrain.ts';
 import type { TreeField } from './foliage';
 
 export interface TileContext {
@@ -223,9 +224,10 @@ export function createTileBuilder(ctx: TileContext) {
         // portal triangles); the collider then reuses that clip of the same arrays.
         if (due(pace)) yield 'terrain';
         yield* stage('terrain', clipPortalSurfaceSteps(city, geometry, pace));
+        yield* stage('terrain', clipWaterfrontTerrainSteps(city,geometry,pace));
         const ground = new THREE.Mesh(geometry, ctx.ground); ground.name = 'Terrain'; ground.position.y = -.04; ground.receiveShadow = true; ground.renderOrder = -3; group.add(ground);
         if (due(pace)) yield 'terrain';
-        colliders.push(physics.addTerrainTile(positions,indices));
+        if(geometry.index!.count)colliders.push(physics.addTerrainTile(geometry.getAttribute('position').array as Float32Array,geometry.index!.array as Uint32Array));
         if (overlaps(bounds, BACK_BAY_PAVING)) {
           if (due(pace)) yield 'terrain';
           const paving = backBayPaving(city, { i0, i1, j0, j1 });
