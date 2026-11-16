@@ -2,9 +2,12 @@ import type {CityData,Point2,Road} from '../types';
 import {sampleElevation} from '../simulation/terrain.ts';
 import {deckEdge} from '../simulation/road-surfaces.ts';
 import {footbridgeRoad} from '../simulation/footbridges.ts';
+import {tunnelCoveredAt,tunnelStations} from '../simulation/tunnels.ts';
 
 type Cutout={points:Point2[];minX:number;maxX:number;minZ:number;maxZ:number;minimumWaterLevel?:number};
 const indexes=new WeakMap<CityData,Map<string,Cutout[]>>(),bankIndexes=new WeakMap<CityData,Map<string,Cutout[]>>(),CELL=64;
+const lerp=(a:number,b:number,t:number)=>a+(b-a)*t;
+const between=(a:Point2,b:Point2,t:number):Point2=>t===0?a:t===1?b:[lerp(a[0],b[0],t),lerp(a[1],b[1],t)];
 /** Hydro outlines sometimes include the paved riverbank and its underpass.
  * Remove those pavement footprints from water, including low source decks at
  * their ground landings. Keep water beneath genuinely elevated crossings. */
@@ -17,18 +20,33 @@ function index(city:CityData,banks=false){
     else if(bridge)corridors.push({road:bridge,margin:.3,kind:'approach'});
   }
   for(const {road,margin,kind} of corridors){
+    // A covered bore owns no surface pavement, even when its floor is lower
+    // than the bed of the harbour. Open cuts keep their bank treatment.
+    if(road.tunnel&&!road.tunnel.covered)continue;
+    const stations=road.tunnel?tunnelStations(road):undefined;
+    const coverEnds=road.tunnel?.covered?.flat().sort((a,b)=>a-b)??[];
     const expanded={...road,width:road.width+margin,deckWidths:road.deckWidths?.map(w=>w+margin)};
     for(let i=1;i<road.points.length;i++){
-      const points=[deckEdge(expanded,i-1,-1),deckEdge(expanded,i-1,1),deckEdge(expanded,i,1),deckEdge(expanded,i,-1)];
-      if(road.elevations&&kind==='road'){
-        // Only clip an elevated ribbon where it actually merges with the bank.
-        // A bridge can have two ground-level ends and still span deep water.
-        const probes=[...points,road.points[i-1],road.points[i]],low=Math.min(road.elevations[i-1],road.elevations[i]);
-        if(probes.every(p=>low-sampleElevation(city,...p)>.25))continue;
+      const start=stations?.[i-1]??0,end=stations?.[i]??1;
+      const splits=[start,...coverEnds.filter(s=>s>start&&s<end),end];
+      const leftA=deckEdge(expanded,i-1,-1),rightA=deckEdge(expanded,i-1,1);
+      const leftB=deckEdge(expanded,i,-1),rightB=deckEdge(expanded,i,1);
+      for(let j=1;j<splits.length;j++){
+        const lo=splits[j-1],hi=splits[j];
+        if(hi<=lo||tunnelCoveredAt(road,(lo+hi)/2))continue;
+        const a=(lo-start)/(end-start),b=(hi-start)/(end-start);
+        const points=[between(leftA,leftB,a),between(rightA,rightB,a),between(rightA,rightB,b),between(leftA,leftB,b)];
+        const low=road.elevations?Math.min(lerp(road.elevations[i-1],road.elevations[i],a),lerp(road.elevations[i-1],road.elevations[i],b)):Infinity;
+        if(road.elevations&&kind==='road'){
+          // Only clip an elevated ribbon where it actually merges with the bank.
+          // A bridge can have two ground-level ends and still span deep water.
+          const probes=[...points,between(road.points[i-1],road.points[i],a),between(road.points[i-1],road.points[i],b)];
+          if(probes.every(p=>low-sampleElevation(city,...p)>.25))continue;
+        }
+        const area=points.reduce((n,p,j)=>{const q=points[(j+1)%4];return n+p[0]*q[1]-q[0]*p[1];},0);if(Math.abs(area)<.0001)continue;if(area<0)points.reverse();
+        const cutout={points,minX:Math.min(...points.map(p=>p[0])),maxX:Math.max(...points.map(p=>p[0])),minZ:Math.min(...points.map(p=>p[1])),maxZ:Math.max(...points.map(p=>p[1])),minimumWaterLevel:kind==='approach'?low-.1:undefined};
+        for(let x=Math.floor(cutout.minX/CELL);x<=Math.floor(cutout.maxX/CELL);x++)for(let z=Math.floor(cutout.minZ/CELL);z<=Math.floor(cutout.maxZ/CELL);z++){const key=`${x},${z}`,list=cells.get(key)??[];list.push(cutout);cells.set(key,list);}
       }
-      const area=points.reduce((n,p,j)=>{const q=points[(j+1)%4];return n+p[0]*q[1]-q[0]*p[1];},0);if(Math.abs(area)<.0001)continue;if(area<0)points.reverse();
-      const cutout={points,minX:Math.min(...points.map(p=>p[0])),maxX:Math.max(...points.map(p=>p[0])),minZ:Math.min(...points.map(p=>p[1])),maxZ:Math.max(...points.map(p=>p[1])),minimumWaterLevel:kind==='approach'?Math.min(road.elevations![i-1],road.elevations![i])-.1:undefined};
-      for(let x=Math.floor(cutout.minX/CELL);x<=Math.floor(cutout.maxX/CELL);x++)for(let z=Math.floor(cutout.minZ/CELL);z<=Math.floor(cutout.maxZ/CELL);z++){const key=`${x},${z}`,list=cells.get(key)??[];list.push(cutout);cells.set(key,list);}
     }
   }
   cache.set(city,cells);return cells;

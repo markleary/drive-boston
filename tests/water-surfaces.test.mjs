@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {parkSurface,WATER_SURFACE_OFFSET} from '../src/render/area-surfaces.ts';
+import * as THREE from 'three';
+import {parkSurface,shoreBankGeometry,WATER_SURFACE_OFFSET} from '../src/render/area-surfaces.ts';
+import {waterShore} from '../src/render/water-shore.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
 import {resolveCity} from '../src/simulation/city-tiles.ts';
@@ -30,6 +32,41 @@ test('flat water retains island holes and paved ground-road cutouts',()=>{
   assert.ok(!pointInside([x,z],rings[1]));assert.ok(Math.abs(z-6)>5.04,'the road and its bank allowance must remain dry');
  }
  g.dispose();
+});
+
+test('a partial tunnel roof stops both pavement cutouts at its exact station',()=>{
+ const road={id:'tunnel',width:4,points:[[0,3],[30,3]],elevations:[-8,-8],tunnel:{clearance:4,covered:[[13,30]]}};
+ const city={bounds:{minX:0,maxX:30,minZ:0,maxZ:30},roads:[road]};
+ const water={rings:[[[0,0],[30,0],[30,30],[0,30]]]},shore=waterShore(water);
+ const bank=[],geometry=parkSurface(city,shore.rings,WATER_SURFACE_OFFSET,0,undefined,true,shore,bank);
+ const bankGeometry=shoreBankGeometry(bank),material=new THREE.MeshBasicMaterial(),ray=new THREE.Raycaster(),down=new THREE.Vector3(0,-1,0);
+ for(const [surface,z] of [[geometry,4],[bankGeometry,1.6]]){
+  const mesh=new THREE.Mesh(surface,material);
+  const visible=x=>{ray.set(new THREE.Vector3(x,10,z),down);return ray.intersectObject(mesh,false).length>0;};
+  assert.equal(visible(12.9),false,'the open approach retains its pavement cutout');
+  assert.equal(visible(13.1),true,'the surface resumes at the roof boundary within a road segment');
+  surface.dispose();
+ }
+ material.dispose();
+});
+
+test('harbour water covers the I-90 bores in Fort Point Channel and off South Boston',()=>{
+ const probes=[
+  [1662.216,329.501],[1656.206,381.679],[1689.312,299.602],
+  [3624.64,-65.46],[3625.35,-37.22],[3601.6,-21.63],
+ ];
+ const water=metro.water.find(w=>w.id==='water-merged-55'),material=new THREE.MeshBasicMaterial(),ray=new THREE.Raycaster(),down=new THREE.Vector3(0,-1,0);
+ for(const [x,z] of probes){
+  const surface=water.surfaces.find(s=>inside([x,z],s.rings));
+  assert.equal(surface?.name,'Tidal harbour');
+  const shore=waterShore(water,surface.rings),bounds={minX:x-6,maxX:x+6,minZ:z-6,maxZ:z+6};
+  const geometry=parkSurface(metro,shore.rings,WATER_SURFACE_OFFSET,surface.level,bounds,true,shore);
+  ray.set(new THREE.Vector3(x,10,z),down);
+  const hit=ray.intersectObject(new THREE.Mesh(geometry,material),false)[0];
+  assert.ok(hit&&Math.abs(hit.point.y-surface.level-WATER_SURFACE_OFFSET)<1e-5,`the water surface continues over the tunnel at ${x}, ${z}`);
+  geometry.dispose();
+ }
+ material.dispose();
 });
 
 test('the Frog Pond water covers both lobes without grass breaking through',()=>{
