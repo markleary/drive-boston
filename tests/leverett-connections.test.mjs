@@ -3,7 +3,6 @@ import test from 'node:test';
 import * as THREE from 'three';
 import {DrivingPhysics,carSteeringLimit} from '../src/physics/vehicle.ts';
 import {bridgeSupports,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
-import {roadGraph} from '../src/simulation/traffic.ts';
 import {tileCollisionIndices} from '../src/render/tile-geometry.ts';
 import {loadMetroCity,windowCity,readJson,installExactMeshes} from './helpers/metro-city.mjs';
 
@@ -35,11 +34,16 @@ function dense(points){
  return[...out,points.at(-1)];
 }
 
-test('Leverett mouths match the retained survey deck throughout their overlap and stay out of ambient traffic',()=>{
- const edges=roadGraph(city).edges;
+test('Leverett mouths match their retained survey or generated continuation and allow ambient traffic',()=>{
  for(const entry of source.routes){
   const road=city.roads.find(r=>r.id===entry.id);assert.ok(road);
-  assert.equal(road.traffic,false);assert.ok(!edges.some(e=>e.road.id===road.id));
+  assert.notEqual(road.traffic,false);
+  if(entry.direction==='south'){
+   const incoming=city.roads.find(r=>r.id==='i93-sb-exit-18-2');assert.ok(incoming,'the source-aligned exit replaces the disconnected survey ramp');
+   assert.deepEqual(incoming.points.at(-1),road.points[0]);assert.ok(Math.abs(incoming.elevations.at(-1)-road.elevations[0])<.001);
+   assert.equal(incoming.deckWidths.at(-1),road.deckWidths[0]);assert.deepEqual(incoming.deckTangents.end,road.deckTangents.start);
+   assert.notEqual(incoming.traffic,false);continue;
+  }
   const start=entry.direction==='north'?road.points.length-8:0,end=entry.direction==='north'?road.points.length:8;
   for(let i=start;i<end;i++){
    const y=surveyHeight(road.points[i],road.elevations[i]);
@@ -70,7 +74,10 @@ test('north Leverett keeps the mapped crossing order above MA3 and below the nex
 for(const entry of source.routes)for(const reverse of [false,true])test(`car crosses both ${entry.id} joins with the real survey collision ${reverse?'reverse':'forward'}`,async()=>{
  const road=city.roads.find(r=>r.id===entry.id),mouth=entry.surveyMouth,way=source.ways.find(w=>w.id===mouth.sourceWay),north=entry.direction==='north';
  const extended=[];
- for(let d=3;d<=21;d+=3){
+ if(!north){
+  const incoming=city.roads.find(r=>r.id==='i93-sb-exit-18-2');
+  for(let i=incoming.points.length-2;i>=incoming.points.length-8;i--){const p=incoming.points[i];extended.push({x:p[0],z:p[1],y:incoming.elevations[i]});}
+ }else for(let d=3;d<=21;d+=3){
   const p=along(way.points,mouth.stationMeters+(north?d:-d));
   extended.push({x:p[0],z:p[1],y:surveyHeight(p,mouth.height)});
  }

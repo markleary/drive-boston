@@ -27,8 +27,8 @@ REVIEWED=[
 ]
 
 
-def duplicate_components(vertices,faces):
- """Return the complete lower-loop components, or fail if the survey changed."""
+def duplicate_components(vertices,faces,reviewed=REVIEWED,label='Leverett'):
+ """Return the reviewed connected components, or fail if the survey changed."""
  parent=list(range(len(vertices)))
  def root(i):
   while parent[i]!=i:parent[i]=parent[parent[i]];i=parent[i]
@@ -40,12 +40,12 @@ def duplicate_components(vertices,faces):
  removed=np.zeros(len(faces),bool);components=[];matched=set()
  for indices in groups.values():
   points=vertices[faces[indices]];low=points.min((0,1));high=points.max((0,1))
-  signature=next((i for i,(count,a,b) in enumerate(REVIEWED) if len(indices)==count and np.max(np.abs(low-a))<.06 and np.max(np.abs(high-b))<.06),None)
+  signature=next((i for i,(count,a,b) in enumerate(reviewed) if len(indices)==count and np.max(np.abs(low-a))<.06 and np.max(np.abs(high-b))<.06),None)
   if signature is None:continue
-  assert signature not in matched,'Duplicate lower-loop signature: review the updated survey'
+  assert signature not in matched,f'Duplicate {label} component signature: review the updated survey'
   matched.add(signature);removed[indices]=True
   components.append({'triangles':len(indices),'min':low.round(3).tolist(),'max':high.round(3).tolist()})
- assert len(matched)==len(REVIEWED),f'Leverett survey edition changed: found {len(matched)}/{len(REVIEWED)} reviewed components; rebuild/review before removing any geometry'
+ assert len(matched)==len(reviewed),f'{label} survey edition changed: found {len(matched)}/{len(reviewed)} reviewed components; rebuild/review before removing any geometry'
  return removed,components
 
 
