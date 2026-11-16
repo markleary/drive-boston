@@ -1,0 +1,815 @@
+{
+  "errors": [],
+  "snapshots": [
+    {
+      "name": "fish-pier",
+      "waterfront": [
+        {
+          "sites": 14,
+          "quays": 807,
+          "benches": 61,
+          "lamps": 62
+        },
+        {
+          "sites": 5,
+          "quays": 417,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 3,
+          "quays": 75,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 6,
+          "quays": 884,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 14,
+          "quays": 1473,
+          "benches": 93,
+          "lamps": 91
+        },
+        {
+          "sites": 5,
+          "quays": 973,
+          "benches": 20,
+          "lamps": 19
+        },
+        {
+          "sites": 5,
+          "quays": 42,
+          "benches": 4,
+          "lamps": 4
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 3,
+          "quays": 786,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 24,
+          "benches": 0,
+          "lamps": 0
+        }
+      ],
+      "snapshot": {
+        "mobile": false,
+        "fps": 60,
+        "drawCalls": 2509,
+        "triangles": 15864568,
+        "textures": 1137,
+        "geometries": 2061,
+        "graphicsContext": {
+          "lost": false,
+          "losses": 0,
+          "builds": 1
+        },
+        "tiles": {
+          "loaded": 12,
+          "failed": 0,
+          "cpuMs": 12860
+        },
+        "conley": {
+          "cranes": 7,
+          "containers": 1438,
+          "cargoStacks": 571,
+          "yardGantries": 12,
+          "berth10Length": 388.62,
+          "extension": [
+            [
+              3710.48,
+              909.17
+            ],
+            [
+              4101.945750603523,
+              898.1795266516867
+            ],
+            [
+              4104.134752496094,
+              976.1488043879485
+            ],
+            [
+              3712.6690018925706,
+              987.1392777362618
+            ]
+          ],
+          "interpretation": "Source quay alignment; documented crane types and dimensions; illustrative parking and cargo inventory"
+        },
+        "fishPier": {
+          "buildingId": "boston-fish-pier",
+          "triangles": 31474,
+          "fishPier": {
+            "halls": 2,
+            "exchange": true,
+            "sourceBuildings": [
+              "BOS-J5CID-VEXTU-F7LOA",
+              "BOS-UJJRR-NN2MB-M3QNM",
+              "BOS-4K78V-JFNIC-EHC3N"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "piers-park",
+      "waterfront": [
+        {
+          "sites": 3,
+          "quays": 75,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 6,
+          "quays": 884,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 14,
+          "quays": 1473,
+          "benches": 93,
+          "lamps": 91
+        },
+        {
+          "sites": 5,
+          "quays": 973,
+          "benches": 20,
+          "lamps": 19
+        },
+        {
+          "sites": 5,
+          "quays": 42,
+          "benches": 4,
+          "lamps": 4
+        },
+        {
+          "sites": 1,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 14,
+          "quays": 807,
+          "benches": 61,
+          "lamps": 62
+        },
+        {
+          "sites": 5,
+          "quays": 417,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 5,
+          "quays": 619,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 10,
+          "quays": 162,
+          "benches": 11,
+          "lamps": 11
+        },
+        {
+          "sites": 12,
+          "quays": 1180,
+          "benches": 23,
+          "lamps": 23
+        }
+      ],
+      "snapshot": {
+        "mobile": false,
+        "fps": 54,
+        "drawCalls": 3263,
+        "triangles": 20467027,
+        "textures": 1388,
+        "geometries": 2468,
+        "graphicsContext": {
+          "lost": false,
+          "losses": 0,
+          "builds": 1
+        },
+        "tiles": {
+          "loaded": 14,
+          "failed": 0,
+          "cpuMs": 11089
+        },
+        "conley": {
+          "cranes": 7,
+          "containers": 1438,
+          "cargoStacks": 571,
+          "yardGantries": 12,
+          "berth10Length": 388.62,
+          "extension": [
+            [
+              3710.48,
+              909.17
+            ],
+            [
+              4101.945750603523,
+              898.1795266516867
+            ],
+            [
+              4104.134752496094,
+              976.1488043879485
+            ],
+            [
+              3712.6690018925706,
+              987.1392777362618
+            ]
+          ],
+          "interpretation": "Source quay alignment; documented crane types and dimensions; illustrative parking and cargo inventory"
+        },
+        "fishPier": {
+          "buildingId": "boston-fish-pier",
+          "triangles": 31474,
+          "fishPier": {
+            "halls": 2,
+            "exchange": true,
+            "sourceBuildings": [
+              "BOS-J5CID-VEXTU-F7LOA",
+              "BOS-UJJRR-NN2MB-M3QNM",
+              "BOS-4K78V-JFNIC-EHC3N"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "downtown-wharves",
+      "waterfront": [
+        {
+          "sites": 3,
+          "quays": 75,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 14,
+          "quays": 1473,
+          "benches": 93,
+          "lamps": 91
+        },
+        {
+          "sites": 5,
+          "quays": 973,
+          "benches": 20,
+          "lamps": 19
+        },
+        {
+          "sites": 5,
+          "quays": 42,
+          "benches": 4,
+          "lamps": 4
+        },
+        {
+          "sites": 14,
+          "quays": 807,
+          "benches": 61,
+          "lamps": 62
+        },
+        {
+          "sites": 5,
+          "quays": 417,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 5,
+          "quays": 619,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 10,
+          "quays": 162,
+          "benches": 11,
+          "lamps": 11
+        },
+        {
+          "sites": 12,
+          "quays": 1180,
+          "benches": 23,
+          "lamps": 23
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        }
+      ],
+      "snapshot": {
+        "mobile": false,
+        "fps": 56,
+        "drawCalls": 3508,
+        "triangles": 25232246,
+        "textures": 1632,
+        "geometries": 2836,
+        "graphicsContext": {
+          "lost": false,
+          "losses": 0,
+          "builds": 1
+        },
+        "tiles": {
+          "loaded": 12,
+          "failed": 0,
+          "cpuMs": 11459
+        },
+        "conley": {
+          "cranes": 7,
+          "containers": 1438,
+          "cargoStacks": 571,
+          "yardGantries": 12,
+          "berth10Length": 388.62,
+          "extension": [
+            [
+              3710.48,
+              909.17
+            ],
+            [
+              4101.945750603523,
+              898.1795266516867
+            ],
+            [
+              4104.134752496094,
+              976.1488043879485
+            ],
+            [
+              3712.6690018925706,
+              987.1392777362618
+            ]
+          ],
+          "interpretation": "Source quay alignment; documented crane types and dimensions; illustrative parking and cargo inventory"
+        },
+        "fishPier": {
+          "buildingId": "boston-fish-pier",
+          "triangles": 31474,
+          "fishPier": {
+            "halls": 2,
+            "exchange": true,
+            "sourceBuildings": [
+              "BOS-J5CID-VEXTU-F7LOA",
+              "BOS-UJJRR-NN2MB-M3QNM",
+              "BOS-4K78V-JFNIC-EHC3N"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "conley-terminal",
+      "waterfront": [
+        {
+          "sites": 3,
+          "quays": 75,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 14,
+          "quays": 807,
+          "benches": 61,
+          "lamps": 62
+        },
+        {
+          "sites": 5,
+          "quays": 417,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 3,
+          "quays": 786,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 24,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 6,
+          "quays": 884,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 5,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        }
+      ],
+      "snapshot": {
+        "mobile": false,
+        "fps": 60,
+        "drawCalls": 1801,
+        "triangles": 11867520,
+        "textures": 940,
+        "geometries": 2251,
+        "graphicsContext": {
+          "lost": false,
+          "losses": 0,
+          "builds": 1
+        },
+        "tiles": {
+          "loaded": 12,
+          "failed": 0,
+          "cpuMs": 5344
+        },
+        "conley": {
+          "cranes": 7,
+          "containers": 1438,
+          "cargoStacks": 571,
+          "yardGantries": 12,
+          "berth10Length": 388.62,
+          "extension": [
+            [
+              3710.48,
+              909.17
+            ],
+            [
+              4101.945750603523,
+              898.1795266516867
+            ],
+            [
+              4104.134752496094,
+              976.1488043879485
+            ],
+            [
+              3712.6690018925706,
+              987.1392777362618
+            ]
+          ],
+          "interpretation": "Source quay alignment; documented crane types and dimensions; illustrative parking and cargo inventory"
+        },
+        "fishPier": {
+          "buildingId": "boston-fish-pier",
+          "triangles": 31474,
+          "fishPier": {
+            "halls": 2,
+            "exchange": true,
+            "sourceBuildings": [
+              "BOS-J5CID-VEXTU-F7LOA",
+              "BOS-UJJRR-NN2MB-M3QNM",
+              "BOS-4K78V-JFNIC-EHC3N"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "navy-yard",
+      "waterfront": [
+        {
+          "sites": 14,
+          "quays": 807,
+          "benches": 61,
+          "lamps": 62
+        },
+        {
+          "sites": 12,
+          "quays": 1180,
+          "benches": 23,
+          "lamps": 23
+        },
+        {
+          "sites": 6,
+          "quays": 842,
+          "benches": 6,
+          "lamps": 6
+        },
+        {
+          "sites": 5,
+          "quays": 619,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 8,
+          "quays": 1126,
+          "benches": 35,
+          "lamps": 34
+        },
+        {
+          "sites": 10,
+          "quays": 162,
+          "benches": 11,
+          "lamps": 11
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 14,
+          "quays": 1473,
+          "benches": 93,
+          "lamps": 91
+        },
+        {
+          "sites": 1,
+          "quays": 271,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        }
+      ],
+      "snapshot": {
+        "mobile": false,
+        "fps": 60,
+        "drawCalls": 3056,
+        "triangles": 19665844,
+        "textures": 1379,
+        "geometries": 2630,
+        "graphicsContext": {
+          "lost": false,
+          "losses": 0,
+          "builds": 1
+        },
+        "tiles": {
+          "loaded": 10,
+          "failed": 0,
+          "cpuMs": 6997
+        },
+        "conley": {
+          "cranes": 7,
+          "containers": 1438,
+          "cargoStacks": 571,
+          "yardGantries": 12,
+          "berth10Length": 388.62,
+          "extension": [
+            [
+              3710.48,
+              909.17
+            ],
+            [
+              4101.945750603523,
+              898.1795266516867
+            ],
+            [
+              4104.134752496094,
+              976.1488043879485
+            ],
+            [
+              3712.6690018925706,
+              987.1392777362618
+            ]
+          ],
+          "interpretation": "Source quay alignment; documented crane types and dimensions; illustrative parking and cargo inventory"
+        },
+        "fishPier": {
+          "buildingId": "boston-fish-pier",
+          "triangles": 31474,
+          "fishPier": {
+            "halls": 2,
+            "exchange": true,
+            "sourceBuildings": [
+              "BOS-J5CID-VEXTU-F7LOA",
+              "BOS-UJJRR-NN2MB-M3QNM",
+              "BOS-4K78V-JFNIC-EHC3N"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "chelsea",
+      "waterfront": [
+        {
+          "sites": 12,
+          "quays": 1180,
+          "benches": 23,
+          "lamps": 23
+        },
+        {
+          "sites": 6,
+          "quays": 842,
+          "benches": 6,
+          "lamps": 6
+        },
+        {
+          "sites": 5,
+          "quays": 619,
+          "benches": 1,
+          "lamps": 1
+        },
+        {
+          "sites": 8,
+          "quays": 1126,
+          "benches": 35,
+          "lamps": 34
+        },
+        {
+          "sites": 3,
+          "quays": 811,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 245,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 1,
+          "quays": 168,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 5,
+          "quays": 144,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 3,
+          "quays": 1072,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        },
+        {
+          "sites": 0,
+          "quays": 0,
+          "benches": 0,
+          "lamps": 0
+        }
+      ],
+      "snapshot": {
+        "mobile": false,
+        "fps": 58,
+        "drawCalls": 3570,
+        "triangles": 26433903,
+        "textures": 1616,
+        "geometries": 2943,
+        "graphicsContext": {
+          "lost": false,
+          "losses": 0,
+          "builds": 1
+        },
+        "tiles": {
+          "loaded": 13,
+          "failed": 0,
+          "cpuMs": 8246
+        },
+        "conley": {
+          "cranes": 7,
+          "containers": 1438,
+          "cargoStacks": 571,
+          "yardGantries": 12,
+          "berth10Length": 388.62,
+          "extension": [
+            [
+              3710.48,
+              909.17
+            ],
+            [
+              4101.945750603523,
+              898.1795266516867
+            ],
+            [
+              4104.134752496094,
+              976.1488043879485
+            ],
+            [
+              3712.6690018925706,
+              987.1392777362618
+            ]
+          ],
+          "interpretation": "Source quay alignment; documented crane types and dimensions; illustrative parking and cargo inventory"
+        },
+        "fishPier": {
+          "buildingId": "boston-fish-pier",
+          "triangles": 31474,
+          "fishPier": {
+            "halls": 2,
+            "exchange": true,
+            "sourceBuildings": [
+              "BOS-J5CID-VEXTU-F7LOA",
+              "BOS-UJJRR-NN2MB-M3QNM",
+              "BOS-4K78V-JFNIC-EHC3N"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

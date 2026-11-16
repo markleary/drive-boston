@@ -4,6 +4,7 @@ import type { FarBuilding } from '../simulation/far-format.ts';
 import { buildBostonCityHall, CITY_HALL_EAST_ID, CITY_HALL_ID } from './boston-city-hall.ts';
 import { buildEncore, ENCORE_ID } from './encore.ts';
 import { buildIcaBoston, ICA_ID, insideIcaForecourt } from './ica-boston.ts';
+import { buildFishPier, FISH_PIER_BUILDINGS, insideFishPierWorkingArea } from './fish-pier.ts';
 
 export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity) {
   const farHulls = new Set<FarBuilding>(), replaced = new Set<string>();
@@ -41,6 +42,13 @@ export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity) {
   const encore = resort && buildEncore(resort.base);
   if (encore) install(ENCORE_ID, encore, [resort]);
 
-  // These three fixed-size models are part of the skyline at all detail levels.
-  return { replaced, farHulls, collisions, occupied: ica ? insideIcaForecourt : undefined, encore };
+  const fishHulls=FISH_PIER_BUILDINGS.map(source=>hullAt(source.tile,...source.first));
+  const fishPier=fishHulls.every(Boolean)?buildFishPier(city):undefined;
+  if(fishPier){
+    for(const [i,source] of FISH_PIER_BUILDINGS.entries()){replaced.add(source.id);farHulls.add(fishHulls[i]!);}
+    collisions.push(fishPier.collision);scene.add(fishPier.group);
+  }
+
+  // Fixed-size architectural models stay in the skyline at all detail levels.
+  return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z), encore, fishPier };
 }

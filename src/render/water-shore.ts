@@ -1,9 +1,14 @@
 import type {CityArea,Point2} from '../types';
+import {hardQuayAt,nearestQuay} from '../simulation/waterfront.ts';
 
 export const SHORE_WIDTH=3;
 export const SHORE_FADE=.75;
 type Edge={a:Point2;b:Point2};
-export interface WaterShore { rings:Point2[][]; width:number; distance:(x:number,z:number)=>number; }
+export interface WaterShore { rings:Point2[][]; width:number; distance:(x:number,z:number)=>number; hard?:(x:number,z:number)=>boolean;
+  /** Signed depth of the preserved water strip. A continuous value keeps
+   * coarse DEM triangles from shrinking it during water-plane clipping. */
+  hardDepth?:(x:number,z:number)=>number;
+}
 const cache=new WeakMap<CityArea,WeakMap<Point2[][],WaterShore>>();
 const boundaries=new WeakMap<CityArea,ReturnType<typeof edgeIndex>>();
 const cross=(a:Point2,b:Point2,c:Point2)=>(b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0]);
@@ -38,7 +43,11 @@ export function waterShore(water:CityArea,source=water.rings):WaterShore{
   // Leave open water in tiny ponds and narrow canals; a fixed-width bank can
   // otherwise consume the complete source footprint.
   const width=Math.min(SHORE_WIDTH,Math.max(.1,area/Math.max(1,perimeter)*.5));
-  const onShore=(a:Point2,b:Point2)=>originalDistance((a[0]+b[0])/2,(a[1]+b[1])/2)<.01&&originalDistance(...a)<.01&&originalDistance(...b)<.01;
+  const onShore=(a:Point2,b:Point2)=>{
+    if(!(originalDistance((a[0]+b[0])/2,(a[1]+b[1])/2)<.01&&originalDistance(...a)<.01&&originalDistance(...b)<.01))return false;
+    if(hardQuayAt((a[0]+b[0])/2,(a[1]+b[1])/2))return false;
+    return true;
+  };
   const rings=source.map((ring,index)=>{
     const area=ring.reduce((sum,p,i)=>{const q=ring[(i+1)%ring.length];return sum+p[0]*q[1]-q[0]*p[1];},0),sign=Math.sign(area)*(index?-1:1);
     const out:Point2[]=[],flags:boolean[]=[];
@@ -46,7 +55,7 @@ export function waterShore(water:CityArea,source=water.rings):WaterShore{
       const a=ring[(i+ring.length-1)%ring.length],p=ring[i],b=ring[(i+1)%ring.length],before=onShore(a,p),after=onShore(p,b);
       const la=Math.hypot(a[0]-p[0],a[1]-p[1]),lb=Math.hypot(b[0]-p[0],b[1]-p[1]);
       const turn=Math.atan2(cross(a,p,b)*sign,(p[0]-a[0])*(b[0]-p[0])+(p[1]-a[1])*(b[1]-p[1]));
-      if(before&&after&&turn>.18&&la>.01&&lb>.01){
+      if(before&&after&&!hardQuayAt(...p,9)&&turn>.18&&la>.01&&lb>.01){
         const trim=Math.min(width/SHORE_WIDTH*8,la*.45,lb*.45),u:Point2=[p[0]+(a[0]-p[0])*trim/la,p[1]+(a[1]-p[1])*trim/la],v:Point2=[p[0]+(b[0]-p[0])*trim/lb,p[1]+(b[1]-p[1])*trim/lb],steps=Math.max(3,Math.ceil(turn/.2));
         for(let j=0;j<=steps;j++){const t=j/steps,s=1-t;out.push([s*s*u[0]+2*s*t*p[0]+t*t*v[0],s*s*u[1]+2*s*t*p[1]+t*t*v[1]]);flags.push(true);}
       }else{out.push(p);flags.push(after);}
@@ -54,5 +63,9 @@ export function waterShore(water:CityArea,source=water.rings):WaterShore{
     for(let i=0;i<out.length;i++)if(flags[i])shoreEdges.push({a:out[i],b:out[(i+1)%out.length]});
     return out;
   });
-  const result={rings,width,distance:edgeIndex(shoreEdges,SHORE_WIDTH+9)};sources.set(source,result);return result;
+  const softDistance=edgeIndex(shoreEdges,SHORE_WIDTH+9);
+  // A named site can own only part of a long source hydro edge. Test the
+  // queried location as well as the edge midpoint, so that partial quays do
+  // not inherit the natural bank of the rest of the original segment.
+  const result:WaterShore={rings,width,distance:(x,z)=>hardQuayAt(x,z,4.5)?Infinity:softDistance(x,z),hard:(x,z)=>hardQuayAt(x,z,4.5),hardDepth:(x,z)=>nearestQuay(x,z).distance-4.5};sources.set(source,result);return result;
 }
