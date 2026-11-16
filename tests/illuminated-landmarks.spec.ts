@@ -27,6 +27,14 @@ test('Schrafft and CITGO retain their skyline details through day, night and tra
   expect((await snapshot()).bridges.citgo.night).toBe(true); await page.screenshot({ path: testInfo.outputPath('citgo-night.png') });
   await lighting('Day'); await page.screenshot({ path: testInfo.outputPath('citgo-day.png') });
   await fly(-1580, 43, 40, -1730, 102); await page.screenshot({ path: testInfo.outputPath('citgo-reverse.png') });
+  // Reproduce the floating-support report close to the stepped host roof.
+  await page.keyboard.press('c'); expect((await snapshot()).camera).toBe('hood');
+  await page.evaluate(() => (window as any).__backbay.flyTo(-1750.79, 31.79, 139.23, 2.7966));
+  await expect(page.locator('#toast')).not.toHaveClass(/visible/, { timeout: 20000 }); await page.waitForTimeout(1300);
+  await page.screenshot({ path: testInfo.outputPath('citgo-roof-supports.png') });
+  await fly(-1706, 37, 113, -1730, 101); await page.screenshot({ path: testInfo.outputPath('citgo-roof-supports-east.png') });
+  await lighting('Night'); await page.screenshot({ path: testInfo.outputPath('citgo-roof-supports-night.png') });
+  await page.keyboard.press('c'); await page.keyboard.press('c');
   await fly(-80, 37, -3920, 184, -3812); await lighting('Night'); await page.screenshot({ path: testInfo.outputPath('schrafft-i93-night.png') });
   expect((await snapshot()).bridges.schrafft.night).toBe(true);
   await page.keyboard.press('1');

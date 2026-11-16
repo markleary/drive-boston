@@ -7,7 +7,7 @@ import { finish, LandmarkModel, landmarkTexture, type Vertex } from './landmark-
 export const CITGO = {
   original: [-1766.321, 102.158] as [number, number],
   position: [-1729.745, 102.158] as [number, number],
-  width: 18.288, height: 18.288, bottom: 47.743, roof: 33.935,
+  width: 18.288, height: 18.288, bottom: 47.743, frameBase: 33.935,
   normal: [.936, -.352] as [number, number],
 };
 
@@ -22,7 +22,17 @@ export function citgoSequence(seconds: number) {
 
 // The front of the surveyed roof is oblique to the sign. Its southern upright
 // cantilevers from an inset foot, rather than extending down beyond the facade.
-export const citgoSupportX = (x: number, y: number) => x < 0 ? x + 3.5 * Math.max(0, 1 - (y - CITGO.roof) / 6.9) : x;
+export const citgoSupportX = (x: number, y: number) => x < 0 ? x + 3.5 * Math.max(0, 1 - (y - CITGO.frameBase) / 6.9) : x;
+
+// Roof terraces beneath the three pairs of legs, sampled from the detailed
+// BOS-HNZB1-9VG44-I6AIK mesh in tile -2_0. The building's maximum height is
+// the upper frame datum, not the roof beneath these feet. Tests raycast the
+// packaged mesh so a survey change cannot silently leave the frame floating.
+export const CITGO_SUPPORT_COLUMNS = [
+  { x: -6.3, roof: 25.395 },
+  { x: 0, roof: 29.365 },
+  { x: 6.3, roof: 29.665 },
+];
 
 function faceTexture(mobile: boolean) {
   const size = mobile ? 512 : 1024;
@@ -115,11 +125,24 @@ export function buildCitgoSign(mobile = false) {
     g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize())); g.translate(...start.add(end).multiplyScalar(.5).toArray()); model.append(steel, g);
   };
   for (const z of [-1.55, 1.55]) {
-    for (const x of [-6.3, 0, 6.3]) {
-      strut([citgoSupportX(x, CITGO.roof), CITGO.roof, z], [x, CITGO.roof + 6.9, z], .23);
-      strut([x, CITGO.roof + 6.9, z], [x, CITGO.bottom + .1, z], .23);
+    for (const { x, roof } of CITGO_SUPPORT_COLUMNS) {
+      const footX = citgoSupportX(x, CITGO.frameBase);
+      // Embed the leg and base plate slightly into the terrace to avoid a
+      // visible seam from survey quantization or grazing camera angles.
+      strut([footX, roof - .12, z], [footX, CITGO.frameBase, z], .23);
+      model.box(steel, footX, roof + .05, z, .8, .18, .8);
+      strut([footX, CITGO.frameBase, z], [x, CITGO.frameBase + 6.9, z], .23);
+      strut([x, CITGO.frameBase + 6.9, z], [x, CITGO.bottom + .1, z], .23);
     }
-    for (let y = CITGO.roof; y < CITGO.bottom; y += 3.45) {
+    for (let i = 0; i < CITGO_SUPPORT_COLUMNS.length - 1; i++) {
+      const a = CITGO_SUPPORT_COLUMNS[i], b = CITGO_SUPPORT_COLUMNS[i + 1];
+      const left = citgoSupportX(a.x, CITGO.frameBase), right = citgoSupportX(b.x, CITGO.frameBase);
+      const low = Math.max(a.roof, b.roof) + .3;
+      strut([left, low, z], [right, low, z]);
+      strut([left, low, z], [right, CITGO.frameBase, z], .12);
+      strut([right, low, z], [left, CITGO.frameBase, z], .12);
+    }
+    for (let y = CITGO.frameBase; y < CITGO.bottom; y += 3.45) {
       strut([citgoSupportX(-6.3, y), y, z], [6.3, y, z]);
       for (const x of [-6.3, 0]) {
         const top = Math.min(y + 3.45, CITGO.bottom);
@@ -128,13 +151,24 @@ export function buildCitgoSign(mobile = false) {
       }
     }
   }
-  for (const y of [CITGO.roof + 6.9, CITGO.bottom - .45]) {
+  for (const { x, roof } of CITGO_SUPPORT_COLUMNS) {
+    const footX = citgoSupportX(x, CITGO.frameBase);
+    for (let y = roof + .3; y < CITGO.frameBase; y += 3.45) {
+      const top = Math.min(y + 3.45, CITGO.frameBase);
+      strut([footX, y, -1.55], [footX, y, 1.55]);
+      strut([footX, y, -1.55], [footX, top, 1.55], .12);
+      strut([footX, y, 1.55], [footX, top, -1.55], .12);
+    }
+    strut([footX, CITGO.frameBase, -1.55], [footX, CITGO.frameBase, 1.55]);
+  }
+  for (const y of [CITGO.frameBase + 6.9, CITGO.bottom - .45]) {
     model.box(steel, 0, y, 0, 14.2, .15, 4.1);
     for (const z of [-2, 2]) { strut([-7, y + 1, z], [7, y + 1, z], .07); for (let x = -7; x <= 7; x += 1.4) strut([x, y, z], [x, y + 1, z], .07); }
   }
   // A ladder and the slender maintenance rail above the rounded cabinet.
-  for (const x of [5.6, 6.2]) strut([x, CITGO.roof, 1.8], [x, CITGO.bottom, 1.8], .065);
-  for (let y = CITGO.roof; y < CITGO.bottom; y += .35) strut([5.6, y, 1.8], [6.2, y, 1.8], .045);
+  const ladderRoof = CITGO_SUPPORT_COLUMNS[2].roof;
+  for (const x of [5.6, 6.2]) strut([x, ladderRoof - .12, 1.8], [x, CITGO.bottom, 1.8], .065);
+  for (let y = ladderRoof + .3; y < CITGO.bottom; y += .35) strut([5.6, y, 1.8], [6.2, y, 1.8], .045);
   strut([-8.9, CITGO.bottom + CITGO.height + .3, 0], [8.9, CITGO.bottom + CITGO.height + .3, 0], .1);
   const result = model.build();
   Object.assign(result.group.userData, { ...CITGO, faces: 2, night: false, sequenceSeconds: 28, restoration: '2026' });
