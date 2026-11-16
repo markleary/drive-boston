@@ -5,8 +5,10 @@ import { buildBostonCityHall, CITY_HALL_EAST_ID, CITY_HALL_ID } from './boston-c
 import { buildEncore, ENCORE_ID } from './encore.ts';
 import { buildIcaBoston, ICA_ID, insideIcaForecourt } from './ica-boston.ts';
 import { buildFishPier, FISH_PIER_BUILDINGS, insideFishPierWorkingArea } from './fish-pier.ts';
+import { buildSchrafftCenter, SCHRAFFT_ID, SCHRAFFT_FIRST } from './schrafft-center.ts';
+import { buildCitgoSign } from './citgo-sign.ts';
 
-export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity) {
+export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, mobile = false) {
   const farHulls = new Set<FarBuilding>(), replaced = new Set<string>();
   const collisions: ReturnType<typeof buildIcaBoston>['collision'][] = [];
   const install = (id: string, model: ReturnType<typeof buildIcaBoston>, hulls: FarBuilding[]) => {
@@ -49,6 +51,14 @@ export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity) {
     collisions.push(fishPier.collision);scene.add(fishPier.group);
   }
 
+  const factory = hullAt('0_-4', ...SCHRAFFT_FIRST);
+  const schrafft = factory && buildSchrafftCenter(mobile);
+  if (schrafft) install(SCHRAFFT_ID, schrafft, [factory]);
+  // This is an addition above the restored host roof. The source record named
+  // “CITGO Sign” is its six-storey building, and must remain in the world.
+  const citgo = city.far.tiles.has('-2_0') ? buildCitgoSign(mobile) : undefined;
+  if (citgo) { scene.add(citgo.group); collisions.push(citgo.collision); }
+
   // Fixed-size architectural models stay in the skyline at all detail levels.
-  return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z), encore, fishPier };
+  return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z), encore, fishPier, schrafft, citgo };
 }
