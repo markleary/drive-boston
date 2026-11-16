@@ -7,6 +7,8 @@ import { buildIcaBoston, ICA_ID, insideIcaForecourt } from './ica-boston.ts';
 import { buildFishPier, FISH_PIER_BUILDINGS, insideFishPierWorkingArea } from './fish-pier.ts';
 import { buildSchrafftCenter, SCHRAFFT_ID, SCHRAFFT_FIRST } from './schrafft-center.ts';
 import { buildCitgoSign } from './citgo-sign.ts';
+import { buildCastleIsland } from './castle-island.ts';
+import { FORT_ID, castleIslandReserved } from '../simulation/castle-island.ts';
 
 export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, mobile = false) {
   const farHulls = new Set<FarBuilding>(), replaced = new Set<string>();
@@ -51,6 +53,15 @@ export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, m
     collisions.push(fishPier.collision);scene.add(fishPier.group);
   }
 
+  const fort=city.landmarkBuildings.find(b=>b.id===FORT_ID);
+  const castleIsland=fort?buildCastleIsland(city):undefined;
+  if(fort&&castleIsland){
+    install(FORT_ID,castleIsland,ownFarHulls(city,fort));
+    // The small interior magazine is included in the authored fort.
+    const magazine=hullAt('5_1',5239.612,1250.377);
+    if(magazine){replaced.add('BOS-MPJ4Y-KUYWX-M7XYI');farHulls.add(magazine);}
+  }
+
   const factory = hullAt('0_-4', ...SCHRAFFT_FIRST);
   const schrafft = factory && buildSchrafftCenter(mobile);
   if (schrafft) install(SCHRAFFT_ID, schrafft, [factory]);
@@ -60,5 +71,5 @@ export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, m
   if (citgo) { scene.add(citgo.group); collisions.push(citgo.collision); }
 
   // Fixed-size architectural models stay in the skyline at all detail levels.
-  return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z), encore, fishPier, schrafft, citgo };
+  return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z)||!!castleIsland&&castleIslandReserved(x,z), encore, fishPier, castleIsland, schrafft, citgo };
 }

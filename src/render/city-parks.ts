@@ -34,6 +34,9 @@ import { isCommonwealthMall, isPlannedMallLawn, mallPathTest } from '../simulati
 import { mallDetailSteps, type SolidBox } from './commonwealth-mall.ts';
 import {isPavedWaterfrontPark,waterfrontReserved} from '../simulation/waterfront.ts';
 import {waterfrontDetailSteps} from './waterfront.ts';
+import {castleIslandLandscapeSteps} from './castle-island.ts';
+import {fortTerrainCuts} from '../simulation/castle-island.ts';
+import {clipWaterfrontTerrainSteps} from './waterfront-terrain.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -180,7 +183,9 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   for(const [surface,material,name] of [[lawns,lawn,'Park lawns'],[gardens,gardenLawn,'Garden lawns'],[woods,forestFloor,'Fells forest floor'],[plazas,pathMaterial,'Plazas']] as const){
     if(!surface.stats.polygons)continue;
     if(due(pace))yield;
-    const geometry=yield* surface.geometrySteps();if(!geometry.index!.count){geometry.dispose();continue;}
+    const geometry=yield* surface.geometrySteps();
+    yield* clipWaterfrontTerrainSteps(city,geometry,pace,fortTerrainCuts);
+    if(!geometry.index!.count){geometry.dispose();continue;}
     const mesh=new THREE.Mesh(geometry,material);mesh.name=name;mesh.receiveShadow=true;group.add(mesh);
   }
   if(waterSheets.length){
@@ -348,6 +353,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   if(christianSciencePlaza){
     yield* christianSciencePlazaSteps(city,group,options);
   }
+  yield* castleIslandLandscapeSteps(city,group,options);
   const waterfront=yield* waterfrontDetailSteps(city,group,options);
   group.userData={parks:parks.length,waterBodies:waters.length,paths:paths.length,naturalTrails,bridges,footbridgePiers:piers,trees:treePoints.length+woodlandTrees-sharedWoodlandTrees+(greenwayGroup.userData.trees??0),benches,lamps,waterfront,greenway:greenwayGroup.userData,...(mall?{mall:mall.stats}:{}),source:'Boston GIS park/hydro polygons, Boston Common tree inventory, and OpenStreetMap pedestrian paths',accuracy:'Mapped outlines, paths and Common tree locations. Outcrops and furnishings are procedural.'};
   (options.target??scene).add(group);return group;

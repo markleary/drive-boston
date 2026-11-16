@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import data from '../data/waterfront.json' with { type: 'json' };
+import { pleasureBayTerrainCuts } from '../simulation/castle-island.ts';
 import type { CityData, Point2 } from '../types.ts';
 import { drain, due, type Pace } from './pacing.ts';
 import { boundingSphereSteps } from './paced-geometry.ts';
 
 /** Offline hydro ∩ hard-quay neighborhood, with ground-road approaches removed.
  * These are water-only polygons; holes retain land and road foundations. */
-export const waterfrontTerrainCuts: Point2[][][] = data.waterCuts.map(rings => rings.map(ring => ring.map(([x, z]): Point2 => [x, z])));
+export const waterfrontTerrainCuts: Point2[][][] = [...data.waterCuts.map(rings => rings.map(ring => ring.map(([x, z]): Point2 => [x, z]))), ...pleasureBayTerrainCuts];
 type Plane = [number, number, number];
 interface CutTriangle { planes: Plane[]; minX: number; maxX: number; minZ: number; maxZ: number; }
 interface CutIndex { triangles: CutTriangle[]; cells: Map<number, number[]>; stamps: Uint32Array; stamp: number; }
