@@ -138,9 +138,11 @@ def install_surfaces(headers, roads, records, road_key, obstacles=(), contacts=(
   highway_ids=highway_tree.query(area,predicate='intersects')
   if len(highway_ids) and not walk.is_empty:
    before=walk.area;walk=walk.difference(unary_union(highway_tree.geometries[highway_ids]));cut+=before-walk.area
+  lawn=unary_union([Polygon(r[0],r[1:]) for r in tile.get('streetLawns',[])])
+  if not lawn.is_empty:road=road.difference(lawn);walk=walk.difference(lawn)
   tile['streetPavement']=encoded_polygons(road);tile['streetSidewalks']=encoded_polygons(walk)
   contact_ids=contact_tree.query(area,predicate='intersects')
-  tile['deckPavement']=encoded_polygons(unary_union(contact_tree.geometries[contact_ids]).intersection(area))
+  tile['deckPavement']=encoded_polygons(unary_union(contact_tree.geometries[contact_ids]).intersection(area).difference(lawn))
  stats['highwayBandArea']=round(cut)   # (square metres of band left off that pavement)
  stats['pavementParts']=sum(len(t['streetPavement']) for t in headers.values())
  stats['fallbackSidewalkParts']=sum(len(t['streetSidewalks']) for t in headers.values())
@@ -153,9 +155,10 @@ def compile_headers(headers,roads,contacts=(),highways=()):
  highway records in the open, which no fallback sidewalk band covers (install_surfaces)."""
  from street_surfaces import road_key
  from reviewed_road_inputs import reviewed_pavement,reviewed_streets,reviewed_parking_edges,restore_street_sources,source_hash
+ highways=tuple(highways)
  restore_street_sources(headers)
  normalize_overlays(headers)
- reviewed_street_tiles=reviewed_streets(headers,roads)
+ reviewed_street_tiles=reviewed_streets(headers,roads,highways=highways)
  reviewed_tiles=reviewed_pavement(headers)
  by=defaultdict(list)
  for r in roads:
