@@ -9,6 +9,7 @@ import { buildSchrafftCenter, SCHRAFFT_ID, SCHRAFFT_FIRST } from './schrafft-cen
 import { buildCitgoSign } from './citgo-sign.ts';
 import { buildCastleIsland } from './castle-island.ts';
 import { FORT_ID, castleIslandReserved } from '../simulation/castle-island.ts';
+import { buildHatchShell, HATCH_SHELL_ID, HATCH_SHELL_FIRST, insideHatchShellApron } from './hatch-shell.ts';
 
 export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, mobile = false) {
   const farHulls = new Set<FarBuilding>(), replaced = new Set<string>();
@@ -42,6 +43,10 @@ export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, m
   const ica = hullAt('2_-1', 2587.643, -308.28);
   if (ica) install(ICA_ID, buildIcaBoston(), [ica]);
 
+  const hatchHull = hullAt('0_-1', ...HATCH_SHELL_FIRST);
+  const hatchShell = hatchHull ? buildHatchShell() : undefined;
+  if (hatchShell) install(HATCH_SHELL_ID, hatchShell, [hatchHull!]);
+
   const resort = hullAt('0_-6', 202.779, -4898.949);
   const encore = resort && buildEncore(resort.base);
   if (encore) install(ENCORE_ID, encore, [resort]);
@@ -71,5 +76,5 @@ export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, m
   if (citgo) { scene.add(citgo.group); collisions.push(citgo.collision); }
 
   // Fixed-size architectural models stay in the skyline at all detail levels.
-  return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z)||!!castleIsland&&castleIslandReserved(x,z), encore, fishPier, castleIsland, schrafft, citgo };
+  return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z)||!!castleIsland&&castleIslandReserved(x,z)||!!hatchShell&&insideHatchShellApron(x,z), encore, fishPier, castleIsland, schrafft, citgo, hatchShell };
 }
