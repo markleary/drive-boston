@@ -50,7 +50,7 @@ test('flight shadows retain distant tree silhouettes and switch immediately whil
     for(const mesh of meshes().filter(m=>/foliage/.test(m.name))){
       assert.equal(mesh.customDepthMaterial.map,mesh.material.map);
       assert.equal(mesh.customDepthMaterial.alphaTest,mesh.material.alphaTest,'leaf shadows retain their cutout silhouette');
-      assert.equal(mesh.material.alphaToCoverage,mesh.name.endsWith('LOD0'),'only close leaf cards use multisample coverage');
+      assert.equal(mesh.material.alphaToCoverage,false,'all leaf cards use opaque cutouts, including shrinking cards in the nearest pool');
     }
     assert.ok(meshes().some(m=>m.name.endsWith('LOD0')));
     observer.y=440;
