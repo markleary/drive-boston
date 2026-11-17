@@ -162,6 +162,7 @@ export function createStreetLife(scene: THREE.Scene, city: CityData, physics?: D
       if (!built) { if (keys.has(key)) { unseen = true; return false; } continue; }
       const streets = drawnStreets(built.tile);
       if (streets.inset(p[0], p[1]) > -room && streets.near(p[0], p[1], room) || streets.stall(p[0], p[1], room)) return false;
+      if (streets.lawn(p[0], p[1], room)) return false;
       // (a post is listed in every 64 m cell within a metre of it, so the cell p lies in holds every post within .76 m of p, across a cell line too)
       if (built.posts?.length) { let near = postCells.get(built.posts); if (!near) postCells.set(built.posts, near = spatialIndex(built.posts as Point2[], q => [q[0], q[1], q[0], q[1]], 1)); if (!near(p).every(post => gap(p, post) > .76)) return false; }
       if (!built.tile.streetPavement) ribbons = true;   // (a tile without compiled pavement: its streets by their ribbons)

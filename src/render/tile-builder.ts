@@ -401,6 +401,7 @@ export function createTileBuilder(ctx: TileContext) {
       const paved: [THREE.Material, string, Point2[][][], number][] = [[materials.sidewalk, 'Sidewalks', tile.sidewalks.filter(w => w.material !== 'brick').map(w => w.rings), .03], [materials.brick, 'Brick sidewalks', tile.sidewalks.filter(w => w.material === 'brick').map(w => w.rings), .03], [materials.asphalt, 'Driveways', tile.driveways, .035], [materials.sidewalk, 'Curb islands', tile.islands, .05]];
       if (tile.streetPavement) paved.push([materials.asphalt,'Streets',tile.streetPavement,.045],[materials.sidewalk,'Street sidewalks',tile.streetSidewalks ?? [],.012]);
       if (tile.deckPavement) paved.push([materials.asphalt,'Paved embankments',tile.deckPavement,.03]);
+      if (tile.streetLawns) paved.push([ctx.ground,'Street grass verges',tile.streetLawns,.055]);
       // Shopfront forecourts in the northern town centres, between the sidewalk band and the walls (town-frontages.ts).
       paved.push([materials.sidewalk,'Shop frontages',townFrontages(subCity,tile.buildings),.02]);
       // Cross Street's brick access lane shares the plaza surface. Its source

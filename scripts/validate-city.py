@@ -314,9 +314,9 @@ land=level_land_approaches(pre_roads,pre_elevation,water_chain_ids(decks),apply=
 assert not land['changedRoads'],f"{len(land['changedRoads'])} land approaches need level-land-approaches.py: {', '.join(land['changedRoads'][:6])}"
 recorded=provenance.get('landApproaches');assert recorded and {'seams','floored','links'}<=set(recorded),'provenance must describe the installed land approaches'
 roads_map={r['id']:r for r in pre_roads};replay=copy.deepcopy(pre_roads);restore_sources(replay,recorded);replayed=level_land_approaches(replay,pre_elevation,water_chain_ids(decks),profile_excluded=levelled_water_ids(decks))
-from reviewed_road_inputs import source_hash
+from reviewed_road_inputs import source_hash,street_source_hash
 assert recorded.get('reviewedSourceSHA256')==source_hash(),'reviewed road inputs changed without regeneration'
-assert provenance.get('streetMeshes',{}).get('reviewedSourceSHA256')==source_hash(),'reviewed pavement inputs changed without surface regeneration'
+assert provenance.get('streetMeshes',{}).get('reviewedSourceSHA256')==street_source_hash(),'reviewed pavement inputs changed without surface regeneration'
 for key in ('seams','floored','links','profiles','reviewed'):assert [{k:v for k,v in e.items() if k!='way'} for e in recorded.get(key,[])]==replayed[key],f"provenance {key} do not match a replay of the land approaches from their recorded sources"
 replay_map={r['id']:r for r in replay}
 for id in replayed['changedRoads']:assert replay_map[id]==roads_map[id],f"{id} differs from the replay of its recorded land-approach source"

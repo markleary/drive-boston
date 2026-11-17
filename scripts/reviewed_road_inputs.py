@@ -11,11 +11,16 @@ from shapely.ops import unary_union
 from road_connections import share_deck_section,stations
 
 SOURCE=pathlib.Path(__file__).resolve().parents[1]/'public/data/sullivan-square-source.json'
+STREET_SOURCE=SOURCE.with_name('back-street-source.json')
 PROFILE_FIELDS=('points','elevations','startLevel','endLevel','deckWidths','deckTangents')
 
 
-def source_inputs():return json.loads(SOURCE.read_text())
+def source_inputs():
+ source=json.loads(SOURCE.read_text())
+ source.setdefault('streetCorridors',[]).extend(json.loads(STREET_SOURCE.read_text())['streetCorridors'])
+ return source
 def source_hash():return hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+def street_source_hash():return hashlib.sha256(SOURCE.read_bytes()+STREET_SOURCE.read_bytes()).hexdigest()
 
 
 def reviewed_profiles(roads,ground,source=None):
@@ -81,22 +86,25 @@ def restore_street_sources(headers):
  """Undo only generated row replacements, including splits and deletions."""
  restore_parking_sources(headers)
  for tile in headers.values():
+  tile.pop('streetLawns',None)
   for field,changes in tile.pop('reviewedStreetSources',{}).items():
    for index,count,original in reversed(changes):tile[field][index:index+count]=[original]
 
 
-def reviewed_streets(headers,roads,source=None):
+def reviewed_streets(headers,roads,source=None,highways=()):
  """Resolve reviewed curb/centerline disagreements before mesh compilation.
 
  One joined corridor supplies every section, including municipal and tile
  boundaries. Only obsolete survey pieces inside that corridor are removed.
- Keep changed source rows so rebuilding or removing the input is reversible.
+ Optional grass verges exclude other street and highway crossings and suppress
+ the fallback sidewalk on their side. Keep changed source rows so rebuilding
+ or removing the input is reversible.
  """
  import numpy as np
  from street_surfaces import encode_edges,line_parts
  from street_meshes import strip,encoded_polygons
  from shapely.geometry import box
- source=source if source is not None else source_inputs();by={r['id']:r for r in roads};sections={};shapes=[]
+ source=source if source is not None else source_inputs();by={r['id']:r for r in roads};sections={};shapes=[];lawns=[];verge_sides={}
  restore_street_sources(headers)
  for entry in source.get('streetCorridors',[]):
   present=[id in by for id in entry['roads']]
@@ -114,28 +122,52 @@ def reviewed_streets(headers,roads,source=None):
   for r in chain:
    n=len(r['points']);sections[r['id']]=(left[cursor:cursor+n],right[cursor:cursor+n]);cursor+=n-1;r['pavedWidth']=entry['width']
   shapes.append(strip(left,right))
- corridor=unary_union(shapes);changed=[]
+  if verge:=entry.get('verge'):
+   assert verge['side'] in ('left','right') and verge['width']>0,'invalid street verge'
+   side=0 if verge['side']=='left' else 1;sign=1 if side==0 else -1;edge=left if side==0 else right
+   lawns.append(strip(edge,edge+normal*sign*verge['width']))
+   verge_sides.update({r['id']:side for r in chain})
+ # Preserve real crossing streets and highway ramps through a verge. Their
+ # measured pavement, not a guessed buffer, defines the opening.
+ crossings=list(highways);lawn_region=unary_union(lawns)
+ if lawns:
+  x0,z0,x1,z1=lawn_region.bounds
+  for tile in headers.values():
+   origin=np.array([tile['tx'],tile['tz']])*tile['size']
+   for rec in tile['pavements']:
+    if rec['road'] in sections:continue
+    e=np.asarray(rec['edges']).reshape(-1,4)/100+np.tile(origin,2)
+    if e[:,[0,2]].max()<x0 or e[:,[0,2]].min()>x1 or e[:,[1,3]].max()<z0 or e[:,[1,3]].min()>z1:continue
+    crossings.append(strip(e[:,:2],e[:,2:]))
+ lawn=lawn_region.difference(unary_union(crossings)) if lawns else Polygon()
+ corridor=unary_union(shapes);edit_area=corridor.union(lawn);changed=[]
  for key,tile in headers.items():
   size=tile['size'];x=tile['tx']*size;z=tile['tz']*size
-  if not corridor.intersects(box(x,z,x+size,z+size)):continue
+  area=box(x,z,x+size,z+size)
+  if not edit_area.intersects(area):continue
+  if lawn.intersects(area):tile['streetLawns']=encoded_polygons(lawn.intersection(area))
   # Fail instead of paving through a newly introduced building.
   assert not any(corridor.intersection(Polygon(b['footprint']).buffer(-.1)).area>.1 for b in tile['buildings'] if not b.get('structure')),f'{key}: reviewed street intersects a building'
   saved={}
-  for field in ('pavements','borderPavements','curbs','sidewalks','islands'):
+  for field in ('pavements','borderPavements','curbs','sidewalks','islands','driveways'):
+   if field not in tile:continue
    out=[];changes=[]
    for item in tile[field]:
     replacement=[item]
     if field in ('pavements','borderPavements'):
      if item['road'] in sections:
       l,r=sections[item['road']];replacement=[{**item,'edges':encode_edges(l,r,tile['tx'],tile['tz'],size)}]
+      if item['road'] in verge_sides:
+       flags=list(item.get('walk',[0,0]));flags[verge_sides[item['road']]]=1;replacement[0]['walk']=flags
     elif field=='curbs':
      line=LineString(item)
      if line.intersects(corridor.buffer(-.15)):
       replacement=[[[round(x,3),round(z,3)] for x,z in part.coords] for part in line_parts(line.difference(corridor.buffer(-.15))) if part.length>=.5]
     else:
      rings=item['rings'] if field=='sidewalks' else item;polygon=Polygon(rings[0],rings[1:])
-     if polygon.intersection(corridor).area>.0001:
-      replacement=[{**item,'rings':r} if field=='sidewalks' else r for r in encoded_polygons(polygon.difference(corridor))]
+     cut=lawn if field=='driveways' else edit_area
+     if polygon.intersection(cut).area>.0001:
+      replacement=[{**item,'rings':r} if field=='sidewalks' else r for r in encoded_polygons(polygon.difference(cut))]
     if replacement!=[item]:changes.append([len(out),len(replacement),item])
     out.extend(replacement)
    tile[field]=out

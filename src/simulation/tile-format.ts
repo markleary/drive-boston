@@ -6,8 +6,8 @@ export interface TileBuildingGeometry { positions: Float32Array; facade: Uint16A
 export interface TileBuilding extends Building { district: string; source?: string; partOf?: string; sourceBaseOffset?: number; /** A bridge or viaduct carried as a survey mesh: exact collision, no foundation skirt, token footprint. */ structure?: boolean; anchor: [number, number, number]; v: number; f: number; r: number; /** Quantization step in metres when coarser than TILE_SCALE (extensive complexes). */ scale?: number; }
 /** Curb-bounded roadway of one road the tile owns (scripts/street_surfaces.py):
  * `edges` runs [lx, lz, rx, rz, ...] in centimetres from the tile origin, one
- * left/right pair per station; `walk` says per side whether the Boston sidewalk
- * inventory has a polygon there (a missing side gets the fallback band). */
+ * left/right pair per station; `walk` suppresses the fallback sidewalk per
+ * side where an inventory sidewalk or reviewed grass verge already exists. */
 export interface TilePavement { road: string; edges: number[]; walk?: [number, number]; }
 /** A sidewalk inventory polygon clipped to the tile; concrete unless `material` says brick. */
 export interface TileSidewalk { rings: Point2[][]; material?: 'brick'; }
@@ -19,6 +19,8 @@ export interface CityTile {
   /** Closed curb faces an OSM service road or parking area explains (pull-offs, turnarounds, lots), filled with asphalt. */ driveways: Point2[][][];
   /** Compiled unions, clipped to tile boundaries after resolving folds and junctions. */
   streetPavement?: Point2[][][]; streetSidewalks?: Point2[][][];
+  /** Reviewed grass verges between separate roadways, draped on the shared terrain. */
+  streetLawns?: Point2[][][];
   /** Pavement on terrain only where an embankment reaches a deck. */
   deckPavement?: Point2[][][];
   /** Stalls of the tile's surface parking lots (scripts/parking_lots.py): [x, z, yaw, ...], centimetres from the tile origin and the
@@ -47,7 +49,7 @@ function tileHeader(buffer: ArrayBuffer) {
 function headerTile(header: any, geometry: Map<string, TileBuildingGeometry>): CityTile {
   return { tx: header.tx, tz: header.tz, size: header.size, key: tileKey(header.tx, header.tz), buildings: header.buildings, geometry,
     curbs: header.curbs ?? [], bareCurbs: header.bareCurbs, parks: header.parks ?? [], water: header.water ?? [], parkPaths: header.parkPaths ?? [], roads: header.roads ?? [],
-    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [], streetPavement: header.streetPavement, streetSidewalks: header.streetSidewalks, deckPavement: header.deckPavement, parking: header.parking };
+    pavements: header.pavements ?? [], borderPavements: header.borderPavements ?? [], sidewalks: header.sidewalks ?? [], islands: header.islands ?? [], driveways: header.driveways ?? [], streetPavement: header.streetPavement, streetSidewalks: header.streetSidewalks, streetLawns: header.streetLawns, deckPavement: header.deckPavement, parking: header.parking };
 }
 /** A decompressed DBT2 buffer's tile without its buildings' shells (`geometry` is empty): the surfaces, curbs, paths
  * and stalls are all in the header, which is all an audit of every tile needs to read. */

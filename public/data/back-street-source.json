@@ -1,0 +1,14 @@
+{
+  "reviewed": "2026-11-16",
+  "reference": "User-supplied Google Maps satellite image of Back Street at Exeter Street: a narrow local roadway with a grass strip separating it from Storrow Drive. Image used as reference only, not bundled.",
+  "note": "Widths are visual game approximations, not surveyed dimensions. Preserve Boston centerlines and cross-street junctions. Scope is the Back Bay frontage from the David G Mugar Way junction to the Massachusetts Avenue approach; the separate western Back Street and highway decks retain their existing profiles. Edge sides use the pavement record convention: left is +normal (-tz, tx), the Storrow side along this east-to-west chain.",
+  "streetCorridors": [
+    {
+      "id": "back-street-back-bay",
+      "roads": ["13241-0-0", "13242-0-0", "13243-0-0", "13244-0-0", "13245-0-0", "13246-0-0", "13247-0-0", "13248-0-0"],
+      "landings": [[122.191, -632.821], [-1229.994, -132.349]],
+      "width": 5.5,
+      "verge": {"side": "left", "width": 2.0}
+    }
+  ]
+}
