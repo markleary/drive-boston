@@ -14,6 +14,10 @@ test('leaf cutouts stay opaque through distance blends and vehicle motion', asyn
   // target. On an opaque background a cutout must leave opaque pixels:
   // fractional leaf alpha is the pale fringe path, even in the nearest LOD
   // while its cards shrink. A legacy material is the positive control.
+  // Three.js disables its OPAQUE shader define when alphaToCoverage is on,
+  // even with transparent=false. Its alpha-test chunk then emits smoothstep
+  // alpha into covered samples; resolving against alpha-1 background samples
+  // still leaves fractional alpha. This measures emitted alpha, not RGB coverage.
   const coverage = await page.evaluate(async () => {
     const game = (window as any).__backbay, renderer = game.renderer;
     const render = renderer.render;
