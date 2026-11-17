@@ -30,6 +30,7 @@ from road_structure_clearance import validate_bridge_clearance
 from water_crossings import level_water_crossings,water_inputs
 from land_approaches import TOWN_LINKS,level_land_approaches,restore_sources,water_chain_ids,levelled_water_ids
 import north_overpasses
+import charles_dam
 import i93_north
 import boston_highways
 import footbridges
@@ -310,6 +311,14 @@ if north_overpasses.applies(pre_roads):
 water_polygons,water_level=water_inputs(city);decks=level_water_crossings(pre_roads,water_polygons,pre_elevation,water_level,apply=False)
 assert not decks['changedRoads'],f"{len(decks['changedRoads'])} water-crossing deck profiles need level-water-crossings.py: {', '.join(decks['changedRoads'][:6])}"
 recorded=provenance.get('waterCrossingDecks');assert recorded and [c['roads'] for c in recorded['chains']]==[c['roads'] for c in decks['chains']] and all(abs(x-y)<.001 for a,b in zip(recorded['chains'],decks['chains']) for x,y in zip(a['deck'],b['deck'])),'provenance must describe the installed water-crossing decks'
+# Charles River Dam Road (build-charles-dam.py) precedes the water stage: every piece a surface street on one level crest,
+# a rerun from the recorded originals writes the same roads and grid, and the water stage finds no crossing on the dam.
+dam=provenance.get('charlesRiverDam');assert bool(dam)==charles_dam.applies(city['roads']),'provenance must describe the dam road; run build-charles-dam.py'
+if dam:
+ dam_grid=charles_dam.load_grid(data_dir/grid['file']);dam_counts=charles_dam.check(city['roads'],grid,dam_grid,dam)
+ assert charles_dam.replay(city['roads'],grid,dam_grid,dam,water_polygons),'Charles River Dam roads or terrain differ from a replay of build-charles-dam.py'
+ on_dam=set(charles_dam.NORTHBOUND+charles_dam.SOUTHBOUND);assert not any(on_dam&set(c['roads']) for c in decks['chains']+decks['skipped']),'the water stage still finds a crossing on the dam; run build-charles-dam.py before it'
+ print(f"Validated Charles River Dam Road: {dam_counts['pieces']} pieces over {dam_counts['meters']} m are surface streets on one crest ({dam_counts['crest'][0]} to {dam_counts['crest'][1]} m, steepest {dam_counts['steepest']*100:.1f}%), level within {dam_counts['offLevel']} m at {dam_counts['stations']} points across both roadways, the median and the sidewalks; {dam_counts['vertices']} grid vertices match a replay of build-charles-dam.py.")
 land=level_land_approaches(pre_roads,pre_elevation,water_chain_ids(decks),apply=False,profile_excluded=levelled_water_ids(decks))
 assert not land['changedRoads'],f"{len(land['changedRoads'])} land approaches need level-land-approaches.py: {', '.join(land['changedRoads'][:6])}"
 recorded=provenance.get('landApproaches');assert recorded and {'seams','floored','links'}<=set(recorded),'provenance must describe the installed land approaches'

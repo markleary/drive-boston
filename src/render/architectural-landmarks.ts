@@ -9,6 +9,7 @@ import { buildSchrafftCenter, SCHRAFFT_ID, SCHRAFFT_FIRST } from './schrafft-cen
 import { buildCitgoSign } from './citgo-sign.ts';
 import { buildCastleIsland } from './castle-island.ts';
 import { FORT_ID, castleIslandReserved } from '../simulation/castle-island.ts';
+import { VIADUCT_TOWER } from '../simulation/lechmere-viaduct.ts';
 import { buildHatchShell, HATCH_SHELL_ID, HATCH_SHELL_FIRST, insideHatchShellApron } from './hatch-shell.ts';
 
 export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, mobile = false) {
@@ -74,6 +75,11 @@ export function addArchitecturalLandmarks(scene: THREE.Scene, city: MetroCity, m
   // “CITGO Sign” is its six-storey building, and must remain in the world.
   const citgo = city.far.tiles.has('-2_0') ? buildCitgoSign(mobile) : undefined;
   if (citgo) { scene.add(citgo.group); collisions.push(citgo.collision); }
+
+  // The survey's one piece of the Lechmere Viaduct is the tower at its draw span, a shell on its own beside the road.
+  // The viaduct is modelled whole (lechmere-viaduct.ts), tower included.
+  const drawTower = hullAt('0_-2', ...VIADUCT_TOWER.first);
+  if (drawTower) { replaced.add(VIADUCT_TOWER.id); farHulls.add(drawTower); }
 
   // Fixed-size architectural models stay in the skyline at all detail levels.
   return { replaced, farHulls, collisions, occupied:(x:number,z:number)=>!!ica&&insideIcaForecourt(x,z)||!!fishPier&&insideFishPierWorkingArea(x,z)||!!castleIsland&&castleIslandReserved(x,z)||!!hatchShell&&insideHatchShellApron(x,z), encore, fishPier, castleIsland, schrafft, citgo, hatchShell };

@@ -59,6 +59,8 @@ import { isTdGarden, prepareTdGardenFinishes, splitTdGardenShell, tdGardenFinish
 import { createPrudentialPenthouseMaterial, isPrudential, splitPrudentialShell } from './prudential';
 import { createMissionChurchMaterials, isMissionChurch, splitMissionChurchShell } from './mission-church';
 import { landmarkShellMaterial } from './metro-landmarks';
+import { museumShellMaterial } from './museum-of-science';
+import { stationShellMaterial } from './lechmere-viaduct';
 import { buildMelroseLandmark, replacesTileShell } from './melrose-landmarks';
 import { sourceWallSampler, facadeDetailSteps } from './facade-details';
 import { streetscapeSteps } from './streetscape';
@@ -471,7 +473,7 @@ export function createTileBuilder(ctx: TileContext) {
           if (!isRoof && b.landmark === 'hancock') material = materials.glass;
           else if (!isRoof && b.landmark === 'library') material = materials.library;
           else if (!isRoof && b.landmark === 'trinity') material = materials.church;
-          else material = landmarkShellMaterial(b, isRoof, materials) ?? material;
+          else material = museumShellMaterial(b, isRoof) ?? stationShellMaterial(b, isRoof) ?? landmarkShellMaterial(b, isRoof, materials) ?? material;
           if (isStone) material = parkStone;
           if (fenway) material = isRoof ? fenwayMaterials.roof : fenwayMaterials.wall;
           // This source footprint is bridge machinery spanning an open road,
