@@ -230,7 +230,9 @@ test('street life stays on clear sidewalks and parked cars react to impacts', as
   try {
     assert.ok(life.count >= 72 && life.count <= 112, 'the city should keep a bounded crowd with enough walkers for busy neighborhoods');
     assert.ok(life.parkedCount >= 6 && life.parkedCount <= 8, 'only verified curb spaces should receive parked cars');
-    const roadSegments = city.roads.flatMap(road => { let start = 0; return road.points.slice(1).map((b, i) => { const a = road.points[i], segment = { a, b, width: road.deckWidths ? Math.max(road.deckWidths[i], road.deckWidths[i + 1]) : road.width, road, start }; start += Math.hypot(b[0] - a[0], b[1] - a[1]); return segment; }); });
+    // This legacy-shaped fixture has no streamed pavement polygons. Its street
+    // life follows measured widths, including Back Street's narrowed roadway.
+    const roadSegments = city.roads.flatMap(road => { let start = 0; return road.points.slice(1).map((b, i) => { const a = road.points[i], segment = { a, b, width: road.deckWidths ? Math.max(road.deckWidths[i], road.deckWidths[i + 1]) : road.pavedWidth ?? road.width, road, start }; start += Math.hypot(b[0] - a[0], b[1] - a[1]); return segment; }); });
     for (let time = 0; time <= 160; time += 2) {
       life.update(2, time);
       for (const pedestrian of life.pedestrians) {
@@ -242,8 +244,8 @@ test('street life stays on clear sidewalks and parked cars react to impacts', as
           const t = Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dz) / (dx * dx + dz * dz || 1)));
           // A sidewalk over a roofed stretch of a tunnel (the Turnpike under the Back Bay) is clear of the road beneath it.
           if (road.tunnel && tunnelCoveredAt(road, start + t * Math.hypot(dx, dz))) continue;
-          assert.ok(Math.hypot(point[0] - a[0] - dx * t, point[1] - a[1] - dz * t) > width / 2 + .35,
-            'walkers must leave room between their centers and the road edge, including at turns');
+          const distance = Math.hypot(point[0] - a[0] - dx * t, point[1] - a[1] - dz * t);
+          if (!(distance > width / 2 + .35)) assert.fail(`walkers must clear ${road.name} (${road.id}) at ${point}: distance ${distance}, width ${width}`);
         }
       }
     }

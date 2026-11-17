@@ -3,13 +3,18 @@ import copy,json,pathlib,unittest
 import numpy as np
 from shapely.geometry import LineString,Point,Polygon
 from shapely.ops import unary_union
-from reviewed_road_inputs import reviewed_streets,restore_street_sources
+from reviewed_road_inputs import reviewed_streets,restore_street_sources,source_hash,street_source_hash
 from street_surfaces import unpack,encode_edges,decode_edges
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 
 
 class BackStreet(unittest.TestCase):
+ def test_packaged_stage_hashes_track_their_inputs(self):
+  provenance=json.loads((ROOT/'public/data/provenance.json').read_text())
+  self.assertEqual(provenance['landApproaches']['reviewedSourceSHA256'],source_hash())
+  self.assertEqual(provenance['streetMeshes']['reviewedSourceSHA256'],street_source_hash())
+
  def test_verge_preserves_crossing_and_can_be_rebuilt_or_removed(self):
   roads=[{'id':'back','width':7,'points':[[0,10],[30,10]]},{'id':'cross','width':4,'points':[[15,0],[15,20]]}]
   tile={'tx':0,'tz':0,'size':40,'buildings':[],'borderPavements':[],'curbs':[],

@@ -19,7 +19,8 @@ def source_inputs():
  source=json.loads(SOURCE.read_text())
  source.setdefault('streetCorridors',[]).extend(json.loads(STREET_SOURCE.read_text())['streetCorridors'])
  return source
-def source_hash():return hashlib.sha256(SOURCE.read_bytes()+STREET_SOURCE.read_bytes()).hexdigest()
+def source_hash():return hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+def street_source_hash():return hashlib.sha256(SOURCE.read_bytes()+STREET_SOURCE.read_bytes()).hexdigest()
 
 
 def reviewed_profiles(roads,ground,source=None):
