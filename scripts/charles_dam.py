@@ -57,8 +57,10 @@ the crest one ground:
   access is Science Park.
 
 Run before `level-water-crossings.py`, which then no longer finds a water
-crossing here. Estimated game ground, not a survey of the dam. The originals
-of every road and grid vertex are recorded, and a rerun restores them first.
+crossing here. Estimated game ground, not a survey of the dam. What the stage
+decides about each road (name, line, deck fields) and every grid vertex are
+recorded as they stood, and a rerun restores them first; fields a later stage
+added to a road, such as its measured width, are left on it.
 """
 import copy,gzip,math
 import numpy as np
@@ -90,7 +92,7 @@ WALK=2.9
 GRADE=.06
 BEND=.012
 LEVEL=.05
-FIELDS=('name','points','width','oneway','kind')+DECK_FIELDS
+OWNED=('name','points')+DECK_FIELDS
 NOTE=' Charles River Dam crest levelled under its road by build-charles-dam.py.'
 METHOD=('The dam road is a surface street on one graded crest: stations every 3 m along the Cambridge-bound line take the higher graded ground of the two carriageway lines, '
  'an opening more than 0.75 m under the crest within 30 m on both sides (the lock) takes the line between its neighbours, and the result is smoothed with its ends held; '
@@ -187,11 +189,23 @@ def source_vertices(points,shared=(),tolerance=STRAIGHT):
  return [points[i] for i in sorted(keep)]
 
 
+def owned(road):
+ """What this stage decides about a road, as it stood before: its name, its line and whatever made it a deck."""
+ return {'id':road['id'],**{f:copy.deepcopy(road[f]) for f in OWNED if f in road}}
+
+
 def restore(roads,heights,record):
- """Put back the roads and grid vertices a previous run changed (`roads` is edited in place)."""
+ """Put back what a previous run changed: the stage's own fields of each road (`roads` is edited in place) and the grid
+ vertices. A field a later stage added, such as the width the surface stage measured, stays on the road: a rerun on a
+ finished package must not strip it."""
  if not record:return
  sources={r['id']:r for r in record['roads']['sources']}
- roads[:]=[copy.deepcopy(sources[r['id']]) if r['id'] in sources else r for r in roads]
+ for road in roads:
+  source=sources.get(road['id'])
+  if not source:continue
+  for f in OWNED:
+   if f in source:road[f]=copy.deepcopy(source[f])
+   else:road.pop(f,None)
  terrain=record['terrain']
  if terrain['vertices']:heights[np.asarray(terrain['vertices'],dtype=np.int64)]=np.asarray(terrain['heights'],dtype=heights.dtype)
 
@@ -230,7 +244,7 @@ def build(roads,grid,heights,water=()):
   changed['name']=NAME if road['id'] not in RENAMED else NAMES.get(road['name'],road['name'])
   # A deck's line carries a station every 3 m for its profile. A street's has its source vertices: lane paint, traffic and crosswalks read segments.
   if 'elevations' in road:changed['points']=source_vertices(road['points'],shared)
-  if changed!=road:sources.append(copy.deepcopy(road))
+  if changed!=road:sources.append(owned(road))
   out.append(changed)
  step=stations[1]-stations[0];grades=[abs(b-a)/step for a,b in zip(profile,profile[1:])]
  record={'method':METHOD,'roads':{'northbound':NORTHBOUND,'southbound':SOUTHBOUND,'continuation':CONTINUATION,'sources':sources},
@@ -268,5 +282,5 @@ def replay(roads,grid,heights,record,water=()):
  Later stages add fields to a street (its measured width), so the roads are compared by what this stage decides."""
  again_roads=copy.deepcopy(roads);again_heights=np.asarray(heights).copy();restore(again_roads,again_heights,record)
  again,result,out=build(again_roads,grid,again_heights,water);touched=set(NORTHBOUND+SOUTHBOUND+RENAMED)
- same=[r['id'] for r in out]==[r['id'] for r in roads] and all(a.get(f)==b.get(f) for a,b in zip(out,roads) if a['id'] in touched for f in FIELDS)
+ same=[r['id'] for r in out]==[r['id'] for r in roads] and all(a.get(f)==b.get(f) for a,b in zip(out,roads) if a['id'] in touched for f in OWNED)
  return same and np.array_equal(result,heights) and all(again[k]==record.get(k) for k in again)

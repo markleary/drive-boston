@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { Building, CityData } from '../types';
+import type { Building, CityData } from '../types.ts';
 import { sampleElevation } from '../simulation/terrain.ts';
 import { MUSEUM, MUSEUM_ROLES, museumTurbines, museumStatue, type MuseumRole } from '../simulation/museum-of-science.ts';
-import { canvasTexture, seeded } from './materials';
+import { canvasTexture, seeded } from './materials.ts';
 import { lettering } from './landmark-model.ts';
 
 /** The Museum of Science on the Charles River Dam keeps its surveyed shells (fifteen of them: the 1951 east wing,
@@ -80,10 +80,41 @@ export function museumShellMaterial(building: Building | undefined, isRoof: bool
   return finishFor(role === 'tower' || role === 'omni' ? 'brick' : role);
 }
 
+type StatueFinish = 'hide' | 'plinth' | 'dark';
+const PEDESTAL = .7;
+/** The Tyrannosaurus in place: the old upright, tail-dragging pose on a low plinth, by finish. DOM-free. */
+export function museumStatueParts(city: CityData): [THREE.BufferGeometry, StatueFinish][] {
+  const statue = museumStatue(), ground = sampleElevation(city, statue.x, statue.z), rex: [THREE.BufferGeometry, StatueFinish][] = [];
+  const part = (g: THREE.BufferGeometry, finish: StatueFinish = 'hide') => rex.push([g, finish]);
+  // A pedestal a car cannot mount: at a kerb's height the wheels climbed it and the car drove on under the belly.
+  part(new THREE.BoxGeometry(3.2, PEDESTAL, 7.2).translate(0, PEDESTAL / 2, -.6), 'plinth');
+  part(new THREE.SphereGeometry(1, 14, 10).scale(1.05, 1.9, 1.25).rotateX(-.62).translate(0, 3.25, .2));
+  part(new THREE.ConeGeometry(.85, 5.6, 10).rotateX(-Math.PI / 2 - .5).translate(0, 1.45, -3.1));
+  part(new THREE.CylinderGeometry(.5, .78, 1.7, 10).rotateX(-.35).translate(0, 4.85, 1.05));
+  part(new THREE.BoxGeometry(.95, .95, 1.9).translate(0, 5.65, 1.9)); part(new THREE.BoxGeometry(.8, .3, 1.5).rotateX(.22).translate(0, 5.02, 1.95)); part(new THREE.BoxGeometry(.84, .12, 1.2).translate(0, 5.22, 2.15), 'dark');
+  for (const side of [-1, 1]) {
+    part(new THREE.CylinderGeometry(.42, .3, 1.9, 8).rotateX(.35).translate(side * .72, 2.05, .35)); part(new THREE.CylinderGeometry(.24, .2, 1.5, 8).rotateX(-.3).translate(side * .72, .95, .5));
+    part(new THREE.BoxGeometry(.6, .28, 1.25).translate(side * .72, .49, .95)); part(new THREE.CylinderGeometry(.1, .07, .8, 6).rotateX(1.1).translate(side * .55, 3.9, 1.35));
+    part(new THREE.SphereGeometry(.09, 6, 5).translate(side * .34, 5.86, 2.45), 'dark');
+  }
+  for (const [g, finish] of rex) g.translate(0, finish === 'plinth' ? 0 : PEDESTAL - .35, .6).rotateY(statue.yaw).translate(statue.x, ground, statue.z);
+  return rex;
+}
+/** What a car or a walker meets of the statue: the plinth and the animal itself, as one static mesh. */
+export function museumStatueCollision(city: CityData) {
+  const positions: number[] = [];
+  for (const [geometry, finish] of museumStatueParts(city)) {
+    if (finish !== 'dark') { const flat = geometry.index ? geometry.toNonIndexed() : geometry; positions.push(...(flat.getAttribute('position').array as Float32Array)); if (flat !== geometry) flat.dispose(); }
+    geometry.dispose();
+  }
+  return { id: 'museum-of-science-statue', vertices: new Float32Array(positions), indices: Uint32Array.from({ length: positions.length / 3 }, (_, i) => i) };
+}
+
 /** What the survey leaves out. World coordinates measured on the packaged shells (tests hold them to the tiles). */
 export function addMuseumOfScience(scene: THREE.Object3D, city: CityData) {
   const group = new THREE.Group(); group.name = 'Museum of Science details';
-  if (!city.landmarks.some(l => l.id === 'museum-of-science')) return { group };
+  const collisions: ReturnType<typeof museumStatueCollision>[] = [];
+  if (!city.landmarks.some(l => l.id === 'museum-of-science')) return { group, collisions };
   const batches = new Map<THREE.Material, THREE.BufferGeometry[]>(), add = (g: THREE.BufferGeometry, m: THREE.Material) => { const list = batches.get(m) ?? []; list.push(g); batches.set(m, list); };
   const white = new THREE.MeshStandardMaterial({ color: '#e9e7de', roughness: .8 }), aluminium = new THREE.MeshStandardMaterial({ color: '#c3c8ca', metalness: .85, roughness: .32 });
   const dome = new THREE.MeshStandardMaterial({ color: '#eceae2', roughness: .55 }), hide = new THREE.MeshStandardMaterial({ color: '#66705a', roughness: .85 }), dark = new THREE.MeshStandardMaterial({ color: '#2c302f', roughness: .7 });
@@ -119,25 +150,15 @@ export function addMuseumOfScience(scene: THREE.Object3D, city: CityData) {
     add(new THREE.CylinderGeometry(.16, .16, .9, 8).rotateX(Math.PI / 2).rotateY(turbine.yaw).translate(x, hub, z), steel);
     for (let blade = 0; blade < 3; blade++) add(new THREE.BoxGeometry(.2, turbine.rotor, .04).translate(0, turbine.rotor / 2, 0).rotateZ(blade * Math.PI * 2 / 3 + turbine.phase).translate(0, 0, .5).rotateY(turbine.yaw).translate(x, hub, z), steel);
   }
-  // The Tyrannosaurus by the drive: the old upright, tail-dragging pose, on a low plinth, looking at the road.
-  const statue = museumStatue(), ground = sampleElevation(city, statue.x, statue.z), rex: [THREE.BufferGeometry, THREE.Material][] = [];
-  const part = (g: THREE.BufferGeometry, m: THREE.Material = hide) => rex.push([g, m]);
-  part(new THREE.BoxGeometry(3.2, .35, 7.2).translate(0, .175, -.6), plinth);
-  part(new THREE.SphereGeometry(1, 14, 10).scale(1.05, 1.9, 1.25).rotateX(-.62).translate(0, 3.25, .2));
-  part(new THREE.ConeGeometry(.85, 5.6, 10).rotateX(-Math.PI / 2 - .5).translate(0, 1.45, -3.1));
-  part(new THREE.CylinderGeometry(.5, .78, 1.7, 10).rotateX(-.35).translate(0, 4.85, 1.05));
-  part(new THREE.BoxGeometry(.95, .95, 1.9).translate(0, 5.65, 1.9)); part(new THREE.BoxGeometry(.8, .3, 1.5).rotateX(.22).translate(0, 5.02, 1.95)); part(new THREE.BoxGeometry(.84, .12, 1.2).translate(0, 5.22, 2.15), dark);
-  for (const side of [-1, 1]) {
-    part(new THREE.CylinderGeometry(.42, .3, 1.9, 8).rotateX(.35).translate(side * .72, 2.05, .35)); part(new THREE.CylinderGeometry(.24, .2, 1.5, 8).rotateX(-.3).translate(side * .72, .95, .5));
-    part(new THREE.BoxGeometry(.6, .28, 1.25).translate(side * .72, .49, .95)); part(new THREE.CylinderGeometry(.1, .07, .8, 6).rotateX(1.1).translate(side * .55, 3.9, 1.35));
-    part(new THREE.SphereGeometry(.09, 6, 5).translate(side * .34, 5.86, 2.45), dark);
-  }
-  for (const [g, m] of rex) add(g.translate(0, 0, .6).rotateY(statue.yaw).translate(statue.x, ground, statue.z), m);
+  // The Tyrannosaurus on the verge beside the drive.
+  const finishes = { hide, plinth, dark };
+  for (const [geometry, finish] of museumStatueParts(city)) add(geometry, finishes[finish]);
   for (const [material, geometries] of batches) {
     const flat = geometries.map(g => { const n = g.index ? g.toNonIndexed() : g; n.deleteAttribute('uv'); if (!n.getAttribute('normal')) n.computeVertexNormals(); return n; }), merged = mergeGeometries(flat, false)!;
     new Set([...geometries, ...flat]).forEach(g => g.dispose());
     const mesh = new THREE.Mesh(merged, material); mesh.castShadow = mesh.receiveShadow = true; mesh.name = 'Museum of Science details'; group.add(mesh);
   }
-  group.userData = { turbines: museumTurbines().length, statue: [statue.x, statue.z], towerTop: tower.top + 17, accuracy: 'Surveyed shells; finishes, the tower crown, dome, turbines and statue interpreted from photographs' };
-  scene.add(group); return { group };
+  const statue = museumStatue(); collisions.push(museumStatueCollision(city));
+  group.userData = { turbines: museumTurbines().length, statue: [statue.x, statue.z], statueSolidTriangles: collisions[0].indices.length / 3, towerTop: tower.top + 17, accuracy: 'Surveyed shells; finishes, the tower crown, dome, turbines and statue interpreted from photographs' };
+  scene.add(group); return { group, collisions };
 }

@@ -71,3 +71,29 @@ test('the survey\'s lone shell of the viaduct tower is the one the viaduct repla
  assert.ok(Math.abs(shell.baseElevation+shell.height-VIADUCT_TOWER.top)<.05);
  const hull=metro.far.tiles.get('0_-2').buildings.find(h=>!h.fragment&&Math.hypot(h.footprint[0][0]-VIADUCT_TOWER.first[0],h.footprint[0][1]-VIADUCT_TOWER.first[1])<.14);assert.ok(hull,'its far box is found by its first vertex');
 });
+
+test('the Tyrannosaurus is solid: a car driven at it from the dam road is stopped, and passes where it is not registered',async()=>{
+ const {DrivingPhysics}=await import('../src/physics/vehicle.ts'),{museumStatueCollision}=await import('../src/render/museum-of-science.ts'),{windowCity}=await import('./helpers/metro-city.mjs');
+ const city=windowCity(metro,{minX:330,maxX:540,minZ:-1990,maxZ:-1800}),mesh=museumStatueCollision(city),{x,z,yaw,half}=museumStatue();
+ assert.ok(mesh.indices.length/3>300&&mesh.vertices.length===mesh.indices.length*3,'a triangle list');
+ let low=Infinity,high=-Infinity;const across=[Math.cos(yaw),-Math.sin(yaw)],along=[Math.sin(yaw),Math.cos(yaw)];
+ for(let i=0;i<mesh.vertices.length;i+=3){
+  const dx=mesh.vertices[i]-x,dz=mesh.vertices[i+2]-z;low=Math.min(low,mesh.vertices[i+1]);high=Math.max(high,mesh.vertices[i+1]);
+  assert.ok(Math.abs(dx*across[0]+dz*across[1])<=half[0]+.05&&Math.abs(dx*along[0]+dz*along[1])<=half[1]+2.2,'the mesh stays over its plinth (the tail reaches two metres past its end)');
+ }
+ assert.ok(high-low>5.5&&high-low<7,`about six metres tall (${(high-low).toFixed(2)})`);
+ const run=async solid=>{
+  const physics=await DrivingPhysics.create(city);
+  try{
+   if(solid)physics.addStaticMesh(mesh.vertices,mesh.indices);
+   physics.reset(x+across[0]*14,z+across[1]*14,Math.atan2(-across[0],-across[1]));
+   for(let i=0;i<60;i++)physics.step({throttle:0,brake:1,steer:0,handbrake:false},1/60);
+   let nearest=Infinity;
+   for(let frame=0;frame<7*60;frame++){physics.step({throttle:.6,brake:0,steer:0,handbrake:false},1/60);const s=physics.getState();nearest=Math.min(nearest,(s.x-x)*across[0]+(s.z-z)*across[1]);}
+   return nearest;
+  }finally{physics.dispose();}
+ };
+ const open=await run(false),blocked=await run(true);
+ assert.ok(open<-3,`without the mesh the car drives through where the statue stands (${open.toFixed(1)} m)`);
+ assert.ok(blocked>.8,`with it the car stops short of the statue's axis (${blocked.toFixed(1)} m)`);
+});

@@ -79,6 +79,21 @@ class CharlesDamTests(unittest.TestCase):
   self.assertEqual(back,roads);self.assertTrue(np.array_equal(values,heights))
   later=copy.deepcopy(out);later[0]['pavedWidth']=11.2
   self.assertTrue(D.replay(later,grid,result,record,water),'a width measured by a later stage is not this stage\'s')
+
+ def test_a_rerun_on_a_finished_package_keeps_what_later_stages_added(self):
+  roads,grid,heights,water=dam();record,result,out=D.build(roads,grid,heights,water)
+  # The surface stage measures every piece afterwards, the former decks among them.
+  finished=copy.deepcopy(out)
+  for road in finished:
+   if road['id'] in D.NORTHBOUND+D.SOUTHBOUND:road['pavedWidth']=19.5
+  again=copy.deepcopy(finished);values=result.copy();D.restore(again,values,record)
+  self.assertTrue(all(r['pavedWidth']==19.5 for r in again if r['id'] in D.NORTHBOUND+D.SOUTHBOUND),'restoring a source keeps the measured width')
+  self.assertIn('elevations',next(r for r in again if r['id']==D.NORTHBOUND[1]));self.assertTrue(np.array_equal(values,heights))
+  record2,result2,out2=D.build(again,grid,values,water)
+  self.assertEqual(out2,finished,'the rerun writes the finished roads back, widths included')
+  self.assertEqual([list(r) for r in out2],[list(r) for r in finished],'in the same key order, so city.json is the same file')
+  self.assertEqual(record2,record,'and the same record');self.assertTrue(np.array_equal(result2,result))
+  self.assertTrue(all(set(r)<={'id',*D.OWNED} for r in record['roads']['sources']),'a source holds only what the stage decides')
   moved=result.copy();moved[record['terrain']['vertices'][0]]+=7
   self.assertFalse(D.replay(out,grid,moved,record,water))
 
