@@ -2303,7 +2303,7 @@ def landed_decks(roads,records,ground):
  road it shares for its first 22 m, where a car rode the road and the ground instead and met the ramp in a bump. Such
  a deck that misses the road's height at that end by more than LANDED_STEP is laid again (one that meets it stays as
  its builder laid it: a ramp of the stage that starts or ends on such a deck takes that deck's height, and how the two
- share their pavement beyond is the stage's own matter, as at Airport Road's end on the Exit 137 ramp). From that end inward the deck takes the road's height while its centre line lies in the road's pavement (`records`, the
+ share their pavement beyond is the stage's own matter, as at Airport Road's end on the Exit 137 ramp). From that end inward the deck takes the road's height while their full pavements overlap (`records`, the
  stage's records as installed: the nearest one there) and runs along it (LANDED_ALONG: a street leaving a ramp's mouth
  at an angle shares its pavement for a metre or two as the two grade apart, which is no defect), is then pulled taut (land_approaches.taut) over the ground
  across its own pavement (RAMP_RISE over the highest of it, `ground` the graded grid) to the first station where its
@@ -2334,7 +2334,14 @@ def landed_decks(roads,records,ground):
    held=[records[k]['elevations'][i]]
    for j,p in enumerate(pts[1:],1):
     near=surface(p)
-    if near is None or near[0]>near[2] or abs(t[j][0]*near[3][0]+t[j][1]*near[3][1])<LANDED_ALONG:break
+    if near is None:break
+    alignment=abs(t[j][0]*near[3][0]+t[j][1]*near[3][1])
+    # The centre leaves the parent's pavement before the inner edge does.
+    # Raising the deck then puts its slab and parapet across the through lane
+    # (the Bowker fork off Storrow East). Keep the shared pavement level until
+    # the full width, projected across the parent, has parted, with rail room.
+    reach=(road.get('deckWidths') or [road['width']]*len(pts))[order[j]]/2*alignment
+    if near[0]>near[2]+reach+.3 or alignment<LANDED_ALONG:break
     held.append(near[1])
    m=len(held)-1
    if abs(orig[0]-held[0])<=LANDED_STEP:   # (it meets the road: as its builder laid it)

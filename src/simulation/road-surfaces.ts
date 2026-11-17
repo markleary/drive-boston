@@ -363,19 +363,25 @@ function coveredDeckInterval(a:Point2,b:Point2,ya:number,yb:number,triangle:Deck
 
 /** Exposed edge intervals at the requested inset. Markings test their actual
  * centerline; rails probe outside the deck to retain coincident outer edges.
+ * Several probe insets open an entire band wherever any probe is covered.
  * `hidden` names further stretches to leave out, as fractions of the edge from
  * station `index - 1` to `index` (a median: `medianStretches`). */
-export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset=inset,levelTolerance=.8,hidden?:(index:number,side:number)=>readonly [number,number][]|undefined){
+export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeInset:number|readonly number[]=inset,levelTolerance=.8,hidden?:(index:number,side:number)=>readonly [number,number][]|undefined){
   if(!road.elevations)return[];
-  const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number;side:number;index:number}[]=[];
+  const probes=typeof probeInset==='number'?[probeInset]:probeInset;
+  const cells=deckIndex(city),parts:{a:Point2;b:Point2;ya:number;yb:number;side:number;index:number;start:number;end:number}[]=[];
   for(let i=1;i<road.points.length;i++)for(const side of [-1,1]){
     const a=deckEdge(road,i-1,side,inset),b=deckEdge(road,i,side,inset),ya=road.deckEdgeElevations?sampleRoadElevation(city,road,...a):deckEdgeElevation(road,i-1,side),yb=road.deckEdgeElevations?sampleRoadElevation(city,road,...b):deckEdgeElevation(road,i,side);
-    const outsideA=deckEdge(road,i-1,side,probeInset),outsideB=deckEdge(road,i,side,probeInset);
-    const probeYa=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideA):ya,probeYb=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideB):yb;
-    const candidates=new Set<DeckTriangle>();
-    for(let x=Math.floor(Math.min(outsideA[0],outsideB[0])/DECK_CELL);x<=Math.floor(Math.max(outsideA[0],outsideB[0])/DECK_CELL);x++)for(let z=Math.floor(Math.min(outsideA[1],outsideB[1])/DECK_CELL);z<=Math.floor(Math.max(outsideA[1],outsideB[1])/DECK_CELL);z++)for(const triangle of cells.get(`${x},${z}`)??[])if(triangle.road!==road)candidates.add(triangle);
     const covered:[number,number][]=[...hidden?.(i,side)??[]];
-    for(const triangle of candidates){const interval=coveredDeckInterval(outsideA,outsideB,probeYa,probeYb,triangle,levelTolerance);if(interval)covered.push(interval);}
+    // A sidewalk band probes both edges and its middle: any covered portion
+    // opens the whole band, including a ramp approaching it obliquely.
+    for(const probe of probes){
+      const outsideA=deckEdge(road,i-1,side,probe),outsideB=deckEdge(road,i,side,probe);
+      const probeYa=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideA):ya,probeYb=road.deckEdgeElevations?sampleRoadElevation(city,road,...outsideB):yb;
+      const candidates=new Set<DeckTriangle>();
+      for(let x=Math.floor(Math.min(outsideA[0],outsideB[0])/DECK_CELL);x<=Math.floor(Math.max(outsideA[0],outsideB[0])/DECK_CELL);x++)for(let z=Math.floor(Math.min(outsideA[1],outsideB[1])/DECK_CELL);z<=Math.floor(Math.max(outsideA[1],outsideB[1])/DECK_CELL);z++)for(const triangle of cells.get(`${x},${z}`)??[])if(triangle.road!==road)candidates.add(triangle);
+      for(const triangle of candidates){const interval=coveredDeckInterval(outsideA,outsideB,probeYa,probeYb,triangle,levelTolerance);if(interval)covered.push(interval);}
+    }
     covered.sort((a,b)=>a[0]-b[0]);
     const exposed:[number,number][]=[];let cursor=0;
     for(const [low,high]of covered){if(low>cursor)exposed.push([cursor,low]);cursor=Math.max(cursor,high);}
@@ -383,7 +389,7 @@ export function bridgeEdgeSections(city:CityData,road:Road,inset:number,probeIns
     const dx=b[0]-a[0],dz=b[1]-a[1],dy=yb-ya,distance=Math.hypot(dx,dz),length=Math.hypot(distance,dy);
     for(const [start,end]of exposed){
       if((end-start)*length<.12)continue;
-      parts.push({a:[a[0]+dx*start,a[1]+dz*start],b:[a[0]+dx*end,a[1]+dz*end],ya:ya+dy*start,yb:ya+dy*end,side,index:i});
+      parts.push({a:[a[0]+dx*start,a[1]+dz*start],b:[a[0]+dx*end,a[1]+dz*end],ya:ya+dy*start,yb:ya+dy*end,side,index:i,start,end});
     }
   }
   return parts;
