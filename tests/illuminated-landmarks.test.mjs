@@ -8,6 +8,19 @@ import { loadMetroCity } from './helpers/metro-city.mjs';
 
 const city = await loadMetroCity({ tiles: ['0_-4', '-2_0'] });
 
+function buildSign() {
+  // Canvas artwork is exercised in the browser; Node checks the real mesh.
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const context = new Proxy({ measureText: () => ({ width: 500 }) }, { get: (target, name) => target[name] ?? (() => {}) });
+  globalThis.document = { createElement: () => ({ getContext: () => context }) };
+  try { return buildCitgoSign(); }
+  finally { if (saved) Object.defineProperty(globalThis, 'document', saved); else delete globalThis.document; }
+}
+
+function disposeSign(sign) {
+  sign.traverse(object => { if (object.isMesh) { object.geometry.dispose(); object.material.map?.dispose(); object.material.dispose(); } });
+}
+
 test('Schrafft preserves the survey footprint, shell and collision, with one matching far hull', () => {
   const source = city.geometry.get(SCHRAFFT_ID), building = city.buildings.find(b => b.id === SCHRAFFT_ID);
   assert.deepEqual(building.footprint, shell.building.footprint);
@@ -38,14 +51,7 @@ test('all six CITGO legs and the access ladder attach to the detailed stepped ro
   geometry.setAttribute('position', new THREE.BufferAttribute(source.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(source.roof, 1));
   const roof = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-  // Canvas drawing is covered by the browser test; here inspect the actual
-  // batched frame geometry and survey triangles, not the coarse height hull.
-  const saved = Object.getOwnPropertyDescriptor(globalThis, 'document');
-  const context = new Proxy({ measureText: () => ({ width: 500 }) }, { get: (target, name) => target[name] ?? (() => {}) });
-  let sign;
-  globalThis.document = { createElement: () => ({ getContext: () => context }) };
-  try { sign = buildCitgoSign().group; }
-  finally { if (saved) Object.defineProperty(globalThis, 'document', saved); else delete globalThis.document; }
+  const sign = buildSign().group;
   sign.updateMatrixWorld(true);
   const [nx, nz] = CITGO.normal;
   const world = (x, y, z) => new THREE.Vector3(CITGO.position[0] + nz * x + nx * z, y, CITGO.position[1] - nx * x + nz * z);
@@ -72,8 +78,30 @@ test('all six CITGO legs and the access ladder attach to the detailed stepped ro
     }
   } finally {
     geometry.dispose(); roof.material.dispose();
-    sign.traverse(object => { if (object.isMesh) { object.geometry.dispose(); object.material.map?.dispose(); object.material.dispose(); } });
+    disposeSign(sign);
   }
+});
+
+test('CITGO cabinet has one surface per face, without depth-fighting caps or a second flat logo', () => {
+  const { group, collision } = buildSign();
+  const solid = new THREE.BufferGeometry();
+  solid.setAttribute('position', new THREE.BufferAttribute(collision.vertices, 3));
+  solid.setIndex(new THREE.BufferAttribute(collision.indices, 1));
+  const collider = new THREE.Mesh(solid, new THREE.MeshBasicMaterial());
+  group.updateMatrixWorld(true);
+  const [nx, nz] = CITGO.normal, middle = CITGO.bottom + CITGO.height / 2;
+  const world = (x, y, z) => new THREE.Vector3(CITGO.position[0] + nz * x + nx * z, middle + y, CITGO.position[1] - nx * x + nz * z);
+  const depths = hits => [...new Set(hits.map(hit => Math.round(hit.distance * 1000)))];
+  try {
+    for (const side of [-1, 1]) for (let x = -8.2; x < 8.3; x += .67) for (let y = -8.2; y < 8.3; y += .67) {
+      // Stop at the cabinet's midplane so only the near face can be hit.
+      const ray = new THREE.Raycaster(world(x, y, side * 3), new THREE.Vector3(-side * nx, 0, -side * nz), 0, 3);
+      const hits = ray.intersectObject(group, true), contact = ray.intersectObject(collider);
+      assert.equal(depths(hits).length, 1, `one visible surface at ${side}, ${x}, ${y}`);
+      assert.equal(depths(contact).length, 1, 'removing duplicate caps must retain a closed collision shell');
+      assert.ok(Math.abs(hits[0].distance - contact[0].distance) < .001, 'render and collision share the panel/pyramid surface');
+    }
+  } finally { solid.dispose(); collider.material.dispose(); disposeSign(group); }
 });
 
 test('CITGO sequence retains the blue letters through wipes and two flashes', () => {

@@ -104,19 +104,31 @@ export function buildCitgoSign(mobile = false) {
   face.customProgramCacheKey = () => 'citgo-tubes-v1';
   const middle = CITGO.bottom + CITGO.height / 2, half = CITGO.width / 2;
   const rounded = new THREE.Shape(); rounded.moveTo(-half + 1, -half); rounded.lineTo(half - 1, -half); rounded.quadraticCurveTo(half, -half, half, -half + 1); rounded.lineTo(half, half - 1); rounded.quadraticCurveTo(half, half, half - 1, half); rounded.lineTo(-half + 1, half); rounded.quadraticCurveTo(-half, half, -half, half - 1); rounded.lineTo(-half, -half + 1); rounded.quadraticCurveTo(-half, -half, -half + 1, -half);
-  const caseGeometry = new THREE.ExtrudeGeometry(rounded, { depth: 1.35, bevelEnabled: false, curveSegments: 8 }); caseGeometry.translate(0, middle, -.675); model.append(rim, caseGeometry, true);
+  // Only the cabinet's edge walls belong to the metal rim. Solid extrusion
+  // caps just behind the artwork competed with it in the driving camera's
+  // depth buffer, showing moving dark stripes at a few hundred metres.
+  const extrusion = new THREE.ExtrudeGeometry(rounded, { depth: 1.38, bevelEnabled: false, curveSegments: 8 });
+  const walls = extrusion.groups.find(group => group.materialIndex === 1)!;
+  const caseGeometry = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'uv']) {
+    const attribute = extrusion.getAttribute(name);
+    caseGeometry.setAttribute(name, new THREE.Float32BufferAttribute(attribute.array.slice(walls.start * attribute.itemSize, (walls.start + walls.count) * attribute.itemSize), attribute.itemSize));
+  }
+  extrusion.dispose(); caseGeometry.translate(0, middle, -.69); model.append(rim, caseGeometry, true);
+  // Give the raised pyramid a real opening rather than hiding a second flat
+  // logo beneath it. Its base shares the panel's boundary and depth exactly.
+  const logoHole = new THREE.Path(); logoHole.moveTo(0, 8.34); logoHole.lineTo(7.394, -4.036); logoHole.lineTo(-7.394, -4.036); logoHole.closePath();
+  rounded.holes.push(logoHole);
   for (const side of [-1, 1]) {
     const geometry = new THREE.ShapeGeometry(rounded, 8), p = geometry.getAttribute('position'), uv = geometry.getAttribute('uv');
     for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + half) / CITGO.width, (p.getY(i) + half) / CITGO.height);
-    // The shallow three-facet pyramid projects out of both faces. Remove the
-    // flat triangle behind it through depth occlusion; both share the atlas.
-    geometry.rotateY(side < 0 ? Math.PI : 0); geometry.translate(0, middle, side * .69); model.append(face, geometry);
-    const a: Vertex = [0, middle + 8.34, side * .70], b: Vertex = [-7.394, middle - 4.036, side * .70], c: Vertex = [7.394, middle - 4.036, side * .70], d: Vertex = [0, middle + .089, side * 1.28];
+    geometry.rotateY(side < 0 ? Math.PI : 0); geometry.translate(0, middle, side * .69); model.append(face, geometry, true);
+    const a: Vertex = [0, middle + 8.34, side * .69], b: Vertex = [-7.394, middle - 4.036, side * .69], c: Vertex = [7.394, middle - 4.036, side * .69], d: Vertex = [0, middle + .089, side * 1.28];
     for (const [v1, v2] of [[a, b], [b, c], [c, a]]) {
       const g = new THREE.BufferGeometry(), points = side > 0 ? [v1, v2, d] : [v2, v1, d];
       // Back-face texture is read from its own viewer's right.
       g.setAttribute('position', new THREE.Float32BufferAttribute(points.flat(), 3));
-      g.setAttribute('uv', new THREE.Float32BufferAttribute(points.flatMap(p => [(side * p[0] + half) / CITGO.width, (p[1] - middle + half) / CITGO.height]), 2)); g.computeVertexNormals(); model.append(face, g);
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(points.flatMap(p => [(side * p[0] + half) / CITGO.width, (p[1] - middle + half) / CITGO.height]), 2)); g.computeVertexNormals(); model.append(face, g, true);
     }
   }
   const strut = (a: Vertex, b: Vertex, thickness = .16) => {
