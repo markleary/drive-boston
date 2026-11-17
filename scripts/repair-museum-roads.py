@@ -42,6 +42,8 @@ def repair(city):
  # road order its replay expects even though every profile is unchanged.
  replacements={LINK:road,NORTH_LINK:north_link};present=set(by_id)
  city['roads']=[replacements.get(r['id'],r) for r in city['roads']]+[r for id,r in replacements.items() if id not in present]
+ # build-charles-dam.py makes the dam road a surface street measured between its curbs: no deck is left to taper.
+ if not north.get('elevations'):return road,north_link,dam
  distances=stations(north['points']);total=distances[-1]
  north['deckWidths']=[round(north['width']+(dam['pavedWidth']-north['width'])*max(0,1-(total-s)/30),5) for s in distances]
  north.setdefault('deckTangents',{})['end']=[b[k]-a[k] for k in (0,1)]

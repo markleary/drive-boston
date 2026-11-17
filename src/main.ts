@@ -34,6 +34,7 @@ import { addTheEmbrace } from './render/the-embrace';
 import { addPrudentialCrown } from './render/prudential';
 import { addTdGardenDetails } from './render/td-garden';
 import { setMelroseNight } from './render/melrose-landmarks';
+import { setMuseumNight } from './render/museum-of-science';
 import { addNeighborhoodDetails } from './render/neighborhood-architecture';
 import { updateFoliage } from './render/foliage';
 import { createGroundCover } from './render/ground-cover';
@@ -123,7 +124,7 @@ async function boot(){
       }
       travelMode=mode;if(from==='walk'||mode==='walk')populateNeighborhood();keys.clear();cancelCameraDrag();audio.setMode(mode);cameraMode='chase';ui.setCamera(cameraMode);cameraSnap=true;lookOffset=0;orbitPitch=.3;zoom=1;
     },
-    onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');setParkedNight(mode==='night');transit?.setNight(mode==='night');prudential?.setNight(mode==='night');metroLandmarks?.setNight(mode==='night');tdGarden?.setNight(mode==='night');setMelroseNight(mode==='night');},
+    onLighting(mode){lighting=mode;world?.setLighting(mode);traffic?.setNight(mode==='night');setParkedNight(mode==='night');transit?.setNight(mode==='night');prudential?.setNight(mode==='night');metroLandmarks?.setNight(mode==='night');tdGarden?.setNight(mode==='night');setMelroseNight(mode==='night');setMuseumNight(mode==='night');},
     onPause(){keys.clear();cancelCameraDrag();},
     onStart(){audio.start();journal.start();captureSession();},
     onSound(enabled){audio.enabled=enabled;},
@@ -237,7 +238,7 @@ async function boot(){
     physics.setCar(carId);
     const embrace=addTheEmbrace(scene,city);physics.addStaticMesh(embrace.collision.vertices,embrace.collision.indices);
     metroLandmarks=metro?addMetroLandmarkDetails(scene,city):undefined;for(const mesh of metroLandmarks?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
-    tdGarden=addTdGardenDetails(scene,city,mobile);tdGarden?.setNight((lighting as LightingMode)==='night');setMelroseNight((lighting as LightingMode)==='night');for(const mesh of tdGarden?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
+    tdGarden=addTdGardenDetails(scene,city,mobile);tdGarden?.setNight((lighting as LightingMode)==='night');setMelroseNight((lighting as LightingMode)==='night');setMuseumNight((lighting as LightingMode)==='night');for(const mesh of tdGarden?.collisions??[])physics.addStaticMesh(mesh.vertices,mesh.indices);
     let restored=false;
     if(saved){
       let loaded=true;

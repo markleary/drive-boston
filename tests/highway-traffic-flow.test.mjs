@@ -42,7 +42,11 @@ test('ambient cars merge from the retained Leverett survey onto I-93 northbound'
  const road=byId.get('i93-zakim-leverett-nb-02'),observer=at(road,road.points.length-1),f=await fleet(observer,leverettBounds);
  let previous=f.traffic.snapshot(),merged=0;
  try{
-  for(let frame=0;frame<100*60;frame++){
+  // The connector carries about one car in eight seconds past this observer and a merge about every five minutes
+  // (two in ten minutes, on the package before and after Charles River Dam Road became a street: at 52 and 291 s,
+  // then at 146 and 389 s, the seeded sequence having shifted with that road's vertices). So wait for the first
+  // merge instead of for a fixed 100 s, which only one of those two sequences passes.
+  for(let frame=0;frame<420*60&&!merged;frame++){
    f.step();if(frame%15)continue;const cars=f.traffic.snapshot();
    cars.forEach((car,i)=>{
     const before=previous[i];
