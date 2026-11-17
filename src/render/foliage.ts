@@ -31,7 +31,7 @@ const SPECIES=[
 const STREET_SPECIES=SPECIES.flatMap((s,i)=>s.parkOnly?[]:[i]);
 const PARK_SPECIES=SPECIES.map((_,i)=>i);
 const LODS=[0,1,2];
-let resources:{bark:THREE.MeshStandardMaterial;leaves:{near:THREE.MeshStandardMaterial;distant:THREE.MeshStandardMaterial;depth:THREE.MeshDepthMaterial}[];geometries:{wood:THREE.BufferGeometry;leaves:THREE.BufferGeometry}[][]}|undefined;
+let resources:{bark:THREE.MeshStandardMaterial;leaves:{material:THREE.MeshStandardMaterial;depth:THREE.MeshDepthMaterial}[];geometries:{wood:THREE.BufferGeometry;leaves:THREE.BufferGeometry}[][]}|undefined;
 /** `flutter`: a leaf material. Its cards carry `cardCentre` and `cardFade` (see `geometryFor`) and are scaled about
  * their centres by the blend between detail levels at the tree's distance from the observer; areas, not sides, are
  * blended, so the crown keeps its cover half way. The shadow pass draws with the same uniforms (its own camera is
@@ -121,14 +121,14 @@ function assets(){
   if(resources)return resources;
   const bark=new THREE.MeshStandardMaterial({color:'#665949',roughness:.98});wind(bark);
   const leaves=SPECIES.map((s,i)=>{
-    const distant=new THREE.MeshStandardMaterial({map:leafTexture(i),color:s.color,roughness:.92,alphaTest:.42,side:THREE.DoubleSide});
-    distant.forceSinglePass=true;
-    // Alpha-to-coverage smooths nearby leaves, but its subpixel coverage
-    // produces bright speckles in the multisampled beauty pass at a distance.
-    const near=distant.clone();near.alphaToCoverage=true;
-    const depth=new THREE.MeshDepthMaterial({map:distant.map,alphaTest:distant.alphaTest,side:THREE.DoubleSide,depthPacking:THREE.RGBADepthPacking});
-    wind(near,true);wind(distant,true);wind(depth,true);
-    return{near,distant,depth};
+    // Use opaque alpha-test cutouts at every distance. Even the nearest pool
+    // contains subpixel leaves as its cards shrink during the LOD blend;
+    // alpha-to-coverage there brings back the pale fringes fixed for far trees.
+    const material=new THREE.MeshStandardMaterial({map:leafTexture(i),color:s.color,roughness:.92,alphaTest:.42,side:THREE.DoubleSide});
+    material.forceSinglePass=true;
+    const depth=new THREE.MeshDepthMaterial({map:material.map,alphaTest:material.alphaTest,side:THREE.DoubleSide,depthPacking:THREE.RGBADepthPacking});
+    wind(material,true);wind(depth,true);
+    return{material,depth};
   });
   resources={bark,leaves,geometries:SPECIES.map((_,i)=>LODS.map(lod=>geometryFor(i,lod)))};return resources;
 }
@@ -158,8 +158,8 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
   const palette=options.grates===false?PARK_SPECIES:STREET_SPECIES;
   let sites:Site[]=[];
   const make=(species:number,lod:number,capacity:number)=>{
-    const {near,distant,depth}=shared.leaves[species];
-    const wood=new THREE.InstancedMesh(shared.geometries[species][lod].wood,shared.bark,capacity),leaf=new THREE.InstancedMesh(shared.geometries[species][lod].leaves,lod===0?near:distant,capacity);
+    const {material,depth}=shared.leaves[species];
+    const wood=new THREE.InstancedMesh(shared.geometries[species][lod].wood,shared.bark,capacity),leaf=new THREE.InstancedMesh(shared.geometries[species][lod].leaves,material,capacity);
     wood.name=`${SPECIES[species].name} branches LOD${lod}`;leaf.name=`${SPECIES[species].name} foliage LOD${lod}`;
     leaf.customDepthMaterial=depth;leaf.userData.noAO=true;
     for(const mesh of [wood,leaf]){mesh.castShadow=lod<2;mesh.receiveShadow=true;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);mesh.frustumCulled=false;mesh.count=0;group.add(mesh);}
