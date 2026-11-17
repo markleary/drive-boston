@@ -2,8 +2,8 @@ import type { Point2 } from '../types';
 import type { CityTile } from './tile-format.ts';
 import { STALL_DEPTH, STALL_HALF, tileStalls, type Stall } from './parking-lots.ts';
 
-/** What the planters read of a tile: the street pavement it draws, its lot asphalt and its parking stalls. */
-export type StreetTile = Pick<CityTile, 'tx' | 'tz' | 'size' | 'streetPavement' | 'driveways' | 'parking'>;
+/** Ground used by roadside placement: pavement, grass verges, lot asphalt and parking stalls. */
+export type StreetTile = Pick<CityTile, 'tx' | 'tz' | 'size' | 'streetPavement' | 'streetLawns' | 'driveways' | 'parking'>;
 
 /** The streets of one tile as it draws them: the compiled `streetPavement` polygons (the roadway measured between
  * the curbs, junction mouths and highway aprons included) indexed for the planters, which stand trees, posts and
@@ -26,6 +26,8 @@ export interface DrawnStreets {
   /** Whether (x, z) lies on the asphalt the tile draws for lots and driveways, or within `margin` of it: every stall
    * stands on that asphalt, so ground off it holds no stall of any tile. */
   lot(x: number, z: number, margin: number): boolean;
+  /** Whether a reviewed grass verge lies at or within `margin` of (x, z). Sidewalk routes keep clear of it. */
+  lawn(x: number, z: number, margin: number): boolean;
   /** How far inside the tile (x, z) lies: the distance to its nearest border, negative beyond it. */
   inset(x: number, z: number): number;
   /** The stretch of the line (x + t nx, z + t nz) that lies at least `inset` inside the tile: [from, to] in t (from > to when none does). */
@@ -143,20 +145,23 @@ export function drawnStreets(tile: StreetTile): DrawnStreets {
     } }
     return false;
   };
-  let lots: { rings: Point2[][]; minX: number; maxX: number; minZ: number; maxZ: number }[] | undefined;
-  const lot = (x: number, z: number, margin: number) => {
-    lots ??= (tile.driveways ?? []).filter(rings => rings[0]?.length >= 3).map(rings => { let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity; for (const p of rings[0]) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minZ = Math.min(minZ, p[1]); maxZ = Math.max(maxZ, p[1]); } return { rings, minX, maxX, minZ, maxZ }; });
-    return lots.some(l => x >= l.minX - margin && x <= l.maxX + margin && z >= l.minZ - margin && z <= l.maxZ + margin && (inRings(x, z, l.rings) || l.rings.some(ring => ring.some((a, i) => {
-      const b = ring[(i + 1) % ring.length], dx = b[0] - a[0], dz = b[1] - a[1], t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1)));
-      return (x - a[0] - t * dx) ** 2 + (z - a[1] - t * dz) ** 2 < margin * margin;
-    }))));
+  const polygonQuery = (polygons: Point2[][][] = []) => {
+    let areas: { rings: Point2[][]; minX: number; maxX: number; minZ: number; maxZ: number }[] | undefined;
+    return (x: number, z: number, margin: number) => {
+      areas ??= polygons.filter(rings => rings[0]?.length >= 3).map(rings => { let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity; for (const p of rings[0]) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minZ = Math.min(minZ, p[1]); maxZ = Math.max(maxZ, p[1]); } return { rings, minX, maxX, minZ, maxZ }; });
+      return areas.some(l => x >= l.minX - margin && x <= l.maxX + margin && z >= l.minZ - margin && z <= l.maxZ + margin && (inRings(x, z, l.rings) || l.rings.some(ring => ring.some((a, i) => {
+        const b = ring[(i + 1) % ring.length], dx = b[0] - a[0], dz = b[1] - a[1], t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz || 1)));
+        return (x - a[0] - t * dx) ** 2 + (z - a[1] - t * dz) ** 2 < margin * margin;
+      }))));
+    };
   };
+  const lot = polygonQuery(tile.driveways), lawn = polygonQuery(tile.streetLawns);
   const within = (x: number, z: number, nx: number, nz: number, inset: number): [number, number] => {
     let a = -Infinity, b = Infinity;
     if (nx === 0) { if (x < x0 + inset || x > x1 - inset) return [1, 0]; } else { const p = (x0 + inset - x) / nx, q = (x1 - inset - x) / nx; a = Math.max(a, Math.min(p, q)); b = Math.min(b, Math.max(p, q)); }
     if (nz === 0) { if (z < z0 + inset || z > z1 - inset) return [1, 0]; } else { const p = (z0 + inset - z) / nz, q = (z1 - inset - z) / nz; a = Math.max(a, Math.min(p, q)); b = Math.min(b, Math.max(p, q)); }
     return [a, b];
   };
-  const streets: DrawnStreets = { paved, near, spans, stall, lot, inset: (x, z) => Math.min(x - x0, x1 - x, z - z0, z1 - z), within };
+  const streets: DrawnStreets = { paved, near, spans, stall, lot, lawn, inset: (x, z) => Math.min(x - x0, x1 - x, z - z0, z1 - z), within };
   cache.set(tile, streets); return streets;
 }
