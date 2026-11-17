@@ -332,6 +332,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     architecturalLandmarks?.encore?.setLighting(night);
     architecturalLandmarks?.schrafft?.setLighting(night);
     architecturalLandmarks?.citgo?.setLighting(night);
+    architecturalLandmarks?.hatchShell?.setLighting(mode);
     architecturalLandmarks?.encore?.setReflection(skyEnvironment.texture);
     sun.color.set(mode==='golden'?0xffd5a6:mode==='day'?0xfff3df:0x8eaad8);
     sun.intensity=night?.16:mode==='golden'?3.6:3.4;hemi.intensity=night?.24:.68;
