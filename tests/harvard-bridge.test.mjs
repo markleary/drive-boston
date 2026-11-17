@@ -71,7 +71,8 @@ test('Smoot labels cover the eastern sidewalk with real unit spacing and the com
  assert.ok(markers.find(m=>m.smoot===182.2).label.includes('HALFWAY TO HELL'));
  assert.ok(markers.at(-1).label.includes('± 1 EAR'));
  const details=addHarvardBridgeDetails(new THREE.Scene(),city,{labelTexture:null});
- assert.equal(details.group.userData.markers.length,39);assert.equal(details.group.userData.ticks,366);assert.equal(details.collisions.length,4);
+ assert.equal(details.group.userData.markers.length,38);assert.equal(details.group.userData.ticks,361);assert.ok(details.collisions.length>=4,'both sidewalks and rails retain collision, split at junctions');
+ assert.ok(!details.group.userData.markers.some(m=>m.smoot===10),'the label in the westbound exit opening is omitted');
  details.group.traverse(o=>o.geometry?.dispose());
 });
 

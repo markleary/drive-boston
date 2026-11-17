@@ -25,6 +25,14 @@ This is supported by the cached source geometries, not just neighboring names: p
 
 Validation includes geometry-derived signs for all three parkways, upward rays against the visible/physical Longfellow ribs, ordinary-car passage in both directions, and the source-label exception. The main Storrow browser test exercises a truck strike and recovery in the complete rendered game.
 
+## Harvard Bridge and Bowker junction collision audit
+
+The Bowker eastbound entrance ends at the Massachusetts Avenue/Harvard Bridge approach at `(-1233.935, -142.603)`, at the same elevation as the bridge. The custom Harvard sidewalk and outer railing formerly continued across this junction. They now open across the full width of connecting roads, using both sidewalk edges and its midpoint to cover oblique approaches. Connections require a shared endpoint and matching elevation; Storrow's lower through lanes do not cut openings in the bridge above. The same correction opens the westbound Massachusetts Avenue exit, the eastbound entrance on the opposite side, and Back Street. Smoot paint is omitted inside the sidewalk openings.
+
+The surrounding sweep also found the inner edge of Bowker ramp `19896-0-bridge` rising into Storrow East's through lane. `boston_highways.landed_decks` now holds the ramp at the parent road's height until their full pavement widths, including room for the rail, separate. The regenerated profile preserves both endpoints and the source alignment.
+
+`tests/storrow-junctions.test.mjs` drives the entrance through to Storrow East, the westbound exit onto Harvard Bridge, Back Street, both through lanes beside the Bowker fork, and the fork itself. It also checks more than 5,300 sedan-sized collision volumes at two-metre intervals in the surrounding surface streets, elevated roads and cuts (`x = -1670…-1070`, `z = -260…30`), and verifies that Harvard's outer rails remain above the lower roads and river. The browser regression reproduces the reported approach in the complete streamed scene and captures the open mouth and completed merge. This is a bounded fixed-geometry audit; traffic and street furniture are exercised by the browser drive rather than included in the static sweep.
+
 ## Bounded source-alias audit
 
 A geometric audit checked **14,920 remaining unrestricted Boston source roads** against **132 named Storrow Drive, Soldiers Field Road, Memorial Drive and Embankment Road ways** across all four retained road extracts (Cambridge, Brookline, Somerville and Chelsea). Candidates had at least 60% of their length inside a four-meter buffer of those mapped centerlines. Eighteen candidates then received crossing/topology review; no further unresolved candidates remained.

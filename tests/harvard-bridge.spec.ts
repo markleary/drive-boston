@@ -31,6 +31,6 @@ for(const reverse of [false,true])test(`Harvard Bridge full drive ${reverse?'Cam
   await page.evaluate(value=>{(window as any).__testSteer=value;},Math.max(-1,Math.min(1,steer/limit)));
   await key('w',car.speed<8);await page.waitForTimeout(80);car=(await snapshot()).state;
  }}finally{await page.evaluate(()=>{(window as any).__testSteer=0;});for(const name of [...held])await key(name,false);}
- expect(arrived).toBe(true);const harvard=(await snapshot()).bridges.harvard;expect(harvard.markers).toHaveLength(39);expect(harvard.ticks).toBe(366);expect(harvard.markers.at(-1).label).toContain('± 1 EAR');
+ expect(arrived).toBe(true);const harvard=(await snapshot()).bridges.harvard;expect(harvard.markers).toHaveLength(38);expect(harvard.ticks).toBe(361);expect(harvard.markers.at(-1).label).toContain('± 1 EAR');
  await page.keyboard.down('Space');await expect.poll(async()=>Math.abs((await snapshot()).state.speed)).toBeLessThan(.3);await page.keyboard.up('Space');await page.screenshot({path:testInfo.outputPath('harvard-complete-crossing.png')});expect(errors).toEqual([]);
 });

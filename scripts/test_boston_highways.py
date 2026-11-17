@@ -628,8 +628,8 @@ class LandedTest(unittest.TestCase):
  def test_the_deck_takes_the_road_s_height_while_it_lies_in_its_pavement_and_never_runs_under_the_ground(self):
   out,report=H.landed_decks([self.ramp],[self.record],self.ground);y=out[0]['elevations'];orig=self.ramp['elevations']
   self.assertEqual(y[0],1.2,'it starts at the height of the road it leaves');self.assertLess(orig[0],y[0])
-  held=[i for i in range(35) if 3*i*math.sin(math.radians(10))<=3.0]
-  self.assertTrue(all(abs(y[i]-1.2)<1e-9 for i in held),'held to the road while its centre line lies in its pavement')
+  held=[i for i in range(35) if 3*i*math.sin(math.radians(10))<=3.0+3.5*math.cos(math.radians(10))+.3]
+  self.assertTrue(all(abs(y[i]-1.2)<1e-9 for i in held),'held to the road until the entire ramp pavement and rail clear its lanes')
   self.assertTrue(all(v>=1.0+H.W.RAMP_RISE-1e-9 for v in y),'never under the ground across its pavement')
   j=report[0]['stations'];self.assertEqual(y[j:],orig[j:],'its own profile from where that climbs back over the height it left the road at')
   self.assertGreaterEqual(orig[j],1.2);grade=lambda v:max(abs(b-a)/3 for a,b in zip(v,v[1:]))
