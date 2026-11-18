@@ -104,7 +104,8 @@ test('raised bank leaves ground paths and the actual low Riverway footbridges cl
  }
  const endpoint=[-2764.659133,925.84845],bounds={minX:-2770,maxX:-2745,minZ:920,maxZ:944},corrected=build(city,water,level,bounds),uncut=build({...city,parkPaths:[]},water,level,bounds);
  assert.ok(covers(uncut.water,endpoint),'the source water plane otherwise crosses this submerged approach');
- assert.ok(!covers(corrected.water,endpoint),'only the low bridge approach is removed from water');
+ assert.ok(covers(corrected.water,endpoint),'the restored complete bridge now carries this formerly clipped landing above open water');
+ assert.ok(sampleRoadElevation(city,footbridgeRoad(city,city.parkPaths.find(p=>p.id==='osm-way-48920379-0--3_0_0')),...endpoint)>level+.1,'the restored crossing clears the water plane');
  for(const result of [corrected,uncut]){result.water.dispose();result.bank.dispose();}
 });
 

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type {CityData,Point2} from '../types';
 import {sampleElevation} from '../simulation/terrain.ts';
 import type {Bounds} from './city-parks';
-import {uncoveredWater,uncoveredBank} from './water-pavement.ts';
+import {uncoveredWater,uncoveredBank,shorePathDistance} from './water-pavement.ts';
 import {SHORE_FADE,type WaterShore} from './water-shore.ts';
 import {drain,due,type Pace} from './pacing.ts';
 import {boundingSphereSteps,flatNormalSteps,smoothNormalSteps} from './paced-geometry.ts';
@@ -21,6 +21,8 @@ export function* shoreBankSteps(positions:number[],pace?:Pace):Generator<void,TH
 export interface SurfaceOptions{offset?:number;flatHeight?:number;bounds?:Bounds;water?:boolean;shore?:WaterShore;bankPositions?:number[];
   /** Absolute height for a shaped surface tessellated against the terrain grid. */
   heightAt?:(point:Point2)=>number;
+  /** Refine a custom curved surface independently of the coarse DEM. */ cellSize?:number; smooth?:boolean;
+  /** Engineered basins replace the terrain inside their entire outline. */ basin?:boolean;
   /** Frame pacing: pause between DEM cells and through the per-vertex passes once the deadline has passed. */ pace?:Pace;}
 
 /** Clip polygon triangulation against the exact DEM triangles. This preserves
@@ -32,7 +34,7 @@ export function parkSurface(city:CityData,rings:Point2[][],offset=.024,flatHeigh
 /** parkSurface as a paced generator. A tile's street pavement or a harbour
  * basin covers tens of thousands of DEM cells, a few hundred milliseconds of
  * clipping in one piece; the tile builder runs it a few milliseconds a frame. */
-export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,flatHeight,bounds,water=false,shore,bankPositions=[],heightAt,pace}:SurfaceOptions={}):Generator<void,THREE.BufferGeometry>{
+export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,flatHeight,bounds,water=false,shore,bankPositions=[],heightAt,cellSize,smooth=false,basin=false,pace}:SurfaceOptions={}):Generator<void,THREE.BufferGeometry>{
   let triangulated=triangulations.get(rings);
   if(!triangulated){
     const contour=rings[0]?.map(p=>new THREE.Vector2(...p))??[];
@@ -40,6 +42,8 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
     triangulated={vertices:[...contour,...holes.flat()],faces:THREE.ShapeUtils.triangulateShape(contour,holes)};triangulations.set(rings,triangulated);
   }
   const {vertices,faces}=triangulated;
+  const pathDistance=shore?shorePathDistance(city):undefined;
+  const distance=(x:number,z:number)=>shore?.hard?.(x,z)?Infinity:Math.min(shore?.distance(x,z)??Infinity,pathDistance?.(x,z)??Infinity);
   const positions:number[]=[],uv:number[]=[];
   const emitTriangles=(poly:Point2[],bank=false,height?:(p:Point2)=>number)=>{
     for(let i=1;i<poly.length-1;i++){
@@ -58,7 +62,7 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
       // A narrow land strip joins the DEM to the waterline *inside* the
       // mapped outline. This closes low-bank gaps without hanging a water sheet
       // over dry land or sloping the water itself. Pavement remains untouched.
-      const values=new WeakMap<Point2,number>();for(const p of poly)values.set(p,Math.min(shore.width+12,shore.distance(...p)));
+      const values=new WeakMap<Point2,number>();for(const p of poly)values.set(p,Math.min(shore.width+12,distance(...p)));
       const split=(input:Point2[],bank:boolean)=>{
         const limit=shore.width+(bank?Math.min(SHORE_FADE,shore.width/3):0),result:Point2[]=[];let a=input.at(-1)!,da=values.get(a)!-limit;
         for(const b of input){const db=values.get(b)!-limit;
@@ -67,7 +71,7 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
         }return result;
       };
       const bank=split(poly,true),height=(p:Point2)=>{
-        const ground=sampleElevation(city,...p),t=Math.min(1,(values.get(p)??shore.distance(...p))/shore.width),blend=t*t*(3-2*t);
+        const ground=sampleElevation(city,...p),t=Math.max(0,Math.min(1,(values.get(p)??distance(...p))/shore.width)),blend=t*t*(3-2*t);
         return ground+(flatHeight-ground)*blend+.026;
       };
       for(const part of uncoveredBank(city,bank))emitTriangles(part,true,height);
@@ -78,7 +82,7 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
     // With a constructed shore, clipShoreTerrainSteps removes the high DEM
     // wedges and the bank slopes down as well as up to this horizontal plane.
     // Clipping it against the original DEM would bring back six-metre teeth.
-    if(water&&flatHeight!==undefined&&!shore&&poly.length){
+    if(water&&flatHeight!==undefined&&!shore&&!basin&&poly.length){
       // A quay retains the land vertically. Let the water reach that surveyed
       // wall even where a coarse DEM cell blends the pier down into the basin.
       const depth=(p:Point2)=>inWaterfrontTerrainCut(...p)?-6:sampleElevation(city,...p)-flatHeight;
@@ -98,7 +102,7 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
       if(db<=0)out.push(b);a=b;da=db;
     }return out;
   };
-  const grid=city.elevation,cell=grid?.cellSize??6,ox=grid?.originX??0,oz=grid?.originZ??0;
+  const grid=city.elevation,cell=cellSize??grid?.cellSize??6,ox=grid?.originX??0,oz=grid?.originZ??0;
   for(const f of faces){
     if(due(pace))yield;
     let triangle=f.map(i=>[vertices[i].x,vertices[i].y] as Point2);
@@ -116,7 +120,7 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
       let polygon=clip(triangle,-1,0,-x);polygon=clip(polygon,1,0,x+cell);polygon=clip(polygon,0,-1,-z);polygon=clip(polygon,0,1,z+cell);
       if(polygon.length<3)continue;
       const faces=[clip(polygon,1,1,x+z+cell),clip(polygon,-1,-1,-x-z-cell)];
-      if(shore&&shore.distance(x+cell/2,z+cell/2)<shore.width+SHORE_FADE+cell){
+      if(shore&&distance(x+cell/2,z+cell/2)<shore.width+SHORE_FADE+cell){
         // Only the shoreline needs sub-metre sampling. Keep the DEM's exact
         // diagonals, and use a world-aligned lattice on both sides of tile seams.
         const count=Math.ceil(cell/.75),step=cell/count;
@@ -130,6 +134,6 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
     }
   }
   const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
-  if(water){const edge=new Float32Array(positions.length/3);for(let i=0;i<edge.length;i++){if(i%4096===0&&due(pace))yield;edge[i]=shore?Math.max(0,Math.min(1,(shore.distance(positions[i*3],positions[i*3+2])-shore.width)/Math.min(SHORE_FADE,shore.width/3))):1;}g.setAttribute('waterEdge',new THREE.BufferAttribute(edge,1));}
-  yield* flatNormalSteps(g,pace);yield* boundingSphereSteps(g,pace);return g;
+  if(water){const edge=new Float32Array(positions.length/3);for(let i=0;i<edge.length;i++){if(i%4096===0&&due(pace))yield;edge[i]=shore?Math.max(0,Math.min(1,(distance(positions[i*3],positions[i*3+2])-shore.width)/Math.min(SHORE_FADE,shore.width/3))):1;}g.setAttribute('waterEdge',new THREE.BufferAttribute(edge,1));}
+  yield* (smooth?smoothNormalSteps(g,pace):flatNormalSteps(g,pace));yield* boundingSphereSteps(g,pace);return g;
 }

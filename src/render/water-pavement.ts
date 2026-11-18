@@ -3,11 +3,37 @@ import {sampleElevation} from '../simulation/terrain.ts';
 import {deckEdge} from '../simulation/road-surfaces.ts';
 import {footbridgeRoad} from '../simulation/footbridges.ts';
 import {tunnelCoveredAt,tunnelStations} from '../simulation/tunnels.ts';
+import {longWharfOwnsPath} from '../simulation/long-wharf.ts';
 
 type Cutout={points:Point2[];minX:number;maxX:number;minZ:number;maxZ:number;minimumWaterLevel?:number};
 const indexes=new WeakMap<CityData,Map<string,Cutout[]>>(),bankIndexes=new WeakMap<CityData,Map<string,Cutout[]>>(),CELL=64;
 const lerp=(a:number,b:number,t:number)=>a+(b-a)*t;
 const between=(a:Point2,b:Point2,t:number):Point2=>t===0?a:t===1?b:[lerp(a[0],b[0],t),lerp(a[1],b[1],t)];
+const pathDistances=new WeakMap<CityData,(x:number,z:number)=>number>();
+/** Distance outside ground paving. Banks meet the full path footprint before
+ * descending to water; a ribbon must not become a shelf above a lowered bank. */
+export function shorePathDistance(city:CityData){
+  const cached=pathDistances.get(city);if(cached)return cached;
+  const cells=new Map<string,{a:Point2;b:Point2;radius:number}[]>(),size=16;
+  for(const path of city.parkPaths??[]){
+    if(path.bridge||longWharfOwnsPath(path))continue;
+    for(let i=1;i<path.points.length;i++){
+      const a=path.points[i-1],b=path.points[i],radius=path.width/2+.05,reach=radius+10;
+      for(let x=Math.floor((Math.min(a[0],b[0])-reach)/size);x<=Math.floor((Math.max(a[0],b[0])+reach)/size);x++)for(let z=Math.floor((Math.min(a[1],b[1])-reach)/size);z<=Math.floor((Math.max(a[1],b[1])+reach)/size);z++){
+        const key=`${x},${z}`,list=cells.get(key)??[];list.push({a,b,radius});cells.set(key,list);
+      }
+    }
+  }
+  const distance=(x:number,z:number)=>{
+    let d=Infinity;
+    for(const {a,b,radius} of cells.get(`${Math.floor(x/size)},${Math.floor(z/size)}`)??[]){
+      const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));
+      d=Math.min(d,Math.hypot(x-a[0]-dx*t,z-a[1]-dz*t)-radius);
+    }
+    return Math.max(0,d);
+  };
+  pathDistances.set(city,distance);return distance;
+}
 /** Hydro outlines sometimes include the paved riverbank and its underpass.
  * Remove those pavement footprints from water, including low source decks at
  * their ground landings. Keep water beneath genuinely elevated crossings. */
@@ -15,6 +41,7 @@ function index(city:CityData,banks=false){
   const cache=banks?bankIndexes:indexes;let cells=cache.get(city);if(cells)return cells;cells=new Map();
   const corridors:{road:Road;margin:number;kind:'road'|'path'|'approach'}[]=city.roads.map(road=>({road,margin:road.elevations?.3:6.1,kind:'road'}));
   for(const path of city.parkPaths??[]){
+    if(longWharfOwnsPath(path))continue;
     const bridge=footbridgeRoad(city,path);
     if(banks)corridors.push({road:bridge??{id:path.id,points:path.points,width:path.width,name:'Park path',oneway:0},margin:.1,kind:'path'});
     else if(bridge)corridors.push({road:bridge,margin:.3,kind:'approach'});

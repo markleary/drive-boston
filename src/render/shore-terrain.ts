@@ -1,12 +1,13 @@
 import type * as THREE from 'three';
 import type { CityData, Point2 } from '../types.ts';
 import { waterHeight } from '../simulation/water-level.ts';
-import { FROG_POND } from '../simulation/boston-common.ts';
+import { FROG_POND, FROG_POND_LEVEL, frogPondApron } from '../simulation/boston-common.ts';
 import { isChristianSciencePool } from './christian-science-plaza.ts';
 import { waterShore, type WaterShore } from './water-shore.ts';
 import { clipWaterfrontTerrainSteps } from './waterfront-terrain.ts';
 import { due, type Pace } from './pacing.ts';
 
+const frogPondCut=[ [frogPondApron] ];
 const masks = new WeakMap<WaterShore, Point2[][][]>();
 const extents = new WeakMap<Point2[][], { minX: number; maxX: number; minZ: number; maxZ: number }>();
 
@@ -24,7 +25,11 @@ export function* clipShoreTerrainSteps(city: CityData, geometry: THREE.BufferGeo
     minZ = Math.min(minZ, positions.getZ(i)); maxZ = Math.max(maxZ, positions.getZ(i)); maxY = Math.max(maxY, positions.getY(i));
   }
   for (const water of city.water ?? []) {
-    if (water.name === FROG_POND || isChristianSciencePool(water)) continue;
+    if (isChristianSciencePool(water)) continue;
+    if(water.name===FROG_POND){
+      yield* clipWaterfrontTerrainSteps(city,geometry,pace,frogPondCut,{level:FROG_POND_LEVEL,preserveGround:true});
+      continue;
+    }
     for (const surface of water.surfaces ?? [{ rings: water.rings, level: waterHeight(city, water) }]) {
       if (due(pace)) yield;
       if (maxY <= surface.level + .03) continue;
