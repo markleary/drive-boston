@@ -116,6 +116,24 @@ interface CutOptions {
   preserveGround?: boolean;
 }
 
+/** Partition a face at the waterline before clipping its dry footprint. Keep
+ * the submerged part, including its interpolated normals/UVs and collision. */
+function splitAtHeight(subject: Corner[], height: number): [Corner[], Corner[]] {
+  const above: Corner[] = [], below: Corner[] = [];
+  let a = subject.at(-1)!, da = a.values[1] - height;
+  for (const b of subject) {
+    const db = b.values[1] - height;
+    if ((da > 0) !== (db > 0)) {
+      const t = da / (da - db);
+      const point = t === 0 ? a : t === 1 ? b : { values: a.values.map((value, k) => value + (b.values[k] - value) * t) as Corner['values'] };
+      above.push(point); below.push(point);
+    }
+    if (db > 0) above.push(b); else below.push(b);
+    a = b; da = db;
+  }
+  return [above, below];
+}
+
 /** Remove only mapped water from the visual and physical terrain. New shore
  * vertices lie on their original terrain triangle, so surviving land keeps its
  * exact height/normal/UV and both neighboring tiles produce the same seam.
@@ -155,11 +173,17 @@ export function* clipWaterfrontTerrainSteps(city: CityData, geometry: THREE.Buff
   for (let i = 0; i + 2 < count; i += 3) {
     if (i % 192 === 0 && due(pace)) yield;
     const triangle = [0, 1, 2].map(k => corner(index ? index.getX(i + k) : i + k));
-    if(options.level!==undefined&&triangle.every(p=>p.values[1]<=options.level!+.03)){
+    const waterline=options.level===undefined?undefined:options.level+.03;
+    if(waterline!==undefined&&triangle.every(p=>p.values[1]<=waterline)){
       indices.push(...triangle.map(vertex));continue;
     }
     const x = triangle.map(p => p.values[0]), z = triangle.map(p => p.values[2]);
     const retained:Corner[][]=[];
+    let dry=triangle;
+    if(waterline!==undefined&&triangle.some(p=>p.values[1]<=waterline)){
+      const [above,below]=splitAtHeight(triangle,waterline);dry=above;
+      if(below.length>=3)retained.push(below);
+    }
     const preserve=options.preserveGround?(inside:Corner[])=>{
       // Interpolate the original face payload at each preserved pavement corner.
       const [a,b,c]=triangle.map(p=>p.values),det=(b[0]-a[0])*(c[2]-a[2])-(b[2]-a[2])*(c[0]-a[0]);
@@ -171,7 +195,7 @@ export function* clipWaterfrontTerrainSteps(city: CityData, geometry: THREE.Buff
         }));
       }
     }:undefined;
-    let fragments = [triangle];
+    let fragments = [dry];
     for (const id of candidates(cuts, Math.min(...x), Math.max(...x), Math.min(...z), Math.max(...z))) {
       const next: Corner[][] = [];
       for (const fragment of fragments) next.push(...subtract(fragment, cuts.triangles[id],preserve));

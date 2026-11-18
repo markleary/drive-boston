@@ -79,6 +79,30 @@ test('shore cuts preserve overlapping ground paths, road foundations, islands an
   ground.dispose(); bed.dispose();
 });
 
+test('mixed dry and submerged DEM triangles keep their underwater surface and collision', async () => {
+  const fixture = { ...city, elevation: { ...city.elevation, heights: Array.from({ length: 64 }, (_, i) => 16 - i % 8 * 6) } };
+  const ground = terrainGeometry(fixture);
+  assert.ok(Math.abs(hit(ground, 10.5, 12.5) + .5) < 1e-6, 'the mixed source triangle has a submerged portion beyond the bank strip');
+  drain(clipShoreTerrainSteps(fixture, ground));
+  assert.equal(hit(ground, 8, 12.5), undefined, 'only the above-water wedge is removed');
+  for (const [x, z] of [[9.98, 12.5], [10.5, 11.99], [10.5, 12.01], [11.95, 12.5], [10.5, -3]]) {
+    assert.ok(Math.abs(hit(ground, x, z) - sampleElevation(fixture, x, z)) < 1e-5, `retain original support at ${x}, ${z}`);
+  }
+  const p = ground.attributes.position, uv = ground.attributes.uv;
+  for (let i = 0; i < p.count; i++) {
+    assert.ok(Math.abs(p.getY(i) - sampleElevation(fixture, p.getX(i), p.getZ(i))) < 1e-5);
+    assert.ok(Math.abs(uv.getX(i) - p.getX(i) / 4) < 1e-6);
+    assert.ok(Math.abs(uv.getY(i) - p.getZ(i) / 4) < 1e-6);
+  }
+  await RAPIER.init();
+  const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  try {
+    world.createCollider(RAPIER.ColliderDesc.trimesh(ground.attributes.position.array, ground.index.array)); world.step();
+    const contact = world.castRay(new RAPIER.Ray({ x: 10.5, y: 10, z: 12.5 }, { x: 0, y: -1, z: 0 }), 20, true);
+    assert.ok(contact); assert.ok(Math.abs(10 - contact.timeOfImpact + .5) < 1e-5, 'the submerged rendered surface still has collision');
+  } finally { world.free(); ground.dispose(); }
+});
+
 test('neighboring tiles carve the same diagonal shoreline and retain bank coverage at their seam', () => {
   const slanted = { ...water, rings: [[[0, 0], [30, 0], [24, 30], [6, 30]]] };
   slanted.surfaces = [{ rings: slanted.rings, level: 0 }];
