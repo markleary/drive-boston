@@ -35,6 +35,7 @@ try {
     ['long', [2142.27, 12.85, -1084.24], [2185, -3, -1170]],
     ['long-low', [2243.06, -.99, -1108.15], [2070, -.8, -1208]],
     ['long-dock', [2118, 22, -1072], [2154, -2, -1107]],
+    ['harvard', [-1100, 80, -320], [-1370, 2, -480]],
   ];
   for (const [name, eye, target] of sites.filter(s => !process.env.SITE || process.env.SITE.split(',').includes(s[0]))) {
     // Nearby inspection cameras share the loaded neighborhood. Moving the

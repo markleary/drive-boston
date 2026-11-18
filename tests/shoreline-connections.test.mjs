@@ -19,6 +19,10 @@ import {createWalker} from '../src/simulation/walker.ts';
 import {clipShoreTerrainSteps} from '../src/render/shore-terrain.ts';
 import {clipWaterfrontTerrainSteps} from '../src/render/waterfront-terrain.ts';
 import {waterfrontDetailSteps} from '../src/render/waterfront.ts';
+import restoredPaths from '../src/data/water-paths.json' with {type:'json'};
+import {harvardBridgeSpine} from '../src/simulation/harvard-bridge.ts';
+import {longfellowDeckOwnsPath} from '../src/simulation/longfellow.ts';
+import {roadProjection,roadWidthAt} from '../src/simulation/road-surfaces.ts';
 
 const material=new THREE.MeshBasicMaterial({side:THREE.DoubleSide});
 const height=(geometry,x,z)=>{
@@ -112,6 +116,21 @@ test('short steps survive tile loading and water crossings are emitted only in t
     const paths=restoreWaterPaths({tx,tz,size:1000,parkPaths:[]});
     for(const path of paths)for(const [x,z]of path.points)assert.ok(x>=tx*1000-1e-8&&x<=(tx+1)*1000+1e-8&&z>=tz*1000-1e-8&&z<=(tz+1)*1000+1e-8);
   }
+});
+
+test('the complete crossing overlay cannot duplicate dedicated Harvard or Longfellow sidewalks',()=>{
+  const spine=harvardBridgeSpine(metro).road;
+  for(const path of restoredPaths.paths){
+    assert.equal(longfellowDeckOwnsPath(path.id),false);
+    // Harvard builds the 2.4-metre strip outside either carriageway edge.
+    // Its separate descending Esplanade access ramp is farther out and remains.
+    const followsSidewalk=path.points.every(p=>{
+      const d=roadProjection(spine,...p).distance,half=roadWidthAt(spine,...p)/2;
+      return d>=half-.3&&d<=half+2.7;
+    });
+    assert.equal(followsSidewalk,false,`${path.id} belongs to the dedicated Harvard sidewalk`);
+  }
+  assert.ok(restoredPaths.paths.some(p=>p.id==='osm-way-807423459-0'),'keep the separate Esplanade access ramp');
 });
 
 test('Long Wharf HarborWalk stays on the quay and its gangway reaches a supported landing',()=>{

@@ -6,7 +6,7 @@ Frog Pond is an engineered basin. Its apron interpolates from the level rim to t
 
 ## Complete pedestrian crossings
 
-The original park polygon clip removed portions of bridges over water. It also discarded source stair links shorter than three metres. `public/data/water-paths-source.json` retains 56 existing generic water-crossing ways from the cached OSM metro paths plus four short stair links. Crossings intersecting driving roads were excluded, leaving the separately surveyed highway footbridges in control.
+The original park polygon clip removed portions of bridges over water. It also discarded source stair links shorter than three metres. `public/data/water-paths-source.json` retains 55 existing generic water-crossing ways from the cached OSM metro paths plus four short stair links. Crossings intersecting driving roads and sidewalks already owned by dedicated road-bridge geometry were excluded, leaving the separately surveyed highway footbridges and Harvard/Longfellow sidewalks in control.
 
 Run `.venv-data/bin/python scripts/build-water-paths.py` to compile `src/data/water-paths.json`, or add `--check` to verify replay. Connected, nonbranching bridge-tagged source ways share one complete bank-to-bank profile. Ground stairs retain their `steps` kind and terrain-following surface; they neither extend an arch nor acquire bridge slabs and railings. Forks and loops are not guessed. Tile loading replaces the older clipped records with these source lines and clips them only at tile ownership boundaries. Render and collision consume the same resulting paths. Stored-height overrides retain priority.
 
