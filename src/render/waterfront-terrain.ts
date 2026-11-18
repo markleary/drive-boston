@@ -4,6 +4,7 @@ import { pleasureBayTerrainCuts } from '../simulation/castle-island.ts';
 import type { CityData, Point2 } from '../types.ts';
 import { drain, due, type Pace } from './pacing.ts';
 import { boundingSphereSteps } from './paced-geometry.ts';
+import { coveredBank } from './water-pavement.ts';
 
 /** Offline hydro ∩ hard-quay neighborhood, with ground-road approaches removed.
  * These are water-only polygons; holes retain land and road foundations. */
@@ -85,7 +86,7 @@ const signed = (p: Corner, [nx, nz, limit]: Plane) => nx * p.values[0] + nz * p.
 
 /** Convex subject minus convex triangle. At each clip edge the outside piece
  * is final; only the inside remainder proceeds to the next half-plane. */
-function subtract(subject: Corner[], triangle: CutTriangle): Corner[][] {
+function subtract(subject: Corner[], triangle: CutTriangle, onRemoved?: (inside: Corner[]) => void): Corner[][] {
   if (triangle.planes.some(plane => subject.every(p => signed(p, plane) <= -1e-8))) return [subject];
   const outside: Corner[][] = []; let inside = subject;
   for (const plane of triangle.planes) {
@@ -104,14 +105,22 @@ function subtract(subject: Corner[], triangle: CutTriangle): Corner[][] {
     if (removed.length >= 3) outside.push(removed);
     inside = next;
   }
+  if(inside.length>=3)onRemoved?.(inside);
   return outside;
+}
+
+interface CutOptions {
+  /** Leave submerged terrain in place; only grass above the water needs replacing. */
+  level?: number;
+  /** Natural shores retain the foundations excluded by uncoveredBank. */
+  preserveGround?: boolean;
 }
 
 /** Remove only mapped water from the visual and physical terrain. New shore
  * vertices lie on their original terrain triangle, so surviving land keeps its
  * exact height/normal/UV and both neighboring tiles produce the same seam.
  * `polygons` is injectable for geometry regression fixtures. */
-export function* clipWaterfrontTerrainSteps(_city: CityData, geometry: THREE.BufferGeometry, pace?: Pace, polygons = waterfrontTerrainCuts): Generator<void, THREE.BufferGeometry> {
+export function* clipWaterfrontTerrainSteps(city: CityData, geometry: THREE.BufferGeometry, pace?: Pace, polygons = waterfrontTerrainCuts, options: CutOptions = {}): Generator<void, THREE.BufferGeometry> {
   const source = geometry.getAttribute('position'); if (!source?.count || !polygons.length) return geometry;
   const cuts = yield* indexSteps(polygons, pace);
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -146,15 +155,30 @@ export function* clipWaterfrontTerrainSteps(_city: CityData, geometry: THREE.Buf
   for (let i = 0; i + 2 < count; i += 3) {
     if (i % 192 === 0 && due(pace)) yield;
     const triangle = [0, 1, 2].map(k => corner(index ? index.getX(i + k) : i + k));
+    if(options.level!==undefined&&triangle.every(p=>p.values[1]<=options.level!+.03)){
+      indices.push(...triangle.map(vertex));continue;
+    }
     const x = triangle.map(p => p.values[0]), z = triangle.map(p => p.values[2]);
+    const retained:Corner[][]=[];
+    const preserve=options.preserveGround?(inside:Corner[])=>{
+      // Interpolate the original face payload at each preserved pavement corner.
+      const [a,b,c]=triangle.map(p=>p.values),det=(b[0]-a[0])*(c[2]-a[2])-(b[2]-a[2])*(c[0]-a[0]);
+      if(Math.abs(det)<1e-12)return;
+      for(const part of coveredBank(city,inside.map(p=>[p.values[0],p.values[2]]))){
+        retained.push(part.map(([px,pz])=>{
+          const u=((px-a[0])*(c[2]-a[2])-(pz-a[2])*(c[0]-a[0]))/det,v=((b[0]-a[0])*(pz-a[2])-(b[2]-a[2])*(px-a[0]))/det;
+          const values=a.map((value,k)=>value+(b[k]-value)*u+(c[k]-value)*v) as Corner['values'];values[0]=px;values[2]=pz;return {values};
+        }));
+      }
+    }:undefined;
     let fragments = [triangle];
     for (const id of candidates(cuts, Math.min(...x), Math.max(...x), Math.min(...z), Math.max(...z))) {
       const next: Corner[][] = [];
-      for (const fragment of fragments) next.push(...subtract(fragment, cuts.triangles[id]));
+      for (const fragment of fragments) next.push(...subtract(fragment, cuts.triangles[id],preserve));
       if (next.length !== fragments.length || next.some((part, j) => part !== fragments[j])) changed = true;
       fragments = next; if (!fragments.length) break;
     }
-    for (const polygon of fragments) for (let j = 1; j + 1 < polygon.length; j++) {
+    for (const polygon of [...fragments,...retained]) for (let j = 1; j + 1 < polygon.length; j++) {
       const a = polygon[0], b = polygon[j], c = polygon[j + 1];
       const ax = Math.fround(a.values[0]), az = Math.fround(a.values[2]), bx = Math.fround(b.values[0]), bz = Math.fround(b.values[2]), cx = Math.fround(c.values[0]), cz = Math.fround(c.values[2]);
       if (Math.abs((bx - ax) * (cz - az) - (bz - az) * (cx - ax)) < 1e-7) continue;

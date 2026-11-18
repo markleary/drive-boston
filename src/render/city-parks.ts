@@ -37,6 +37,7 @@ import {waterfrontDetailSteps} from './waterfront.ts';
 import {castleIslandLandscapeSteps} from './castle-island.ts';
 import {fortTerrainCuts} from '../simulation/castle-island.ts';
 import {clipWaterfrontTerrainSteps} from './waterfront-terrain.ts';
+import {clipShoreTerrainSteps} from './shore-terrain.ts';
 export {waterHeight} from '../simulation/water-level.ts';
 
 export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number; }
@@ -185,6 +186,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     if(due(pace))yield;
     const geometry=yield* surface.geometrySteps();
     yield* clipWaterfrontTerrainSteps(city,geometry,pace,fortTerrainCuts);
+    yield* clipShoreTerrainSteps(city,geometry,pace);
     if(!geometry.index!.count){geometry.dispose();continue;}
     const mesh=new THREE.Mesh(geometry,material);mesh.name=name;mesh.receiveShadow=true;group.add(mesh);
   }

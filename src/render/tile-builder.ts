@@ -74,6 +74,7 @@ import { cityParkDetailSteps, areaBoundsOf, type Bounds } from './city-parks';
 import { DrapedSurface } from './draped-surface.ts';
 import { fellsViewHeight } from './fells-woodland.ts';
 import {clipWaterfrontTerrainSteps} from './waterfront-terrain.ts';
+import {clipShoreTerrainSteps} from './shore-terrain.ts';
 import {fortTerrainCuts} from '../simulation/castle-island.ts';
 import type { TreeField } from './foliage';
 
@@ -229,6 +230,7 @@ export function createTileBuilder(ctx: TileContext) {
         yield* stage('terrain', clipPortalSurfaceSteps(city, geometry, pace));
         yield* stage('terrain', clipWaterfrontTerrainSteps(city,geometry,pace));
         yield* stage('terrain', clipWaterfrontTerrainSteps(city,geometry,pace,fortTerrainCuts));
+        yield* stage('terrain', clipShoreTerrainSteps(subCity,geometry,pace));
         const ground = new THREE.Mesh(geometry, ctx.ground); ground.name = 'Terrain'; ground.position.y = -.04; ground.receiveShadow = true; ground.renderOrder = -3; group.add(ground);
         if (due(pace)) yield 'terrain';
         if(geometry.index!.count)colliders.push(physics.addTerrainTile(geometry.getAttribute('position').array as Float32Array,geometry.index!.array as Uint32Array));

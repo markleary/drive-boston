@@ -1,5 +1,5 @@
 import type {CityArea,Point2} from '../types';
-import {hardQuayAt as waterfrontQuayAt,nearestQuay} from '../simulation/waterfront.ts';
+import {hardQuayAt as waterfrontQuayAt} from '../simulation/waterfront.ts';
 
 import {castleIslandShoreDistance} from '../simulation/castle-island.ts';
 const hardQuayAt=(x:number,z:number,reach=.12)=>waterfrontQuayAt(x,z,reach)||castleIslandShoreDistance(x,z)<reach;
@@ -7,11 +7,7 @@ const hardQuayAt=(x:number,z:number,reach=.12)=>waterfrontQuayAt(x,z,reach)||cas
 export const SHORE_WIDTH=3;
 export const SHORE_FADE=.75;
 type Edge={a:Point2;b:Point2};
-export interface WaterShore { rings:Point2[][]; width:number; distance:(x:number,z:number)=>number; hard?:(x:number,z:number)=>boolean;
-  /** Signed depth of the preserved water strip. A continuous value keeps
-   * coarse DEM triangles from shrinking it during water-plane clipping. */
-  hardDepth?:(x:number,z:number)=>number;
-}
+export interface WaterShore { rings:Point2[][]; width:number; distance:(x:number,z:number)=>number; hard?:(x:number,z:number)=>boolean; }
 const cache=new WeakMap<CityArea,WeakMap<Point2[][],WaterShore>>();
 const boundaries=new WeakMap<CityArea,ReturnType<typeof edgeIndex>>();
 const cross=(a:Point2,b:Point2,c:Point2)=>(b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0]);
@@ -70,5 +66,5 @@ export function waterShore(water:CityArea,source=water.rings):WaterShore{
   // A named site can own only part of a long source hydro edge. Test the
   // queried location as well as the edge midpoint, so that partial quays do
   // not inherit the natural bank of the rest of the original segment.
-  const result:WaterShore={rings,width,distance:(x,z)=>hardQuayAt(x,z,4.5)?Infinity:softDistance(x,z),hard:(x,z)=>hardQuayAt(x,z,4.5),hardDepth:(x,z)=>Math.min(nearestQuay(x,z).distance,castleIslandShoreDistance(x,z))-4.5};sources.set(source,result);return result;
+  const result:WaterShore={rings,width,distance:(x,z)=>hardQuayAt(x,z,4.5)?Infinity:softDistance(x,z),hard:(x,z)=>hardQuayAt(x,z,4.5)};sources.set(source,result);return result;
 }
