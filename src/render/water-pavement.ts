@@ -55,11 +55,11 @@ function clip(poly:Point2[],nx:number,nz:number,limit:number){
   const out:Point2[]=[];if(!poly.length)return out;let a=poly.at(-1)!,da=a[0]*nx+a[1]*nz-limit;
   for(const b of poly){const db=b[0]*nx+b[1]*nz-limit;if((da<=0)!==(db<=0)){const t=da/(da-db);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);}if(db<=0)out.push(b);a=b;da=db;}return out;
 }
-function uncovered(city:CityData,poly:Point2[],banks=false,flatHeight?:number){
+function uncovered(city:CityData,poly:Point2[],banks=false,flatHeight?:number,covered=false){
   if(poly.length<3)return[];const cells=index(city,banks),minX=Math.min(...poly.map(p=>p[0])),maxX=Math.max(...poly.map(p=>p[0])),minZ=Math.min(...poly.map(p=>p[1])),maxZ=Math.max(...poly.map(p=>p[1]));
   const candidates=new Set<Cutout>();
   for(let x=Math.floor(minX/CELL);x<=Math.floor(maxX/CELL);x++)for(let z=Math.floor(minZ/CELL);z<=Math.floor(maxZ/CELL);z++)for(const c of cells.get(`${x},${z}`)??[])if(c.maxX>=minX&&c.minX<=maxX&&c.maxZ>=minZ&&c.minZ<=maxZ&&(c.minimumWaterLevel===undefined||flatHeight!==undefined&&flatHeight>=c.minimumWaterLevel))candidates.add(c);
-  let pieces=[poly];
+  let pieces=[poly];const retained:Point2[][]=[];
   for(const c of candidates){
     const outside:Point2[][]=[];
     for(const piece of pieces){
@@ -68,12 +68,16 @@ function uncovered(city:CityData,poly:Point2[],banks=false,flatHeight?:number){
         const a=c.points[i],b=c.points[(i+1)%c.points.length],nx=b[1]-a[1],nz=a[0]-b[0],limit=nx*a[0]+nz*a[1];
         const part=clip(inside,-nx,-nz,-limit);if(part.length>=3)outside.push(part);inside=clip(inside,nx,nz,limit);
       }
+      if(covered&&inside.length>=3)retained.push(inside);
     }
     pieces=outside;if(!pieces.length)break;
   }
-  return pieces;
+  return covered?retained:pieces;
 }
 export function uncoveredWater(city:CityData,poly:Point2[],flatHeight?:number){return uncovered(city,poly,false,flatHeight);}
 /** Raised shoreline must not bury ground paths or protrude through footbridge
  * slabs. Water itself still continues beneath elevated pedestrian crossings. */
 export function uncoveredBank(city:CityData,poly:Point2[]){return uncovered(city,poly,true);}
+/** Preserve the same road/path foundations when replacing coarse wet terrain
+ * with a shoreline bank. Pieces are disjoint even where corridors overlap. */
+export function coveredBank(city:CityData,poly:Point2[]){return uncovered(city,poly,true,undefined,true);}

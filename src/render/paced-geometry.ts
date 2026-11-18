@@ -23,6 +23,36 @@ export function* flatNormalSteps(geometry: THREE.BufferGeometry, pace?: Pace): G
   geometry.setAttribute('normal', new THREE.BufferAttribute(n, 3));
 }
 
+/** Area-weighted normals for a triangle list with coincident corners. Shore
+ * banks contain independently clipped fragments; flat normals expose every
+ * diagonal as a bright tooth along a steep waterline. Weld only for shading,
+ * keeping the original render/collision triangles and metre UVs untouched. */
+export function* smoothNormalSteps(geometry: THREE.BufferGeometry, pace?: Pace): Generator<void, void> {
+  const p = geometry.getAttribute('position').array as Float32Array;
+  const ids = new Uint32Array(p.length / 3), shared = new Map<string, number>(), sums: number[] = [];
+  for (let i = 0; i < p.length; i += 3) {
+    if (i % 12288 === 0 && due(pace)) yield;
+    const key = `${Math.round(p[i] * 1000)},${Math.round(p[i + 1] * 1000)},${Math.round(p[i + 2] * 1000)}`;
+    let id = shared.get(key);
+    if (id === undefined) { id = sums.length; shared.set(key, id); sums.push(0, 0, 0); }
+    ids[i / 3] = id;
+  }
+  for (let i = 0; i + 8 < p.length; i += 9) {
+    if (i % 36864 === 0 && due(pace)) yield;
+    const ax = p[i] - p[i + 3], ay = p[i + 1] - p[i + 4], az = p[i + 2] - p[i + 5];
+    const bx = p[i + 6] - p[i + 3], by = p[i + 7] - p[i + 4], bz = p[i + 8] - p[i + 5];
+    const nx = by * az - bz * ay, ny = bz * ax - bx * az, nz = bx * ay - by * ax;
+    for (let k = 0; k < 3; k++) { const id = ids[i / 3 + k]; sums[id] += nx; sums[id + 1] += ny; sums[id + 2] += nz; }
+  }
+  const normals = new Float32Array(p.length);
+  for (let i = 0; i < p.length; i += 3) {
+    if (i % 36864 === 0 && due(pace)) yield;
+    const id = ids[i / 3], x = sums[id], y = sums[id + 1], z = sums[id + 2], length = Math.hypot(x, y, z) || 1;
+    normals[i] = x / length; normals[i + 1] = y / length; normals[i + 2] = z / length;
+  }
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+}
+
 /** computeBoundingSphere: centred on the position bounds, radius to the farthest vertex. */
 export function* boundingSphereSteps(geometry: THREE.BufferGeometry, pace?: Pace): Generator<void, void> {
   const p = geometry.getAttribute('position').array as Float32Array;

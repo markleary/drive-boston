@@ -156,9 +156,13 @@ export function createWalker(city:CityData,physics:DrivingPhysics){
       if(floor&&floor.timeOfImpact<centre-.005){state.y+=centre-floor.timeOfImpact;state.grounded=true;}
     }
     const covered=Math.hypot(mx,mz);state.speed=covered/dt;if(state.grounded)state.travelled+=covered;
-    // Below the terrain with no tunnel around is a hole in the loaded world, not a place to be.
+    // The shaped shoreline can sit below the coarse DEM. Recover a fall into
+    // missing terrain only when no actual support lies beneath the walker.
     const ground=sampleElevation(city,state.x,state.z);
-    if(state.y<ground-3&&!tunnelAt(city,state.x,state.z,state.y)){state.y=ground+.05;state.verticalSpeed=0;}
+    if(state.y<ground-3&&!state.grounded&&!tunnelAt(city,state.x,state.z,state.y)){
+      down.origin.x=state.x;down.origin.y=state.y+centre;down.origin.z=state.z;
+      if(!world.castRay(down,centre+3,false,STATIC_ONLY,ALL_GROUPS)){state.y=ground+.05;state.verticalSpeed=0;}
+    }
     falling=state.grounded?0:falling+dt;
     if(falling>6&&!resetToSidewalk()){state.y=ground+.05;falling=0;}
     if(firstPerson)state.yaw=state.viewYaw;

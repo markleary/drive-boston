@@ -5,7 +5,7 @@ import type {Bounds} from './city-parks';
 import {uncoveredWater,uncoveredBank} from './water-pavement.ts';
 import {SHORE_FADE,type WaterShore} from './water-shore.ts';
 import {drain,due,type Pace} from './pacing.ts';
-import {boundingSphereSteps,flatNormalSteps} from './paced-geometry.ts';
+import {boundingSphereSteps,flatNormalSteps,smoothNormalSteps} from './paced-geometry.ts';
 import {inWaterfrontTerrainCut} from './waterfront-terrain.ts';
 // Above lawn decals (.024 m), below ground-road asphalt (.045 m).
 export const WATER_SURFACE_OFFSET=.035;
@@ -15,7 +15,7 @@ export function shoreBankGeometry(positions:number[]){return drain(shoreBankStep
 export function* shoreBankSteps(positions:number[],pace?:Pace):Generator<void,THREE.BufferGeometry>{
   const g=new THREE.BufferGeometry(),uv:number[]=[];
   for(let i=0;i<positions.length;i+=3)uv.push(positions[i]/4,positions[i+2]/4);
-  g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));yield* flatNormalSteps(g,pace);yield* boundingSphereSteps(g,pace);return g;
+  g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));yield* smoothNormalSteps(g,pace);yield* boundingSphereSteps(g,pace);return g;
 }
 
 export interface SurfaceOptions{offset?:number;flatHeight?:number;bounds?:Bounds;water?:boolean;shore?:WaterShore;bankPositions?:number[];
@@ -55,7 +55,7 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
   };
   const emit=(poly:Point2[])=>{
     if(shore&&flatHeight!==undefined&&poly.length){
-      // A narrow land strip rises from the DEM to the waterline *inside* the
+      // A narrow land strip joins the DEM to the waterline *inside* the
       // mapped outline. This closes low-bank gaps without hanging a water sheet
       // over dry land or sloping the water itself. Pavement remains untouched.
       const values=new WeakMap<Point2,number>();for(const p of poly)values.set(p,Math.min(shore.width+12,shore.distance(...p)));
@@ -68,17 +68,20 @@ export function* parkSurfaceSteps(city:CityData,rings:Point2[][],{offset=.024,fl
       };
       const bank=split(poly,true),height=(p:Point2)=>{
         const ground=sampleElevation(city,...p),t=Math.min(1,(values.get(p)??shore.distance(...p))/shore.width),blend=t*t*(3-2*t);
-        return ground+Math.max(0,flatHeight-ground)*blend+.026;
+        return ground+(flatHeight-ground)*blend+.026;
       };
       for(const part of uncoveredBank(city,bank))emitTriangles(part,true,height);
       poly=split(poly,false);
     }
     // Intersect each DEM face with a horizontal water plane. A bank can rise
     // through the surface, but must never pull the water's vertices uphill.
-    if(water&&flatHeight!==undefined&&poly.length){
+    // With a constructed shore, clipShoreTerrainSteps removes the high DEM
+    // wedges and the bank slopes down as well as up to this horizontal plane.
+    // Clipping it against the original DEM would bring back six-metre teeth.
+    if(water&&flatHeight!==undefined&&!shore&&poly.length){
       // A quay retains the land vertically. Let the water reach that surveyed
       // wall even where a coarse DEM cell blends the pier down into the basin.
-      const depth=(p:Point2)=>inWaterfrontTerrainCut(...p)?-6:Math.min(sampleElevation(city,...p)-flatHeight,shore?.hardDepth?.(...p)??Infinity);
+      const depth=(p:Point2)=>inWaterfrontTerrainCut(...p)?-6:sampleElevation(city,...p)-flatHeight;
       const out:Point2[]=[];let a=poly.at(-1)!,da=depth(a);
       for(const b of poly){const db=depth(b);
         if((da<=0)!==(db<=0)){const t=da/(da-db);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]);}
