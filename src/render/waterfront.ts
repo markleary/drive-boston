@@ -3,6 +3,7 @@ import type {CityData,Point2} from '../types.ts';
 import {buildingAt} from '../simulation/city-tiles.ts';
 import {sampleElevation,terrainGrid} from '../simulation/terrain.ts';
 import {insideWaterfrontPolygon,quayEdges,waterfrontHeight,waterfrontOverlaps,waterfrontSites,type QuayEdge} from '../simulation/waterfront.ts';
+import {longWharfGangwayOpening} from '../simulation/long-wharf.ts';
 import {parkSurfaceSteps} from './area-surfaces.ts';
 import type {ParkOptions} from './city-parks.ts';
 import {PartBatches,box} from './geometry-writer.ts';
@@ -108,13 +109,13 @@ export function* waterfrontDetailSteps(city:CityData,group:THREE.Group,options:P
       // A continuous vertical granite/concrete face descends below the water.
       part(.65,h,span,m.granite,x+nx*.18,y-h/2,z+nz*.18,yaw);
       part(.9,.18,span+.04,m.cap,x+nx*.15,y+.06,z+nz*.15,yaw);
-      if(publicWalk){
+      if(publicWalk&&!(site.id==='long-wharf'&&longWharfGangwayOpening(x,z))){
         const rx=x+nx*.55,rz=z+nz*.55,ry=ground(rx,rz);
         for(const height of [.45,1.1])part(.055,.06,span,m.iron,rx,ry+height,rz,yaw);
         part(.075,1.15,.075,m.iron,rx,ry+.575,rz);
         if(!options.mobile)for(const s of [-.9,-.45,.45,.9])if(Math.abs(s)<span/2)part(.025,.97,.025,m.iron,rx+tx*s,ry+.54,rz+tz*s);
         solids.push({x:rx,y:ry+.6,z:rz,yaw,slope:0,length:span,width:.15,height:1.2});
-      }else if(i%3===0){
+      }else if(!publicWalk&&i%3===0){
         // Timber fenders and mooring bitts on the working faces.
         part(.42,h+.25,.45,m.wood,x-nx*.36,y-h/2+.08,z-nz*.36,yaw);
         const bx=x+nx*1.4,bz=z+nz*1.4,by=ground(bx,bz);

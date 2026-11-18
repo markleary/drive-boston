@@ -2,6 +2,8 @@ import type { Building, CityData, HighwaySign, Point2 } from '../types';
 import { decodeElevation, gunzip, parseTile, tileFile, tileKey, tileOf, type CityTile, type TileBuilding } from './tile-format.ts';
 import { parseFar, type FarBuilding, type FarCity } from './far-format.ts';
 import {prepareBuildingTunnelPassage} from './tunnel-passages.ts';
+import {refineLongWharfPaths} from './long-wharf.ts';
+import {restoreWaterPaths} from './water-paths.ts';
 import {refineFrogPond} from './boston-common.ts';
 import {STORROW_SOURCE_CARRIAGEWAYS} from './cars-only-roads.ts';
 import {longfellowDeckOwnsPath} from './longfellow.ts';
@@ -77,7 +79,7 @@ export async function loadTile(city: MetroCity, tx: number, tz: number, read: Re
   const tile=parseTile(await gunzip(await read(`${city.tiles.directory}/${tileFile(tx, tz)}`)));
   // Correct older packaged/cached tiles before render, physics and walkers
   // consume their paths. The compiler excludes these deck-owned ways too.
-  tile.parkPaths=tile.parkPaths.filter(path=>!longfellowDeckOwnsPath(path.id));
+  tile.parkPaths=refineLongWharfPaths(city,restoreWaterPaths(tile).filter(path=>!longfellowDeckOwnsPath(path.id)));
   for(const building of tile.buildings){const data=tile.geometry.get(building.id);if(data)tile.geometry.set(building.id,prepareBuildingTunnelPassage(city,building,data));}
   return tile;
 }

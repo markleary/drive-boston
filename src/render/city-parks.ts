@@ -1,3 +1,4 @@
+import {frogPondSteps} from './frog-pond.ts';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CityArea, CityData, Point2 } from '../types';
@@ -10,7 +11,7 @@ import { canvasTexture, seeded } from './materials';
 import { createStreetTrees, type TreeField, type TreePlanting } from './foliage';
 import { drapedRibbonInto } from './terrain-ground';
 import { DrapedSurface } from './draped-surface.ts';
-import { PartBatches, TriangleWriter, box, type Part } from './geometry-writer';
+import { PartBatches, box, type Part } from './geometry-writer';
 import { drain, due, type Pace } from './pacing';
 import { createGrassMaterial } from './ground-cover';
 import { createFellsGroundMaterial, naturalTrailInto } from './fells-surfaces.ts';
@@ -23,13 +24,14 @@ import {waterShore} from './water-shore.ts';
 import {createWaterMaterial} from './water-material.ts';
 import {applyWaterMotion,waterMotion} from './water-motion.ts';
 export {parkSurface} from './area-surfaces.ts';
+import {longWharfOwnsPath,longWharfDockRailOpening} from '../simulation/long-wharf.ts';
 import {waterHeight} from '../simulation/water-level.ts';
 import {inTunnelApproach} from '../simulation/tunnels.ts';
 import {inGreenway,replacesGreenwayPark,outsideGreenwayPath} from '../simulation/greenway.ts';
 import {greenwayDetailSteps} from './greenway';
 import { fellsViewHeight, fellsWoodlandSteps, isFellsWoodland, type FellsViewHeight } from './fells-woodland.ts';
 import { christianSciencePlazaSteps, christianScienceTrees, isChristianSciencePool, ownsChristianSciencePlaza } from './christian-science-plaza.ts';
-import { BOSTON_COMMON, commonTrees, FROG_POND, FROG_POND_LEVEL, frogPondApron } from '../simulation/boston-common.ts';
+import { BOSTON_COMMON, commonTrees, FROG_POND, frogPondApron } from '../simulation/boston-common.ts';
 import { isCommonwealthMall, isPlannedMallLawn, mallPathTest } from '../simulation/commonwealth-mall.ts';
 import { mallDetailSteps, type SolidBox } from './commonwealth-mall.ts';
 import {isPavedWaterfrontPark,waterfrontReserved} from '../simulation/waterfront.ts';
@@ -75,41 +77,6 @@ export interface ParkOptions {
   /** Frame pacing: the generator form pauses between areas, paths and parks once the deadline has passed. */ pace?:Pace;
 }
 type ParkPath=NonNullable<CityData['parkPaths']>[number];
-
-const frogPondConcrete=new THREE.MeshStandardMaterial({color:'#b7afa3',roughness:.93});
-
-/** This wading pool has a concrete rim and a level surface. The apron ties
- * the rim back into the sloped paths without changing their terrain heights. */
-function* frogPondSteps(city:CityData,water:CityArea,waterMaterial:THREE.Material,{onShore,pace}:ParkOptions){
-  const level=FROG_POND_LEVEL,rimHeight=level+.23,ring=water.rings[0];
-  const apron=yield* parkSurfaceSteps(city,[frogPondApron,ring],{pace,heightAt:p=>{
-    const distance=Math.min(...ring.map((a,i)=>distanceToSegment(p,a,ring[(i+1)%ring.length])));
-    return Math.max(sampleElevation(city,...p)+.035,rimHeight-.45*distance);
-  }});
-  const rim=new TriangleWriter();
-  rim.append(apron);
-  apron.dispose();
-  for(const [i,[ax,az]] of ring.entries()){
-    const [bx,bz]=ring[(i+1)%ring.length],base=level-.04;
-    rim.triangle(ax,base,az,ax,rimHeight,az,bx,base,bz);
-    rim.triangle(bx,base,bz,ax,rimHeight,az,bx,rimHeight,bz);
-  }
-  const concrete=new THREE.Mesh(rim.geometry(),frogPondConcrete);
-  concrete.name='Frog Pond concrete rim';
-  concrete.receiveShadow=true;
-
-  const surface=yield* parkSurfaceSteps(city,water.rings,{offset:WATER_SURFACE_OFFSET,flatHeight:level,water:true,pace});
-  const sheet=new THREE.Mesh(applyWaterMotion(surface,waterMotion(water)),waterMaterial);
-  sheet.name='Frog Pond water';
-  sheet.receiveShadow=true;
-  sheet.userData.noAO=true;
-  const pond=new THREE.Group();
-  pond.name=FROG_POND;
-  pond.add(concrete,sheet);
-  const vertices=concrete.geometry.getAttribute('position').array as Float32Array;
-  onShore?.(vertices,Uint32Array.from({length:vertices.length/3},(_,i)=>i));
-  return pond;
-}
 
 /** Real Boston park boundaries, hydrography and mapped pedestrian alignments.
  * Planting, furnishings and bridge details are original procedural interpretations. */
@@ -204,7 +171,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     if(due(pace))yield;
     const bridge='bridge' in path&&path.bridge;
     surfaceRuns.set(path,parkSurfaceRuns(path,woodland));
-    if(!bridge&&onMall(path))continue;
+    if(!bridge&&(onMall(path)||longWharfOwnsPath(path)))continue;
     if(bridge){
       const road=footbridgeRoad(city,path);if(!road)continue;bridges++;
       const slab=roadSlabGeometry(city,road),deck=new THREE.BufferGeometry();
@@ -216,6 +183,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
         const y0=road.elevations![i-1],y1=road.elevations![i];
         for(const side of [-1,1]){
           const a=deckEdge(road,i-1,side,.12),b=deckEdge(road,i,side,.12),dx=b[0]-a[0],dz=b[1]-a[1],seg=Math.hypot(dx,dz),x=(a[0]+b[0])/2,z=(a[1]+b[1])/2,k=side<0?0:1;
+          if(longWharfDockRailOpening(path,x,z))continue;
           if(stored&&seg<.04)continue; // the inside of a turn back, where the edge all but stands still
           if(!stored||(since[k]+=seg)>=1.3){part(box(.065,1.05,.065),iron,x,(y0+y1)/2+.5,z);since[k]=0;}
           const rail=new THREE.BoxGeometry(.085,.075,Math.hypot(seg,y1-y0)+.05);rail.rotateX(-Math.atan2(y1-y0,seg));
