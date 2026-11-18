@@ -25,13 +25,14 @@ def compile_paths(source,origin):
             x,y=transform.transform(p['lon'],p['lat'])
             points.append([round((x-731100-origin['xFeet'])*1200/3937,3),round((2902900+origin['yFeet']-y)*1200/3937,3)])
         tags=way['tags']
-        paths.append(dict(id=f"osm-way-{way['id']}-0",points=points,width=max(1,min(8,float(re.match(r'[\d.]+',str(tags.get('width',2.6))).group(0)))),bridge=True,kind=tags['highway'],name=tags.get('name','')))
+        paths.append(dict(id=f"osm-way-{way['id']}-0",points=points,width=max(1,min(8,float(re.match(r'[\d.]+',str(tags.get('width',2.6))).group(0)))),bridge=tags.get('bridge','no')!='no',kind=tags['highway'],name=tags.get('name','')))
     ends=defaultdict(list)
     for i,p in enumerate(paths):
+        if not p['bridge']:continue
         for end in (p['points'][0],p['points'][-1]):ends[tuple(end)].append(i)
     visited=set()
     for i in range(len(paths)):
-        if i in visited:continue
+        if i in visited or not paths[i]['bridge']:continue
         component=set();pending=[i]
         while pending:
             j=pending.pop()

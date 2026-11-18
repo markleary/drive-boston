@@ -19,5 +19,12 @@ class WaterPathTests(unittest.TestCase):
         self.assertEqual(east['bridgePoints'],west['bridgePoints'])
         self.assertIn('osm-way-165358917-0',by_id)
         self.assertEqual(by_id['osm-way-832417214-0']['bridgePoints'],by_id['osm-way-242536776-0']['bridgePoints'])
+        for way_id in [165358917,832417244,837678518]:
+            steps=by_id[f'osm-way-{way_id}-0']
+            self.assertFalse(steps['bridge'])
+            self.assertEqual(steps['kind'],'steps')
+            self.assertNotIn('bridgePoints',steps)
+        self.assertTrue(by_id['osm-way-242536776-0']['bridge'])
+        self.assertEqual(by_id['osm-way-242536776-0']['kind'],'steps')
 
 if __name__=='__main__':unittest.main()

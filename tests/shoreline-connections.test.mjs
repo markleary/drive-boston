@@ -75,7 +75,7 @@ test('ground paths beside an engineered quay cannot grow a grass bank outside it
 });
 
 for(const [name,ways]of [
-  ['Hatch Shell',[832417214,832417215,242536776,832417244]],
+  ['Hatch Shell',[832417214,832417215,242536776]],
   ['lagoon east',[29328208,832417246]],
   ['lagoon west',[29380675,820802432]],
   ['lagoon middle',[165358918,828185862]],
@@ -104,6 +104,10 @@ for(const [name,ways]of [
 
 test('short steps survive tile loading and water crossings are emitted only in their owner tiles',()=>{
   assert.ok(metro.parkPaths.some(p=>p.id.startsWith('osm-way-165358917-')),'the one-metre stair join is no longer discarded');
+  for(const id of [165358917,832417244,837678518]){
+    const steps=metro.parkPaths.filter(p=>p.id.startsWith(`osm-way-${id}-`));
+    for(const path of steps){assert.equal(path.kind,'steps');assert.equal(path.bridge,false);assert.equal(footbridgeRoad(metro,path),undefined,'ground stairs cannot become railed bridge slabs');}
+  }
   for(const tx of [-1,0,1,2])for(const tz of [-2,-1]){
     const paths=restoreWaterPaths({tx,tz,size:1000,parkPaths:[]});
     for(const path of paths)for(const [x,z]of path.points)assert.ok(x>=tx*1000-1e-8&&x<=(tx+1)*1000+1e-8&&z>=tz*1000-1e-8&&z<=(tz+1)*1000+1e-8);
@@ -127,7 +131,7 @@ test('Long Wharf HarborWalk stays on the quay and its gangway reaches a supporte
 test('a walker crosses the restored Hatch Shell bridge and Long Wharf gangway without jumping',async()=>{
   for(const wharf of [false,true]){
     const paths=metro.parkPaths.filter(p=>wharf?p.id.startsWith('osm-way-236582646-')||p.id.startsWith('long-wharf-floating-landing-'):[832417214,832417215,242536776,832417244].some(id=>p.id.startsWith(`osm-way-${id}-`)));
-    const crossing=wharf?paths.find(p=>p.id.startsWith('osm-way-236582646-')).points:paths[0].bridgePoints;
+    const crossing=wharf?paths.find(p=>p.id.startsWith('osm-way-236582646-')).points:paths.find(p=>p.bridge).bridgePoints;
     const start=crossing[0],end=crossing.at(-1),dx=end[0]-start[0],dz=end[1]-start[1],length=Math.hypot(dx,dz),ux=dx/length,uz=dz/length;
     const bounds={minX:Math.min(...crossing.map(p=>p[0]))-10,maxX:Math.max(...crossing.map(p=>p[0]))+10,minZ:Math.min(...crossing.map(p=>p[1]))-10,maxZ:Math.max(...crossing.map(p=>p[1]))+10};
     const city={...windowCity(metro,bounds,{pad:6}),roads:[],buildings:[],water:metro.water,parkPaths:metro.parkPaths,spawn:{x:bounds.minX,y:10,z:bounds.minZ,yaw:0}};

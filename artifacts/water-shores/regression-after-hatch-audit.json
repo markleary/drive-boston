@@ -1,0 +1,199 @@
+{
+  "errors": [],
+  "snapshots": [
+    {
+      "name": "hatch",
+      "mobile": false,
+      "fps": 58,
+      "triangles": 14214126,
+      "drawCalls": 3922,
+      "graphicsContext": {
+        "lost": false,
+        "losses": 0,
+        "builds": 1
+      },
+      "tiles": {
+        "loadRadius": 1150,
+        "unloadRadius": 1650,
+        "maxFetches": 4,
+        "releasedBytes": 0,
+        "releasedAttributes": 0,
+        "loaded": 6,
+        "residentGroups": 13,
+        "keys": [
+          "-1_0",
+          "-1_-1",
+          "0_-1",
+          "0_0",
+          "0_-2",
+          "-1_-2"
+        ],
+        "fetching": 0,
+        "pending": 0,
+        "downloaded": 0,
+        "failed": 0,
+        "building": "1_-1",
+        "stage": "roads",
+        "underConstruction": 7,
+        "structured": [
+          "-2_-1",
+          "1_-1",
+          "1_-2",
+          "-2_-2",
+          "0_-3",
+          "-1_-3"
+        ],
+        "speed": 0,
+        "budgetMs": 4,
+        "tileSize": 1000,
+        "available": 265,
+        "farBuildings": 174878,
+        "buildings": 1688,
+        "exactMeshes": 59,
+        "triangles": 352131,
+        "roads": 1307,
+        "structures": 90,
+        "trees": 3442,
+        "lamps": 1850,
+        "signs": 79,
+        "signals": 149,
+        "parkTrees": 1437,
+        "storefronts": 469,
+        "facades": 5784,
+        "rooftops": 540,
+        "porches": 1,
+        "colliders": 5125,
+        "buildMs": 5673,
+        "cpuMs": 5673,
+        "stageMs": {
+          "terrain": 896,
+          "structures": 159,
+          "roads": 1037,
+          "curbs": 211,
+          "buildings": 199,
+          "props": 70,
+          "signals": 68,
+          "parks": 2026,
+          "details": 67,
+          "finish": 939
+        },
+        "tiles": [
+          {
+            "key": "-1_0",
+            "buildings": 274,
+            "triangles": 86529,
+            "buildMs": 1104,
+            "cpuMs": 1104,
+            "stageMs": {
+              "terrain": 212.5,
+              "structures": 19.90000009536743,
+              "roads": 350,
+              "curbs": 50.200000286102295,
+              "buildings": 54.69999980926514,
+              "props": 27.200000286102295,
+              "signals": 17.299999713897705,
+              "parks": 155.2000002861023,
+              "details": 15.599999904632568,
+              "finish": 200.90000009536743
+            }
+          },
+          {
+            "key": "-1_-1",
+            "buildings": 189,
+            "triangles": 43288,
+            "buildMs": 1124,
+            "cpuMs": 1124,
+            "stageMs": {
+              "terrain": 153.09999990463257,
+              "structures": 34.80000019073486,
+              "roads": 94.59999990463257,
+              "curbs": 24.90000009536743,
+              "buildings": 15,
+              "props": 8.599999904632568,
+              "signals": 6.900000095367432,
+              "parks": 652.0999999046326,
+              "details": 6.299999713897705,
+              "finish": 127.2000002861023
+            }
+          },
+          {
+            "key": "0_-1",
+            "buildings": 355,
+            "triangles": 83958,
+            "buildMs": 1265,
+            "cpuMs": 1265,
+            "stageMs": {
+              "terrain": 299.2999997138977,
+              "structures": 5.200000286102295,
+              "roads": 158.69999980926514,
+              "curbs": 32.30000019073486,
+              "buildings": 45.09999990463257,
+              "props": 11.300000190734863,
+              "signals": 16.59999990463257,
+              "parks": 538.2999997138977,
+              "details": 15.800000190734863,
+              "finish": 142.19999980926514
+            }
+          },
+          {
+            "key": "0_0",
+            "buildings": 334,
+            "triangles": 58570,
+            "buildMs": 645,
+            "cpuMs": 645,
+            "stageMs": {
+              "terrain": 72.10000038146973,
+              "structures": 41.299999713897705,
+              "roads": 217.7000002861023,
+              "curbs": 53.19999980926514,
+              "buildings": 34.30000019073486,
+              "props": 10.599999904632568,
+              "signals": 12.900000095367432,
+              "parks": 22.699999809265137,
+              "details": 10.300000190734863,
+              "finish": 170.19999980926514
+            }
+          },
+          {
+            "key": "0_-2",
+            "buildings": 306,
+            "triangles": 50800,
+            "buildMs": 906,
+            "cpuMs": 906,
+            "stageMs": {
+              "terrain": 96.7999997138977,
+              "structures": 32.80000019073486,
+              "roads": 139,
+              "curbs": 33.30000019073486,
+              "buildings": 34.90000009536743,
+              "props": 7.299999713897705,
+              "signals": 6.200000286102295,
+              "parks": 358.7999997138977,
+              "details": 10,
+              "finish": 186.5
+            }
+          },
+          {
+            "key": "-1_-2",
+            "buildings": 230,
+            "triangles": 28986,
+            "buildMs": 629,
+            "cpuMs": 629,
+            "stageMs": {
+              "terrain": 62.60000038146973,
+              "structures": 25,
+              "roads": 76.7999997138977,
+              "curbs": 16.90000009536743,
+              "buildings": 15.199999809265137,
+              "props": 5.100000381469727,
+              "signals": 8,
+              "parks": 298.59999990463257,
+              "details": 8.799999713897705,
+              "finish": 112.40000009536743
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
