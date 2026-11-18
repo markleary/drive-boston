@@ -1,3 +1,4 @@
+import { addFellsmerePark, addFellsmereWalks, fellsmereLawns, fellsmereTrees, fellsmereWalkIds, onFellsmereLookout } from './fellsmere-park.ts';
 import {frogPondSteps} from './frog-pond.ts';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -87,6 +88,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
   const parks=(city.parks??[]).filter(p=>p.rings[0]?.length>=3&&!replacesGreenwayPark(p));
   const woodland=parks.filter(isFellsWoodland);
   const waters=(city.water??[]).filter(p=>p.rings[0]?.length>=3);
+  const fellsmere=waters.find(w=>w.name==='Fellsmere Pond');
   const christianSciencePlaza=waters.some(isChristianSciencePool)&&ownsChristianSciencePlaza(bounds);
   const paths=(city.parkPaths??[]).filter(p=>options.pathOwned?options.pathOwned(p):true);
   // Lawns and plazas lie a few centimetres above the terrain (depth bias 4) and
@@ -111,10 +113,12 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     // Boston types the Commonwealth Avenue Mall with its paved squares; it is a lawn (its walk is a surveyed sidewalk polygon).
     const list=isFellsWoodland(park)?woods:(isPavedWaterfrontPark(park)||/plaza/i.test(park.name)||/Malls, Squares/i.test(park.kind??''))&&!isCommonwealthMall(park)?plazas:/public garden/i.test(park.name)?gardens:lawns;
     // A large park covers thousands of DEM cells: its surface is draped a few milliseconds a frame.
-    yield* list.add(park.rings);
+    for (const rings of fellsmereLawns.get(park.id) ?? [park.rings]) yield* list.add(rings);
   }
+  if (fellsmere) yield* addFellsmereWalks(group, city, pathMaterial, options);
   for(const water of waters){
     if(due(pace))yield;
+    if(water===fellsmere)group.add(addFellsmerePark(city,water,options));
     if(isChristianSciencePool(water))continue;
     if(water.name===FROG_POND){
       // This pool fits in one tile. It is also in adjacent tiles' shoreline buffers.
@@ -171,7 +175,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     if(due(pace))yield;
     const bridge='bridge' in path&&path.bridge;
     surfaceRuns.set(path,parkSurfaceRuns(path,woodland));
-    if(!bridge&&(onMall(path)||longWharfOwnsPath(path)))continue;
+    if(!bridge&&(onMall(path)||longWharfOwnsPath(path)||(fellsmere&&fellsmereWalkIds.has(path.id))))continue;
     if(bridge){
       const road=footbridgeRoad(city,path);if(!road)continue;bridges++;
       const slab=roadSlabGeometry(city,road),deck=new THREE.BufferGeometry();
@@ -229,7 +233,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
     return {area,...areaBounds(area)};
   });
   const wet=(p:Point2)=>waterBounds.some(w=>p[0]>=w.minX-2&&p[0]<=w.maxX+2&&p[1]>=w.minZ-2&&p[1]<=w.maxZ+2&&insideArea(p,w.area));
-  const safe=(p:Point2)=>!options.reserved?.(...p)&&!waterfrontReserved(...p)&&!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
+  const safe=(p:Point2)=>!(fellsmere&&onFellsmereLookout(...p))&&!options.reserved?.(...p)&&!waterfrontReserved(...p)&&!inGreenway(...p)&&!inTunnelApproach(city,...p)&&!wet(p)&&!insideEmbracePlaza(...p)&&!(buildings.get(key(...p))??[]).some(b=>pointInside(p,b))&&!(segments.get(key(...p))??[]).some(s=>distanceToSegment(p,s.a,s.b)<s.clearance);
   const treePoints:(THREE.Vector3|TreePlanting)[]=[],random=seeded(1877),treeCells=new Map<string,Point2[]>();
   const principal=parks.filter(p=>/common$|public garden|back bay fens|commonwealth avenue mall/i.test(p.name));
   const selected=bounds||!principal.length?parks.filter(p=>!/cemetery|golf/i.test(p.kind??'')):principal;
@@ -274,6 +278,7 @@ export function* cityParkDetailSteps(scene:THREE.Scene,city:CityData,options:Par
       treePoints.push(new THREE.Vector3(p[0],sampleElevation(city,...p)+.025,p[1]));count++;
     }
   }
+  if(fellsmere)treePoints.push(...fellsmereTrees(city,bounds,safe));
   if(christianSciencePlaza)treePoints.push(...christianScienceTrees(city));
   // Use the park inventory independently of the tile's procedural tree budget.
   const common=parks.find(p=>p.name===BOSTON_COMMON);

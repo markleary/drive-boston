@@ -17,6 +17,10 @@ const output = resolve(root, 'public/audio');
 const model = 'eleven_text_to_sound_v2';
 const format = 'mp3_44100_128';
 const clips = [
+  {
+    id: 'pond-fountain', seconds: 10, loop: true,
+    prompt: 'Seamless outdoor ambience loop of one large park pond fountain, heard from the nearby bank. A steady airy hiss from the tall spray, with many fine droplets pattering into open water over a soft continuous rushing splash. Natural and even in level throughout. Isolated fountain water, no music, voices, birds, traffic or mechanical pump hum.'
+  },
   {id:'tesla-model-3-performance-drive',seconds:8,loop:true,prompt:'Quiet Tesla Model 3 Performance electric car at steady slow speed, close exterior perspective. Very soft smooth traction motor hum, fine clean inverter whine and subdued airy pedestrian warning whirr. Refined and much quieter than a gasoline engine. Constant pitch and level, seamless dry isolated loop. No combustion, exhaust, revving, gear changes, tire or wind noise, siren, beeps, music, voices or fade.'},
   {"id": "tesla-model-3-performance-reverse", "seconds": 10, "loop": true, "prompt": "Continuous Tesla electric car reverse warning, a deep hollow futuristic UFO WOOOOOO. Warm low 200 Hz body with soft airy ghostly organ harmonics. Static hovering spaceship held at exactly the same power: fixed pitch and absolutely even volume throughout, no movement or swells. Smooth seamless ten-second loop. No high whistle, wobble, tremolo, pulsing, clicks, percussion, siren, music or voices.", "model": "eleven_text_to_sound_v3", "promptInfluence": 0.8},
   {id:'moving-truck-idle',seconds:6,loop:true,prompt:'An older 1990s medium duty moving box truck diesel engine idling at a constant 650 RPM, close exterior recording. Heavy uneven low diesel chug, dry injector clatter, gentle worn fan belt and cab panel vibration. Steady speed and volume for a seamless loop. No starting, stopping, revving, wind, traffic, horns, voices or music.'},

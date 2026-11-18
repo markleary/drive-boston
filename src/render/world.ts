@@ -40,6 +40,7 @@ import { addMuseumOfScience } from './museum-of-science';
 import { addLowClearanceDetails } from './low-clearance';
 import { addHarvardBridgeDetails } from './harvard-bridge';
 import { addTobinBridgeDetails } from './tobin-bridge';
+import { setFellsmereLighting } from './fellsmere-fountains';
 import { updateWater } from './water-material';
 import { updateSunShadow } from './shadows';
 import { addTunnels } from './tunnels';
@@ -318,6 +319,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   function setLighting(next:LightingMode){
     mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);conley.setLighting(night);
     roadHeadlights.setNight(night);
+    setFellsmereLighting(night);
     sky.visible=!night;environmentSky.visible=!night;
     scene.background=night?new THREE.Color('#07111e'):null;
     environmentScene.background=night?new THREE.Color('#152638'):null;
