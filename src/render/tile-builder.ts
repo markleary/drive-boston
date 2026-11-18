@@ -76,6 +76,7 @@ import { fellsViewHeight } from './fells-woodland.ts';
 import {clipWaterfrontTerrainSteps} from './waterfront-terrain.ts';
 import {clipShoreTerrainSteps} from './shore-terrain.ts';
 import {fortTerrainCuts} from '../simulation/castle-island.ts';
+import {fellsmereUpperTerrace} from './fellsmere-park.ts';
 import type { TreeField } from './foliage';
 
 export interface TileContext {
@@ -230,6 +231,10 @@ export function createTileBuilder(ctx: TileContext) {
         yield* stage('terrain', clipPortalSurfaceSteps(city, geometry, pace));
         yield* stage('terrain', clipWaterfrontTerrainSteps(city,geometry,pace));
         yield* stage('terrain', clipWaterfrontTerrainSteps(city,geometry,pace,fortTerrainCuts));
+        if (subCity.water?.some(w => w.name === 'Fellsmere Pond')) {
+          // The lookout deck and its approach supply the walkable surface here.
+          yield* stage('terrain', clipWaterfrontTerrainSteps(city, geometry, pace, fellsmereUpperTerrace));
+        }
         yield* stage('terrain', clipShoreTerrainSteps(subCity,geometry,pace));
         const ground = new THREE.Mesh(geometry, ctx.ground); ground.name = 'Terrain'; ground.position.y = -.04; ground.receiveShadow = true; ground.renderOrder = -3; group.add(ground);
         if (due(pace)) yield 'terrain';

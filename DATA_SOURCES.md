@@ -102,6 +102,21 @@ curl -L --fail 'https://www.rosekennedygreenway.org/map/' -o data-source-cache/g
 
 The same cached inputs produce identical output. `tests/greenway.test.mjs` protects the screenshot's curb correction, existing street edges, exterior path continuity, and tile-seam surface coverage. `tests/greenway.spec.ts` captures the corridor, street-level scale, mobile rendering, and a streaming return.
 
+## Fellsmere Park, Malden
+
+The city’s existing-conditions survey identifies the pond-level fishing overlook and the elevated Robert F. Murphy Overlook on Quarry Hill. It dates their curved rubble-stone walls to the 1930s WPA work and records three illuminated flagpoles, two lighted fountains, rocky ledges, asphalt walks, wooded slopes and open lawns. The two supplied photographs guided the spray profiles, masonry, bank boulders and views between the terraces. Heights, individual stones, flag details and tree placements are interpretations. [Fellsmere Park Master Plan and Report, Landscape Existing Conditions pp. 2–12 and Electrical Survey](https://www.cityofmalden.org/DocumentCenter/View/5584/Fellsmere-Park-Master-Plan-and-Report)
+
+The game places the fountains at OpenStreetMap nodes 3998261284 and 3998261285 and follows wall ways 585996040–585996042. The flagpole nodes and woodland outlines use the same projection as the packaged pond and path network. The lower platform is fitted to the shore beside the mapped bench. Map data © OpenStreetMap contributors, ODbL 1.0. [Park map](https://www.openstreetmap.org/#map=18/42.4285/-71.0859) · [License](https://www.openstreetmap.org/copyright)
+
+The pond paths use their packaged widths and OpenStreetMap surface tags. The lawn meshes end at those paths and at the packaged street and sidewalk edges around the park and its Fellsway median.
+
+To regenerate the coordinate overlay from the public map extract and the installed city tiles
+
+```sh
+curl -fL 'https://api.openstreetmap.org/api/0.6/map?bbox=-71.0900,42.4257,-71.0837,42.4303' -o data-source-cache/osm-fellsmere.osm
+.venv-data/bin/python scripts/build-fellsmere.py data-source-cache/osm-fellsmere.osm
+```
+
 ## Original environment and ambient characters
 
 Tree species, individual tree placement, pedestrians, and ground-cover details are **original procedural art**, not a municipal vegetation or population inventory. Maple, elm, honey locust, ginkgo, red oak, and white pine use generated leaf masks and branching geometry. Street planting uses broadleaf variants; park planting may include pine. The same branch/leaf resources are shared across instances, with three distance levels and a bounded nearby active field. Wind deformation also applies to the foliage shadow pass. No downloaded leaf photographs or tree models are used.

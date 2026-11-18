@@ -436,6 +436,16 @@
         "durationSeconds": 8.012517006802721,
         "description": "Fresh ElevenLabs UFO source at its original low pitch; matched-phase cosine loop splice and lossless output. No fast level modulation or synthesized layers."
       }
+    },
+    {
+      "id": "pond-fountain",
+      "seconds": 10,
+      "loop": true,
+      "prompt": "Seamless outdoor ambience loop of one large park pond fountain, heard from the nearby bank. A steady airy hiss from the tall spray, with many fine droplets pattering into open water over a soft continuous rushing splash. Natural and even in level throughout. Isolated fountain water, no music, voices, birds, traffic or mechanical pump hum.",
+      "file": "pond-fountain.mp3",
+      "generatedAt": "2026-11-18T18:58:46.036Z",
+      "bytes": 160957,
+      "sha256": "c36f5ec1e1622eb3bf345dd2239e8a66e3104d2b23ee13461b147db924909511"
     }
   ]
 }

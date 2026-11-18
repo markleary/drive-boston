@@ -1,3 +1,4 @@
+import fellsmere from '../data/fellsmere.json' with { type: 'json' };
 import {DEFAULT_CAR, CAR_POWERTRAINS, isPerformanceCar, isElectricCar, type PerformanceCarId, type PlayerCarId} from './player-cars.ts';
 import type { DriveInput, TravelMode } from '../types';
 
@@ -7,9 +8,12 @@ const carSound=(id:CombustionCarId,layer:'idle'|'drive'|'high'|'upshift'|'downsh
 type TruckEffect = 'moving-truck-horn' | 'moving-truck-storrow-crash' | 'moving-truck-boo' | 'moving-truck-reverse';
 const EV_DRIVE='tesla-model-3-performance-drive', EV_REVERSE='tesla-model-3-performance-reverse';
 const EV_SOUNDS=[EV_DRIVE,EV_REVERSE] as const;
-type SoundName = CarSound | TruckEffect | typeof EV_SOUNDS[number] | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
+const FOUNTAIN = 'pond-fountain';
+const FOUNTAIN_RANGE = 145; // metres from a jet
+type SoundName = typeof FOUNTAIN | CarSound | TruckEffect | typeof EV_SOUNDS[number] | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
 /** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
+type ListenerPosition = { x: number; z: number };
 type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean };
 interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; releaseEnd?:number; }
 const CAR_IDS=(Object.keys(CAR_POWERTRAINS) as PerformanceCarId[]).filter((id):id is CombustionCarId=>!isElectricCar(id));
@@ -38,7 +42,10 @@ export class DriveAudio {
   private electric?: {oscillator:OscillatorNode;gain:GainNode};
   private rotorFallback?: { oscillator: OscillatorNode; modulator: OscillatorNode; gain: GainNode };
   private carId:PlayerCarId=DEFAULT_CAR;
-  private wantedSounds = SOUNDS;
+  private vehicleSounds = SOUNDS;
+  private fountainWanted = false;
+  private loadingFountain = false;
+  private get wantedSounds(): SoundName[] { return this.fountainWanted ? [FOUNTAIN, ...this.vehicleSounds] : this.vehicleSounds; }
   private loadingMobileSounds = false;
   private previousDriveGear=0;
   private lastShift=-Infinity;
@@ -47,7 +54,7 @@ export class DriveAudio {
   private readonly mobile:boolean;
   constructor(mobile = false) {
     this.mobile=mobile;
-    if (mobile) this.wantedSounds = COMMON_SOUNDS;
+    if (mobile) this.vehicleSounds = COMMON_SOUNDS;
   }
 
   setCar(id:PlayerCarId){
@@ -55,7 +62,7 @@ export class DriveAudio {
     if(this.context)for(const name of ['engine-idle','engine-drive',...CAR_SOUNDS,...EV_SOUNDS] as SoundName[])this.loops.get(name)?.gain.gain.setTargetAtTime(0,this.context.currentTime,.025);
     this.electric?.gain.gain.setTargetAtTime(0,this.context!.currentTime,.025);
     if (this.mobile) {
-      this.wantedSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[]),...(isElectricCar(id)?EV_SOUNDS:[])];
+      this.vehicleSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[]),...(isElectricCar(id)?EV_SOUNDS:[])];
       for (const name of [...CAR_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS]) {
         if (this.wantedSounds.includes(name)) continue;
         this.releaseSound(name);
@@ -112,6 +119,7 @@ export class DriveAudio {
       failed: [...this.failed], activeLoops: this.loops.size,
       activeOneShots: this.oneShots.size, fallback: Boolean(this.mode === 'drive' ? isElectricCar(this.carId)?!this.carEngineReady&&this.electric:this.fallback : this.mode==='helicopter'?this.rotorFallback:false),
       masterGain: this.master?.gain.value ?? 0, rpm: Math.round(this.rpm), gear: this.gear + 1,
+      fountainGain: this.loops.get(FOUNTAIN)?.gain.gain.value ?? 0,
       rotorGain: this.loops.get('helicopter-rotor')?.gain.gain.value ?? 0,
       electricGain:this.electric?.gain.gain.value??0, impactCount: this.impactCount,storrowCount:this.storrowCount,
       reverseAlarm:this.loops.has(REVERSE_ALARM),electricReverse:this.loops.has(EV_REVERSE),
@@ -147,7 +155,7 @@ export class DriveAudio {
     void this.context.resume().catch(() => {});
   }
 
-  update(speed: number, throttle: number, paused: boolean, controls?: AudioControls) {
+  update(speed: number, throttle: number, paused: boolean, controls?: AudioControls, listener?: ListenerPosition) {
     const context = this.context;
     if (!context || this.disposed) return;
     if (paused && !this.paused) this.stopOneShots();
@@ -159,6 +167,7 @@ export class DriveAudio {
     const dt = clamp(now - this.previousTime, 0, 0.1); this.previousTime = now;
     if (paused || document.hidden) {this.previousDriveGear=0;return;}
 
+    this.updateFountain(listener);
     const velocity = Math.abs(Number.isFinite(speed) ? speed : 0);
     const pedal = clamp(Number.isFinite(throttle) ? Math.abs(throttle) : 0);
     const braking = speed * throttle < -0.5;
@@ -179,7 +188,7 @@ export class DriveAudio {
       return;
     }
     if(this.mode==='walk'){
-      // On foot only the city is heard; footsteps arrive one at a time from the gait.
+      // Footsteps arrive one at a time from the gait.
       this.rpm=0;this.gear=0;this.setLoop('city-ambience',.2,1,5200);return;
     }
     if(this.mode==='bike'){
@@ -266,6 +275,37 @@ export class DriveAudio {
       this.fallback.oscillator.frequency.setTargetAtTime(this.rpm / 30, now, 0.12);
       this.fallback.gain.gain.setTargetAtTime(useCar?0:0.035 + load * 0.045, now, 0.1);
       this.fallback.filter.frequency.setTargetAtTime(160 + load * 180, now, 0.1);
+    }
+  }
+
+  private updateFountain(listener?: ListenerPosition) {
+    const onFootOrBike = this.mode === 'walk' || this.mode === 'bike';
+    if (!this.fountainWanted && (!onFootOrBike || this.muted || !listener)) return;
+    let distance = Infinity;
+    if (onFootOrBike && listener) {
+      for (const [x,z] of fellsmere.fountains)
+        distance = Math.min(distance, Math.hypot(x-listener.x,z-listener.z));
+    }
+
+    if (!this.fountainWanted) {
+      if (distance >= FOUNTAIN_RANGE) return;
+      this.fountainWanted = true;
+      // Join the phone's serial decode queue. On desktop an earlier fetch can
+      // still be in flight if the player leaves and re-enters via the map.
+      if (this.mobile) void this.loadMobileSounds();
+      else if (!this.loadingFountain) {
+        this.loadingFountain = true;
+        void this.loadSound(FOUNTAIN).finally(() => { this.loadingFountain = false; });
+      }
+    }
+    const proximity = clamp(1 - distance / FOUNTAIN_RANGE);
+    this.setLoop(FOUNTAIN, .82 * proximity ** 2, 1, 2200 + 8000 * proximity);
+    // Keep the buffer at the edge of earshot. A teleport or mode switch can
+    // start this fade at full volume, so finish it before disconnecting.
+    if (distance > FOUNTAIN_RANGE + 20 && (this.loops.get(FOUNTAIN)?.gain.gain.value ?? 0) < .0001) {
+      this.fountainWanted = false;
+      this.releaseSound(FOUNTAIN);
+      this.failed.delete(FOUNTAIN);
     }
   }
 
