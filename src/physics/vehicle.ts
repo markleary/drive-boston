@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, MOVING_TRUCK, isPerformanceCar, isElectricCar, carGear, carRpm, type PlayerCarId } from '../simulation/player-cars.ts';
+import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, HARBOR_DRIVE, ENGINES, MOVING_TRUCK, isPerformanceCar, isElectricCar, carGear, carRpm, roadLoad, engineBrakeForce, type PlayerCarId } from '../simulation/player-cars.ts';
 import {lowClearanceAt} from '../simulation/low-clearance.ts';
 import {storrowRecoveryCandidates,storrowRetreatCandidates,storrowSolidRecoveryPlan,type StorrowRecoveryPlan} from '../simulation/storrow-recovery.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
@@ -23,6 +23,8 @@ export interface PhysicsVehicleState extends VehicleState {
   braking: boolean;
   gear: number;
   rpm: number;
+  /** 0 to 1: how hard the rear tyres are spinning under power or sliding sideways (smoke, marks and squeal). */
+  wheelspin: number;
   vehicle: 'car' | 'ultrabee';
   carId: PlayerCarId;
   halfLength: number;
@@ -47,6 +49,21 @@ export const IMPACT_THRESHOLD = 1.2;
  * At 50 mph a head-on into a car lifts the tail about 45 degrees and an offset or side hit spins the car
  * 50 to 70; the cap keeps a full stop against a wall to a nose-stand rather than an end-over-end flip. */
 export const CRASH_KICK = { lift: .35, scale: 2.2, limit: 18000 };
+
+/** Lift-off regeneration of the electric car: 0.21 g with its road load at town speeds, as coast-down tests of the
+ * Model 3 measure it (SAE 2020-01-0883), held down to `walk` (m/s) and eased from there to `ease` of it at rest. */
+export const REGEN = { force: 3550, walk: 1.5, ease: .35 };
+/** Rear tyres that have let go. `stick` (m/s): a locked wheel slower than this is held by the controller's brake.
+ * `grip` (m/s): the sliding speed at which a tyre is giving all it has; below it the pull falls away in proportion,
+ * and a rolling tyre sliding slower than this goes back to the controller's own tyre model. */
+export const SLIDE = { stick: .5, grip: .45 };
+/** Wheelspin under power: the treads outrun the road by as much as the engine's power can drive them against their
+ * sliding grip, up to `limit` m/s at full pedal, building at `rise` and dying away at `fall` (1/s). Full throttle
+ * therefore tightens a slide into a donut, and part throttle holds a shallower angle. */
+export const SPIN = { limit: 30, rise: 10, fall: 6 };
+type Vector = { x: number; y: number; z: number };
+/** A rear tyre's contact: wheel index, point, load (N), unit directions along and across the wheel in the road's plane, and the patch's velocity along each. */
+interface RearPatch { i: number; p: Vector; load: number; along: Vector; side: Vector; forward: number; sideways: number; }
 
 let initialization: Promise<void> | undefined;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
@@ -78,6 +95,19 @@ export class DrivingPhysics {
   private steering = 0;
   private braking = false;
   private pedal = 0;
+  /** Free engine speed while the handbrake holds the clutch open (rpm). */
+  private revs = 0;
+  /** Speed of the rear treads over the road speed while they spin under power (m/s), and whether traction is given up to it. */
+  private slip = 0;
+  private loose = false;
+  /** The rear axle is on the sliding tyre model (locked, spinning or sliding sideways). */
+  private sliding = false;
+  /** The electric car's Hold: stopped on the friction brakes with the pedal released. */
+  private held = false;
+  private handbrakeHeld = false;
+  private wheelspin = 0;
+  private wheelTurn = [0, 0, 0, 0];
+  private wheelSeen = [0, 0, 0, 0];
   private gear = 1;
   private rpm = 850;
   private rescue: {x:number;z:number;yaw:number;roadId?:string} = { x: 0, z: 0, yaw: 0 };
@@ -401,60 +431,127 @@ export class DrivingPhysics {
       this.steering=this.bike.steering;this.braking=this.bike.braking;this.gear=state.speed<-.3?-1:1;this.rpm=0;
     } else {
     const speed = state.speed,spec=this.carSpec,id=this.selectedCar,performance=isPerformanceCar(id),electric=isElectricCar(id),drive=performance?CAR_POWERTRAINS[id]:null;
-    const throttle = clamp(input.throttle, -1, 1);
+    const throttle = clamp(input.throttle, -1, 1),handbrake=input.handbrake,c=this.controller;
     const pedalBrake = clamp(input.brake, 0, 1);
     const changeDirection = throttle * speed < -0.4;
-    this.braking = pedalBrake > 0.05 || input.handbrake || changeDirection;
-    // Slightly tighter arcs at parking and road speeds; cap lateral demand near .87g.
-    const steeringLimit = carSteeringLimit(speed,spec);
+    // The rear tyres as they stand on the road: load, heading and the velocity of each contact patch.
+    const q=this.body.rotation(),fx=2*(q.x*q.z+q.w*q.y),fy=2*(q.y*q.z-q.w*q.x),fz=1-2*(q.x*q.x+q.y*q.y);
+    const lin=this.body.linvel(),ang=this.body.angvel(),com=this.body.worldCom(),rear:RearPatch[]=[];
+    for(const i of [2,3]){
+      if(!c.wheelIsInContact(i))continue;
+      const p=c.wheelContactPoint(i),n=c.wheelContactNormal(i),load=c.wheelSuspensionForce(i)??0,ground=c.wheelGroundObject(i)?.parent();
+      if(!p||!n||load<=0||n.y<.3||ground&&!ground.isFixed())continue;
+      const fn=fx*n.x+fy*n.y+fz*n.z;let ax=fx-n.x*fn,ay=fy-n.y*fn,az=fz-n.z*fn;const length=Math.hypot(ax,ay,az);if(length<.2)continue;
+      ax/=length;ay/=length;az/=length;
+      const sx=n.y*az-n.z*ay,sy=n.z*ax-n.x*az,sz=n.x*ay-n.y*ax,rx=p.x-com.x,ry=p.y-com.y,rz=p.z-com.z;
+      const vx=lin.x+ang.y*rz-ang.z*ry,vy=lin.y+ang.z*rx-ang.x*rz,vz=lin.z+ang.x*ry-ang.y*rx;
+      rear.push({i,p,load,along:{x:ax,y:ay,z:az},side:{x:sx,y:sy,z:sz},forward:vx*ax+vy*ay+vz*az,sideways:vx*sx+vy*sy+vz*sz});
+    }
+    const rearLoad=rear.reduce((sum,w)=>sum+w.load,0),rearSlide=rear.reduce((most,w)=>Math.max(most,Math.abs(w.sideways)),0),rearTravel=rear.reduce((most,w)=>Math.max(most,Math.hypot(w.forward,w.sideways)),0);
+    // A tyre that slides holds four fifths of what it holds at its braking peak.
+    const grip=Math.max(.7,.8*spec.brakeForce/(spec.mass*9.81)),rearShare=electric?.6:performance?1:.5,efficiency=(drive??HARBOR_DRIVE).efficiency;
+    // The handbrake locks the rear wheels and opens the clutch (the electric car cuts its motors), so the pedal only
+    // holds revs against it. Let go of it with the pedal down and the wheel turned, or put the power down while the
+    // tail is already out, and the rear tyres spin for as long as the engine can outrun their grip and the pedal stays
+    // down. Released with the wheel straight, the car launches hooked up, as it does from rest without the handbrake.
+    const released=this.handbrakeHeld&&!handbrake;this.handbrakeHeld=handbrake;
+    const canSpin=rearLoad>0&&spec.traction*spec.wheelspin*rearShare>grip*rearLoad;
+    if(handbrake||pedalBrake>.1||changeDirection||throttle<=0||this.pedal<.2||speed<-1||!canSpin)this.loose=false;
+    else if(!this.loose&&this.pedal>.5&&(released&&Math.abs(input.steer)>.2||this.sliding&&rearSlide>1.2))this.loose=true;
+    const road=Math.max(0,speed),spin=this.loose?Math.max(0,Math.min(this.pedal*SPIN.limit,spec.power*efficiency*rearShare*this.pedal/(grip*rearLoad)-road)):0;
+    this.slip=handbrake?0:this.slip+(spin-this.slip)*(1-Math.exp(-(spin>this.slip?SPIN.rise:SPIN.fall)*timestep));
+    if(this.loose&&spin<.3&&this.slip<.5)this.loose=false;
+    if(!this.loose&&this.slip<.05)this.slip=0;
+    const locked=handbrake&&rear.length>0;
+    // The rear axle is off the controller's tyre model while it is locked and moving, spinning, or still sliding sideways afterwards.
+    this.sliding=rear.length>0&&(locked?rearTravel>SLIDE.stick:this.slip>.3||this.sliding&&rearSlide>SLIDE.grip);
+    // Slightly tighter arcs at parking and road speeds; cap lateral demand at the car's cornering limit. With the tail
+    // out the front wheels may also turn by the angle the car is sliding at, or opposite lock could not catch it.
+    const drift=this.sliding?Math.atan2(rearSlide,Math.max(1,Math.abs(speed))):0;
+    const steeringLimit = Math.min(spec.maxSteering,carSteeringLimit(speed,spec)+drift);
     const desiredSteer = clamp(input.steer, -1, 1) * steeringLimit;
     this.steering += (desiredSteer - this.steering) * (1 - Math.exp(-(id==='moving-truck'?3.2:8) * timestep));
     const speedLimit = throttle >= 0 ? spec.maxForwardSpeed : spec.maxReverseSpeed;
     this.pedal += (throttle-this.pedal)*(1-Math.exp(-(Math.abs(throttle)>Math.abs(this.pedal)?22:14)*timestep));
     if(Math.abs(throttle)<.001&&Math.abs(this.pedal)<.005)this.pedal=0;
-    const targetGear=isPerformanceCar(this.selectedCar)?carGear(this.selectedCar,Math.max(0,speed),this.gear):Math.min(5,Math.max(1,1+Math.floor(Math.abs(speed)/7.5)));
+    // The gearbox and the tachometer follow the driven tread, which outruns the road while the tyres spin.
+    const tread=speed+(speed>-1?this.slip:0);
+    const targetGear=isPerformanceCar(this.selectedCar)?carGear(this.selectedCar,Math.max(0,tread),this.gear):Math.min(5,Math.max(1,1+Math.floor(Math.abs(tread)/7.5)));
     const previousGear=this.gear;
     // Reverse input brakes a forward-moving car before selecting reverse.
     // Only select R while actually reversing or nearly stopped with reverse intent.
     this.gear=speed<-.3||(Math.abs(speed)<=.3&&throttle<-.1)?-1:targetGear;
-    this.rpm=isPerformanceCar(this.selectedCar)?carRpm(this.selectedCar,speed,this.gear,this.pedal):850+Math.abs(speed)/(this.gear<0?7.5:7.5*targetGear)*3000+Math.abs(this.pedal)*650;
+    this.rpm=isPerformanceCar(this.selectedCar)?carRpm(this.selectedCar,tread,this.gear,this.pedal):850+Math.abs(tread)/(this.gear<0?7.5:7.5*targetGear)*3000+Math.abs(this.pedal)*650;
+    if(!electric){
+      // Declutched by the handbrake, the engine revs freely with the pedal; let in again, the flare dies away as the clutch bites.
+      const engine=ENGINES[id as keyof typeof ENGINES],free=handbrake&&throttle>0?engine.idle+this.pedal*(.72*engine.redline-engine.idle):0;
+      this.revs+=(free-this.revs)*(1-Math.exp(-(free>this.revs?7:4)*timestep));
+      this.rpm=Math.min(engine.redline,Math.max(this.rpm,this.revs));
+    }
     if(drive&&previousGear>0&&this.gear>0&&previousGear!==this.gear)this.shiftRemaining=drive.shiftSeconds;
     this.shiftRemaining=Math.max(0,this.shiftRemaining-timestep);
-    // Combustion performance cars drive the rear axle; the dual-motor EV
-    // shares continuous torque between both axles without a shift interruption.
-    const resistance=drive?drive.rolling+.5*1.225*drive.dragArea*speed*speed:spec.mass*spec.linearDamping*Math.abs(speed);
-    if(drive&&Math.abs(speed)>.05){
-      const q=this.body.rotation(),fx=2*(q.x*q.z+q.w*q.y),fy=2*(q.y*q.z-q.w*q.x),fz=1-2*(q.x*q.x+q.y*q.y),drag=-Math.sign(speed)*resistance*timestep;
+    // Rolling resistance and aerodynamic drag act on the body whatever the pedals do.
+    const resistance=roadLoad(id,speed);
+    if(Math.abs(speed)>.05){
+      const drag=-Math.sign(speed)*resistance*timestep;
       this.body.applyImpulse({x:fx*drag,y:fy*drag,z:fz*drag},true);
     }
-    const tractiveForce=Math.min(spec.traction,spec.power*(drive?.efficiency??1)/Math.max(10,Math.abs(speed)));
+    // Combustion performance cars drive the rear axle; the dual-motor EV
+    // shares continuous torque between both axles without a shift interruption.
+    const tractiveForce=Math.min(spec.traction,spec.power*efficiency/Math.max(10,Math.abs(speed)));
     const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
-    const force = changeDirection || pedalBrake > 0.1 || (input.handbrake&&Math.abs(throttle)<.05) ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
-    // Lift-off regenerative braking fades at walking speed and blends with
-    // the service brakes. Actual braking remains tire/contact dependent.
-    const regenForce=electric&&!changeDirection&&!input.handbrake?3400*(1-Math.min(1,Math.abs(this.pedal)/.15))*Math.min(1,Math.abs(speed)/3):0;
-    if(regenForce>spec.mass*1.3)this.braking=true;
+    const force = changeDirection || pedalBrake > 0.1 || handbrake ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
+    const lift=1-Math.min(1,Math.abs(this.pedal)/.15);
+    // Lift-off regeneration holds its rate down to a walk and then eases the car to rest, where Hold keeps it on
+    // the friction brakes until the pedal is pressed again. It blends with the service brakes; actual braking
+    // remains tire/contact dependent.
+    const regenForce=electric&&!changeDirection&&!handbrake?REGEN.force*lift*Math.min(1,REGEN.ease+Math.abs(speed)/REGEN.walk):0;
+    this.held=electric&&!handbrake&&Math.abs(throttle)<.05&&(Math.abs(speed)<.25||this.held&&Math.abs(speed)<1);
+    // A closed throttle leaves the engine to be turned by the driven wheels.
+    const engineBrake=electric||handbrake||this.loose||changeDirection?0:engineBrakeForce(id,this.rpm,this.gear)*lift;
+    this.braking = pedalBrake > 0.05 || handbrake || changeDirection || this.held || regenForce>spec.mass*1.3;
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
-    const brakingImpulse = (changeDirection ? spec.brakeForce*.8 : Math.max(pedalBrake * spec.brakeForce,regenForce)) * timestep / 4;
-    const rollingImpulse = !performance&&Math.abs(throttle) < 0.05 ? (90+Math.min(110,Math.abs(speed)*5))*timestep : 0;
+    const brakingImpulse = (changeDirection ? spec.brakeForce*Math.abs(throttle) : Math.max(pedalBrake * spec.brakeForce,regenForce,this.held?spec.brakeForce*.5:0)) * timestep / 4;
+    const rollingImpulse = !performance&&Math.abs(throttle) < 0.05&&Math.abs(speed)<1.5 ? 90*timestep : 0;
     for (let i = 0; i < 4; i++) {
       const radius=spec.wheelbase/Math.tan(this.steering||1e-8);
       const ackermann=Math.atan(spec.wheelbase/(radius+(i%2===0?-1:1)*spec.track/2));
-      this.controller.setWheelSteering(i, i < 2 ? ackermann : 0);
-      // Rapier chooses engine force before wheel braking. A locked rear wheel
+      c.setWheelSteering(i, i < 2 ? ackermann : 0);
+      // Rapier chooses engine force before wheel braking. A locked or spinning rear wheel
       // must receive exactly zero engine force, including decaying pedal input.
-      const driveShare=electric?(i<2?.2:.3):performance?(i<2?0:.5):.25;
-      this.controller.setWheelEngineForce(i, input.handbrake&&i>=2?0:force*driveShare);
-      this.controller.setWheelBrake(i, brakingImpulse*(i<2?1.2:.8) + rollingImpulse + (input.handbrake && i >= 2 ? 16000 * timestep / 2 : 0));
-      const slidingTurn=input.handbrake&&Math.abs(input.steer)>.25&&Math.abs(speed)>3;
-      this.controller.setWheelSideFrictionStiffness(i, slidingTurn && i >= 2 ? 0.45 : 1.05);
+      const driveShare=electric?(i<2?.2:.3):performance?(i<2?0:.5):.25,back=i>=2;
+      c.setWheelEngineForce(i, back&&(locked||this.loose)?0:force*driveShare);
+      const patch=back?rear.find(w=>w.i===i):undefined;
+      // A locked rear wheel that has come to rest is held by the tyre's grip on the road under it.
+      const service=back&&this.sliding&&(locked||this.loose)?0:back&&locked?grip*(patch?.load??0)*timestep:Math.max(brakingImpulse*(i<2?1.2:.8),engineBrake*driveShare*timestep) + rollingImpulse;
+      c.setWheelBrake(i, service);
+      c.setWheelSideFrictionStiffness(i, back&&this.sliding ? 0 : 1.05);
+      // While the tail slides the front tyres hold no more than a tyre's peak either, so they cannot whip the car round.
+      c.setWheelFrictionSlip(i, this.sliding&&!back ? grip/.8 : spec.friction);
     }
-    this.controller.updateVehicle(timestep, undefined, undefined, collider => collider.parent()?.handle !== this.body.handle);
-    if(input.handbrake&&Math.abs(throttle)<.05&&Math.abs(speed)<.2&&this.controller.wheelIsInContact(2)&&this.controller.wheelIsInContact(3)){
+    // A tyre that has let go pushes back with its sliding grip against the way its tread moves over the road:
+    // against the car's travel when the wheel is locked, mostly forwards when it spins, sideways when it only slides.
+    // The pull fades in over the first half metre a second of sliding, where a rolling tyre would still be gripping.
+    if(this.sliding)for(const w of rear){
+      const along=locked?w.forward:this.loose||this.slip>0?-this.slip:0,size=Math.hypot(along,w.sideways);if(size<1e-4)continue;
+      const impulse=grip*w.load*timestep*Math.min(1,size/SLIDE.grip)/size,a=-along*impulse,b=-w.sideways*impulse;
+      this.body.applyImpulseAtPoint({x:w.along.x*a,y:w.along.y*a,z:w.along.z*a},w.p,true);
+      // (the sideways part acts near the height of the centre of mass, as the controller's own tyres do, so a slide does not trip the car)
+      const ux=2*(q.x*q.y-q.w*q.z),uy=1-2*(q.x*q.x+q.z*q.z),uz=2*(q.y*q.z+q.w*q.x),rise=((com.x-w.p.x)*ux+(com.y-w.p.y)*uy+(com.z-w.p.z)*uz)*.9;
+      this.body.applyImpulseAtPoint({x:w.side.x*b,y:w.side.y*b,z:w.side.z*b},{x:w.p.x+ux*rise,y:w.p.y+uy*rise,z:w.p.z+uz*rise},true);
+    }
+    // The picture of a rear wheel stands still while it is locked and runs ahead of the road while it spins.
+    for(const i of [2,3]){
+      const angle=c.wheelRotation(i)??0,turned=angle-this.wheelSeen[i];this.wheelSeen[i]=angle;
+      if(locked)this.wheelTurn[i]-=turned;else if(this.slip>0)this.wheelTurn[i]+=this.slip*timestep/spec.rearWheelRadius;
+    }
+    this.wheelspin=clamp(Math.max(this.slip/6,this.sliding?(rearSlide-1.5)/4:0),0,1);
+    c.updateVehicle(timestep, undefined, undefined, collider => collider.parent()?.handle !== this.body.handle);
+    if((handbrake||this.held)&&Math.abs(speed)<.2&&c.wheelIsInContact(2)&&c.wheelIsInContact(3)){
       // At rest, the locked tires supply static friction against the component
       // of gravity along the road. Rapier's wheel impulse precedes world gravity;
       // compensate that next-step load rather than allowing continual hill creep.
-      const normals=[0,1,2,3].filter(i=>this.controller.wheelIsInContact(i)).map(i=>this.controller.wheelContactNormal(i)!);
+      const normals=[0,1,2,3].filter(i=>c.wheelIsInContact(i)).map(i=>c.wheelContactNormal(i)!);
       const normal=normals.reduce((n,v)=>({x:n.x+v.x,y:n.y+v.y,z:n.z+v.z}),{x:0,y:0,z:0}),length=Math.hypot(normal.x,normal.y,normal.z);
       normal.x/=length;normal.y/=length;normal.z/=length;
       const velocity=this.body.linvel(),vn=velocity.x*normal.x+velocity.y*normal.y+velocity.z*normal.z;
@@ -619,9 +716,9 @@ export class DrivingPhysics {
       x: p.x, y: p.y, z: p.z,
       yaw: Math.atan2(fx, fz), speed: this.bike ? (velocity.x*fx+velocity.z*fz)/(Math.hypot(fx,fz)||1) : velocity.x * fx + velocity.y * fy + velocity.z * fz,
       steering: this.steering, rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
-      wheelAngles: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelRotation(i) ?? 0),
+      wheelAngles: Array.from({length:this.controller.numWheels()}, (_,i) => (this.controller.wheelRotation(i) ?? 0)+(this.bike?0:this.wheelTurn[i]??0)),
       suspension: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelSuspensionLength(i) ?? this.carSpec.suspensionRest),
-      braking: this.braking,gear:this.gear,rpm:this.rpm,vehicle:this.vehicleType,carId:this.carId,
+      braking: this.braking,gear:this.gear,rpm:this.rpm,wheelspin:this.bike?0:this.wheelspin,vehicle:this.vehicleType,carId:this.carId,
       halfLength:this.bike?.8:this.carSpec.halfLength,halfWidth:this.bike?.4:this.carSpec.halfWidth,
       lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
       storrowDamage:this.storrow?.damage??0,storrowDirection:this.storrow?.direction??1,storrowed:!!this.storrow,
@@ -640,7 +737,7 @@ export class DrivingPhysics {
       const rx=point.x-p.x,ry=point.y-p.y,rz=point.z-p.z;
       const vx=v.x+w.y*rz-w.z*ry,vz=v.z+w.x*ry-w.y*rx,heading=yaw+(c.wheelSteering(i)??0);
       const speed=vx*Math.sin(heading)+vz*Math.cos(heading),side=vx*Math.cos(heading)-vz*Math.sin(heading);
-      contacts.push({wheel:i,x:point.x,y:point.y,z:point.z,normal:{x:normal.x,y:normal.y,z:normal.z},width:bike?.11:this.carId==='supra-mk4'?(i<2?.235:.255):this.carId==='mclaren-720s'?(i<2?.245:.305):this.carId==='mclaren-gt'?(i<2?.225:.295):.235,intensity:tireSlipIntensity(input,speed,side,bike?i===1:i>=2,bike)});
+      contacts.push({wheel:i,x:point.x,y:point.y,z:point.z,normal:{x:normal.x,y:normal.y,z:normal.z},width:bike?.11:this.carId==='supra-mk4'?(i<2?.235:.255):this.carId==='mclaren-720s'?(i<2?.245:.305):this.carId==='mclaren-gt'?(i<2?.225:.295):.235,intensity:Math.max(tireSlipIntensity(input,speed,side,bike?i===1:i>=2,bike),!bike&&i>=2?Math.min(1,this.slip/3):0)});
     }
     return contacts;
   }
@@ -685,6 +782,7 @@ export class DrivingPhysics {
     this.body.resetForces(true);
     this.body.resetTorques(true);
     this.steering = 0;this.pedal=0;this.gear=1;this.rpm=isElectricCar(this.selectedCar)?0:850;
+    this.revs=0;this.slip=0;this.loose=false;this.sliding=false;this.held=false;this.handbrakeHeld=false;this.wheelspin=0;
     this.overturnedTime = 0;this.shiftRemaining=0;this.braking=false;this.bike?.reset();
     for (let i = 0; i < this.controller.numWheels(); i++) {
       this.controller.setWheelEngineForce(i, 0);

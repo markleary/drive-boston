@@ -14,7 +14,7 @@ type SoundName = typeof FOUNTAIN | CarSound | TruckEffect | typeof EV_SOUNDS[num
 /** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
 type ListenerPosition = { x: number; z: number };
-type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean };
+type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean; wheelspin?:number };
 interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; releaseEnd?:number; }
 const CAR_IDS=(Object.keys(CAR_POWERTRAINS) as PerformanceCarId[]).filter((id):id is CombustionCarId=>!isElectricCar(id));
 const CAR_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high','upshift','downshift'] as const).map(layer=>carSound(id,layer)));
@@ -317,7 +317,9 @@ export class DriveAudio {
     const cornerScrub = clamp((steer * velocity * velocity - 115) / 200) * 0.5;
     const lockedTires = controls?.handbrake ? clamp((velocity - 1.5) / 8) : 0;
     const hardBraking = (controls?.brake ?? 0) > 0.85 && velocity > 8 ? 0.2 : 0;
-    this.setLoop('tire-skid', Math.max(cornerScrub, lockedTires, hardBraking) * 0.32, clamp(0.85 + velocity * 0.014, 0.85, 1.4), 3600);
+    // Rear tyres spinning under power or sliding sideways squeal whatever the road speed (a burnout stands still).
+    const spinning = clamp(controls?.wheelspin ?? 0);
+    this.setLoop('tire-skid', Math.max(cornerScrub, lockedTires, hardBraking, spinning) * 0.32, clamp(0.85 + velocity * 0.014 + spinning * .12, 0.85, 1.4), 3600);
   }
 
   horn() {

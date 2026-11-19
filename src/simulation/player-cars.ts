@@ -12,6 +12,8 @@ export const MOVING_TRUCK = {
   cab:{center:{x:0,y:.68,z:2.45},halfExtents:{x:1.06,y:1.02,z:1.25}},
   chassis:{center:{x:0,y:-.10,z:0},halfExtents:{x:1.08,y:.22,z:3.78}},
 } as const;
+/** `traction` is the launch force the tyres hold with the car's traction control (N); `wheelspin` is how far the
+ * first-gear wheel force can exceed it, so only cars above 1 with the grip to spare can spin their rear tyres. */
 export const PLAYER_CARS = {
   'harbor-s4': {
     name:'Harbor S4', description:'Everyday coupe · 60 mph',
@@ -19,15 +21,15 @@ export const PLAYER_CARS = {
     suspensionRest:.31, spawnHeight:.78, maxForwardSpeed:60*.44704, maxReverseSpeed:8,
     maxSteering:.52, maxLateralAcceleration:8.5, halfWidth:.85, halfLength:2.02,
     stiffness:32, compression:4.4, relaxation:5.2, travel:.16, friction:1.5,
-    linearDamping:.13, brakeForce:12500, power:125000, traction:8400,
+    linearDamping:0, brakeForce:12500, power:125000, traction:8400, wheelspin:1,
   },
   'mclaren-gt': {
     name:'McLaren GT', description:'Twin-turbo V8 · 203 mph · 0–60 in 3.1 s',
     mass:1530, wheelRadius:.33275, rearWheelRadius:.3552, wheelbase:2.675, track:1.671, rearTrack:1.663,
     suspensionRest:.20, spawnHeight:.66, maxForwardSpeed:326/3.6, maxReverseSpeed:10,
-    maxSteering:.48, maxLateralAcceleration:11.6, halfWidth:.945, halfLength:2.3415,
+    maxSteering:.48, maxLateralAcceleration:10.3, halfWidth:.945, halfLength:2.3415,
     stiffness:58, compression:5.4, relaxation:7.4, travel:.10, friction:2.5,
-    linearDamping:0, brakeForce:17900, power:456000, traction:13800,
+    linearDamping:0, brakeForce:17900, power:456000, traction:13800, wheelspin:1.5,
   },
   'mclaren-720s': {
     name:'McLaren 720S', description:'Twin-turbo V8 · 212 mph · 0–60 in 2.8 s',
@@ -35,23 +37,23 @@ export const PLAYER_CARS = {
     suspensionRest:.19, spawnHeight:.64, maxForwardSpeed:341/3.6, maxReverseSpeed:10,
     maxSteering:.49, maxLateralAcceleration:12.2, halfWidth:.965, halfLength:2.2715,
     stiffness:63, compression:5.8, relaxation:7.8, travel:.10, friction:2.6,
-    linearDamping:0, brakeForce:17700, power:530000, traction:14300,
+    linearDamping:0, brakeForce:17700, power:530000, traction:14300, wheelspin:1.8,
   },
   'supra-mk4': {
     name:'Toyota Supra Mk4', description:'Twin-turbo straight-six · 155 mph · 0–60 in 4.6 s',
     mass:1563, wheelRadius:.32165, rearWheelRadius:.3179, wheelbase:2.55, track:1.52, rearTrack:1.525,
     suspensionRest:.25, spawnHeight:.70, maxForwardSpeed:155*.44704, maxReverseSpeed:9,
-    maxSteering:.51, maxLateralAcceleration:9.3, halfWidth:.905, halfLength:2.2575,
+    maxSteering:.51, maxLateralAcceleration:10.3, halfWidth:.905, halfLength:2.2575,
     stiffness:41, compression:4.9, relaxation:6.1, travel:.14, friction:2.1,
-    linearDamping:0, brakeForce:16500, power:239000, traction:10400,
+    linearDamping:0, brakeForce:16500, power:239000, traction:10400, wheelspin:1.4,
   },
   'tesla-model-3-performance': {
     name:'Tesla Model 3 Performance', description:'Dual-motor AWD · 163 mph · 0–60 in 2.9 s (rollout)',
     mass:1839, wheelRadius:.33625, rearWheelRadius:.3365, wheelbase:2.875, track:1.582, rearTrack:1.560,
     suspensionRest:.23, spawnHeight:.69, maxForwardSpeed:163*.44704, maxReverseSpeed:7,
-    maxSteering:.49, maxLateralAcceleration:10.3, halfWidth:.925, halfLength:2.416,
+    maxSteering:.49, maxLateralAcceleration:10.1, halfWidth:.925, halfLength:2.416,
     stiffness:53, compression:5.2, relaxation:6.8, travel:.12, friction:2.4,
-    linearDamping:0, brakeForce:18500, power:510*745.7, traction:16350,
+    linearDamping:0, brakeForce:19500, power:510*745.7, traction:16350, wheelspin:1.25,
   },
   'moving-truck': {
     name:'Moving Truck', description:'Storrow Movers · loaded diesel · 12 ft high',
@@ -59,7 +61,7 @@ export const PLAYER_CARS = {
     suspensionRest:.39, spawnHeight:.98, maxForwardSpeed:65*.44704, maxReverseSpeed:5,
     maxSteering:.51, maxLateralAcceleration:3.5, halfWidth:1.21, halfLength:3.8,
     stiffness:40, compression:5.4, relaxation:6.8, travel:.22, friction:1.55,
-    linearDamping:0, brakeForce:37000, power:170000, traction:17500,
+    linearDamping:0, brakeForce:37000, power:170000, traction:17500, wheelspin:1,
   },
 } as const;
 export const isPlayerCarId = (value:unknown):value is PlayerCarId => typeof value==='string'&&Object.hasOwn(PLAYER_CARS,value);
@@ -85,6 +87,30 @@ export function carGear(id:PerformanceCarId,speed:number,previous:number){
   while(gear<last&&speed>shifts[gear])gear++;
   while(gear>1&&speed<shifts[gear-1]-3)gear--;
   return gear;
+}
+/** The Harbor S4's road load and driveline: an everyday coupe's drag area and tires, and the share of its rated
+ * power that reaches the road averaged over a gear and its shifts (it has no rev range or shift interruptions of
+ * its own): 0 to 60 mph in about seven seconds, as 100 W/kg with four driven wheels gives. */
+export const HARBOR_DRIVE={efficiency:.65,dragArea:.62,rolling:150} as const;
+/** Rolling resistance and aerodynamic drag (N) at a road speed (m/s). */
+export const roadLoad=(id:PlayerCarId,speed:number)=>{const d=isPerformanceCar(id)?CAR_POWERTRAINS[id]:HARBOR_DRIVE;return d.rolling+.5*1.225*d.dragArea*speed*speed;};
+/** Swept volume (litres) and idle speed of each combustion engine. */
+export const ENGINES={
+  'harbor-s4':{litres:2.0,idle:850,redline:6500},'mclaren-gt':{litres:3.994,idle:850,redline:8500},'mclaren-720s':{litres:3.994,idle:850,redline:8500},
+  'supra-mk4':{litres:2.997,idle:850,redline:6800},'moving-truck':{litres:6.7,idle:650,redline:3400},
+} as const;
+/** Engine speed per road speed (rpm per m/s) in a gear: the ratio the HUD, the sound and engine braking share. */
+export const gearing=(id:PlayerCarId,gear:number)=>{
+  if(!isPerformanceCar(id))return 400/Math.max(1,gear);
+  const spec=CAR_POWERTRAINS[id];return isElectricCar(id)?9.03*60/(2*Math.PI*PLAYER_CARS[id].wheelRadius):spec.shiftRpm/spec.shifts[Math.max(1,gear)];
+};
+/** Lift-off engine braking at the driven wheels (N). A closed throttle leaves the engine's friction and pumping
+ * work to the road: a mean effective pressure of about 1 bar at idle rising to 2.9 bar at the redline, over the
+ * swept volume, times the gearing. It fades out towards idle, where the clutch or converter lets go. */
+export function engineBrakeForce(id:PlayerCarId,rpm:number,gear:number){
+  if(isElectricCar(id))return 0;
+  const e=ENGINES[id],torque=1e5*(1+1.9*Math.min(1,rpm/e.redline))*e.litres*1e-3/(4*Math.PI);
+  return torque*gearing(id,gear)*Math.PI/30*Math.max(0,Math.min(1,(rpm-e.idle-150)/350));
 }
 export function carRpm(id:PerformanceCarId,speed:number,gear:number,pedal:number){
   const spec=CAR_POWERTRAINS[id];
