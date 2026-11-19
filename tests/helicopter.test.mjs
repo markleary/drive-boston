@@ -81,6 +81,28 @@ test('roofs, the hover floor, map bounds and the ceiling remain solid', async ()
   } finally { setup.dispose(); }
 });
 
+test('metro flight revisits a roof after the mobile cache evicts its decoded footprint', async () => {
+  const corners = [[45, 45], [55, 45], [55, 55], [45, 55]];
+  const old = Proxy.revocable(corners, {});
+  let decoded = old.proxy;
+  const hull = { minX: 45, maxX: 55, minZ: 45, maxZ: 55, base: 2, height: 30, exactMesh: false,
+    get footprint() { return decoded; } };
+  const city = { ...emptyCity, tiles: {}, far: {}, index: { query: () => [hull] } };
+  const setup = await fixture(city);
+  try {
+    const arrival = { x: 50, z: 50, y: 4 };
+    setup.flight.reset(arrival, 0);
+    const roof = setup.flight.state.y;
+    assert.ok(roof > hull.base + hull.height + HELICOPTER.verticalClearance);
+    setup.flight.reset({ x: 0, z: 0, y: 20 }, 0);
+    // Make use of the old array after this point observable without relying on GC timing.
+    old.revoke();
+    decoded = corners.map(p => [...p]);
+    setup.flight.reset(arrival, 0);
+    assert.equal(setup.flight.state.y, roof);
+  } finally { setup.dispose(); }
+});
+
 test('real Back Bay launch is clear and 60/120 Hz flight produces the same path', async () => {
   const city = await loadCentralCity();
   const setup = await fixture(city);
