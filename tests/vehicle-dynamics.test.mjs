@@ -41,6 +41,28 @@ test('a closed throttle leaves the engine to be turned by the driven wheels, by 
   assert.ok(measured['moving-truck']>.035&&measured['moving-truck']<.08,JSON.stringify(measured));
 });
 
+for(const dt of [1/60,1/120])test(`lifting off from full throttle brings the retardation in under the pedal as it comes up, without a wait or a step, at ${1/dt} Hz`,async()=>{
+  // The pedal takes 0.4 s to come all the way up, and Rapier gives a wheel with any engine force no brake at all, so
+  // the pedal's last tenths and the regeneration or engine braking under them have to be one force at the wheel.
+  // (Rolling at a set speed with the pedal already at rest, as the other tests here do, does not show this.)
+  for(const id of ALL){
+    const p=await car(id);
+    try{
+      const from=(id==='moving-truck'?18:30)*MPH;while(p.getState().speed<from)p.step({...idle,throttle:1},dt);
+      let before=p.getState().speed,onset;const trace=[];
+      advance(p,.7,idle,dt,(s,t)=>{const g=(before-s.speed)/dt/G;before=s.speed;trace.push(g);if(onset===undefined&&g>.02)onset=t;});
+      const a=p.getState().speed,steady=(a-advance(p,.5,idle,dt).speed)/.5/G;
+      // Deceleration over the 50 ms up to a time (a single step's is noisy with the suspension), and when it first passes a share of the steady rate.
+      const span=Math.round(.05/dt),at=seconds=>{const end=Math.round(seconds/dt);return trace.slice(end-span,end).reduce((sum,g)=>sum+g,0)/span;};
+      const reaches=share=>{for(let i=span;i<=trace.length;i++)if(at(i*dt)>=steady*share)return i*dt;return Infinity;};
+      assert.ok(onset<.25,`${id} is slowing ${onset} s after the lift`);
+      assert.ok(at(.3)>steady*.5&&at(.45)>steady*.95,`${id}: ${at(.3)} g at .3 s and ${at(.45)} g at .45 s of ${steady} g`);
+      // A ramp, not a step: the old wait ended with the whole rate inside one frame.
+      const rise=reaches(.9)-reaches(.1);assert.ok(rise>.08&&rise<.3,`${id} goes from a tenth to nine tenths of its rate in ${rise} s`);
+    }finally{p.dispose();}
+  }
+});
+
 test('the Harbor S4 rolls on tyre and air drag instead of body damping, and reaches its 60 mph',async()=>{
   const p=await car('harbor-s4');
   try{

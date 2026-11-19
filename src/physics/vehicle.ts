@@ -500,18 +500,19 @@ export class DrivingPhysics {
     // shares continuous torque between both axles without a shift interruption.
     const tractiveForce=Math.min(spec.traction,spec.power*efficiency/Math.max(10,Math.abs(speed)));
     const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
-    const force = changeDirection || pedalBrake > 0.1 || handbrake ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
+    const held=electric&&!handbrake&&Math.abs(throttle)<.05&&(Math.abs(speed)<.25||this.held&&Math.abs(speed)<1);
+    const force = changeDirection || pedalBrake > 0.1 || handbrake || held ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
     const lift=1-Math.min(1,Math.abs(this.pedal)/.15);
     // Lift-off regeneration holds its rate down to a walk and then eases the car to rest, where Hold keeps it on
     // the friction brakes until the pedal is pressed again. It blends with the service brakes; actual braking
     // remains tire/contact dependent.
     const regenForce=electric&&!changeDirection&&!handbrake?REGEN.force*lift*Math.min(1,REGEN.ease+Math.abs(speed)/REGEN.walk):0;
-    this.held=electric&&!handbrake&&Math.abs(throttle)<.05&&(Math.abs(speed)<.25||this.held&&Math.abs(speed)<1);
+    this.held=held;
     // A closed throttle leaves the engine to be turned by the driven wheels.
     const engineBrake=electric||handbrake||this.loose||changeDirection?0:engineBrakeForce(id,this.rpm,this.gear)*lift;
     this.braking = pedalBrake > 0.05 || handbrake || changeDirection || this.held || regenForce>spec.mass*1.3;
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
-    const brakingImpulse = (changeDirection ? spec.brakeForce*Math.abs(throttle) : Math.max(pedalBrake * spec.brakeForce,regenForce,this.held?spec.brakeForce*.5:0)) * timestep / 4;
+    const brakingImpulse = (changeDirection ? spec.brakeForce*Math.abs(throttle) : Math.max(pedalBrake * spec.brakeForce,this.held?spec.brakeForce*.5:0)) * timestep / 4;
     const rollingImpulse = !performance&&Math.abs(throttle) < 0.05&&Math.abs(speed)<1.5 ? 90*timestep : 0;
     for (let i = 0; i < 4; i++) {
       const radius=spec.wheelbase/Math.tan(this.steering||1e-8);
@@ -520,10 +521,15 @@ export class DrivingPhysics {
       // Rapier chooses engine force before wheel braking. A locked or spinning rear wheel
       // must receive exactly zero engine force, including decaying pedal input.
       const driveShare=electric?(i<2?.2:.3):performance?(i<2?0:.5):.25,back=i>=2;
-      c.setWheelEngineForce(i, back&&(locked||this.loose)?0:force*driveShare);
+      // For the same reason the pedal's last tenths and the lift-off retardation that comes in under them (regeneration,
+      // engine braking) are one force at the wheel, the difference of the two: set side by side, the retardation would
+      // wait out the 0.4 s the pedal takes to come all the way up and then arrive at once.
+      const drive=back&&(locked||this.loose)?0:force*driveShare,coast=electric?regenForce*(i<2?1.2:.8)/4:engineBrake*driveShare;
+      const net=drive*speed>0?Math.abs(drive)-coast:Infinity,retard=net===Infinity?coast:Math.max(0,-net);
+      c.setWheelEngineForce(i, net===Infinity?drive:Math.sign(drive)*Math.max(0,net));
       const patch=back?rear.find(w=>w.i===i):undefined;
       // A locked rear wheel that has come to rest is held by the tyre's grip on the road under it.
-      const service=back&&this.sliding&&(locked||this.loose)?0:back&&locked?grip*(patch?.load??0)*timestep:Math.max(brakingImpulse*(i<2?1.2:.8),engineBrake*driveShare*timestep) + rollingImpulse;
+      const service=back&&this.sliding&&(locked||this.loose)?0:back&&locked?grip*(patch?.load??0)*timestep:Math.max(brakingImpulse*(i<2?1.2:.8),retard*timestep) + rollingImpulse;
       c.setWheelBrake(i, service);
       c.setWheelSideFrictionStiffness(i, back&&this.sliding ? 0 : 1.05);
       // While the tail slides the front tyres hold no more than a tyre's peak either, so they cannot whip the car round.
