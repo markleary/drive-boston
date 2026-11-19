@@ -1,6 +1,6 @@
 import type { Building, CityData, HighwaySign, Point2 } from '../types';
 import { decodeElevation, gunzip, parseTile, tileFile, tileKey, tileOf, type CityTile, type TileBuilding } from './tile-format.ts';
-import { parseFar, type FarBuilding, type FarCity } from './far-format.ts';
+import { PackedHull, parseFar, type FarBuilding, type FarCity } from './far-format.ts';
 import {prepareBuildingTunnelPassage} from './tunnel-passages.ts';
 import {refineLongWharfPaths} from './long-wharf.ts';
 import {restoreWaterPaths} from './water-paths.ts';
@@ -45,12 +45,12 @@ export type Reader = (name: string) => Promise<ArrayBuffer>;
 
 /** Resolve the sidecar files a metro city.json refers to. The elevation grid
  * becomes a Float32Array (graded offline when `elevation.graded` is set). */
-export async function resolveCity(city: CityData, read: Reader): Promise<CityData> {
+export async function resolveCity(city: CityData, read: Reader, mobile = false): Promise<CityData> {
   const elevation = city.elevation as (CityData['elevation'] & { file?: string; scale?: number }) | undefined;
   const tiles = (city as Partial<MetroCity>).tiles;
   const [heights, far, tunnels] = await Promise.all([
     elevation?.file ? read(elevation.file).then(gunzip).then(buffer => decodeElevation(buffer, elevation.scale ?? .01)) : undefined,
-    tiles ? read(tiles.far).then(gunzip).then(parseFar) : undefined,
+    tiles ? read(tiles.far).then(gunzip).then(buffer => parseFar(buffer, mobile)) : undefined,
     city.tunnels ? Promise.all((city.tunnels.files??[city.tunnels.file]).map(file=>read(file).then(buffer=>JSON.parse(new TextDecoder().decode(buffer)) as Pick<CityData,'roads'|'landmarks'|'sources'>&{signs?:HighwaySign[]}))) : undefined,
   ]);
   if (elevation && heights) elevation.heights = heights;
@@ -122,8 +122,12 @@ export class BuildingIndex {
     this.all.forEach((b, n) => {
       (b as FarBuilding & { n: number }).n = n;
       let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-      for (const [x, z] of b.footprint) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
-      Object.assign(b, { minX, maxX, minZ, maxZ });
+      if (b instanceof PackedHull) {
+        ({ minX, maxX, minZ, maxZ } = b);
+      } else {
+        for (const [x, z] of b.footprint) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+        Object.assign(b, { minX, maxX, minZ, maxZ });
+      }
       for (let cx = Math.floor(minX / cell); cx <= Math.floor(maxX / cell); cx++) for (let cz = Math.floor(minZ / cell); cz <= Math.floor(maxZ / cell); cz++) {
         const key = this.key(cx, cz), list = this.cells.get(key); if (list) list.push(b); else this.cells.set(key, [b]);
       }

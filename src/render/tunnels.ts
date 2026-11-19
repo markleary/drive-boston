@@ -133,7 +133,7 @@ export function tunnelExitSigns(city:CityData){
 
 /** Source-aligned bores, portals and terminal closures. Geometry comes from
  * simulation/tunnels, so a visible wall cannot close a physically open merge. */
-export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false,headlightSource?:THREE.Material){
+export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false,headlightSource?:THREE.Material,stream=false){
   const roads=city.roads.filter(r=>r.tunnel&&r.elevations),group=new THREE.Group();group.name='Central Artery tunnels';
   const tunnelRoads={...city,roads};
   const tiles=wallTexture(),paving=asphaltTexture();
@@ -146,103 +146,124 @@ export function addTunnels(scene:THREE.Object3D,city:CityData,mobile=false,headl
   inheritRoadHeadlights(headlightSource,asphalt);
   inheritRoadHeadlights(headlightSource,white);
   const amber=new THREE.MeshBasicMaterial({color:'#e7b74b'}),darkMetal=new THREE.MeshStandardMaterial({color:'#394342',roughness:.8,metalness:.3});
-  const lightMaterial=new THREE.MeshBasicMaterial({color:'#fff1c9',toneMapped:false}),batches=new PartBatches(180),matrix=new THREE.Matrix4();
-  let fixtures=0,signs=0,closures=0,metres=0;
-  const mesh=(geometry:THREE.BufferGeometry,material:THREE.Material,name:string)=>{
-    if(!geometry.attributes.position?.count){geometry.dispose();return;}const object=new THREE.Mesh(geometry,material);object.name=name;object.receiveShadow=true;object.castShadow=true;group.add(object);
-  };
-  const place=(material:THREE.Material,w:number,h:number,d:number,p:{x:number;y:number;z:number;yaw:number},rise=0,across=0,slope=0)=>{
-    matrix.makeRotationFromEuler(new THREE.Euler(-slope,p.yaw,0,'YXZ'));matrix.setPosition(p.x+Math.cos(p.yaw)*across,p.y+rise,p.z-Math.sin(p.yaw)*across);batches.part(box(w,h,d),material,matrix);
-  };
-  const signPanel=(width:number,height:number,lines:string[],warning=false,half=false)=>{
-    // Highway signs have one printed face. A solid metal panel hides that
-    // texture from drivers approaching the rear, including wrong-way travel.
-    const face=new THREE.Mesh(new THREE.PlaneGeometry(width,height),signMaterial(lines,warning,mobile,half));
-    face.userData.tunnelSignFace=true;
-    const back=new THREE.Mesh(new THREE.BoxGeometry(width,height,.08),darkMetal);
-    back.name='Tunnel sign backing';back.position.z=-.055;face.add(back);
-    return face;
-  };
-  // `half` hangs a half panel over the left (1) or the right (-1) of the road: one of two legends on a shared gantry.
-  const sign=(road:Road,s:number,lines:string[],warning=false,backwards=false,half=0)=>{
-    const p=tunnelPointAt(road,s),span=Math.min(road.width-1,6.6,4*(road.tunnel!.clearance-.28-SIGN_HEADROOM)),height=span/4,width=half?span/2-.08:span,across=half*span/4;
-    const object=signPanel(width,height,lines,warning,half!==0);object.name=lines.join(' / ');
-    object.userData.roadId=road.id;object.userData.station=s;object.userData.backwards=backwards;
-    object.position.set(p.x+Math.cos(p.yaw)*across,p.y+road.tunnel!.clearance-height/2-.28,p.z-Math.sin(p.yaw)*across);object.rotation.y=p.yaw+(backwards?0:Math.PI);group.add(object);signs++;
-    if(half>0)return; // its twin on the right hangs the gantry
-    place(darkMetal,tunnelCoveredAt(road,s)?span+.15:p.width+.9,.08,.12,p,road.tunnel!.clearance-.2);
-    if(!tunnelCoveredAt(road,s))for(const side of [-1,1])place(darkMetal,.14,road.tunnel!.clearance,.14,p,road.tunnel!.clearance/2,side*(p.width/2+.35));
-  };
-  const paint=(a:{x:number;y:number;z:number},b:{x:number;y:number;z:number},width:number)=>{
-    const dx=b.x-a.x,dz=b.z-a.z,dy=b.y-a.y,length=Math.hypot(dx,dz);
-    const middle={x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2,yaw:Math.atan2(dx,dz)};
-    // Merges can have crossfall: every painted stripe follows its own part of
-    // the deck instead of floating at the road centerline's elevation.
-    place(white,width,.018,Math.hypot(length,dy),middle,.04,0,Math.atan2(dy,length));
-  };
-  const stripe=(road:Road,start:number,end:number,width:number,across:(width:number)=>number)=>{
-    const endpoint=(s:number)=>{const p=tunnelPointAt(road,s),offset=across(p.width),x=p.x+Math.cos(p.yaw)*offset,z=p.z-Math.sin(p.yaw)*offset;return{x,z,y:sampleRoadElevation(city,road,x,z)};};
-    paint(endpoint(start),endpoint(end),width);
-  };
-  for(const road of roads){
-    const length=tunnelStations(road).at(-1)??0;metres+=length;
-    const geometry=tunnelGeometry(city,road),deck=roadDeckGeometry(city,road,road.width,.018),floor=buffer(deck);floor.setAttribute('uv',new THREE.BufferAttribute(deck.uv,2));mesh(floor,asphalt,`${road.name} roadway`);
-    // A highway's open cut is walled in plain concrete: only its roofed stretches are a tiled tunnel.
-    const [tiled,cut]=road.highway?wallParts(geometry.walls,road):[geometry.walls,undefined];
-    if(!cut||tiled.indices.length)mesh(tiledWall(tiled,road,city),walls,`${road.name} tile walls`);
-    mesh(tiledTunnelCeiling(geometry.roof,road),ceiling,`${road.name} ceiling`);
-    if(cut?.indices.length)mesh(buffer(cut),cutConcrete,`${road.name} cut walls`);
-    mesh(buffer(geometry.barriers),concrete,`${road.name} concrete closure`);
-    // (the median barrier row a cut carries between itself and the carriageway that runs the other way, in the precast concrete of a deck's)
-    if(geometry.median.indices.length)mesh(buffer(geometry.median),precastMaterial(),`${road.name} median barrier`);
-    // A generated highway record carries its lane count: 3.65 m lanes centred on the centre line, as its traffic runs.
-    const lanes=road.lanes??Math.max(1,Math.round((road.width-1.4)/3.5));
-    // An edge inside a joined carriageway is no longer a road border. Retain
-    // exterior lines and independent stacked roads, but leave merges open.
-    for(const edge of bridgeEdgeSections(tunnelRoads,road,.7,.7,.15)){
-      const endpoint=(p:[number,number])=>({x:p[0],z:p[1],y:sampleRoadElevation(city,road,...p)});
-      paint(endpoint(edge.a),endpoint(edge.b),.13);
-    }
-    for(let s=2;s<length-2;s+=6){
-      if(Math.floor(s/6)%2===0)for(let lane=1;lane<lanes;lane++)stripe(road,s,Math.min(length,s+3),.14,width=>road.lanes?(lane-lanes/2)*Math.min(LANE_WIDTH,(width-2.4)/Math.max(1,lanes-1)):-width/2+lane*width/lanes);
-    }
-    for(let s=8;s<length-5;s+=14){
-      if(!tunnelCoveredAt(road,s))continue;const p=tunnelPointAt(road,s),clearance=road.tunnel!.clearance;
-      for(const side of [-1,1]){
-        const across=side*(p.width/2-1.05);place(darkMetal,.34,.11,3.3,p,clearance-.1,across);place(lightMaterial,.23,.035,2.9,p,clearance-.17,across);fixtures++;
+  const lightMaterial=new THREE.MeshBasicMaterial({color:'#fff1c9',toneMapped:false});
+  const networkExits=tunnelExitSigns(city);
+
+  function buildSection(group:THREE.Group,roads:Road[],exits:typeof networkExits,owned?:THREE.Material[],shell?:ReturnType<typeof tunnelGeometry>){
+    const batches=new PartBatches(180),matrix=new THREE.Matrix4();
+    let fixtures=0,signs=0,closures=0,metres=0;
+    const mesh=(geometry:THREE.BufferGeometry,material:THREE.Material,name:string)=>{
+      if(!geometry.attributes.position?.count){geometry.dispose();return;}const object=new THREE.Mesh(geometry,material);object.name=name;object.receiveShadow=true;object.castShadow=true;group.add(object);
+    };
+    const place=(material:THREE.Material,w:number,h:number,d:number,p:{x:number;y:number;z:number;yaw:number},rise=0,across=0,slope=0)=>{
+      matrix.makeRotationFromEuler(new THREE.Euler(-slope,p.yaw,0,'YXZ'));matrix.setPosition(p.x+Math.cos(p.yaw)*across,p.y+rise,p.z-Math.sin(p.yaw)*across);batches.part(box(w,h,d),material,matrix);
+    };
+    const signPanel=(width:number,height:number,lines:string[],warning=false,half=false)=>{
+      // Highway signs have one printed face. A solid metal panel hides that
+      // texture from drivers approaching the rear, including wrong-way travel.
+      const material=signMaterial(lines,warning,mobile,half);owned?.push(material);
+      const face=new THREE.Mesh(new THREE.PlaneGeometry(width,height),material);
+      face.userData.tunnelSignFace=true;
+      const back=new THREE.Mesh(new THREE.BoxGeometry(width,height,.08),darkMetal);
+      back.name='Tunnel sign backing';back.position.z=-.055;face.add(back);
+      return face;
+    };
+    // `half` hangs a half panel over the left (1) or the right (-1) of the road: one of two legends on a shared gantry.
+    const sign=(road:Road,s:number,lines:string[],warning=false,backwards=false,half=0)=>{
+      const p=tunnelPointAt(road,s),span=Math.min(road.width-1,6.6,4*(road.tunnel!.clearance-.28-SIGN_HEADROOM)),height=span/4,width=half?span/2-.08:span,across=half*span/4;
+      const object=signPanel(width,height,lines,warning,half!==0);object.name=lines.join(' / ');
+      object.userData.roadId=road.id;object.userData.station=s;object.userData.backwards=backwards;
+      object.position.set(p.x+Math.cos(p.yaw)*across,p.y+road.tunnel!.clearance-height/2-.28,p.z-Math.sin(p.yaw)*across);object.rotation.y=p.yaw+(backwards?0:Math.PI);group.add(object);signs++;
+      if(half>0)return; // its twin on the right hangs the gantry
+      place(darkMetal,tunnelCoveredAt(road,s)?span+.15:p.width+.9,.08,.12,p,road.tunnel!.clearance-.2);
+      if(!tunnelCoveredAt(road,s))for(const side of [-1,1])place(darkMetal,.14,road.tunnel!.clearance,.14,p,road.tunnel!.clearance/2,side*(p.width/2+.35));
+    };
+    const paint=(a:{x:number;y:number;z:number},b:{x:number;y:number;z:number},width:number)=>{
+      const dx=b.x-a.x,dz=b.z-a.z,dy=b.y-a.y,length=Math.hypot(dx,dz);
+      const middle={x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2,yaw:Math.atan2(dx,dz)};
+      // Merges can have crossfall: every painted stripe follows its own part of
+      // the deck instead of floating at the road centerline's elevation.
+      place(white,width,.018,Math.hypot(length,dy),middle,.04,0,Math.atan2(dy,length));
+    };
+    const stripe=(road:Road,start:number,end:number,width:number,across:(width:number)=>number)=>{
+      const endpoint=(s:number)=>{const p=tunnelPointAt(road,s),offset=across(p.width),x=p.x+Math.cos(p.yaw)*offset,z=p.z-Math.sin(p.yaw)*offset;return{x,z,y:sampleRoadElevation(city,road,x,z)};};
+      paint(endpoint(start),endpoint(end),width);
+    };
+    for(const road of roads){
+      const length=tunnelStations(road).at(-1)??0;metres+=length;
+      const geometry=shell??tunnelGeometry(city,road),deck=roadDeckGeometry(city,road,road.width,.018),floor=buffer(deck);floor.setAttribute('uv',new THREE.BufferAttribute(deck.uv,2));mesh(floor,asphalt,`${road.name} roadway`);
+      // A highway's open cut is walled in plain concrete: only its roofed stretches are a tiled tunnel.
+      const [tiled,cut]=road.highway?wallParts(geometry.walls,road):[geometry.walls,undefined];
+      if(!cut||tiled.indices.length)mesh(tiledWall(tiled,road,city),walls,`${road.name} tile walls`);
+      mesh(tiledTunnelCeiling(geometry.roof,road),ceiling,`${road.name} ceiling`);
+      if(cut?.indices.length)mesh(buffer(cut),cutConcrete,`${road.name} cut walls`);
+      mesh(buffer(geometry.barriers),concrete,`${road.name} concrete closure`);
+      // (the median barrier row a cut carries between itself and the carriageway that runs the other way, in the precast concrete of a deck's)
+      if(geometry.median.indices.length)mesh(buffer(geometry.median),precastMaterial(),`${road.name} median barrier`);
+      // A generated highway record carries its lane count: 3.65 m lanes centred on the centre line, as its traffic runs.
+      const lanes=road.lanes??Math.max(1,Math.round((road.width-1.4)/3.5));
+      // An edge inside a joined carriageway is no longer a road border. Retain
+      // exterior lines and independent stacked roads, but leave merges open.
+      for(const edge of bridgeEdgeSections(tunnelRoads,road,.7,.7,.15)){
+        const endpoint=(p:[number,number])=>({x:p[0],z:p[1],y:sampleRoadElevation(city,road,...p)});
+        paint(endpoint(edge.a),endpoint(edge.b),.13);
       }
-      // Reflector studs and service niches provide scale at driving height.
-      if(Math.floor(s/14)%4===0)for(const side of [-1,1])place(amber,.09,.13,.19,p,.54,side*(p.width/2-.1));
+      for(let s=2;s<length-2;s+=6){
+        if(Math.floor(s/6)%2===0)for(let lane=1;lane<lanes;lane++)stripe(road,s,Math.min(length,s+3),.14,width=>road.lanes?(lane-lanes/2)*Math.min(LANE_WIDTH,(width-2.4)/Math.max(1,lanes-1)):-width/2+lane*width/lanes);
+      }
+      for(let s=8;s<length-5;s+=14){
+        if(!tunnelCoveredAt(road,s))continue;const p=tunnelPointAt(road,s),clearance=road.tunnel!.clearance;
+        for(const side of [-1,1]){
+          const across=side*(p.width/2-1.05);place(darkMetal,.34,.11,3.3,p,clearance-.1,across);place(lightMaterial,.23,.035,2.9,p,clearance-.17,across);fixtures++;
+        }
+        // Reflector studs and service niches provide scale at driving height.
+        if(Math.floor(s/14)%4===0)for(const side of [-1,1])place(amber,.09,.13,.19,p,.54,side*(p.width/2-.1));
+      }
+      // Portal headers and retaining faces come from the shared collision shell.
+      // Separate decorative posts could otherwise close an adjoining ramp.
+      for(let s=70;s<length-50;s+=400)if(tunnelCoveredAt(road,s))sign(road,s,destination(road));
+      if(length<200&&length>45)sign(road,length*.55,destination(road));
+      for(const atStart of [true,false]){
+        if(!(atStart?road.tunnel!.capStart:road.tunnel!.capEnd))continue;closures++;
+        const station=atStart?5:length-5,p=tunnelPointAt(road,station),yaw=p.yaw+(atStart?0:Math.PI);
+        const face={...p,x:p.x+Math.sin(yaw)*.59,z:p.z+Math.cos(yaw)*.59,yaw};
+        sign(road,atStart?19:length-19,['ROAD CLOSED','DO NOT ENTER'],true,atStart);
+        for(let side=-p.width/2+.6;side<p.width/2;side+=1.1)place(amber,.5,.12,.025,face,.82,side);
+        const warning=tunnelPointAt(road,atStart?2.2:length-2.2),object=signPanel(3.4,.95,['BEWARE OF FALLING','CEILING TILES'],true);
+        object.name='Beware of Falling Ceiling Tiles';object.position.set(warning.x+Math.cos(yaw)*(warning.width/2-2),warning.y+2.15,warning.z-Math.sin(yaw)*(warning.width/2-2));object.rotation.y=yaw;group.add(object);
+        for(const offset of [-1.25,1.25])place(darkMetal,.06,1.2,.06,{...warning,yaw},1.3,warning.width/2-2+offset);
+        if(!stream)group.add(tunnelContinuation(road,atStart,{walls,ceiling,asphalt}));
+      }
     }
-    // Portal headers and retaining faces come from the shared collision shell.
-    // Separate decorative posts could otherwise close an adjoining ramp.
-    for(let s=70;s<length-50;s+=400)if(tunnelCoveredAt(road,s))sign(road,s,destination(road));
-    if(length<200&&length>45)sign(road,length*.55,destination(road));
-    for(const atStart of [true,false]){
-      if(!(atStart?road.tunnel!.capStart:road.tunnel!.capEnd))continue;closures++;
-      const station=atStart?5:length-5,p=tunnelPointAt(road,station),yaw=p.yaw+(atStart?0:Math.PI);
-      const face={...p,x:p.x+Math.sin(yaw)*.59,z:p.z+Math.cos(yaw)*.59,yaw};
-      sign(road,atStart?19:length-19,['ROAD CLOSED','DO NOT ENTER'],true,atStart);
-      for(let side=-p.width/2+.6;side<p.width/2;side+=1.1)place(amber,.5,.12,.025,face,.82,side);
-      const warning=tunnelPointAt(road,atStart?2.2:length-2.2),object=signPanel(3.4,.95,['BEWARE OF FALLING','CEILING TILES'],true);
-      object.name='Beware of Falling Ceiling Tiles';object.position.set(warning.x+Math.cos(yaw)*(warning.width/2-2),warning.y+2.15,warning.z-Math.sin(yaw)*(warning.width/2-2));object.rotation.y=yaw;group.add(object);
-      for(const offset of [-1.25,1.25])place(darkMetal,.06,1.2,.06,{...warning,yaw},1.3,warning.width/2-2+offset);
-      group.add(tunnelContinuation(road,atStart,{walls,ceiling,asphalt}));
+    // Ramps that part at one place (a ramp tunnel that forks) are signed 40 m before it at the same station:
+    // the two legends share the gantry, each over the side its ramp leaves by, instead of one panel hiding the other.
+    for(const exit of exits){
+      const row=exits.filter(other=>other.road===exit.road&&Math.abs(other.station-exit.station)<FORK).sort((a,b)=>a.right-b.right);
+      sign(exit.road,exit.station,exit.lines,false,false,row.length<2?0:row[0]===exit?1:-1);
     }
+    const fixtureCells=batches.meshes();
+    for(const object of fixtureCells){object.name='Tunnel fixtures and markings';object.castShadow=false;object.receiveShadow=true;group.add(object);}
+    group.userData={roads:roads.length,metres:Math.round(metres),fixtures,signs,advanceExitSigns:exits.length,closures,darkContinuations:closures,continuationLength:TUNNEL_CONTINUATION_LENGTH,tiledCeilings:true,alignment:'Boston official surveyed street centerlines',heights:'Estimated drivable profiles; not engineering survey'};
+    return fixtureCells;
   }
-  // Ramps that part at one place (a ramp tunnel that forks) are signed 40 m before it at the same station:
-  // the two legends share the gantry, each over the side its ramp leaves by, instead of one panel hiding the other.
-  const exits=tunnelExitSigns(city);
-  for(const exit of exits){
-    const row=exits.filter(other=>other.road===exit.road&&Math.abs(other.station-exit.station)<FORK).sort((a,b)=>a.right-b.right);
-    sign(exit.road,exit.station,exit.lines,false,false,row.length<2?0:row[0]===exit?1:-1);
+
+  const fixtureCells=stream?[]:buildSection(group,roads,networkExits);
+  if(stream){
+    // Beyond the few closed ends these short visual continuations share the network's materials.
+    let closures=0;
+    for(const road of roads)for(const atStart of [true,false])if(atStart?road.tunnel!.capStart:road.tunnel!.capEnd){
+      group.add(tunnelContinuation(road,atStart,{walls,ceiling,asphalt}));closures++;
+    }
+    group.userData={roads:roads.length,darkContinuations:closures,streamed:true};
   }
-  const fixtureCells=batches.meshes(),ahead=new THREE.Vector3();
-  for(const object of fixtureCells){object.name='Tunnel fixtures and markings';object.castShadow=false;object.receiveShadow=true;group.add(object);}
   const fill=new THREE.PointLight('#fff1d3',0,52,1.4);fill.name='Nearby tunnel light';group.add(fill);
-  group.userData={roads:roads.length,metres:Math.round(metres),fixtures,signs,advanceExitSigns:exits.length,closures,darkContinuations:closures,continuationLength:TUNNEL_CONTINUATION_LENGTH,tiledCeilings:true,alignment:'Boston official surveyed street centerlines',heights:'Estimated drivable profiles; not engineering survey'};
+  const ahead=new THREE.Vector3();
   scene.add(group);
   return{group,
+    buildRoad(target:THREE.Group,road:Road,owned:THREE.Material[],shell:ReturnType<typeof tunnelGeometry>){
+      const section=new THREE.Group();section.name=road.name;target.add(section);
+      buildSection(section,[road],networkExits.filter(exit=>exit.road===road),owned,shell);
+    },
     /** `view` (from above ground): the camera and the depth at which the fog is complete. A cell of lights and
      * markings wholly beyond it is skipped: they stand inside the bores and trenches, below every horizon, so what
      * shows in their place (a wall, the far ground) is the fog's colour as they were. */

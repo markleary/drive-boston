@@ -202,7 +202,7 @@ function routeData(source:TransitRoute,city:CityData):Route{
  * each route direction. Vehicles stop for the player, dwell at mapped stops, follow
  * bridge decks, and only recycle outside the view. Buses keep to the right-hand lane
  * and move over to their track-clear lane while a tram is near. */
-export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhysics,data:TransitData){
+export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhysics,data:TransitData,mobile=false){
  const group=new THREE.Group();group.name='Boston public transport';scene.add(group);
  const routes=data.routes.map(route=>routeData(route,city)),rails=trackIndex(routes.filter(r=>r.rail));
  for(const route of routes)if(route.kind==='bus')route.lanes=routeLanes(city,route,rails);
@@ -214,7 +214,7 @@ export function createTransit(scene:THREE.Scene,city:CityData,physics:DrivingPhy
   // destination finds them; the rest of a fleet is spread so opposite directions interleave.
   const showcase=route.stops.find(s=>/Fine Arts|Louis Prang/.test(s.name));
   for(let k=0;k<fleet;k++){
-   const tram=route.kind==='tram'?createGreenLine(route.destination):undefined,model=tram?.group??createTransitBus(route.destination);group.add(model);
+   const tram=route.kind==='tram'?createGreenLine(route.destination,mobile):undefined,model=tram?.group??createTransitBus(route.destination,mobile);group.add(model);
    const distance=k===0&&showcase?Math.max(25,showcase.distance-(i%2?180:80)):Math.min(route.length-25,Math.max(25,route.length*(k+.25)/fleet)),point=busPoint(route,distance),next=busPoint(route,distance+1),yaw=Math.atan2(next[0]-point[0],next[1]-point[1]);
    const bodies:RAPIER.RigidBody[]=[];
    for(let part=0;part<(tram?3:1);part++){

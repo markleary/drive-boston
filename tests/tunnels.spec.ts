@@ -233,6 +233,22 @@ test.describe('mobile terminal atmosphere',()=>{
     await page.addInitScript(s=>localStorage.setItem('backbay-drive-v1',JSON.stringify(s)),{x:p.x,z:p.z,yaw:p.yaw,roadId:road.id});
     await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').tap();await page.waitForTimeout(1800);await page.locator('#cycle-camera').tap();await expect(page.locator('#toast')).not.toHaveClass(/visible/);await page.waitForTimeout(220);
     const state=await snapshot(page);expect(state.mobile).toBe(true);expect(state.camera).toBe('hood');expect(state.bridges.tunnels.darkContinuations).toBe(roads.filter(r=>r.tunnel?.capStart||r.tunnel?.capEnd).length+bores);expect(state.graphicsContext.losses).toBe(0);expect(state.state.y).toBeLessThan(-10);
-    await page.screenshot({path:testInfo.outputPath('southbound-dark-closure-mobile.png')});expect(errors).toEqual([]);
+    await page.screenshot({path:testInfo.outputPath('southbound-dark-closure-mobile.png')});
+    // The bore belongs to its road's tile on a phone. Visiting another part of
+    // the city removes it; returning underground must reload the deck before placement.
+    const hasRoadway=()=>page.evaluate(name=>!!(window as any).__backbay.scene.getObjectByName(name),road.name+' roadway');
+    expect(await hasRoadway()).toBe(true);
+    await page.evaluate(async()=>{
+      const game=(window as any).__backbay,park=game.city.landmarks.find((l:{name:string})=>l.name==='Fellsmere Park');
+      const {x,z,yaw}=park.driveStart;await game.travelTo(x,z,yaw);
+    });
+    await expect.poll(hasRoadway,{timeout:15000}).toBe(false);
+    await page.evaluate(async point=>{await (window as any).__backbay.travelTo(point.x,point.z,point.yaw,point.roadId);},{...p,roadId:road.id});
+    expect(await hasRoadway()).toBe(true);
+    await page.waitForTimeout(1000);
+    const returned=await snapshot(page);
+    expect(Math.abs(returned.state.y-p.y)).toBeLessThan(2);
+    expect(returned.graphicsContext.losses).toBe(0);
+    expect(errors).toEqual([]);
   });
 });

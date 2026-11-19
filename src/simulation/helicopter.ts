@@ -2,7 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import type { CityData, Point2 } from '../types';
 import type { DrivingPhysics } from '../physics/vehicle';
 import { buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, terrainRange } from './terrain.ts';
-import { isMetroCity, type IndexedBuilding, type MetroCity } from './city-tiles.ts';
+import { isMetroCity, type IndexedBuilding } from './city-tiles.ts';
 
 export interface FlightInput { forward: number; strafe: number; turn: number; lift: number; }
 export interface HelicopterState {
@@ -43,30 +43,27 @@ export function createHelicopterFlight(city: CityData, physics: DrivingPhysics) 
     [diagonal, diagonal], [-diagonal, diagonal], [diagonal, -diagonal], [-diagonal, -diagonal]];
   const terrainFloor = (x: number, z: number) => minimumAltitude + Math.max(...supports.map(([dx, dz]) => sampleElevation(city, x + dx, z + dz)));
   const launchHeight = () => sampleElevation(city, city.spawn.x, city.spawn.z) + 20;
-  type Obstacle = { polygon: Point2[]; top: number; minX: number; maxX: number; minZ: number; maxZ: number };
-  const obstacle = (polygon: Point2[], top: number): Obstacle => ({
-    polygon, top: top + verticalClearance,
-    minX: Math.min(...polygon.map(p => p[0])) - radius, maxX: Math.max(...polygon.map(p => p[0])) + radius,
-    minZ: Math.min(...polygon.map(p => p[1])) - radius, maxZ: Math.max(...polygon.map(p => p[1])) + radius,
-  });
-  // A metro city answers from its hull index whether or not a tile is loaded;
-  // exact-mesh complexes are queried through their colliders instead.
-  const staticObstacles = isMetroCity(city) ? undefined : city.buildings.filter(b => b.footprint.length >= 3 && b.height > 0 && !physics.meshBuildingIds.has(b.id)).map(b => obstacle(b.footprint, buildingBaseElevation(city, b) + b.height));
-  const indexed = new WeakMap<IndexedBuilding, Obstacle | null>();
-  const obstaclesIn = (minX: number, maxX: number, minZ: number, maxZ: number): Obstacle[] => {
-    if (staticObstacles) return staticObstacles;
-    const result: Obstacle[] = [];
-    for (const b of (city as MetroCity).index.query(minX - radius, maxX + radius, minZ - radius, maxZ + radius)) {
-      let record = indexed.get(b);
-      if (record === undefined) { record = b.exactMesh || b.footprint.length < 3 || b.height <= 0 ? null : obstacle(b.footprint, b.base + b.height); indexed.set(b, record); }
-      if (record) result.push(record);
-    }
-    return result;
-  };
+  type Obstacle = Pick<IndexedBuilding, 'footprint' | 'base' | 'height' | 'minX' | 'maxX' | 'minZ' | 'maxZ'>;
+  const metro = isMetroCity(city) ? city : undefined;
+  // Use the metro's indexed bounds directly. A packed hull's decoded polygon belongs
+  // to the mobile footprint cache and is only borrowed for the current collision query.
+  const staticObstacles: Obstacle[] = metro ? [] : city.buildings
+    .filter(b => b.footprint.length >= 3 && b.height > 0 && !physics.meshBuildingIds.has(b.id))
+    .map(b => ({
+      footprint: b.footprint, base: buildingBaseElevation(city, b), height: b.height,
+      minX: Math.min(...b.footprint.map(p => p[0])), maxX: Math.max(...b.footprint.map(p => p[0])),
+      minZ: Math.min(...b.footprint.map(p => p[1])), maxZ: Math.max(...b.footprint.map(p => p[1])),
+    }));
+  const obstaclesIn = (minX: number, maxX: number, minZ: number, maxZ: number): Obstacle[] =>
+    metro ? metro.index.query(minX - radius, maxX + radius, minZ - radius, maxZ + radius)
+      .filter(b => !b.exactMesh && b.height > 0) : staticObstacles;
+  const roofClearance = (b: Obstacle) => b.base + b.height + verticalClearance;
   const bounds = { minX: city.bounds.minX + radius, maxX: city.bounds.maxX - radius, minZ: city.bounds.minZ + radius, maxZ: city.bounds.maxZ - radius };
-  const overlaps = (x: number, z: number, building: Obstacle) =>
-    x >= building.minX && x <= building.maxX && z >= building.minZ && z <= building.maxZ &&
-    (inside(x, z, building.polygon) || building.polygon.some((a, i, points) => edgeDistance(x, z, a, points[(i + 1) % points.length]) <= radius + .001));
+  const overlaps = (x: number, z: number, b: Obstacle) => {
+    if (x < b.minX - radius || x > b.maxX + radius || z < b.minZ - radius || z > b.maxZ + radius) return false;
+    const polygon = b.footprint;
+    return polygon.length >= 3 && (inside(x, z, polygon) || polygon.some((a, i) => edgeDistance(x, z, a, polygon[(i + 1) % polygon.length]) <= radius + .001));
+  };
   const current: HelicopterState = { x: city.spawn.x, y: launchHeight(), z: city.spawn.z, yaw: city.spawn.yaw, speed: 0, verticalSpeed: 0, bank: 0, pitch: 0 };
   let vx = 0, vy = 0, vz = 0, yawSpeed = 0;
   // Rapier carries the cabin in the shared world. Flight clearance uses analytic
@@ -80,7 +77,7 @@ export function createHelicopterFlight(city: CityData, physics: DrivingPhysics) 
     const inspect = (x: number, z: number, y: number): Position | undefined => {
       x = clamp(x, bounds.minX, bounds.maxX); z = clamp(z, bounds.minZ, bounds.maxZ);
       y = Math.max(y, terrainFloor(x, z));
-      for (const building of obstaclesIn(x, x, z, z)) if (overlaps(x, z, building)) y = Math.max(y, building.top + .2);
+      for (const building of obstaclesIn(x, x, z, z)) if (overlaps(x, z, building)) y = Math.max(y, roofClearance(building) + .2);
       // Exact source complexes may contain a street-sized opening. Query their
       // triangles rather than filling the opening with their footprint's roof.
       if(physics.detailedColliders.size){
@@ -155,18 +152,21 @@ export function createHelicopterFlight(city: CityData, physics: DrivingPhysics) 
       if(detail)accept(detail.time_of_impact,detail.normal1.x,detail.normal1.y,detail.normal1.z);
     }
     for (const building of obstaclesIn(Math.min(start.x, start.x + delta.x), Math.max(start.x, start.x + delta.x), Math.min(start.z, start.z + delta.z), Math.max(start.z, start.z + delta.z))) {
-      if (Math.min(start.y, start.y + delta.y) > building.top + .001 ||
-        Math.max(start.x, start.x + delta.x) < building.minX || Math.min(start.x, start.x + delta.x) > building.maxX ||
-        Math.max(start.z, start.z + delta.z) < building.minZ || Math.min(start.z, start.z + delta.z) > building.maxZ) continue;
+      const top = roofClearance(building);
+      if (Math.min(start.y, start.y + delta.y) > top + .001 ||
+        Math.max(start.x, start.x + delta.x) < building.minX - radius || Math.min(start.x, start.x + delta.x) > building.maxX + radius ||
+        Math.max(start.z, start.z + delta.z) < building.minZ - radius || Math.min(start.z, start.z + delta.z) > building.maxZ + radius) continue;
+      const polygon = building.footprint;
+      if (polygon.length < 3) continue;
       if (delta.y < 0) {
-        const t = (building.top - start.y) / delta.y;
+        const t = (top - start.y) / delta.y;
         if (t >= 0 && t <= 1 && overlaps(start.x + delta.x * t, start.z + delta.z * t, building)) accept(t, 0, 1, 0);
       }
       const side = (t: number, nx: number, nz: number) => {
-        if (start.y + delta.y * t <= building.top + .001) accept(t, nx, 0, nz);
+        if (start.y + delta.y * t <= top + .001) accept(t, nx, 0, nz);
       };
-      for (let i = 0; i < building.polygon.length; i++) {
-        const a = building.polygon[i], b = building.polygon[(i + 1) % building.polygon.length];
+      for (let i = 0; i < polygon.length; i++) {
+        const a = polygon[i], b = polygon[(i + 1) % polygon.length];
         const ex = b[0] - a[0], ez = b[1] - a[1], length = Math.hypot(ex, ez);
         if (length < 1e-7) continue;
         const ux = ex / length, uz = ez / length, nx = -uz, nz = ux;

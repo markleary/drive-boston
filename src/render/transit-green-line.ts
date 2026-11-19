@@ -250,9 +250,10 @@ function fleetMarkings(){
   const geometry=mergeGeometries(geometries,false)!;geometries.forEach(g=>g.dispose());
   const mesh=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({map,transparent:true,alphaTest:.1,roughness:.51,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1}));mesh.name='Green Line fleet markings';return mesh;
 }
-function destinationDisplay(destination:string){
-  let display=displays.get(destination);if(display)return display;
-  const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=256;const c=canvas.getContext('2d')!;
+function destinationDisplay(destination:string,mobile:boolean){
+  const key=mobile ? `mobile:${destination}` : destination;
+  let display=displays.get(key);if(display)return display;
+  const scale=mobile ? .5 : 1,canvas=document.createElement('canvas');canvas.width=1024*scale;canvas.height=256*scale;const c=canvas.getContext('2d')!;c.scale(scale,scale);
   c.fillStyle='#0b100d';c.fillRect(0,0,1024,256);c.textBaseline='middle';
   const match=destination.match(/^([BCDE])\s+(.*)$/i),branch=match?.[1].toUpperCase()??'',terminus=match?.[2]??destination;
   c.fillStyle='#d9e6c6';c.textAlign='center';c.font='bold 112px monospace';c.fillText(branch,90,130,150);c.font='bold 65px monospace';c.fillText(terminus.toUpperCase(),596,130,800);
@@ -261,12 +262,12 @@ function destinationDisplay(destination:string){
     const geometries=[panel(1.43,.34,.008,'cab',0,2.85,.032),panel(.96,.19,.006,-1,1.41,2.38,.039),panel(.96,.19,.006,1,1.41,2.38,.039)];
     displayGeometry=mergeGeometries(geometries,false)!;geometries.forEach(g=>g.dispose());
   }
-  display=new THREE.Mesh(displayGeometry,new THREE.MeshStandardMaterial({map,emissive:0xffffff,emissiveMap:map,emissiveIntensity:.65,roughness:.55}));display.name='Green Line destination displays';displays.set(destination,display);return display;
+  display=new THREE.Mesh(displayGeometry,new THREE.MeshStandardMaterial({map,emissive:0xffffff,emissiveMap:map,emissiveIntensity:.65,roughness:.55}));display.name='Green Line destination displays';displays.set(key,display);return display;
 }
 
 /** Shared fleet templates keep geometry, materials and painted atlases bounded
  * as branches are added. Only section and joint transforms are per vehicle. */
-export function createGreenLine(destination:string){
+export function createGreenLine(destination:string,mobile=false){
   endTemplate??=makeEnd();centerTemplate??=makeCenter();bellowsTemplate??=makeBellows();
   const group=new THREE.Group();group.name=`Green Line single articulated trolley ${destination}`;
   const offsets=[7.35,0,-7.35],sections:THREE.Group[]=[],bellows:THREE.Group[]=[];
@@ -274,7 +275,7 @@ export function createGreenLine(destination:string){
     const section=new THREE.Group();section.name=['Leading cab','Pantograph section','Trailing cab'][i];section.position.z=offsets[i];
     const body=(i===1?centerTemplate:endTemplate).clone();
     if(i===2){body.rotation.y=Math.PI;const lamps=body.getObjectByName('head') as THREE.Mesh;lamps.material=material('tail');}
-    if(i!==1&&typeof document!=='undefined'){markingsTemplate??=fleetMarkings();body.add(markingsTemplate.clone());body.add(destinationDisplay(destination).clone());}
+    if(i!==1&&typeof document!=='undefined'){markingsTemplate??=fleetMarkings();body.add(markingsTemplate.clone());body.add(destinationDisplay(destination,mobile).clone());}
     section.add(body);sections.push(section);group.add(section);
   }
   for(let i=0;i<2;i++){const joint=bellowsTemplate.clone();joint.name='Flexible articulation bellows';joint.position.z=i===0?3.32:-3.32;bellows.push(joint);group.add(joint);}
