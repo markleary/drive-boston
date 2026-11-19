@@ -77,9 +77,12 @@ test('Mission Hill reverse descent stops promptly with the handbrake and stays p
     let reverse=forward;
     for(let i=0;i<10*60&&(reverse.speed>=-1||along(reverse)>=4);i++)reverse=advance(physics,STEP,{...released,throttle:-1});
     assert.ok(reverse.speed<-7&&along(reverse)<4,'reproduce an eight-metre-per-second reverse descent');
-    const stopped=advance(physics,2,{...released,handbrake:true});
+    // The handbrake is the rear tyres alone at their sliding grip: on this 22% grade, with the weight on them as the
+    // car backs downhill, that is about 0.7 g of braking, 0.5 g of it left over the slope.
+    const stopped=advance(physics,3,{...released,handbrake:true});
     assert.ok(Math.abs(stopped.speed)<.05,'handbrake must arrest reverse motion on the real grade');
-    assert.ok(Math.hypot(stopped.x-reverse.x,stopped.z-reverse.z)<6,'rear-wheel braking must stop within six metres');
+    const slid=Math.hypot(stopped.x-reverse.x,stopped.z-reverse.z);
+    assert.ok(slid>7&&slid<12,`rear-wheel braking stops from ten metres a second in about ten metres, not like four wheels: ${slid}`);
     const startGround=sampleElevation(city,start.x,start.z),uphillChange=sampleElevation(city,forward.x,forward.z)-startGround;
     assert.ok(Math.abs(sampleElevation(city,stopped.x,stopped.z)-startGround)<Math.abs(uphillChange)+.2,'return stays near the starting elevation, matching browser behavior');
     const parked=advance(physics,20,{...released,handbrake:true});

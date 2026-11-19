@@ -34,13 +34,13 @@ for(const dt of [1/60,1/120])test(`Model 3 regenerative braking, service brakes 
   try{
     advance(p,2,idle,dt);p.body.setLinvel({x:0,y:0,z:20},true);
     const coasting=advance(p,4,idle,dt);
-    assert.ok(coasting.speed>11&&coasting.speed<13,'lift-off should provide roughly .2g deceleration');
+    assert.ok(coasting.speed>11.2&&coasting.speed<12.3,`lift-off should provide .21 g of deceleration: ${coasting.speed}`);
     assert.ok(coasting.braking,'strong regenerative slowing illuminates brake lamps');
     const stopped=advance(p,12,idle,dt);assert.ok(Math.abs(stopped.speed)<.05,'regen should settle without driving backward');
     p.reset(0,0,0);advance(p,2,idle,dt);p.body.setLinvel({x:0,y:0,z:100/3.6},true);
     const start=p.getState().z;let elapsed=0;
     while(p.getState().speed>.1&&elapsed<6){p.step({...idle,brake:1},dt);elapsed+=dt;}
-    const distance=p.getState().z-start;assert.ok(distance>36&&distance<39,`100–0 stopping distance ${distance}m`);
+    const distance=p.getState().z-start;assert.ok(distance>35&&distance<36.5,`100–0 stopping distance ${distance}m`);
     const reverse=advance(p,5,{...idle,throttle:-1},dt);assert.equal(reverse.gear,-1);
     assert.ok(Math.abs(reverse.speed+spec.maxReverseSpeed)<.05);
     assert.ok(reverse.rpm>0&&reverse.rpm<2500);
