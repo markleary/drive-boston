@@ -90,6 +90,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   let far:ReturnType<typeof createFarCity>;
   let architecturalLandmarks: ReturnType<typeof addArchitecturalLandmarks> | undefined;
 
+  const mobileTunnels=metro&&options.physics?.streamsTunnels?addTunnels(scene,city,options.mobile,materials.asphalt,true):undefined;
   if(metro){
     if(!options.physics||!options.read)throw new Error('A metro city streams its tiles: createWorld needs physics and a tile reader');
     // Below every tile a flat sheet in the far-ground colour, so the fog line
@@ -101,7 +102,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     far=createFarCity(scene,city,!!options.mobile,architecturalLandmarks.farHulls);
     const trees=createTreeField();trees.group.name='Street trees';scene.add(trees.group);
     const parkTrees=createTreeField({scale:1.65,grates:false});parkTrees.group.name='Park specimen trees';scene.add(parkTrees.group);
-    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,detailed:()=>highQuality,warm:options.warm,upload:options.upload,replacedBuildings:architecturalLandmarks.replaced,landmarkForecourt:architecturalLandmarks.occupied},options.read,far,!!options.mobile);
+    streamer=createTileStreamer({scene,city:metro,physics:options.physics,materials,trees,parkTrees,buildingMap,ground:groundMaterial,iron,lampMat,mobile:options.mobile,buildTunnelRoad:mobileTunnels?.buildRoad,detailed:()=>highQuality,warm:options.warm,upload:options.upload,replacedBuildings:architecturalLandmarks.replaced,landmarkForecourt:architecturalLandmarks.occupied},options.read,far,!!options.mobile);
     buildingChunks=streamer.buildingChunks;lampPositions=streamer.lampPositions;signalPlacements=streamer.signals;
     roadStructures=new THREE.Group();roadStructures.name='Streamed road structures';
     const prudentialCrown=prudentialCrownCollider(city);if(prudentialCrown)buildingCollisions.push(prudentialCrown);
@@ -113,10 +114,10 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const charlesBridges=addCharlesBridgeDetails(scene,city);buildingCollisions.push(...charlesBridges.collisions);
   const lechmereViaduct=addLechmereViaduct(scene,city,!!options.mobile);buildingCollisions.push(...lechmereViaduct.collisions);const museum=addMuseumOfScience(scene,city);buildingCollisions.push(...museum.collisions);
   roadStructures.userData.longfellow=charlesBridges.group.userData;roadStructures.userData.lechmere=lechmereViaduct.group.userData;roadStructures.userData.museumOfScience=museum.group.userData;
-  const lowClearances=addLowClearanceDetails(scene,city);buildingCollisions.push(...lowClearances.collisions);roadStructures.userData.lowClearances=lowClearances.group.userData;
+  const lowClearances=addLowClearanceDetails(scene,city,options.mobile);buildingCollisions.push(...lowClearances.collisions);roadStructures.userData.lowClearances=lowClearances.group.userData;
   const harvardBridge=addHarvardBridgeDetails(scene,city,{mobile:options.mobile});buildingCollisions.push(...harvardBridge.collisions);roadStructures.userData.harvard=harvardBridge.group.userData;
   const tobinBridge=addTobinBridgeDetails(scene,city,materials.asphalt);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
-  const tunnels=addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;
+  const tunnels=mobileTunnels??addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;
   const conley=addConleyTerminal(scene,city,{mobile:options.mobile});buildingCollisions.push(...conley.collisions);roadStructures.userData.conley=conley.group.userData;
   if(architecturalLandmarks?.castleIsland)roadStructures.userData.castleIsland=architecturalLandmarks.castleIsland.group.userData;
   if(architecturalLandmarks?.fishPier)roadStructures.userData.fishPier=architecturalLandmarks.fishPier.group.userData;

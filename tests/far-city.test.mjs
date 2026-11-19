@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {createFarCity} from '../src/render/far-city.ts';
-import {drawsFarMassing} from '../src/simulation/far-format.ts';
+import {BuildingIndex} from '../src/simulation/city-tiles.ts';
+import {drawsFarMassing,parseFar} from '../src/simulation/far-format.ts';
 
 // A tile shaped like far.bin's 0_0: an ordinary hull, a hidden complex whose 400 m hull spans the
 // street between its wings, its two massing fragments (which repeat the hidden flag), and a hidden
@@ -55,4 +56,31 @@ test('fragments hide and return with their detailed tile',()=>{
   view.setChunkDetailed('0_0',true);assert.equal(mesh.visible,false);
   view.update(new THREE.Vector3(500,0,500),0);assert.equal(mesh.visible,false);
   view.setChunkDetailed('0_0',false);view.update(new THREE.Vector3(500,0,500),0);assert.equal(mesh.visible,true);
+});
+
+test('packed phone hulls keep map and collision queries exact after their decoded footprints are evicted',()=>{
+  const count=5000, stride=8+4*4;
+  const header=new TextEncoder().encode(JSON.stringify({size:1000,tiles:[{key:'-1_0',offset:0,count}]}));
+  const body=Math.ceil((8+header.length)/4)*4,buffer=new ArrayBuffer(body+count*stride);
+  const bytes=new Uint8Array(buffer),view=new DataView(buffer);
+  bytes.set(new TextEncoder().encode('DBF2'));view.setUint32(4,header.length,true);bytes.set(header,8);
+  for(let n=0;n<count;n++){
+    const at=body+n*stride,x=(n%100)*100,z=Math.floor(n/100)*100;
+    view.setUint16(at,4,true);view.setUint16(at+2,1250,true);view.setInt16(at+4,-25,true);
+    bytes[at+6]=n%16;bytes[at+7]=n%8;
+    for(const [i,[dx,dz]] of [[0,0],[36,0],[36,55],[0,55]].entries()){
+      view.setInt16(at+8+i*4,x+dx,true);view.setInt16(at+10+i*4,z+dz,true);
+    }
+  }
+  const desktop=new BuildingIndex(parseFar(buffer)),phone=new BuildingIndex(parseFar(buffer,true));
+  const first=phone.at(-999,1),original=first.footprint;
+  for(const [n,hull] of phone.all.entries()){
+    const reference=desktop.all[n];
+    for(const field of ['landmark','fragment','hidden','exactMesh','base','height','style','tx','tz','minX','maxX','minZ','maxZ','n'])assert.equal(hull[field],reference[field]);
+    assert.deepEqual(hull.center,reference.center);assert.deepEqual(hull.footprint,reference.footprint);
+  }
+  assert.equal(phone.at(-999,1),first);
+  assert.notEqual(first.footprint,original);
+  assert.deepEqual(first.footprint,original);
+  assert.deepEqual(phone.query(-999,-961,1,24).map(b=>b.n),desktop.query(-999,-961,1,24).map(b=>b.n));
 });

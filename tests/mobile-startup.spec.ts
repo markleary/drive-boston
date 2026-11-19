@@ -58,7 +58,10 @@ test.describe('mobile startup memory limits',()=>{
     // A deterministic allocation budget catches the previous ~482 MiB buffer
     // expansion even on desktop Chrome, which doesn't share iOS's crash limit.
     expect(buffers.peak).toBeLessThan(160*1024*1024);
-    await testInfo.attach('mobile-buffer-budget.json',{body:JSON.stringify(buffers),contentType:'application/json'});
+    // Underground highways used to keep the entire metro's meshes resident even here in Back Bay.
+    const sceneBytes=await page.evaluate(()=>(window as unknown as {__backbay:{residentAttributeBytes():number}}).__backbay.residentAttributeBytes());
+    expect(sceneBytes).toBeLessThan(140*1024*1024);
+    await testInfo.attach('mobile-buffer-budget.json',{body:JSON.stringify({...buffers,sceneBytes}),contentType:'application/json'});
     await page.screenshot({path:testInfo.outputPath('sustained-drive-phone.png')});expect(errors).toEqual([]);
   });
 
@@ -89,6 +92,13 @@ test.describe('mobile startup memory limits',()=>{
     try{await expect.poll(async()=>Math.abs((await snapshot(page)).state.speed)).toBeGreaterThan(1);}
     finally{await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
     await page.screenshot({path:testInfo.outputPath('driving-phone.png')});
+    // The phone builds its routing graph on the first destination request.
+    await page.evaluate(()=>{
+      const game=(window as any).__backbay;
+      const [x,z]=game.city.landmarks.find((place:{name:string})=>place.name==='Fenway Park').position;
+      game.gps.setDestination(x,z);
+    });
+    await expect(page.getByTestId('gps-guide')).toBeVisible();
     await page.getByRole('button',{name:'Pause and open settings'}).tap();
     await page.getByRole('button',{name:'Detailed',exact:true}).tap();
     expect((await snapshot(page)).rendering).toEqual(initial.rendering);

@@ -302,8 +302,8 @@ function createFleetMarkings(){
   mesh.name='MBTA fleet markings';return mesh;
 }
 
-function createDestinationDisplay(destination:string){
-  const signs=document.createElement('canvas');signs.width=1024;signs.height=256;const s=signs.getContext('2d')!;
+function createDestinationDisplay(destination:string,mobile:boolean){
+  const scale=mobile ? .5 : 1,signs=document.createElement('canvas');signs.width=1024*scale;signs.height=256*scale;const s=signs.getContext('2d')!;s.scale(scale,scale);
   s.fillStyle='#0a100e';s.fillRect(0,0,1024,256);s.fillStyle='#f4b540';s.textAlign='center';s.textBaseline='middle';
   const route=destination.split(' ')[0];s.font='bold 60px monospace';s.fillText(destination.toUpperCase(),512,65,985);
   s.font='bold 86px monospace';s.fillText(route,128,194,230);
@@ -321,15 +321,16 @@ function createDestinationDisplay(destination:string){
   display.name='Route destination displays';return display;
 }
 
-export function createTransitBus(destination:string){
+export function createTransitBus(destination:string,mobile=false){
   if(!busTemplate){
     const p=builder();body(p);windowsAndDoors(p);wheels(p);fittings(p);busTemplate=p.finish();
   }
   const group=busTemplate.clone();group.name=`MBTA-style bus ${destination}`;
   if(typeof document!=='undefined'){
     fleetMarkingsTemplate??=createFleetMarkings();group.add(fleetMarkingsTemplate.clone());
-    let display=destinationDisplays.get(destination);
-    if(!display){display=createDestinationDisplay(destination);destinationDisplays.set(destination,display);}
+    const key=mobile ? `mobile:${destination}` : destination;
+    let display=destinationDisplays.get(key);
+    if(!display){display=createDestinationDisplay(destination,mobile);destinationDisplays.set(key,display);}
     group.add(display.clone());
   }
   return group;

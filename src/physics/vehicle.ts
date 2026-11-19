@@ -68,6 +68,14 @@ interface RearPatch { i: number; p: Vector; load: number; along: Vector; side: V
 let initialization: Promise<void> | undefined;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 
+interface PhysicsOptions {
+  buildingColliders?: boolean;
+  meshBuildingIds?: ReadonlySet<string>;
+  streaming?: boolean;
+  /** The mobile tile builder installs tunnel shells with their road owners. */
+  streamTunnels?: boolean;
+}
+
 /** Rapier owns all movement. The game loop supplies a fixed step, normally 1/60 s. */
 export class DrivingPhysics {
   readonly world: RAPIER.World;
@@ -122,7 +130,7 @@ export class DrivingPhysics {
   private readonly bounds: CityData['bounds'];
   private readonly city: CityData;
 
-  static async create(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string>; streaming?: boolean } = {}) {
+  static async create(city: CityData, options: PhysicsOptions = {}) {
     initialization ??= RAPIER.init();
     await initialization;
     return new DrivingPhysics(city, options);
@@ -130,11 +138,13 @@ export class DrivingPhysics {
 
   /** Streaming mode: terrain, decks and building hulls arrive per tile. */
   readonly streaming: boolean;
-  private constructor(city: CityData, options: { buildingColliders?: boolean; meshBuildingIds?:ReadonlySet<string>; streaming?: boolean }) {
+  readonly streamsTunnels: boolean;
+  private constructor(city: CityData, options: PhysicsOptions) {
     this.bounds = city.bounds;
     this.city = city;
     this.meshBuildingIds = new Set([...(options.meshBuildingIds ?? []), ...city.buildings.filter(b => b.collision === 'mesh').map(b => b.id)]);
     this.streaming = !!options.streaming;
+    this.streamsTunnels = this.streaming && !!options.streamTunnels;
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
     this.world.integrationParameters.numSolverIterations = 8;
@@ -154,7 +164,7 @@ export class DrivingPhysics {
 
     // Upper decks are closed solids, separate from the original terrain. Wheel
     // rays can support either level while underpass cars retain their own ground.
-    for(const road of city.roads??[])if(!this.streaming||road.tunnel)this.addRoadDeck(city,road);
+    for(const road of city.roads??[])if(!this.streaming||(road.tunnel&&!this.streamsTunnels))this.addRoadDeck(city,road);
     if(!this.streaming){
       for(const path of city.parkPaths??[])this.addFootbridge(city,path);
       this.registerParkPaths(city.parkPaths??[]);
@@ -282,13 +292,13 @@ export class DrivingPhysics {
   /** Upper decks are closed solids, separate from the original terrain. Wheel
    * rays can support either level while underpass cars retain their own ground.
    * `city` may be a tile-local view so edge and support queries stay bounded. */
-  addRoadDeck(city: CityData, road: CityData['roads'][number]) {
+  addRoadDeck(city: CityData, road: CityData['roads'][number], tunnelShell?:ReturnType<typeof tunnelGeometry>) {
     const colliders: RAPIER.Collider[] = [];
     if (!road.elevations) return colliders;
     const slab = roadSlabGeometry(city, road);
     colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(slab.vertices, slab.indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1).setRestitution(0)));
     if(road.tunnel){
-      const shell=tunnelGeometry(city,road);
+      const shell=tunnelShell??tunnelGeometry(city,road);
       for(const mesh of Object.values(shell))if(mesh.indices.length)colliders.push(this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices,mesh.indices,RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(.5).setRestitution(.02)));
       return colliders;
     }

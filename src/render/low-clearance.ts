@@ -9,7 +9,7 @@ import {sampleElevation} from '../simulation/terrain.ts';
 /** Signs are based on the same soffits that truck contacts use. The Boston
  * Longfellow portal follows the user's reference: riveted open-spandrel steel,
  * block granite abutments, ornamental railing, and a yellow clearance diamond. */
-export function addLowClearanceDetails(scene:THREE.Object3D,city:CityData){
+export function addLowClearanceDetails(scene:THREE.Object3D,city:CityData,mobile=false){
   const group=new THREE.Group();group.name='Parkway low clearance bridges';
   const collisions:{id:string;vertices:Float32Array;indices:Uint32Array}[]=[];
   const steel=new THREE.MeshStandardMaterial({color:'#53645b',metalness:.62,roughness:.62});
@@ -29,14 +29,15 @@ export function addLowClearanceDetails(scene:THREE.Object3D,city:CityData){
   function face(text:string,diamond:boolean){
     const key=`${diamond}:${text}`,old=faces.get(key);if(old)return old;
     if(typeof document==='undefined'){const m=new THREE.MeshBasicMaterial({color:'#efbc33'});faces.set(key,m);return m;}
-    const c=document.createElement('canvas');c.width=diamond?512:1024;c.height=diamond?512:160;const ctx=c.getContext('2d')!;
-    ctx.fillStyle='#f0bf36';ctx.fillRect(0,0,c.width,c.height);ctx.strokeStyle='#201e17';ctx.lineWidth=diamond?14:9;
+    const w=diamond?512:1024,h=diamond?512:160,scale=mobile ? .5 : 1;
+    const c=document.createElement('canvas');c.width=w*scale;c.height=h*scale;const ctx=c.getContext('2d')!;ctx.scale(scale,scale);
+    ctx.fillStyle='#f0bf36';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#201e17';ctx.lineWidth=diamond?14:9;
     if(diamond){
       ctx.clearRect(0,0,512,512);ctx.beginPath();ctx.moveTo(256,9);ctx.lineTo(503,256);ctx.lineTo(256,503);ctx.lineTo(9,256);ctx.closePath();ctx.fill();ctx.stroke();
       ctx.fillStyle='#191b15';for(const reverse of [false,true]){ctx.save();ctx.translate(256,reverse?426:86);if(reverse)ctx.rotate(Math.PI);ctx.beginPath();ctx.moveTo(0,-37);ctx.lineTo(-43,7);ctx.lineTo(-16,7);ctx.lineTo(-16,40);ctx.lineTo(16,40);ctx.lineTo(16,7);ctx.lineTo(43,7);ctx.closePath();ctx.fill();ctx.restore();}
       ctx.font='bold 106px Arial, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,266,352);
     }else{
-      ctx.strokeRect(10,10,c.width-20,c.height-20);ctx.fillStyle='#1c1e17';ctx.font='bold 79px Arial, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(`CLEARANCE  ${text}`,512,85,970);
+      ctx.strokeRect(10,10,w-20,h-20);ctx.fillStyle='#1c1e17';ctx.font='bold 79px Arial, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(`CLEARANCE  ${text}`,512,85,970);
     }
     const map=new THREE.CanvasTexture(c);map.colorSpace=THREE.SRGBColorSpace;map.anisotropy=4;
     const material=new THREE.MeshBasicMaterial({map,transparent:diamond,alphaTest:diamond?.5:0,toneMapped:false});faces.set(key,material);return material;

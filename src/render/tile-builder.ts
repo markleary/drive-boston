@@ -1,3 +1,4 @@
+import { tunnelGeometry } from '../simulation/tunnels.ts';
 import * as THREE from 'three';
 import { IndexedSurfaceWriter, SurfaceBatches } from './indexed-surfaces.ts';
 import { freezeTransforms, showBatches, staticDetailBatchSteps, type HeldBatches, type Warm } from './static-batches.ts';
@@ -89,6 +90,7 @@ export interface TileContext {
   replacedBuildings?: ReadonlySet<string>;
   landmarkForecourt?: (x: number, z: number) => boolean;
   ground: THREE.Material; iron: THREE.Material; lampMat: THREE.Material; mobile?: boolean;
+  buildTunnelRoad?: (target:THREE.Group,road:Road,owned:THREE.Material[],shell:ReturnType<typeof tunnelGeometry>)=>void;
   detailed?: () => boolean;
   /** Starts linking a new static batch's shader programs, so the build can show it once they are ready. */ warm?: Warm;
   /** Sends new meshes' arrays to the GPU a slice a frame (paced-upload.ts); absent on a phone. */ upload?: Upload;
@@ -252,6 +254,15 @@ export function createTileBuilder(ctx: TileContext) {
 
     // Install the procedural decks and barriers ahead of street surfaces and
     // curbs so the highway can carry traffic while the tile finishes building.
+    // On phones the same midpoint owner supplies the visible bore and its Rapier shell.
+    // Junction cuts need the full road network, including branches outside this tile.
+    if(ctx.buildTunnelRoad)for(const road of ownedRoads){
+      if(!road.tunnel||!road.elevations)continue;
+      if(due(pace))yield 'structures';
+      const shell=tunnelGeometry(city,road);
+      colliders.push(...physics.addRoadDeck(city,road,shell));
+      ctx.buildTunnelRoad(group,road,owned,shell);
+    }
     const elevated = ownedRoads.filter(r => r.elevations && !r.tunnel);
     if (elevated.length) {
       yield* stage('structures', roadStructureSteps(group, subCity, materials.asphalt, elevated, pace, city));
