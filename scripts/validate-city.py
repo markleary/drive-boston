@@ -34,6 +34,7 @@ import charles_dam
 import i93_north
 import boston_highways
 import footbridges
+import logan_airfield
 from harvard_terrain import repair_memorial_terrain
 from road_generation_audit import validate_surfaces
 from roadway_buildings import roadway_buildings
@@ -288,6 +289,13 @@ if footbridge_record:
  assert footbridge_record['source']['sha256']==hashlib.sha256(footbridge_path.read_bytes()).hexdigest(),'the footbridge source sidecar changed without regeneration'
  footbridge_counts=footbridges.validate(data_dir,city,footbridge_record,json.loads(footbridge_path.read_text()))
  print(f"Validated {footbridge_counts['bridges']} footbridges over the Turnpike and Storrow Drive: {footbridge_counts['meters']} m in {footbridge_counts['paths']} park paths, steepest {footbridge_counts['steepest']*100:.1f}%")
+# Logan's airfield (build-logan-airfield.py): a replay writes the same sidecar; its layers do not overlap and its aircraft stand clear of the buildings.
+airfield_record=provenance.get('loganAirfield');airfield_path=data_dir/logan_airfield.SOURCE_NAME
+assert bool(airfield_record)==airfield_path.exists()==(data_dir/logan_airfield.OUTPUT_NAME).exists(),'provenance must describe the airfield stage; run build-logan-airfield.py'
+if airfield_record:
+ assert airfield_record['source']['sha256']==hashlib.sha256(airfield_path.read_bytes()).hexdigest(),'the airfield source sidecar changed without regeneration'
+ airfield_counts=logan_airfield.validate(data_dir,city,airfield_record,json.loads(airfield_path.read_text()))
+ print(f"Validated Logan's airfield: {airfield_counts['runways']} runways ({airfield_counts['runwayMetres']} m), {sum(airfield_counts['area'].values())} m2 of pavement in {len(airfield_counts['tiles'])} tiles, {sum(airfield_counts['aircraft'].values())} parked aircraft, {airfield_counts['jetBridges']} jet bridges")
 base_city={**city,'roads':base_roads}
 def base_elevation(x,z):return elevation(x,z,base_heights)
 # Interstate 93 (build-i93-north.py) runs after the stages replayed below: replay it and check its

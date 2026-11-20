@@ -49,6 +49,8 @@ import { createRoadHeadlights } from './road-headlights';
 import { TRAFFIC_CAPACITY } from '../simulation/npc-vehicle-specs';
 import { TRAFFIC_DENSITY } from '../simulation/npc-density';
 import { addConleyTerminal } from './conley-terminal.ts';
+import { addLoganAirfield } from './logan-airfield';
+import { setLoganNight } from './logan-terminals';
 
 export interface WorldOptions { physics?: DrivingPhysics; read?: Reader; mobile?: boolean; waitForContext?:()=>Promise<void>; warm?: Warm; upload?: Upload; }
 
@@ -119,6 +121,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   const tobinBridge=addTobinBridgeDetails(scene,city,materials.asphalt);buildingCollisions.push(...tobinBridge.collisions);roadStructures.userData.tobin=tobinBridge.group.userData;
   const tunnels=mobileTunnels??addTunnels(scene,city,options.mobile,materials.asphalt);roadStructures.userData.tunnels=tunnels.group.userData;
   const conley=addConleyTerminal(scene,city,{mobile:options.mobile});buildingCollisions.push(...conley.collisions);roadStructures.userData.conley=conley.group.userData;
+  const airfield=addLoganAirfield(scene,city,city.airfield,{mobile:options.mobile,upload:options.upload});buildingCollisions.push(...airfield.collisions);roadStructures.userData.loganAirfield=airfield.group.userData;
   if(architecturalLandmarks?.castleIsland)roadStructures.userData.castleIsland=architecturalLandmarks.castleIsland.group.userData;
   if(architecturalLandmarks?.fishPier)roadStructures.userData.fishPier=architecturalLandmarks.fishPier.group.userData;
   if(architecturalLandmarks?.schrafft)roadStructures.userData.schrafft=architecturalLandmarks.schrafft.group.userData;
@@ -318,7 +321,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
   let mode:LightingMode='golden',underground=false;
   const direction=new THREE.Vector3(-270,255,330);
   function setLighting(next:LightingMode){
-    mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);conley.setLighting(night);
+    mode=next;const night=mode==='night';materials.setLighting(mode);lampMat.emissiveIntensity=night?5:.1;tobinBridge.setLighting?.(night);conley.setLighting(night);airfield.setLighting(night);setLoganNight(night);
     roadHeadlights.setNight(night);
     setFellsmereLighting(night);
     sky.visible=!night;environmentSky.visible=!night;
@@ -371,7 +374,7 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     sun.intensity=underground?.08:mode==='night'?.16:mode==='golden'?3.6:3.4;hemi.intensity=underground?.38:mode==='night'?.24:.68;
     const groundY=height(position.x,position.z),altitude=Math.max(0,position.y-groundY);
     updateSunShadow(sun,position,groundY,direction,flightShadows);fineCasters(flightShadows);sky.position.copy(position);
-    if(stream)streamer?.update(position,altitude,flying);far?.update(position,altitude);
+    if(stream)streamer?.update(position,altitude,flying);far?.update(position,altitude);if(stream)airfield.update(position,altitude);
     for(const mesh of buildingChunks){const sphere=mesh.geometry.boundingSphere!;mesh.visible=Math.hypot(sphere.center.x-position.x,sphere.center.z-position.z)<1100+altitude*2+sphere.radius;}
     const night=mode==='night';
     if(night){
@@ -442,5 +445,5 @@ export async function createWorld(renderer:THREE.WebGLRenderer,scene:THREE.Scene
     probeTarget?.dispose();sun.shadow.map?.dispose();sun.shadow.map=null;
     pmrem.dispose();pmrem=new THREE.PMREMGenerator(renderer);
   }
-  return {setLighting,update,updateReflections,setQuality,releaseGraphicsTargets,get shadowMapSize(){return sun.shadow.mapSize.x;},get shadowCoverage(){return {halfExtent:sun.shadow.camera.right,far:sun.shadow.camera.far};},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,roadHeadlights,streamer,far};
+  return {setLighting,update,updateReflections,setQuality,releaseGraphicsTargets,get shadowMapSize(){return sun.shadow.mapSize.x;},get shadowCoverage(){return {halfExtent:sun.shadow.camera.right,far:sun.shadow.camera.far};},materials,buildings:buildingMap,buildingCollisions,get signals(){return signalPlacements;},roadStructures,roadHeadlights,streamer,far,airfield:()=>({...airfield.group.userData,...airfield.stats()})};
 }

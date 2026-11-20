@@ -30,6 +30,8 @@ export interface CityData {
   parkPaths?: ParkPath[];
   /** Every footbridge deck with stored heights (build-footbridges.py), whichever tile holds its path: what stands under one is left out before that tile loads (deckUndersideAt). */
   footbridges?: {id:string;width:number;points:Point2[];elevations:number[]}[];
+  /** Logan's airfield (airfield.json, scripts/logan_airfield.py), when the package ships it: set at boot, before the world is built. */
+  airfield?: import('./simulation/logan-airfield').AirfieldData;
   /** Present on metro builds: buildings stream from 1 km tiles (see simulation/city-tiles.ts). */
   tiles?: { size:number; directory:string; keys:string[]; far:string; buildingCount:number };
   landmarkBuildings?: Building[];

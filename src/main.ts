@@ -54,6 +54,7 @@ import {planConstructionZones} from './simulation/construction-zones';
 import {prepareNPCVehicles} from './render/npc-vehicles';
 import { createTransit, type TransitData } from './simulation/transit';
 import { createRailTracks, loadRailData } from './render/rail-tracks';
+import { loadAirfieldData } from './render/logan-airfield';
 import { meshBuildingIds, usesExactBuildingCollision } from './simulation/building-collisions';
 import { reserveTransitCorridors } from './simulation/transit-corridors';
 import { DriveAudio, type ImpactKind } from './simulation/audio';
@@ -224,9 +225,12 @@ async function boot(){
     })();
     // Optional: a package without rail.json simply has no railway track.
     const railRequest=loadRailData(`${import.meta.env.BASE_URL}data/rail.json`);
+    // Optional as well: without airfield.json Logan's airfield is the bare ground of the survey.
+    const airfieldRequest=loadAirfieldData(`${import.meta.env.BASE_URL}data/airfield.json`);
     const transitResponse=await fetch(`${import.meta.env.BASE_URL}data/transit.json`);if(!transitResponse.ok)throw new Error('Transit data could not be loaded. Please reload.');
     const transitData:TransitData=await transitResponse.json();reserveTransitCorridors(city,transitData.routes);
     const fleetResponse=await fetch(`${import.meta.env.BASE_URL}models/traffic-fleet.glb`);if(!fleetResponse.ok)throw new Error('The traffic models could not be loaded. Please reload.');await prepareNPCVehicles(await fleetResponse.arrayBuffer());
+    city.airfield=await airfieldRequest;
     await contextGate.wait();
     if(metro){physics=await DrivingPhysics.create(city,{meshBuildingIds,streaming:true,streamTunnels:mobile});await contextGate.wait();world=await createWorld(renderer,scene,city,{physics,read,mobile,waitForContext:contextGate.wait,warm:mesh=>graphics?.warm(mesh)??(()=>true),upload:mobile?undefined:function*(meshes,pace){if(graphics?.upload)yield* graphics.upload(meshes,pace);}});}
     else{const results=await Promise.all([DrivingPhysics.create(city,{meshBuildingIds}),createWorld(renderer,scene,city,{mobile,waitForContext:contextGate.wait})]);physics=results[0];world=results[1];}
@@ -535,6 +539,8 @@ async function boot(){
       scene,renderer,tireTracks,construction,residentAttributeBytes:()=>sceneAttributeBytes(scene),
       /** Browser specs: built rail cells and colliders, and the nearest drawn track to (x, z). */
       railTracks:(x?:number,z?:number)=>rail?.snapshot(x,z),
+      /** Browser specs: Logan's airfield as built (runways, parked aircraft by type, jet bridges, draped tiles and their triangles). */
+      airfield:()=>world!.airfield(),
       /** Browser specs: draw every resident object once, with frustum culling off and distance-hidden objects shown (lights stay as they are so no shader variant recompiles). three.js uploads a geometry's GL buffers on its first draw, so without this the renderer's geometry count and buffer bytes track what the camera has happened to see rather than what the scene holds. */
       drawResident:()=>{const culled:THREE.Object3D[]=[],hidden:THREE.Object3D[]=[];scene.traverse(o=>{if(o.frustumCulled){o.frustumCulled=false;culled.push(o);}if(!o.visible&&!(o as THREE.Light).isLight){o.visible=true;hidden.push(o);}});try{scene.updateMatrixWorld();renderer.render(scene,camera);}finally{for(const o of culled)o.frustumCulled=true;for(const o of hidden)o.visible=false;}}};
     Object.assign(window,{__backbay:diagnostic});

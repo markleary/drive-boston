@@ -240,6 +240,9 @@ def osm_extracts(cache,bounds):
  # bridges, platforms and crossings) over the whole envelope, with the train and
  # subway route relations that say which line each track belongs to.
  jobs.append(('metro-railways',['way["railway"~"^(rail|subway|light_rail|platform|disused|abandoned|construction|turntable)$"]({bbox});','node["railway"~"^(level_crossing|crossing|station|halt|stop|buffer_stop|switch|railway_crossing)$"]({bbox});','way["public_transport"="platform"]({bbox});','way["building"="train_station"]({bbox});','relation["route"~"^(train|subway|light_rail|railway|tracks)$"]({bbox});'],envelope(bounds)))
+ # Logan's airfield: every aeroway feature (runways, taxiways, aprons, stands, jet bridges, holding positions) and the
+ # building outlines about them, for build-logan-airfield.py. West, south, east, north.
+ jobs.append(('logan-aeroways',['nwr["aeroway"]({bbox});','way["building"]({bbox});'],[-71.040,42.343,-70.972,42.388]))
  for job in jobs:overpass(cache,*job)
 
 def main():

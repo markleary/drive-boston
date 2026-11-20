@@ -73,6 +73,7 @@ import { housePlan } from './house-plan';
 import { housePalette, houseRoof } from './house-styles';
 import { cityParkDetailSteps, areaBoundsOf, type Bounds } from './city-parks';
 import { DrapedSurface } from './draped-surface.ts';
+import { LOGAN_COMPLEX, loganPartMaterial, loganShellMaterial, splitLoganShell } from './logan-terminals.ts';
 import { fellsViewHeight } from './fells-woodland.ts';
 import {clipWaterfrontTerrainSteps} from './waterfront-terrain.ts';
 import {clipShoreTerrainSteps} from './shore-terrain.ts';
@@ -491,7 +492,7 @@ export function createTileBuilder(ctx: TileContext) {
           if (!isRoof && b.landmark === 'hancock') material = materials.glass;
           else if (!isRoof && b.landmark === 'library') material = materials.library;
           else if (!isRoof && b.landmark === 'trinity') material = materials.church;
-          else material = museumShellMaterial(b, isRoof) ?? stationShellMaterial(b, isRoof) ?? landmarkShellMaterial(b, isRoof, materials) ?? material;
+          else material = museumShellMaterial(b, isRoof) ?? stationShellMaterial(b, isRoof) ?? loganShellMaterial(city, b, isRoof) ?? landmarkShellMaterial(b, isRoof, materials) ?? material;
           if (isStone) material = parkStone;
           if (fenway) material = isRoof ? fenwayMaterials.roof : fenwayMaterials.wall;
           // This source footprint is bridge machinery spanning an open road,
@@ -531,6 +532,8 @@ export function createTileBuilder(ctx: TileContext) {
           if (isMissionChurch(b)) { for (const part of splitMissionChurchShell(geometry,b,isRoof)) bucket(missionChurchMaterials[part.kind],part.geometry,b.center[0],b.center[1],'mission-church'); geometry.dispose(); continue; }
           if (isStateHouse(b)) { for (const part of splitStateHouseShell(geometry, isRoof)) bucket(stateHouseMaterials[part.kind], part.geometry, 0, 0, 'state-house'); geometry.dispose(); continue; }
           if (isSymphonyHall(b)) { for (const part of splitSymphonyHallShell(geometry, b, isRoof)) bucket(symphonyHallMaterials[part.kind], part.geometry, b.center[0], b.center[1], 'symphony-hall'); geometry.dispose(); continue; }
+          // Logan's terminal complex is one mesh: terminals, piers and parking decks take their own finishes (logan-terminals.ts).
+          if (city.airfield && b.id === LOGAN_COMPLEX) { for (const part of splitLoganShell(city.airfield, geometry, isRoof)) bucket(loganPartMaterial(part.kind), part.geometry, b.center[0], b.center[1], 'logan-terminals'); geometry.dispose(); continue; }
           if (isSouthStation(b)) { for (const part of splitSouthStationShell(geometry, isRoof)) bucket(part.kind === 'other' ? choose(isRoof) : southStationMaterials[part.kind], part.geometry, b.center[0], b.center[1], part.kind === 'other' ? '' : 'south-station'); geometry.dispose(); continue; }
           if (isTdGarden(b)) {
             // The passage's street wall is left out (the collider keeps it): the entrance hall stands behind it.

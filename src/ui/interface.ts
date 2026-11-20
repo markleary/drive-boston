@@ -13,6 +13,7 @@ import {buildingPlans,type BuildingPlan} from '../simulation/building-plans.ts';
 import type {Building} from '../types';
 import {sampleDriveSurface} from '../simulation/road-surfaces';
 import {isMotorway,openStretches} from '../simulation/motorway.ts';
+import { AIRFIELD_LAYERS, airfieldPolygons } from '../simulation/logan-airfield';
 import {HELICOPTER} from '../simulation/helicopter';
 import {WALKER} from '../simulation/walker';
 import {createMinimapLabeler} from './minimap-labels';
@@ -215,6 +216,11 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const mapRoads=mapRoadList.flatMap(road=>[road,...(road.highway?openStretches(road).map(points=>({...road,points,tunnel:undefined})):[])]).map(road=>({road,highway:isMotorway(road)&&!road.tunnel||(!!road.highway&&!road.tunnel),rank:road.tunnel?0:isMotorway(road)||road.highway?2:1,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
   const boxed=<T extends {rings:Point2[][]}>(areas:T[])=>areas.filter(a=>a.rings[0]?.length).map(area=>{const ring=area.rings[0];let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of ring){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}return{area,minX,maxX,minZ,maxZ};});
   const mapParks=boxed(city.parks??[]),mapWater=boxed(city.water??[]);
+  // Logan's airfield (airfield.json): aprons, taxiways and runways in three greys, the runways named on the large map.
+  const AIRFIELD_INK:Record<string,string>={shoulder:'#d3d4cb',apron:'#d0cec4',taxiway:'#bcbdb7',runway:'#8a9190'};
+  // Boot attaches the airfield after the interface exists, so its polygons are boxed at the first draw that finds it.
+  let airfieldAreas:{area:{rings:Point2[][];layer:string};minX:number;maxX:number;minZ:number;maxZ:number}[]|undefined;
+  const mapAirfield=()=>airfieldAreas??=city.airfield?AIRFIELD_LAYERS.flatMap(layer=>Object.keys(city.airfield!.tiles).flatMap(key=>boxed(airfieldPolygons(city.airfield!,key,layer).map(rings=>({rings,layer}))))):undefined;
   const metro=isMetroCity(city)?city:undefined;
   // Footprints come from the hull index in a metro, so the map shows every
   // building whether or not its tile is streamed in; zoomed far out they are skipped.
@@ -639,6 +645,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     const inView=(item:{minX:number;maxX:number;minZ:number;maxZ:number})=>item.maxX>viewMinX&&item.minX<viewMaxX&&item.maxZ>viewMinZ&&item.minZ<viewMaxZ;
     for(const {area} of mapParks.filter(inView)){traceRings(area.rings);ctx.fillStyle='#c6d4b3';ctx.fill('evenodd');}
     for(const {area} of mapWater.filter(inView)){traceRings(area.rings);ctx.fillStyle='#a7c8ca';ctx.fill('evenodd');}
+    for(const {area} of (mapAirfield()??[]).filter(inView)){traceRings(area.rings);ctx.fillStyle=AIRFIELD_INK[area.layer];ctx.fill('evenodd');}
+    if(city.airfield&&scale>=.12)for(const runway of city.airfield.runways){
+      // A dashed centre line, and the designation at each end where the map is large enough to read it.
+      const a=project(runway.ends[0].point),b=project(runway.ends[1].point);if(!inside(a,400)&&!inside(b,400))continue;
+      ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.strokeStyle='#f4f3ec';ctx.lineWidth=Math.max(.7,1.2*scale);ctx.setLineDash([Math.max(3,36*scale),Math.max(2,24*scale)]);ctx.stroke();ctx.setLineDash([]);
+      if(large&&scale>=.25){const angle=Math.atan2(b[1]-a[1],b[0]-a[0]);ctx.fillStyle='#f4f3ec';ctx.font=`600 ${Math.max(9,Math.min(22,30*scale))}px system-ui,sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+        runway.ends.forEach((end,i)=>{const p=i?b:a,dir=i?-1:1,d=(end.displaced+110)*scale;ctx.save();ctx.translate(p[0]+Math.cos(angle)*d*dir,p[1]+Math.sin(angle)*d*dir);ctx.rotate(angle+(i?-Math.PI/2:Math.PI/2));ctx.fillText(end.name,0,0);ctx.restore();});}
+    }
     for(const path of city.parkPaths??[]){
       if(path.points.length<2)continue;
       ctx.beginPath();path.points.forEach((point,i)=>{const p=project(point);if(i)ctx.lineTo(...p);else ctx.moveTo(...p);});
