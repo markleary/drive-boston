@@ -72,6 +72,11 @@ const MOTORWAY_HORIZON=120,MERGE_WINDOW=400;
 const PAIR_KEY=4096;
 /** No car further than this (m) slows a street car in the step's following rules (55 m ahead, in its lane). */
 const FOLLOW_REACH=60,NO_OBSTACLES:readonly number[]=[];
+/** Placements of one kind (on the approaching streets, on the highway) that may fail in one refill before that kind is
+ * left until the next, a quarter of a second on. A failed placement is six or eight tries at lanes that turned out to
+ * be full or out of the wanted ring, which they are for the next car as well; without the limit every car beyond the
+ * view was tried, the whole fleet where the lanes that lead toward the observer are few. */
+const REFILL_MISSES=2,HIGHWAY_MISSES=8;
 /** A closed start emits a car per lane every 1.5 to 4 s while the observer is within this many metres. */
 const EMIT_RANGE=750;
 /** Closing speed (m/s) at which a touch becomes a knock rather than a nudge. */
@@ -493,11 +498,34 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     for(let k=0;k<path.roadAt.length;k++){const c=speedClass(path.roadAt[k]);if(c!==speed){if(speed>=0)path.changes.push({distance:path.distances[k],road:path.roadAt[k]});speed=c;}if(k&&path.roadAt[k]!==path.roadAt[k-1]&&mergeRoads.has(path.roadAt[k]))path.merges.push(path.distances[k]);}
     return path;
   }
-  function route(first: Edge,type:NPCVehicleType='compact'): Path {
-    const edge = first;
-    const points = [...laneFor(edge)],roads=points.map(()=>edge.road),last=follow(edge,points,roads,false,0,type).edge;
-    const path=finish(roundedPath(points,roads),last);if(edge.source)path.sourceAt=CLOSURE_SETBACK;
+  /** A route as its lane points, before `built` rounds them and finds its signals: the part that takes the random
+   * draws, at about a twentieth of the route's cost. */
+  interface Trace{first:Edge;points:Point2[];roads:Road[];last:Edge}
+  function trace(first:Edge,type:NPCVehicleType='compact'):Trace{
+    const points=[...laneFor(first)],roads=points.map(()=>first.road);
+    return{first,points,roads,last:follow(first,points,roads,false,0,type).edge};
+  }
+  function built(traced:Trace):Path{
+    const path=finish(roundedPath(traced.points,traced.roads),traced.last);if(traced.first.source)path.sourceAt=CLOSURE_SETBACK;
     return path;
+  }
+  function route(first: Edge,type:NPCVehicleType='compact'): Path {return built(trace(first,type));}
+  /** Where a car placed on a traced route stands: station `d`, the lesser of `metres` and `share` of the route's
+   * length, and the point there, both exactly as the built route gives them. A placement is turned down far more
+   * often than it is taken (out of the wanted ring, or within a headway of another car), and a route runs for 15
+   * streets, a kilometre or two of lane points; so only as many of them are rounded as `metres` needs. `roundedPath` rounds a
+   * corner from its two neighbours alone and sums its stations from the start, so every rounded point but the last
+   * of such a head is a point of the whole route at the same station; where the head does not settle `d` (a short
+   * route) the route is built, and handed back as `path`. */
+  function stationOn(traced:Trace,metres:number,share=.45):{d:number;p:Point2;path?:Path}{
+    const {points,roads}=traced,need=metres/share+20;let count=1,run=0;
+    while(count<points.length&&run<need){run+=distance(points[count-1],points[count]);count++;}
+    if(count+1<points.length){
+      const head=roundedPath(points.slice(0,count+1),roads.slice(0,count+1)),sure=head.distances[head.distances.length-2];
+      if(sure*share>=metres)return{d:metres,p:at(head,metres)};
+    }
+    const path=built(traced),d=Math.min(path.length*share,metres);
+    return{d,p:at(path,d),path};
   }
   /** Continue a route that is running out near the player, so the car drives on
    * instead of parking at its end and holding up everyone behind it. The new
@@ -555,18 +583,28 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   }
   /** Keep each actor's slot stable so following can skip its own index. */
   const fleetObstacles=():FleetObstacle[]=>actors.map(a=>({x:a.x,y:a.body.translation().y,z:a.z,halfLength:a.spec.length/2,halfWidth:a.spec.width/2,speed:a.speed,yaw:a.yaw,hidden:!!a.hidden}));
+  // The highway lanes in reach of the last observer asked for, their length, and the lane line and stations of each
+  // one tried: a refill or a teleport asks once for every car it may move, from one place, and looking through every
+  // station of every highway lane each time, then offsetting a lane for each try, was most of what a placement cost.
+  let inReach:{x:number;z:number;max:number;below:boolean;truck:boolean;lanes:Edge[];total:number;lines:Map<Edge,{points:Point2[];along:number[]}>}|undefined;
+  const refillCount={asked:0,placed:0};
   /** A station on a highway lane between `min` and `max` metres from the
    * observer, on its level (a tunnel record in a tunnel, anywhere open to the
    * sky above ground), clear of the player and of every car by the highway
    * headway; lanes weighted by length. */
   function motorwayPlacement(observer:Pick<VehicleState,'x'|'z'>&{y?:number},player:Pick<VehicleState,'x'|'z'>,min:number,max:number,except?:Actor,external:TrafficObstacle[]=[],attempts=24,type:NPCVehicleType=except?.spec.type??'compact'):Placement|undefined{
-    const below=underground(observer),candidates=highwayEdges.filter(edge=>npcRoadAllowed(type,edge.road)&&(below?!!edge.road.tunnel:open(edge.road))&&edge.points.some(p=>Math.hypot(p[0]-observer.x,p[1]-observer.z)<max+40));
+    const below=underground(observer),truck=type==='box';
+    if(!inReach||inReach.x!==observer.x||inReach.z!==observer.z||inReach.max!==max||inReach.below!==below||inReach.truck!==truck){
+      const lanes=highwayEdges.filter(edge=>npcRoadAllowed(type,edge.road)&&(below?!!edge.road.tunnel:open(edge.road))&&edge.points.some(p=>Math.hypot(p[0]-observer.x,p[1]-observer.z)<max+40));
+      inReach={x:observer.x,z:observer.z,max,below,truck,lanes,total:lanes.reduce((sum,edge)=>sum+edge.length,0),lines:new Map()};
+    }
+    const candidates=inReach.lanes,total=inReach.total,lines=inReach.lines;
     if(!candidates.length)return;
-    const total=candidates.reduce((sum,edge)=>sum+edge.length,0);
     const clear=(p:Point2)=>Math.hypot(p[0]-player.x,p[1]-player.z)>=35&&!actors.some(actor=>actor!==except&&Math.hypot(actor.x-p[0],actor.z-p[1])<MOTORWAY_HEADWAY)&&!external.some(other=>Math.hypot(other.x-p[0],other.z-p[1])<(other.halfLength??2.1)+5);
     for(let attempt=0;attempt<attempts;attempt++){
       let pick=random()*total,edge=candidates[0];for(const c of candidates){edge=c;if((pick-=c.length)<=0)break;}
-      const lanePoints=laneFor(edge),along=stations(lanePoints),s=random()*along[along.length-1],p=pointAtDistance(lanePoints,s,along).p,radius=Math.hypot(p[0]-observer.x,p[1]-observer.z);
+      let line=lines.get(edge);if(!line){const points=laneFor(edge);line={points,along:stations(points)};lines.set(edge,line);}
+      const lanePoints=line.points,along=line.along,s=random()*along[along.length-1],p=pointAtDistance(lanePoints,s,along).p,radius=Math.hypot(p[0]-observer.x,p[1]-observer.z);
       if(radius<min||radius>max||!clear(p)||!below&&coveredAt(edge.road,p[0],p[1]))continue;
       const path=route(edge,type),d=Math.min(s,path.length-1);
       if(path.sinkAt!==undefined&&d>path.sinkAt-40)continue;
@@ -612,11 +650,12 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   function placement(candidates:Edge[],observer:Pick<VehicleState,'x'|'z'>,player:Pick<VehicleState,'x'|'z'>,min:number,max:number,except?:Actor,external:TrafficObstacle[]=[],attempts=36,type:NPCVehicleType=except?.spec.type??'compact'):Placement|undefined{
     candidates=candidates.filter(edge=>npcRoadAllowed(type,edge.road));
     for(let attempt=0;attempt<attempts&&candidates.length;attempt++){
-      const path=route(weightedEdge(candidates),type),d=Math.min(path.length*.45,8+random()*110),p=at(path,d),radius=Math.hypot(p[0]-observer.x,p[1]-observer.z);
+      // The route is built only for a place that is taken (`stationOn`).
+      const traced=trace(weightedEdge(candidates),type),{d,p,path}=stationOn(traced,8+random()*110),radius=Math.hypot(p[0]-observer.x,p[1]-observer.z);
       if(radius<min||radius>max||Math.hypot(p[0]-player.x,p[1]-player.z)<35)continue;
       if(actors.some(actor=>actor!==except&&Math.hypot(actor.x-p[0],actor.z-p[1])<18))continue;
       if(external.some(other=>Math.hypot(other.x-p[0],other.z-p[1])<(other.halfLength??2.1)+5))continue;
-      return {path,d,p};
+      return {path:path??built(traced),d,p};
     }
   }
   function aheadOf(point:Point2,observer:Observer){
@@ -1044,6 +1083,8 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
 
   return {
     get count(){return actors.length;},
+    /** Diagnostics: placements the quarter-second refill has asked for since the fleet was made, and those it was given (a car moved). Tests hold the first to a multiple of the second: see REFILL_MISSES. */
+    get refills(){return {...refillCount};},
     /** `motorway`: highway cars within MOTORWAY_REACH; `highway`: the observer's motorwayLevel. */
     population(observer:Observer&{y?:number}){
       const profile=activityAt(observer.x,observer.z);
@@ -1106,9 +1147,9 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         if(actor.respawnAfter!==undefined&&elapsed<actor.respawnAfter)return false;
         const connected=spawnByComponent.get(actor.path.component)?.filter(edge=>npcRoadAllowed(actor.spec.type,edge.road));
         if(connected?.length)for (let attempt = 0; attempt < 12; attempt++) {
-          const path = route(choose(connected),actor.spec.type), start = at(path, 5);
+          const traced = trace(choose(connected),actor.spec.type), {p:start,path} = stationOn(traced,5,1);
           if (Math.hypot(start[0] - observer.x, start[1] - observer.z) < recycleDistance || !clearRelocation(start,actor)) continue;
-          actor.respawnAfter=undefined;relocate(actor,path);return true;
+          actor.respawnAfter=undefined;relocate(actor,path??built(traced));return true;
         }
         actor.respawnAfter=elapsed+1;return false;
       };
@@ -1130,17 +1171,30 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
           });
           // Driving the highway, cars left 700 m behind are recycled ahead.
           const beyond=level===2?Math.min(localRadius*1.35,MOTORWAY_REACH+200):localRadius*1.35;
-          let moved=0;
+          // Failed placements are counted (REFILL_MISSES) for the streets and for the highway, a box truck's apart from
+          // the cars' (it may not use the parkways, so its failures say nothing about a car's, while a car's hold for it too).
+          // Over Logan's terminal roads 4 to 12 lanes lead toward a helicopter, for a neighborhood target of 152 cars on
+          // High: they are full, and every one of the 150 to 230 cars beyond the view failed its six placements at them
+          // four times a second, 2,200 routes a second for two or three cars placed, which held the frame at 5 fps.
+          let moved=0;const streetMisses=[0,0],highwayMisses=[0,0];
           for(const actor of actors){
             if((local>=target&&highway>=highwayTarget)||moved>=Math.ceil(2*factor))break;
+            const truck=actor.spec.type==='box'?1:0;
+            const toHighway=highway<highwayTarget&&highwayMisses[0]<HIGHWAY_MISSES&&highwayMisses[truck]<HIGHWAY_MISSES,toStreet=local<target&&streetMisses[0]<REFILL_MISSES&&streetMisses[truck]<REFILL_MISSES;
+            // Nothing is left to ask for this car; if it is no truck, for none of the others either.
+            if(!toHighway&&!toStreet){if(truck)continue;break;}
             const away=Math.hypot(actor.x-observer.x,actor.z-observer.z);
             if(Math.hypot(actor.x-player.x,actor.z-player.z)<=35)continue;
             // A highway short of cars also takes street cars out of view.
-            if(away<=beyond&&!(highway<highwayTarget&&away>recycleDistance+40&&!actor.knocked&&speedClass(pathRoad(actor.path,actor.distance))===0))continue;
-            let candidate=highway<highwayTarget?motorwayPlacement(observer,player,recycleDistance,Math.min(localRadius-10,480),actor,external,8):undefined;
+            if(away<=beyond&&!(toHighway&&away>recycleDistance+40&&!actor.knocked&&speedClass(pathRoad(actor.path,actor.distance))===0))continue;
+            let candidate=toHighway?motorwayPlacement(observer,player,recycleDistance,Math.min(localRadius-10,480),actor,external,8):undefined;
+            if(toHighway)refillCount.asked++;
             if(candidate)highway++;
-            else if(local<target&&away>beyond)candidate=placement(approaches,observer,player,recycleDistance,localRadius-10,actor,external,6);
-            if(candidate){relocate(actor,candidate.path,candidate.d);if(away>=localRadius)local++;moved++;}
+            else{
+              if(toHighway)highwayMisses[truck]++;
+              if(toStreet&&away>beyond){refillCount.asked++;if(!(candidate=placement(approaches,observer,player,recycleDistance,localRadius-10,actor,external,6)))streetMisses[truck]++;}
+            }
+            if(candidate){refillCount.placed++;relocate(actor,candidate.path,candidate.d);if(away>=localRadius)local++;moved++;}
           }
         }
       }

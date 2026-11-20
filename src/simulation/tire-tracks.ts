@@ -4,6 +4,7 @@ import {pavementEdges} from './tile-format.ts';
 import {pointInside} from './roads.ts';
 import {roadProjection,sampleVehicleSurface} from './road-surfaces.ts';
 import {isCommonwealthMall} from './commonwealth-mall.ts';
+import {airfieldPaved} from './logan-airfield.ts';
 import {isFellsArea,parkSurfaceRuns} from './fells-trails.ts';
 
 export type TireSurface='pavement'|'grass';
@@ -67,6 +68,8 @@ export function createTireSurfaceSampler(city:CityData,tiles:()=>Iterable<CityTi
     const support=sampleVehicleSurface(city,x,z,y+.15);
     if(Math.abs(support.height-y)>.4)return null; // Roofs, traffic and other raised objects aren't lawns.
     if(support.road)return'pavement';
+    // Logan's runways, taxiways and aprons are no street's pavement and no tile's (logan-airfield.ts).
+    if(city.airfield&&airfieldPaved(city.airfield)(x,z))return'pavement';
     const resident=[...tiles()];
     if(resident.length!==lastTiles.length||resident.some((tile,i)=>tile!==lastTiles[i])){
       measured=new Set(resident.flatMap(tile=>tile.pavements.map(p=>p.road)));lastTiles=resident;
