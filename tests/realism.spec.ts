@@ -1,3 +1,4 @@
+import {desktopDrivingSoundCount} from './helpers/audio-bank';
 import { test, expect, type Page } from '@playwright/test';
 
 interface Snapshot {
@@ -24,9 +25,9 @@ test('desktop: recorded driving sound, pause/mute/horn and both graphics modes',
   await expect(page.getByTestId('start-drive')).toBeEnabled({ timeout: 60000 });
   await page.getByTestId('start-drive').click();
   await expect(page.locator('#welcome')).toBeHidden();
-  await expect.poll(async () => (await snapshot(page)).audio.loadedCount, { timeout: 20000 }).toBe(37);
+  await expect.poll(async () => (await snapshot(page)).audio.loadedCount, { timeout: 20000 }).toBe(desktopDrivingSoundCount);
   const initial = await snapshot(page);
-  expect(initial.audio.expectedCount).toBe(37);
+  expect(initial.audio.expectedCount).toBe(desktopDrivingSoundCount);
   expect(initial.audio.loading).toBe(false);
   expect(initial.audio.failed).toEqual([]);
   expect(initial.audio.fallback).toBe(false);

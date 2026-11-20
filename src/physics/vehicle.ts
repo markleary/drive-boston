@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, HARBOR_DRIVE, ENGINES, MOVING_TRUCK, isPerformanceCar, isElectricCar, carGear, carRpm, roadLoad, engineBrakeForce, type PlayerCarId } from '../simulation/player-cars.ts';
+import { wrxBoost, wrxGearing, wrxTorque } from '../simulation/wrx-powertrain.ts';
 import {lowClearanceAt} from '../simulation/low-clearance.ts';
 import {storrowRecoveryCandidates,storrowRetreatCandidates,storrowSolidRecoveryPlan,type StorrowRecoveryPlan} from '../simulation/storrow-recovery.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
@@ -23,6 +24,8 @@ export interface PhysicsVehicleState extends VehicleState {
   braking: boolean;
   gear: number;
   rpm: number;
+  /** WRX manifold pressure above atmosphere, normalized to full boost. */
+  turboBoost: number;
   /** 0 to 1: how hard the rear tyres are spinning under power or sliding sideways (smoke, marks and squeal). */
   wheelspin: number;
   vehicle: 'car' | 'ultrabee';
@@ -86,6 +89,7 @@ export class DrivingPhysics {
   get carId(){return this.selectedCar;}
   private get carSpec(){return PLAYER_CARS[this.selectedCar];}
   private shiftRemaining=0;
+  private turboBoost=0;
   get vehicleType(): 'car' | 'ultrabee' { return this.bike ? 'ultrabee' : 'car'; }
   readonly chassisCollider: RAPIER.Collider;
   private truckColliders:RAPIER.Collider[]=[];
@@ -459,7 +463,9 @@ export class DrivingPhysics {
     }
     const rearLoad=rear.reduce((sum,w)=>sum+w.load,0),rearSlide=rear.reduce((most,w)=>Math.max(most,Math.abs(w.sideways)),0),rearTravel=rear.reduce((most,w)=>Math.max(most,Math.hypot(w.forward,w.sideways)),0);
     // A tyre that slides holds four fifths of what it holds at its braking peak.
-    const grip=Math.max(.7,.8*spec.brakeForce/(spec.mass*9.81)),rearShare=electric?.6:performance?1:.5,efficiency=(drive??HARBOR_DRIVE).efficiency;
+    const wrx=id==='subaru-wrx';
+    const rearShare=wrx||!performance ? .5 : electric ? .6 : 1;
+    const grip=Math.max(.7,.8*spec.brakeForce/(spec.mass*9.81)),efficiency=(drive??HARBOR_DRIVE).efficiency;
     // The handbrake locks the rear wheels and opens the clutch (the electric car cuts its motors), so the pedal only
     // holds revs against it. Let go of it with the pedal down and the wheel turned, or put the power down while the
     // tail is already out, and the rear tyres spin for as long as the engine can outrun their grip and the pedal stays
@@ -486,7 +492,7 @@ export class DrivingPhysics {
     if(Math.abs(throttle)<.001&&Math.abs(this.pedal)<.005)this.pedal=0;
     // The gearbox and the tachometer follow the driven tread, which outruns the road while the tyres spin.
     const tread=speed+(speed>-1?this.slip:0);
-    const targetGear=isPerformanceCar(this.selectedCar)?carGear(this.selectedCar,Math.max(0,tread),this.gear):Math.min(5,Math.max(1,1+Math.floor(Math.abs(tread)/7.5)));
+    const targetGear=performance?carGear(id,Math.max(0,tread),this.gear,throttle):Math.min(5,Math.max(1,1+Math.floor(Math.abs(tread)/7.5)));
     const previousGear=this.gear;
     // Reverse input brakes a forward-moving car before selecting reverse.
     // Only select R while actually reversing or nearly stopped with reverse intent.
@@ -506,12 +512,19 @@ export class DrivingPhysics {
       const drag=-Math.sign(speed)*resistance*timestep;
       this.body.applyImpulse({x:fx*drag,y:fy*drag,z:fz*drag},true);
     }
-    // Combustion performance cars drive the rear axle; the dual-motor EV
-    // shares continuous torque between both axles without a shift interruption.
-    const tractiveForce=Math.min(spec.traction,spec.power*efficiency/Math.max(10,Math.abs(speed)));
+    // The WRX's clutch opens for each shift. Its common boost state supplies
+    // both the torque curve at the driven tyres and the compressor audio.
+    const clutchOpen=handbrake||(wrx&&this.shiftRemaining>0);
+    let wheelForce=spec.power*efficiency/Math.max(10,Math.abs(speed));
+    if(wrx){
+      const load=clutchOpen||changeDirection||pedalBrake>.1?0:Math.abs(this.pedal);
+      this.turboBoost=wrxBoost(this.turboBoost,this.rpm,load,timestep);
+      wheelForce=wrxTorque(this.rpm,this.turboBoost)*wrxGearing(this.gear)*Math.PI/30*efficiency;
+    }
+    const tractiveForce=Math.min(spec.traction,wheelForce);
     const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
     const held=electric&&!handbrake&&Math.abs(throttle)<.05&&(Math.abs(speed)<.25||this.held&&Math.abs(speed)<1);
-    const force = changeDirection || pedalBrake > 0.1 || handbrake || held ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
+    const force = changeDirection || pedalBrake > 0.1 || clutchOpen || held ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
     const lift=1-Math.min(1,Math.abs(this.pedal)/.15);
     // Lift-off regeneration holds its rate down to a walk and then eases the car to rest, where Hold keeps it on
     // the friction brakes until the pedal is pressed again. It blends with the service brakes; actual braking
@@ -519,7 +532,7 @@ export class DrivingPhysics {
     const regenForce=electric&&!changeDirection&&!handbrake?REGEN.force*lift*Math.min(1,REGEN.ease+Math.abs(speed)/REGEN.walk):0;
     this.held=held;
     // A closed throttle leaves the engine to be turned by the driven wheels.
-    const engineBrake=electric||handbrake||this.loose||changeDirection?0:engineBrakeForce(id,this.rpm,this.gear)*lift;
+    const engineBrake=electric||clutchOpen||this.loose||changeDirection?0:engineBrakeForce(id,this.rpm,this.gear)*lift;
     this.braking = pedalBrake > 0.05 || handbrake || changeDirection || this.held || regenForce>spec.mass*1.3;
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
     const brakingImpulse = (changeDirection ? spec.brakeForce*Math.abs(throttle) : Math.max(pedalBrake * spec.brakeForce,this.held?spec.brakeForce*.5:0)) * timestep / 4;
@@ -530,7 +543,7 @@ export class DrivingPhysics {
       c.setWheelSteering(i, i < 2 ? ackermann : 0);
       // Rapier chooses engine force before wheel braking. A locked or spinning rear wheel
       // must receive exactly zero engine force, including decaying pedal input.
-      const driveShare=electric?(i<2?.2:.3):performance?(i<2?0:.5):.25,back=i>=2;
+      const back=i>=2,driveShare=(back?rearShare:1-rearShare)/2;
       // For the same reason the pedal's last tenths and the lift-off retardation that comes in under them (regeneration,
       // engine braking) are one force at the wheel, the difference of the two: set side by side, the retardation would
       // wait out the 0.4 s the pedal takes to come all the way up and then arrive at once.
@@ -563,6 +576,14 @@ export class DrivingPhysics {
     }
     this.wheelspin=clamp(Math.max(this.slip/6,this.sliding?(rearSlide-1.5)/4:0),0,1);
     c.updateVehicle(timestep, undefined, undefined, collider => collider.parent()?.handle !== this.body.handle);
+    if(wrx){
+      // Rapier applies its lateral tyre impulse near the centre of mass. Its
+      // moment about the sedan's lower roll centre loads the outside springs.
+      const v=this.body.linvel();
+      const sideDelta=(v.x-lin.x)*(1-2*(q.y*q.y+q.z*q.z))+(v.y-lin.y)*2*(q.x*q.y+q.w*q.z)+(v.z-lin.z)*2*(q.x*q.z-q.w*q.y);
+      const rollImpulse=clamp(sideDelta,-12*timestep,12*timestep)*spec.mass*.34;
+      this.body.applyTorqueImpulse({x:fx*rollImpulse,y:fy*rollImpulse,z:fz*rollImpulse},true);
+    }
     if((handbrake||this.held)&&Math.abs(speed)<.2&&c.wheelIsInContact(2)&&c.wheelIsInContact(3)){
       // At rest, the locked tires supply static friction against the component
       // of gravity along the road. Rapier's wheel impulse precedes world gravity;
@@ -734,7 +755,7 @@ export class DrivingPhysics {
       steering: this.steering, rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
       wheelAngles: Array.from({length:this.controller.numWheels()}, (_,i) => (this.controller.wheelRotation(i) ?? 0)+(this.bike?0:this.wheelTurn[i]??0)),
       suspension: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelSuspensionLength(i) ?? this.carSpec.suspensionRest),
-      braking: this.braking,gear:this.gear,rpm:this.rpm,wheelspin:this.bike?0:this.wheelspin,vehicle:this.vehicleType,carId:this.carId,
+      braking: this.braking,gear:this.gear,rpm:this.rpm,turboBoost:this.turboBoost,wheelspin:this.bike?0:this.wheelspin,vehicle:this.vehicleType,carId:this.carId,
       halfLength:this.bike?.8:this.carSpec.halfLength,halfWidth:this.bike?.4:this.carSpec.halfWidth,
       lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
       storrowDamage:this.storrow?.damage??0,storrowDirection:this.storrow?.direction??1,storrowed:!!this.storrow,
@@ -797,8 +818,9 @@ export class DrivingPhysics {
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.body.resetForces(true);
     this.body.resetTorques(true);
-    this.steering = 0;this.pedal=0;this.gear=1;this.rpm=isElectricCar(this.selectedCar)?0:850;
+    this.steering = 0;this.pedal=0;this.gear=1;this.rpm=this.bike||isElectricCar(this.selectedCar)?0:ENGINES[this.selectedCar].idle;
     this.revs=0;this.slip=0;this.loose=false;this.sliding=false;this.held=false;this.handbrakeHeld=false;this.wheelspin=0;
+    this.turboBoost=0;
     this.overturnedTime = 0;this.shiftRemaining=0;this.braking=false;this.bike?.reset();
     for (let i = 0; i < this.controller.numWheels(); i++) {
       this.controller.setWheelEngineForce(i, 0);

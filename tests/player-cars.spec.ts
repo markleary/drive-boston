@@ -1,3 +1,4 @@
+import {desktopDrivingSoundCount} from './helpers/audio-bank';
 import {test,expect} from '@playwright/test';
 // These exercise keyboard/touch; a host's connected controller must not steer
 // the car into traffic during acceleration checks. Controller input has its own suite.
@@ -15,7 +16,7 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
   expect((await snap(page)).carId).toBe('mclaren-gt');expect((await snap(page)).paused).toBe(true);
   await page.screenshot({path:info.outputPath('garage-settings.png')});
   await page.getByRole('button',{name:'Keep driving',exact:true}).click();
-  await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(37);
+  await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(desktopDrivingSoundCount);
   expect((await snap(page)).audio.failed).toEqual([]);
   await expect.poll(async()=>(await snap(page)).audio.engineGain).toBeGreaterThan(.1);
   await page.screenshot({path:info.outputPath('mclaren-gt-boston.png')});
@@ -39,7 +40,7 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
   await page.screenshot({path:info.outputPath('harbor-s4-boston.png')});expect(errors).toEqual([]);
 });
 
-test('touch settings expose all six cars and load only the selected engine bank',async({browser},info)=>{
+test('touch settings expose all seven cars and load only the selected engine bank',async({browser},info)=>{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const page=await context.newPage();
   try{
     await context.addInitScript(()=>Object.defineProperty(navigator,'getGamepads',{value:()=>[],configurable:true}));
@@ -62,10 +63,10 @@ test('touch settings expose all six cars and load only the selected engine bank'
     await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(16);
     await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe('supra-mk4');
     expect(requests.filter(name=>name.startsWith('supra-mk4'))).toHaveLength(5);
-    expect(requests.some(name=>name.startsWith('mclaren'))).toBe(false);
+    expect(requests.some(name=>name.startsWith('mclaren')||name.startsWith('subaru-wrx'))).toBe(false);
     const supraBytes=(await snap(page)).audio.decodedBytes;
     await page.locator('#open-settings').click();
-    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Moving Truck','moving-truck'],['Tesla Model 3 Performance','tesla-model-3-performance'],['Toyota Supra Mk4','supra-mk4']]){
+    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Moving Truck','moving-truck'],['Subaru WRX','subaru-wrx'],['Tesla Model 3 Performance','tesla-model-3-performance'],['Toyota Supra Mk4','supra-mk4']]){
       const car=page.getByRole('combobox',{name:'Your car'});await car.scrollIntoViewIfNeeded();await car.selectOption({label:name});
       await expect(car).toHaveValue(id);expect((await snap(page)).carId).toBe(id);
       const bounds=await car.boundingBox();expect(bounds!.x).toBeGreaterThanOrEqual(0);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(390);
@@ -78,6 +79,11 @@ test('touch settings expose all six cars and load only the selected engine bank'
         await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(20);
         expect((await snap(page)).audio.failed).toEqual([]);
         expect(requests.filter(name=>name.startsWith('moving-truck'))).toHaveLength(9);
+      }
+      if(id==='subaru-wrx'){
+        await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(17);
+        expect((await snap(page)).audio.failed).toEqual([]);
+        expect(requests.filter(name=>name.startsWith('subaru-wrx'))).toHaveLength(6);
       }
       if(id==='harbor-s4'){
         const audio=(await snap(page)).audio;
@@ -127,17 +133,25 @@ for(const scenario of ['missing GT loops','corrupt high-RPM loop','only generic 
   });
 }
 
-for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'],['supra-mk4','Toyota Supra Mk4','PlayerSupraMk4']]){
+for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'],['supra-mk4','Toyota Supra Mk4','PlayerSupraMk4'],['subaru-wrx','Subaru WRX','PlayerSubaruWRX']]){
   test(`${name}: selection, actual shifting, matching plates, mode changes and persistence`,async({page},info)=>{
     test.setTimeout(150000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
     await start(page);await page.keyboard.press('Escape');await page.getByRole('combobox',{name:'Your car'}).selectOption(id);
     await page.getByRole('button',{name:'Keep driving',exact:true}).click();
-    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(37);
+    await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(desktopDrivingSoundCount);
     await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe(id);
     expect((await snap(page)).audio.failed).toEqual([]);
     const plates=await page.evaluate(model=>{const g=(window as any).__backbay.scene.getObjectByName(model),p=g.getObjectByName('PlayerMassachusettsPlates');return {car:g.userData.carId,vertices:p.geometry.attributes.position.count,texture:!!p.material.map};},model);
     expect(plates).toEqual({car:id,vertices:8,texture:true});
     await page.screenshot({path:info.outputPath(`${id}-boston.png`)});
+    if(id==='subaru-wrx'){
+      await expect(page.locator('#gear')).toHaveAttribute('title',/Six-speed manual with shift assist/);
+      await page.keyboard.down('w');
+      try{
+        await expect.poll(async()=>(await snap(page)).audio.turboGain).toBeGreaterThan(.012);
+      }finally{await page.keyboard.up('w');}
+      await expect.poll(async()=>(await snap(page)).audio.turboGain).toBeLessThan(.005);
+    }
     await page.keyboard.down('w');
     try{await expect.poll(async()=>(await snap(page)).audio.shiftCount,{timeout:15000}).toBeGreaterThan(0);}finally{await page.keyboard.up('w');}
     await page.keyboard.press('r');

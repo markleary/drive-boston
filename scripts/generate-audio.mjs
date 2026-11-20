@@ -18,6 +18,30 @@ const model = 'eleven_text_to_sound_v2';
 const format = 'mp3_44100_128';
 const clips = [
   {
+    id:'subaru-wrx-idle', seconds:5, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'Stock 2024 Subaru WRX 2.4 liter FA24 turbo boxer four idling warm at a steady 750 RPM. Close dry tailpipe, low softly pulsing exhaust and a little valve ticking. Modern even firing note, subdued factory mufflers. Constant pitch and level throughout. Isolated engine only, no starting, revving, wind, road noise, voices or music.'
+  },
+  {
+    id:'subaru-wrx-drive', seconds:6, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'Close-miked stock Subaru WRX FA24 flat-four exhaust held at a steady 3200 RPM under load on a dynamometer. Warm throaty bass and clearly audible pitched, even firing pulses with a slightly grainy growl. Dry factory exhaust only, absolutely constant revs from beginning to end. No gear shifts, pitch sweeps, turbo hiss, wind, tires, voices or music.'
+  },
+  {
+    id:'subaru-wrx-high', seconds:5, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'Stock 2024 Subaru WRX FA24 2.4 liter four-cylinder boxer under full load held at exactly 5500 RPM, recorded at the tailpipe. Fast closely spaced exhaust pulses, tight midrange rasp over a low resonant growl. Realistic muffled production sports sedan. Constant pitch and level. No acceleration sweep, shifts, turbo whistle, wind, wheels, speech or music.'
+  },
+  {
+    id:'subaru-wrx-upshift', seconds:1, loop:false, model:'eleven_text_to_sound_v3',
+    prompt:'One quick manual shift in a stock turbocharged boxer-four sports sedan, heard just behind the car. A brief muted break in the exhaust followed by a low soft returning exhaust pulse as the clutch catches. Single short event and immediate natural decay. No bang, blowoff sound, repeated shifts, music or voices.'
+  },
+  {
+    id:'subaru-wrx-downshift', seconds:1, loop:false, model:'eleven_text_to_sound_v3',
+    prompt:'One brief, natural rev-matched downshift blip of a stock 2.4 liter Subaru flat-four with factory exhaust. A quick warm, rounded exhaust note rising and settling within half a second, isolated close to the tailpipe. No bangs, hissing, repeated revs, voices or music.'
+  },
+  {
+    id:'subaru-wrx-turbo-spool', seconds:4, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'An isolated stock automotive turbo compressor under steady boost, close microphone inside the intake airbox of a modern WRX. Fine smooth high turbine whir riding on a soft airy suction hiss, restrained and mechanical. Exactly constant pitch and pressure, seamless steady loop. Compressor only. No exhaust, release puffs, accelerating sweep, siren, road, wind, music or speech.'
+  },
+  {
     id: 'pond-fountain', seconds: 10, loop: true,
     prompt: 'Seamless outdoor ambience loop of one large park pond fountain, heard from the nearby bank. A steady airy hiss from the tall spray, with many fine droplets pattering into open water over a soft continuous rushing splash. Natural and even in level throughout. Isolated fountain water, no music, voices, birds, traffic or mechanical pump hum.'
   },

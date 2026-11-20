@@ -45,7 +45,7 @@ test('all player vehicles swap safely and retain the selected mass and footprint
   }finally{p.dispose();}
 });
 
-for(const id of ['mclaren-720s','supra-mk4'])test(`${id} complete bounded model, outward MA plates, wheel dimensions and unique paint`,()=>{
+for(const id of ['mclaren-720s','supra-mk4','subaru-wrx'])test(`${id} complete bounded model, outward MA plates, wheel dimensions and unique paint`,()=>{
   const car=createCar(id),spec=PLAYER_CARS[id];
   try{
     const paint=car.group.children.find(o=>o.isMesh&&o.material.isMeshPhysicalMaterial);
@@ -55,10 +55,44 @@ for(const id of ['mclaren-720s','supra-mk4'])test(`${id} complete bounded model,
     const plates=car.group.getObjectByName('PlayerMassachusettsPlates');assert.ok(plates);
     const pos=plates.geometry.attributes.position,norm=plates.geometry.attributes.normal;
     assert.equal(pos.count,8);for(let i=0;i<pos.count;i++)assert.equal(Math.sign(norm.getZ(i)),Math.sign(pos.getZ(i)));
-    let triangles=0;car.group.traverse(o=>{if(o.isMesh){const p=o.geometry.attributes.position,n=o.geometry.attributes.normal;triangles+=(o.geometry.index?.count??p.count)/3;for(let i=0;i<p.count;i++)assert.ok(Number.isFinite(p.getX(i)+p.getY(i)+p.getZ(i)+n.getX(i)+n.getY(i)+n.getZ(i)));}});
-    assert.ok(triangles<40000,`${triangles} triangles`);
+    let triangles=0,meshes=0;car.group.traverse(o=>{if(o.isMesh){meshes++;const p=o.geometry.attributes.position,n=o.geometry.attributes.normal;triangles+=(o.geometry.index?.count??p.count)/3;for(let i=0;i<p.count;i++)assert.ok(Number.isFinite(p.getX(i)+p.getY(i)+p.getZ(i)+n.getX(i)+n.getY(i)+n.getZ(i)));}});
+    assert.ok(triangles<(id==='subaru-wrx'?70000:40000),`${triangles} triangles`);
+    if(id==='subaru-wrx'){
+      assert.ok(meshes<=28,`${meshes} meshes`);
+      const width=new THREE.Box3().setFromObject(car.group).getSize(new THREE.Vector3()).x;
+      assert.ok(Math.abs(width-79.3*.0254)<.004,`width including mirrors: ${width} m`);
+      assert.ok(paint.material.color.b>paint.material.color.g&&paint.material.color.g>paint.material.color.r,'blue body');
+    }
     if(id==='supra-mk4')assert.ok(paint.geometry.boundingBox.max.y<.76,'lowered wing remains below .76 m above chassis origin');
   }finally{car.dispose();}
+});
+
+test('WRX plates clear both fascias and its 245/40R18 wheels follow the four suspension pivots',()=>{
+  const car=createCar('subaru-wrx'), spec=PLAYER_CARS['subaru-wrx'];
+  try {
+    const travel=[.22,.23,.24,.25],angles=[.12,.24,.36,.48];
+    car.update({x:0,y:0,z:0,yaw:0,speed:3,steering:.16,suspension:travel,wheelAngles:angles},false);
+    car.group.updateMatrixWorld(true);
+    const plates=car.group.getObjectByName('PlayerMassachusettsPlates'),pos=plates.geometry.attributes.position;
+    for(const sign of [-1,1]){
+      const corners=Array.from({length:pos.count},(_,i)=>i).filter(i=>sign*pos.getZ(i)>0);
+      const y=corners.reduce((sum,i)=>sum+pos.getY(i)/corners.length,0);
+      for(const dx of [-.15,-.10,0,.10,.15])for(const dy of [-.073,-.048,0,.048,.073]){
+        const ray=new THREE.Raycaster(new THREE.Vector3(dx,y+dy,sign*4),new THREE.Vector3(0,0,-sign));
+        assert.equal(ray.intersectObject(car.group,true)[0]?.object,plates,`obstructed plate at ${dx}, ${dy} on end ${sign}`);
+      }
+    }
+    for(let i=0;i<4;i++){
+      const pivot=car.group.getObjectByName(`WrxWheelPivot${i}`),spin=car.group.getObjectByName(`WrxWheelSpin${i}`);
+      assert.equal(pivot.position.x,(i%2?1:-1)*(i<2?spec.track:spec.rearTrack)/2);
+      assert.equal(pivot.position.z,(i<2?1:-1)*spec.wheelbase/2);
+      assert.equal(pivot.position.y,-.08-travel[i]);assert.equal(pivot.rotation.y,i<2?.16:0);
+      assert.equal(spin.parent,pivot);assert.equal(spin.rotation.x,angles[i]);
+      const tire=spin.children.find(mesh=>mesh.material.color.getHex()===0x171a1b);
+      tire.geometry.computeBoundingBox();const size=tire.geometry.boundingBox.getSize(new THREE.Vector3());
+      assert.ok(Math.abs(size.x-.245)<.001);assert.ok(Math.abs(size.y/2-spec.wheelRadius)<.001);
+    }
+  } finally {car.dispose();}
 });
 
 for(const id of ['mclaren-720s','supra-mk4'])test(`${id} CCD stops the car at top speed`,async()=>{

@@ -1,3 +1,4 @@
+import {desktopDrivingSoundCount} from './helpers/audio-bank';
 import {test,expect,type Page} from '@playwright/test';
 type Snapshot={state:{x:number;y:number;z:number;yaw:number;speed:number};traffic:{x:number;z:number;yaw:number;speed:number;knocked:boolean;rejoining:boolean;dynamic:boolean}[];walkers:{x:number;y:number;z:number;yaw:number;knocked:string|null}[];audio:{loadedCount:number;failed:string[];impactCount:number;activeOneShots:number};paused:boolean};
 const snapshot=(page:Page)=>page.evaluate(()=>(window as unknown as {__backbay:{snapshot():Snapshot}}).__backbay.snapshot());
@@ -10,7 +11,7 @@ test('driving into traffic knocks the car and plays a crash; a struck walker goe
   page.on('console',message=>{if(message.type()==='error'||/GL_INVALID|INVALID_(?:OPERATION|VALUE|ENUM)/i.test(message.text()))errors.push(message.text());});
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
   await expect(page.locator('#welcome')).toBeHidden();
-  await expect.poll(async()=>(await snapshot(page)).audio.loadedCount,{timeout:20000}).toBe(37);
+  await expect.poll(async()=>(await snapshot(page)).audio.loadedCount,{timeout:20000}).toBe(desktopDrivingSoundCount);
   expect((await snapshot(page)).audio.failed).toEqual([]);
   // Boylston opens with lane keepers ahead; full throttle catches one from behind.
   const start=await snapshot(page);expect(start.traffic.every(a=>!a.knocked&&!a.dynamic)).toBe(true);
