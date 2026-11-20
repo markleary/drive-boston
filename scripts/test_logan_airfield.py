@@ -73,6 +73,15 @@ class PavementTest(unittest.TestCase):
   self.assertLess(self.buildings[0].distance(Point(bridge['line'][0])),3);self.assertLess(bridge['line'][-1][0],a1['nose'][0],'west of an aircraft that faces north is its left')
   self.assertAlmostEqual(abs(bridge['line'][-1][0]-a1['nose'][0]),spec['body']/2+.4,2);self.assertAlmostEqual(bridge['line'][-1][1],a1['nose'][1]+spec['door'],2)
 
+ def test_rings_are_filed_in_one_form_whatever_the_overlay_hands_back(self):
+  # The same square with a hole, begun at another vertex and wound the other way.
+  a=A.canonical([[0,0,10,0,10,10,0,10],[4,4,4,6,6,6,6,4]]);b=A.canonical([[10,10,10,0,0,0,0,10],[6,6,4,6,4,4,6,4]])
+  self.assertEqual(a,b);self.assertEqual(a[0][:2],[0,0]);self.assertEqual(a[1][:2],[4,4])
+  area=lambda f:sum(f[i]*f[(i+3)%len(f)]-f[(i+2)%len(f)]*f[i+1] for i in range(0,len(f),2));self.assertGreater(area(a[0])*-area(a[1]),0,'the hole winds against the outline')
+  layers,_,_=A.pavement(self.city,self.ways,[],self.runways,self.buildings)
+  for shape in layers.values():
+   for part in A.polygons(shape):self.assertTrue(all(abs(v*100-round(v*100))<1e-6 for xz in part.exterior.coords for v in xz),'every vertex is on the centimetre grid')
+
  def test_a_relations_open_outer_ways_join_into_one_ring(self):
   rings=[{'role':'outer','line':[(0,0),(10,0),(10,10)]},{'role':'outer','line':[(10,10),(0,10),(0,0)]},{'role':'inner','line':[(4,4),(6,4),(6,6),(4,6),(4,4)]}]
   shapes=A.ring_polygons(rings);self.assertEqual(len(shapes),1);self.assertAlmostEqual(shapes[0].area,96)

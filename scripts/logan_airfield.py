@@ -27,6 +27,7 @@ terminal on the lead-in line, each one clear of every building outline and of th
 """
 from __future__ import annotations
 import gzip,hashlib,json,math,pathlib,struct
+import shapely
 from pyproj import Transformer
 from shapely.geometry import LineString,MultiPolygon,Point,Polygon,box
 from shapely.ops import linemerge,polygonize,unary_union
@@ -180,17 +181,29 @@ def obstacles(source,ways,relations):
  return [s for s in shapes if not s.is_empty]
 
 
+# Every shape is held on a centimetre grid and every overlay is made on it (GEOS's fixed-precision overlay), so that
+# the sidecar is the same bytes on any machine. In floating point the last bit of a buffer's arc differs between an
+# x86 and an ARM build of the same GEOS, and where two layers share an edge that bit decided whether a sliver of a
+# few square metres was cut off, how a ring was noded and where it began: a replay on Linux x64 gave the shoulder
+# layer 7 m2 less than the installed package and began 21 of its rings elsewhere, and CI refused it.
+GRID=.01
+def fixed(shape):return shapely.set_precision(shape,GRID)
+def join(shapes):return shapely.union_all([fixed(s) for s in shapes],grid_size=GRID)
+def less(a,b):return shapely.difference(a,b,grid_size=GRID)
+def both(a,b):return shapely.intersection(a,b,grid_size=GRID)
+
+
 def land(city,aerodrome):
  """Where pavement may lie: the airport, a margin about its outline, less mapped water."""
- water=unary_union([Polygon(w['rings'][0],w['rings'][1:]).buffer(0) for w in city['water'] if len(w['rings'][0])>3 and Polygon(w['rings'][0]).intersects(aerodrome)])
- return aerodrome.buffer(LAND_MARGIN).difference(water.buffer(1.0))
+ water=join([Polygon(w['rings'][0],w['rings'][1:]).buffer(0) for w in city['water'] if len(w['rings'][0])>3 and Polygon(w['rings'][0]).intersects(aerodrome)])
+ return less(fixed(aerodrome.buffer(LAND_MARGIN)),fixed(water.buffer(1.0)))
 
 
 def pavement(city,ways,relations,runways,obstacles_=()):
  """The four layers, disjoint, on land: runway over taxiway over apron over shoulder."""
- aerodrome=next(Polygon(w['line']) for w in ways if w['kind']=='aerodrome').buffer(0);ground=land(city,aerodrome)
- runway=unary_union([strip(r['ends'][0]['point'],r['ends'][1]['point'],r['width']) for r in runways])
- edge=unary_union([strip(r['ends'][0]['point'],r['ends'][1]['point'],r['width']+2*r['shoulder']) for r in runways])
+ aerodrome=next(Polygon(w['line']) for w in ways if w['kind']=='aerodrome').buffer(0);ground=land(city,aerodrome);solid=join(list(obstacles_)) if len(obstacles_) else Polygon()
+ runway=join([strip(r['ends'][0]['point'],r['ends'][1]['point'],r['width']) for r in runways])
+ edge=join([strip(r['ends'][0]['point'],r['ends'][1]['point'],r['width']+2*r['shoulder']) for r in runways])
  stopways=[];beds=[]
  for w in ways:
   if w['kind']!='stopway':continue
@@ -198,28 +211,39 @@ def pavement(city,ways,relations,runways,obstacles_=()):
   (beds if w.get('stopway')=='emas' else stopways).append(shape)
  taxi_lines=[LineString(w['line']) for w in ways if w['kind']=='taxiway' and len(w['line'])>1]
  lane_lines=[LineString(w['line']) for w in ways if w['kind']=='taxilane' and len(w['line'])>1]
- taxiway=unary_union([l.buffer(TAXIWAY/2,quad_segs=6) for l in taxi_lines])
- taxi_edge=unary_union([l.buffer(TAXIWAY/2+TAXI_SHOULDER,quad_segs=6) for l in taxi_lines])
+ taxiway=join([l.buffer(TAXIWAY/2,quad_segs=6) for l in taxi_lines])
+ taxi_edge=join([l.buffer(TAXIWAY/2+TAXI_SHOULDER,quad_segs=6) for l in taxi_lines])
  aprons=[Polygon(w['line']).buffer(0) for w in ways if w['kind']=='apron' and len(w['line'])>3]
  for r in relations:
   if r['kind']=='apron':aprons.extend(ring_polygons(r['rings']))
  # A stand is paved as wide as the aircraft it takes, and the wedges the mapped outlines leave between a pier's
  # taxilanes are apron too: the union is closed over `APRON_CLOSE`.
  stands=[LineString(w['line']).buffer(STAND/2,quad_segs=4) for w in ways if w['kind']=='parking_position' and len(w['line'])>1]
- apron=unary_union(aprons+[l.buffer(TAXILANE/2,quad_segs=6) for l in lane_lines]+stands).buffer(APRON_CLOSE,quad_segs=4).buffer(-APRON_CLOSE,quad_segs=4)
- apron=unary_union([apron]+beds).difference(unary_union(obstacles_))
- shoulder=unary_union([edge,taxi_edge]+stopways)
- layers={'runway':runway,'taxiway':taxiway.difference(runway),'apron':apron.difference(runway).difference(taxiway)}
+ apron=fixed(fixed(join(aprons+[l.buffer(TAXILANE/2,quad_segs=6) for l in lane_lines]+stands).buffer(APRON_CLOSE,quad_segs=4)).buffer(-APRON_CLOSE,quad_segs=4))
+ apron=less(join([apron]+beds),solid)
+ shoulder=join([edge,taxi_edge]+stopways)
+ layers={'runway':runway,'taxiway':less(taxiway,runway),'apron':less(less(apron,runway),taxiway)}
  # A small gap wholly inside the pavement with apron along a good part of its edge is a painted island on the
  # apron, not grass: the islands between converging taxiways, which have none, stay.
- whole=unary_union(list(layers.values())+[shoulder]);islands=[]
+ whole=join(list(layers.values())+[shoulder]);islands=[];beside=fixed(layers['apron'].buffer(.5))
  for part in polygons(whole):
   for ring in part.interiors:
    hole=Polygon(ring)
-   if hole.area<=ISLAND and hole.exterior.intersection(layers['apron'].buffer(.5)).length>=.3*hole.exterior.length and not hole.intersects(unary_union(obstacles_)):islands.append(hole)
- if islands:layers['apron']=unary_union([layers['apron']]+islands).difference(runway).difference(taxiway)
- layers['shoulder']=shoulder.difference(unary_union(list(layers.values())))
- return {name:shape.intersection(ground).simplify(SIMPLIFY) for name,shape in layers.items()},aerodrome,ground
+   if hole.area<=ISLAND and hole.exterior.intersection(beside).length>=.3*hole.exterior.length and not hole.intersects(solid):islands.append(hole)
+ if islands:layers['apron']=less(less(join([layers['apron']]+islands),runway),taxiway)
+ layers['shoulder']=less(shoulder,join(list(layers.values())))
+ return {name:fixed(both(shape,ground).simplify(SIMPLIFY)) for name,shape in layers.items()},aerodrome,ground
+
+
+def canonical(rings):
+ """A polygon's rings in one form whatever the overlay handed back: each begun at its least vertex, the outline
+ anticlockwise and the holes clockwise (x east, z south, by the shoelace sum), the holes in order of their first vertex."""
+ out=[]
+ for i,flat in enumerate(rings):
+  pts=[(flat[k],flat[k+1]) for k in range(0,len(flat),2)];area=sum(a[0]*b[1]-b[0]*a[1] for a,b in zip(pts,pts[1:]+pts[:1]))
+  if (area<0)==(i==0):pts.reverse()
+  k=pts.index(min(pts));pts=pts[k:]+pts[:k];out.append([v for p in pts for v in p])
+ return [out[0]]+sorted(out[1:])
 
 
 def tiled(layers,size):
@@ -230,7 +254,7 @@ def tiled(layers,size):
   for tx in range(math.floor(minx/size),math.floor(maxx/size)+1):
    for tz in range(math.floor(minz/size),math.floor(maxz/size)+1):
     cell=box(tx*size,tz*size,(tx+1)*size,(tz+1)*size);out=[]
-    for p in polygons(shape.intersection(cell)):
+    for p in polygons(both(shape,cell)):
      rings=[]
      for ring in [p.exterior,*p.interiors]:
       flat=[];last=None
@@ -239,8 +263,8 @@ def tiled(layers,size):
        if q!=last:flat.extend(q);last=q
       if len(flat)>=6 and flat[:2]==flat[-2:]:flat=flat[:-2]
       if len(flat)>=6:rings.append(flat)
-     if rings and len(rings[0])>=6:out.append(rings)
-    if out:tiles.setdefault(f'{tx}_{tz}',{})[name]=out
+     if rings and len(rings[0])>=6:out.append(canonical(rings))
+    if out:tiles.setdefault(f'{tx}_{tz}',{})[name]=sorted(out)
  return dict(sorted(tiles.items(),key=lambda kv:tuple(map(int,kv[0].split('_')))))
 
 
@@ -248,9 +272,10 @@ def cut_lines(lines,keep,minimum=3.0):
  """The parts of the lines inside `keep`, as point lists of at least `minimum` metres."""
  out=[]
  for line in lines:
-  part=LineString(line).intersection(keep)
-  for piece in (part.geoms if hasattr(part,'geoms') else [part]):
-   if isinstance(piece,LineString) and piece.length>=minimum:out.append([(x,z) for x,z in piece.simplify(.1).coords])
+  whole=LineString(line);part=whole.intersection(keep)
+  # In order along the line, whatever order the overlay gives the pieces in.
+  for piece in sorted([g for g in (part.geoms if hasattr(part,'geoms') else [part]) if isinstance(g,LineString) and g.length>=minimum],key=lambda g:round(whole.project(Point(g.coords[0])),2)):
+   out.append([(x,z) for x,z in piece.simplify(.1).coords])
  return out
 
 
