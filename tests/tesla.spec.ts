@@ -1,3 +1,4 @@
+import {desktopDrivingSoundCount} from './helpers/audio-bank';
 import {test,expect} from '@playwright/test';
 
 const ID='tesla-model-3-performance';
@@ -10,12 +11,12 @@ test('Tesla dropdown, single-speed drive, reverse sound, lighting and saved sele
   await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:60000});
   await page.getByTestId('start-drive').click();await page.keyboard.press('Escape');
   const cars=page.getByRole('combobox',{name:'Your car'});
-  await expect(cars.locator('option')).toHaveCount(6);
+  await expect(cars.locator('option')).toHaveCount(7);
   await cars.selectOption(ID);
   await expect(page.locator('#car-description')).toContainText('163 mph');
   await page.screenshot({path:info.outputPath('tesla-dropdown-desktop.png')});
   await page.getByRole('button',{name:'Keep driving',exact:true}).click();
-  await expect.poll(async()=>(await snapshot(page)).audio.loadedCount).toBe(37);
+  await expect.poll(async()=>(await snapshot(page)).audio.loadedCount).toBe(desktopDrivingSoundCount);
   await expect.poll(async()=>(await snapshot(page)).audio.engineProfile).toBe(ID);
   expect((await snapshot(page)).audio.failed).toEqual([]);
   const reverseLoop=await page.evaluate(async()=>{

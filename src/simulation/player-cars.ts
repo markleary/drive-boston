@@ -1,6 +1,8 @@
+import { WRX, wrxGear, wrxGearing, wrxRpm } from './wrx-powertrain.ts';
+
 /** Metres, kilograms, newtons and watts. Manufacturer dimensions/performance
  * and calibrated game approximations are documented in public/models/PLAYER_CARS.md. */
-export type PlayerCarId = 'harbor-s4' | 'mclaren-gt' | 'mclaren-720s' | 'supra-mk4' | 'tesla-model-3-performance' | 'moving-truck';
+export type PlayerCarId = 'harbor-s4' | 'mclaren-gt' | 'mclaren-720s' | 'supra-mk4' | 'tesla-model-3-performance' | 'subaru-wrx' | 'moving-truck';
 export const DEFAULT_CAR: PlayerCarId = 'harbor-s4';
 export const isElectricCar = (id:PlayerCarId):id is 'tesla-model-3-performance' => id==='tesla-model-3-performance';
 /** Original, loaded medium-duty moving truck. Model coordinates use the same
@@ -55,6 +57,14 @@ export const PLAYER_CARS = {
     stiffness:53, compression:5.2, relaxation:6.8, travel:.12, friction:2.4,
     linearDamping:0, brakeForce:19500, power:510*745.7, traction:16350, wheelspin:1.25,
   },
+  'subaru-wrx': {
+    name:'Subaru WRX', description:'2.4L turbo BOXER · 271 hp · six-speed AWD',
+    mass:1523, wheelRadius:WRX.wheelRadius, rearWheelRadius:WRX.wheelRadius, wheelbase:2.670, track:1.560, rearTrack:1.570,
+    suspensionRest:.28, spawnHeight:.72, maxForwardSpeed:145*.44704, maxReverseSpeed:9,
+    maxSteering:.53, maxLateralAcceleration:10.5, halfWidth:.913, halfLength:2.334,
+    stiffness:44, compression:4.8, relaxation:6.3, travel:.14, friction:2.1,
+    linearDamping:0, brakeForce:15500, power:WRX.power, traction:10900, wheelspin:1,
+  },
   'moving-truck': {
     name:'Moving Truck', description:'Storrow Movers · loaded diesel · 12 ft high',
     mass:8200, wheelRadius:.47, rearWheelRadius:.47, wheelbase:4.40, track:2.02, rearTrack:2.04,
@@ -77,11 +87,13 @@ export const CAR_POWERTRAINS = {
   // Single-speed EV with the manual's 9.03:1 reduction ratio in carRpm;
   // no combustion idle, clutch interruption, or fictitious forward gear shifts.
   'tesla-model-3-performance': {efficiency:.9, dragArea:.51, rolling:180, shiftSeconds:0, redline:20000, shiftRpm:18700, midRpm:6500, highRpm:15000, shifts:[0,163*.44704], cgZ:-.07},
+  'subaru-wrx': {efficiency:.83, dragArea:.71, rolling:175, shiftSeconds:.30, redline:WRX.redline, shiftRpm:WRX.shiftRpm, midRpm:2900, highRpm:5300, cgZ:.21},
   'moving-truck': {efficiency:.80, dragArea:5.8, rolling:1050, shiftSeconds:.42, redline:3400, shiftRpm:2900, midRpm:1800, highRpm:2800, shifts:[0,5.0,9.5,15.5,22,31], cgZ:-.55},
 } as const;
 export type PerformanceCarId = keyof typeof CAR_POWERTRAINS;
 export const isPerformanceCar = (id:PlayerCarId):id is PerformanceCarId => id !== DEFAULT_CAR;
-export function carGear(id:PerformanceCarId,speed:number,previous:number){
+export function carGear(id:PerformanceCarId,speed:number,previous:number,pedal=1){
+  if(id==='subaru-wrx')return wrxGear(speed,previous,pedal);
   const shifts=CAR_POWERTRAINS[id].shifts,last=shifts.length-1;
   let gear=Math.max(1,Math.min(last,previous));
   while(gear<last&&speed>shifts[gear])gear++;
@@ -97,11 +109,12 @@ export const roadLoad=(id:PlayerCarId,speed:number)=>{const d=isPerformanceCar(i
 /** Swept volume (litres) and idle speed of each combustion engine. */
 export const ENGINES={
   'harbor-s4':{litres:2.0,idle:850,redline:6500},'mclaren-gt':{litres:3.994,idle:850,redline:8500},'mclaren-720s':{litres:3.994,idle:850,redline:8500},
-  'supra-mk4':{litres:2.997,idle:850,redline:6800},'moving-truck':{litres:6.7,idle:650,redline:3400},
+  'supra-mk4':{litres:2.997,idle:850,redline:6800},'subaru-wrx':{litres:2.387,idle:WRX.idle,redline:WRX.redline},'moving-truck':{litres:6.7,idle:650,redline:3400},
 } as const;
 /** Engine speed per road speed (rpm per m/s) in a gear: the ratio the HUD, the sound and engine braking share. */
 export const gearing=(id:PlayerCarId,gear:number)=>{
   if(!isPerformanceCar(id))return 400/Math.max(1,gear);
+  if(id==='subaru-wrx')return wrxGearing(gear);
   const spec=CAR_POWERTRAINS[id];return isElectricCar(id)?9.03*60/(2*Math.PI*PLAYER_CARS[id].wheelRadius):spec.shiftRpm/spec.shifts[Math.max(1,gear)];
 };
 /** Lift-off engine braking at the driven wheels (N). A closed throttle leaves the engine's friction and pumping
@@ -113,6 +126,7 @@ export function engineBrakeForce(id:PlayerCarId,rpm:number,gear:number){
   return torque*gearing(id,gear)*Math.PI/30*Math.max(0,Math.min(1,(rpm-e.idle-150)/350));
 }
 export function carRpm(id:PerformanceCarId,speed:number,gear:number,pedal:number){
+  if(id==='subaru-wrx')return wrxRpm(speed,gear,pedal);
   const spec=CAR_POWERTRAINS[id];
   if(isElectricCar(id))return Math.min(spec.redline,Math.abs(speed)/PLAYER_CARS[id].wheelRadius*60/(2*Math.PI)*9.03);
   return Math.min(spec.redline,Math.max((id==='moving-truck'?650:850)+Math.abs(pedal)*(id==='moving-truck'?400:550),Math.abs(speed)/spec.shifts[gear<0?1:gear]*spec.shiftRpm));

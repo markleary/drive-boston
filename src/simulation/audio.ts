@@ -8,13 +8,14 @@ const carSound=(id:CombustionCarId,layer:'idle'|'drive'|'high'|'upshift'|'downsh
 type TruckEffect = 'moving-truck-horn' | 'moving-truck-storrow-crash' | 'moving-truck-boo' | 'moving-truck-reverse';
 const EV_DRIVE='tesla-model-3-performance-drive', EV_REVERSE='tesla-model-3-performance-reverse';
 const EV_SOUNDS=[EV_DRIVE,EV_REVERSE] as const;
+const WRX_SPOOL='subaru-wrx-turbo-spool';
 const FOUNTAIN = 'pond-fountain';
 const FOUNTAIN_RANGE = 145; // metres from a jet
-type SoundName = typeof FOUNTAIN | CarSound | TruckEffect | typeof EV_SOUNDS[number] | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
+type SoundName = typeof FOUNTAIN | CarSound | TruckEffect | typeof EV_SOUNDS[number] | typeof WRX_SPOOL | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
 /** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
 type ListenerPosition = { x: number; z: number };
-type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean; wheelspin?:number };
+type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean; wheelspin?:number; turboBoost?:number };
 interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; releaseEnd?:number; }
 const CAR_IDS=(Object.keys(CAR_POWERTRAINS) as PerformanceCarId[]).filter((id):id is CombustionCarId=>!isElectricCar(id));
 const CAR_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high','upshift','downshift'] as const).map(layer=>carSound(id,layer)));
@@ -22,7 +23,7 @@ const CAR_ENGINE_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high'] as const).m
 const COMMON_SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
 const REVERSE_ALARM:TruckEffect='moving-truck-reverse';
 const TRUCK_EFFECTS:TruckEffect[]=['moving-truck-horn','moving-truck-storrow-crash','moving-truck-boo',REVERSE_ALARM];
-const SOUNDS:SoundName[] = [...CAR_SOUNDS, ...COMMON_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS];
+const SOUNDS:SoundName[] = [...CAR_SOUNDS, ...COMMON_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS,WRX_SPOOL];
 const ONE_SHOTS = new Set<SoundName>([...TRUCK_EFFECTS.filter(name=>name!==REVERSE_ALARM),...CAR_IDS.flatMap(id=>[carSound(id,'upshift'),carSound(id,'downshift')]),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
 /** Velocity change (m/s in one physics step) below which a knock is a bump rather than a crash. */
 const LIGHT_IMPACT = 3.5;
@@ -58,12 +59,12 @@ export class DriveAudio {
   }
 
   setCar(id:PlayerCarId){
-    if(id===this.carId)return;this.carId=id;this.previousDriveGear=0;this.gear=0;this.rpm=850;this.stopOneShots();this.stopReverseSounds();
+    if(id===this.carId)return;this.carId=id;this.previousDriveGear=0;this.gear=0;this.rpm=850;this.stopOneShots();this.resetVehicleEffects();
     if(this.context)for(const name of ['engine-idle','engine-drive',...CAR_SOUNDS,...EV_SOUNDS] as SoundName[])this.loops.get(name)?.gain.gain.setTargetAtTime(0,this.context.currentTime,.025);
     this.electric?.gain.gain.setTargetAtTime(0,this.context!.currentTime,.025);
     if (this.mobile) {
-      this.vehicleSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[]),...(isElectricCar(id)?EV_SOUNDS:[])];
-      for (const name of [...CAR_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS]) {
+      this.vehicleSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[]),...(isElectricCar(id)?EV_SOUNDS:[]),...(id==='subaru-wrx'?[WRX_SPOOL] as const:[])];
+      for (const name of [...CAR_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS,WRX_SPOOL] as const) {
         if (this.wantedSounds.includes(name)) continue;
         this.releaseSound(name);
         this.failed.delete(name);
@@ -90,14 +91,14 @@ export class DriveAudio {
   get enabled() { return !this.muted; }
   set enabled(value: boolean) {
     this.muted = !value;
-    if (this.muted) {this.stopOneShots();this.stopReverseSounds();}
+    if (this.muted) {this.stopOneShots();this.resetVehicleEffects();}
     this.syncMaster();
     if (value) this.resume();
   }
 
   setMode(mode: TravelMode) {
     if (mode === this.mode) return;
-    this.mode = mode; this.previousDriveGear=0;this.stopOneShots();this.stopReverseSounds();
+    this.mode = mode; this.previousDriveGear=0;this.stopOneShots();this.resetVehicleEffects();
     if (!this.context) return;
     const now = this.context.currentTime;
     const silent: SoundName[] = mode === 'helicopter' ? ['engine-idle', 'engine-drive', 'tire-road', 'tire-skid'] : mode==='bike'?['engine-idle','engine-drive','helicopter-rotor','tire-skid']:mode==='walk'?['engine-idle','engine-drive','helicopter-rotor','tire-road','tire-skid']:['helicopter-rotor'];
@@ -125,6 +126,7 @@ export class DriveAudio {
       reverseAlarm:this.loops.has(REVERSE_ALARM),electricReverse:this.loops.has(EV_REVERSE),
       electricReverseGain:this.loops.get(EV_REVERSE)?.gain.gain.value??0,
       electricReverseRate:this.loops.get(EV_REVERSE)?.source.playbackRate.value??0,
+      turboGain:this.loops.get(WRX_SPOOL)?.gain.gain.value??0,
       engineProfile:this.mode!=='drive'?'off':this.carEngineReady?this.carId:isElectricCar(this.carId)?'electric-fallback':this.loops.has('engine-idle')||this.loops.has('engine-drive')?'generic':this.fallback?'synthesized':'loading',
       engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0)+CAR_ENGINE_SOUNDS.reduce((sum,name)=>sum+(this.loops.get(name)?.gain.gain.value??0),0)+(this.fallback?.gain.gain.value??0)+(this.loops.get(EV_DRIVE)?.gain.gain.value??0)+(isElectricCar(this.carId)&&this.mode==='drive'?(this.electric?.gain.gain.value??0):0),
     };
@@ -158,7 +160,7 @@ export class DriveAudio {
   update(speed: number, throttle: number, paused: boolean, controls?: AudioControls, listener?: ListenerPosition) {
     const context = this.context;
     if (!context || this.disposed) return;
-    if (paused && !this.paused) this.stopOneShots();
+    if (paused && !this.paused) {this.stopOneShots();this.resetVehicleEffects();}
     this.paused = paused;
     this.syncMaster();
     this.updateReverseAlarm(!controls?.storrowed&&((controls?.gear??0)<0||speed<-.2));
@@ -228,7 +230,15 @@ export class DriveAudio {
     const id=this.carId,useCar=this.carEngineReady;
     if(isPerformanceCar(id)){
       const nextGear=controls?.gear??1;
-      if(this.previousDriveGear>0&&nextGear>0&&nextGear!==this.previousDriveGear&&velocity>2&&now-this.lastShift>.12){
+      const shifting = this.previousDriveGear>0 && nextGear>0 && nextGear!==this.previousDriveGear;
+      if (id==='subaru-wrx' && !this.muted) {
+        const boost=clamp(controls?.turboBoost??0), charge=clamp((boost-.45)/.55);
+        const underLoad=!shifting && !controls?.handbrake && (controls?.brake??0)<=.1;
+        const rate=.90+.35*boost;
+        // Follow the recorded compressor's ~600 Hz whir as playback speeds up.
+        this.setLoop(WRX_SPOOL,underLoad ? .034*charge*charge*load : 0,rate,600*rate);
+      }
+      if(shifting&&velocity>2&&now-this.lastShift>.12){
         const buffer=this.buffers.get(carSound(id,nextGear>this.previousDriveGear?'upshift':'downshift'));
         if(buffer&&!this.muted){
           const gentle=id!=='mclaren-gt';
@@ -240,17 +250,27 @@ export class DriveAudio {
     }
     // Use the complete generic engine mix until every dedicated car layer is
     // decoded, so either a partial failure or total loss cannot leave RPM gaps.
-    if(useCar&&id==='moving-truck'){
+    if (useCar) {
+      for(const name of CAR_ENGINE_SOUNDS)if(!name.startsWith(id+'-'))this.setLoop(name,0,1,2000);
+      this.setLoop('engine-idle',0,1,1000);this.setLoop('engine-drive',0,1,1000);
+    }
+    if(useCar&&id==='subaru-wrx'){
+      // The generated drive and high loops both have a dominant firing pulse near
+      // 80 Hz. Match their pitch to two firings per revolution across the blend.
+      const mid=clamp((this.rpm-850)/1150)*Math.PI/2;
+      const high=clamp((this.rpm-3500)/1700)*Math.PI/2;
+      const level=(.37+load*.32)*(now-this.lastShift<.16?.72:1);
+      this.setLoop(carSound(id,'idle'),Math.cos(mid)*.50,clamp(this.rpm/1080,.65,1.65),1450+load*550);
+      this.setLoop(carSound(id,'drive'),Math.sin(mid)*Math.cos(high)*level,clamp(this.rpm/2400,.39,2.7),1750+load*2400);
+      this.setLoop(carSound(id,'high'),Math.sin(high)*level,clamp(this.rpm/2340,.7,2.8),2400+load*3300);
+    }else if(useCar&&id==='moving-truck'){
       // The heavy diesel works below 3,000 RPM, with injector clatter at idle
       // and a loaded exhaust layer through its long automatic gear changes.
-      for(const name of CAR_ENGINE_SOUNDS)if(!name.startsWith(id+'-'))this.setLoop(name,0,1,2000);
       const driveMix=clamp(Math.max(velocity/5,load*.72)),highMix=clamp((this.rpm-2050)/750),duck=now-this.lastShift<.28?.72:1;
       this.setLoop(carSound(id,'idle'),(1-driveMix)*.58,clamp(this.rpm/650,.78,1.6),1700);
       this.setLoop(carSound(id,'drive'),driveMix*(1-highMix)*(.52+load*.23)*duck,clamp(this.rpm/1800,.45,1.7),1900+load*1800);
       this.setLoop(carSound(id,'high'),driveMix*highMix*(.48+load*.25)*duck,clamp(this.rpm/2800,.65,1.25),2300+load*1500);
-      this.setLoop('engine-idle',0,1,1000);this.setLoop('engine-drive',0,1,1000);
     }else if(useCar&&isPerformanceCar(id)){
-      for(const name of CAR_ENGINE_SOUNDS)if(!name.startsWith(id+'-'))this.setLoop(name,0,1,2000);
       const revised=id!=='mclaren-gt',supra=id==='supra-mk4';
       // Both newer cars now use mastered GT exhaust sources. All moving mixes
       // replace idle completely above 8 m/s and follow the sources' nominal
@@ -263,7 +283,6 @@ export class DriveAudio {
       this.setLoop(carSound(id,'idle'),(1-driveMix)*.48,clamp(this.rpm/850,.85,revised?1.3:1.5),revised?950:1200);
       this.setLoop(carSound(id,'drive'),driveMix*(1-highMix)*(supra?.47+load*.26:.44+load*.23)*shiftDuck,clamp(this.rpm/4000,.48,1.85),midCutoff);
       this.setLoop(carSound(id,'high'),driveMix*highMix*(supra?.43+load*.27:.40+load*.25)*shiftDuck,clamp(this.rpm/7000,.6,1.25),highCutoff);
-      this.setLoop('engine-idle',0,1,1000);this.setLoop('engine-drive',0,1,1000);
     }else{
       const mix=clamp(Math.max(velocity/6,load*.52));
       this.setLoop('engine-idle',this.failed.has('engine-drive')?.46:Math.cos(mix*Math.PI/2)*(.43+load*.12),clamp(this.rpm/1000,.82,1.55),780+load*650);
@@ -440,8 +459,8 @@ export class DriveAudio {
   private resume = () => {
     if (!this.muted && !document.hidden && this.context?.state === 'suspended') void this.context.resume().catch(() => {});
   };
-  private visibilityChanged = () => { if (document.hidden) {this.stopOneShots();this.stopReverseSounds();} this.syncMaster(); };
-  private hidePage = () => { this.paused = true; this.stopOneShots(); this.stopReverseSounds();this.syncMaster(); };
+  private visibilityChanged = () => { if (document.hidden) {this.stopOneShots();this.resetVehicleEffects();} this.syncMaster(); };
+  private hidePage = () => { this.paused = true; this.stopOneShots(); this.resetVehicleEffects();this.syncMaster(); };
 
   private syncMaster() {
     if (!this.context || !this.master) return;
@@ -537,7 +556,11 @@ export class DriveAudio {
     for(const loop of this.retiringLoops)this.fadeOutLoop(loop,.035);
   }
 
-  private stopReverseSounds(){this.stopLoop(REVERSE_ALARM);this.stopElectricReverse();}
+  private resetVehicleEffects(){
+    this.stopLoop(REVERSE_ALARM);
+    this.stopElectricReverse();
+    this.setLoop(WRX_SPOOL,0,1,600);
+  }
 
   private updateElectricReverse(speed:number,reverseGear:boolean){
     const active=this.loops.has(EV_REVERSE);
@@ -578,7 +601,9 @@ export class DriveAudio {
     const context = this.context!;
     const source = context.createBufferSource(); source.buffer = buffer; source.loop = true;
     source.playbackRate.value=initialRate;
-    const filter = context.createBiquadFilter(); filter.type = 'lowpass'; filter.Q.value = 0.5;
+    const filter = context.createBiquadFilter();
+    filter.type = name===WRX_SPOOL ? 'bandpass' : 'lowpass';
+    filter.Q.value = name===WRX_SPOOL ? 2 : .5;
     const gain = context.createGain(); gain.gain.value = 0;
     source.connect(filter); filter.connect(gain); gain.connect(this.master!);
     this.loops.set(name, { source, gain, filter }); source.start();

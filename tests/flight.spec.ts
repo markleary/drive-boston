@@ -1,3 +1,4 @@
+import {desktopDrivingSoundCount} from './helpers/audio-bank';
 import { test, expect, type Page } from '@playwright/test';
 
 interface Position { x: number; y: number; z: number; yaw: number; speed: number; }
@@ -33,7 +34,7 @@ test('helicopter: lift, fly, turn, descend, inspect, pause and return to the car
   await expect.poll(async () => (await snapshot(page)).travelMode).toBe('helicopter');
   await expect(page.getByTestId('mode-helicopter')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#altitude-readout')).toBeVisible();
-  await expect.poll(async () => (await snapshot(page)).audio.loadedCount, { timeout: 20000 }).toBe(37);
+  await expect.poll(async () => (await snapshot(page)).audio.loadedCount, { timeout: 20000 }).toBe(desktopDrivingSoundCount);
   await expect.poll(async () => (await snapshot(page)).audio.engineGain).toBeLessThan(.001);
   await expect.poll(async () => (await snapshot(page)).audio.rotorGain).toBeGreaterThan(.1);
   expect((await snapshot(page)).audio.failed).toEqual([]);

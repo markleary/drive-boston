@@ -1,6 +1,6 @@
 # Back Bay sound effects
 
-These thirty-eight local sound effects comprise thirty-four ElevenLabs Sound Effects generations (thirty-three v2 and one v3) and four locally mastered variations of the approved GT engine sources. They are not recordings of Boston or of a particular vehicle. No reference voices, music, or third-party recordings were supplied. The Storrowing reaction includes a generated nonverbal crowd boo. The prompts, requested durations, provider settings, generation timestamps, and file checksums are recorded in [provenance.json](./provenance.json).
+The game ships 44 synthetic effects, including 40 original ElevenLabs Sound Effects generations (33 v2 and seven v3) and four locally mastered variations of the GT exhaust. The Storrowing reaction includes a generated nonverbal crowd boo. Generation prompts, requested durations, provider settings, timestamps, and file checksums are recorded in [provenance.json](./provenance.json).
 
 | File | Requested duration | Use |
 | --- | ---: | --- |
@@ -27,7 +27,7 @@ Generated output use is subject to the generating account's applicable [ElevenLa
 
 Five car-specific effects (22 seconds) were generated with the same ElevenLabs v2 settings: `mclaren-gt-idle` (6 s loop), `mclaren-gt-drive` (8 s loop at 4,000 RPM), `mclaren-gt-high` (6 s loop at 7,000 RPM), `mclaren-gt-upshift` and `mclaren-gt-downshift` (1 s each, one-shots). These are synthetic GT V8 interpretations, not authentic vehicle recordings. The selected car controls the engine layers; the GT's actual Rapier drivetrain gear changes trigger its shift sounds. Shift playback uses a quieter mix, a 1,100 Hz low-pass filter, a 25 ms fade-in and an 80 ms fade-out to soften the generated clutch clicks while retaining the lower exhaust/blip character. Pause, mute, vehicle-mode changes and car changes gate/cancel the sounds.
 
-Generate just these missing assets with `node scripts/generate-audio.mjs --only=mclaren-gt --generate`. The 60-second generation guard applies to pending assets per invocation. Existing files are never regenerated. The full library now has 168.5 nominal seconds of audio (140.5 directly generated, plus 28 mastered from existing sources).
+Generate just these missing assets with `node scripts/generate-audio.mjs --only=mclaren-gt --generate`. The 60-second generation guard applies to pending assets per invocation. Existing files are never regenerated.
 
 If any dedicated combustion-car engine layer is still loading or fails to fetch/decode, the car uses the generic engine recordings across the full RPM range. Either generic loop can cover for the other; if both are unavailable, the synthesized engine remains audible. Once all three selected-car layers are ready, their normal mix replaces the fallback. Shift effects remain independent of engine-loop availability.
 
@@ -46,6 +46,12 @@ Both new cars retain reduced shift gains (0.11 up / 0.14 down), a 650 Hz low-pas
 Selecting a car silences the other engine banks and cancels pending shift sounds. A partial failure of the selected bank falls back to the generic engine mix across the full RPM range. Browser tests cover missing/corrupt files, switching to a healthy bank, pause, bike/helicopter transitions and persistence. Static MP3 playback never calls a provider.
 
 The mastered 720S drive/high files use the `gt-exhaust-4` query revision; the Supra drive/high files use `six-exhaust-3`, and both cars' idle/shift clips retain `exhaust-2`, so reloading a preview fetches only the intended replacements.
+
+## Subaru WRX
+
+Six ElevenLabs Sound Effects v3 clips provide 22 seconds of stock WRX-inspired audio (359 KB). Three loops cover warm idle, loaded exhaust and high-RPM exhaust. The mixer follows engine RPM, matching the two loaded loops’ measured firing-pulse frequencies across their crossfade. The six-speed drivetrain triggers the two shift clips. Above 45% of peak boost, a narrow band around the recorded compressor’s 600 Hz whir rises slightly in pitch and volume under throttle. The whir fades beneath the exhaust on lift and through a shift.
+
+On phones, selecting the WRX loads its six files and switching away releases them. To generate missing WRX files, run `node scripts/generate-audio.mjs --only=subaru-wrx --generate`.
 
 ## Storrow Movers
 

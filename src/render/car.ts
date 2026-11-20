@@ -5,6 +5,7 @@ import { createMcLarenGeometry, createMcLarenWheelGeometry } from './mclaren-gt.
 import {create720SGeometry,create720SWheelGeometry} from './mclaren-720s.ts';
 import {createSupraGeometry,createSupraWheelGeometry} from './supra-mk4.ts';
 import {createMovingTruck} from './moving-truck.ts';
+import {createWrxGeometry,createWrxWheelGeometry,wrxPlatePositions} from './subaru-wrx.ts';
 import {createTeslaGeometry,createTeslaWheelGeometry,createTeslaCaliperGeometry,createTeslaWordmarkGeometry,createTeslaCarbonTexture} from './tesla-model-3.ts';
 import {teslaRearSurfaceZ,teslaFrontSurfaceZ} from './tesla-body.ts';
 import type { VehicleState } from '../types';
@@ -327,11 +328,11 @@ export function createMassachusettsPlateMaterial(registration = '4BK 026') {
 
 export function createCar(id:PlayerCarId=DEFAULT_CAR) {
   if(id==='moving-truck')return createMovingTruck();
-  const gt=id==='mclaren-gt',m720=id==='mclaren-720s',supra=id==='supra-mk4',tesla=id==='tesla-model-3-performance',stock=id===DEFAULT_CAR,spec=PLAYER_CARS[id];
-  const group = new THREE.Group(); group.name = gt?'PlayerMcLarenGT':m720?'PlayerMcLaren720S':supra?'PlayerSupraMk4':tesla?'PlayerTeslaModel3Performance':'PlayerCoupe';group.userData.carId=id;
+  const gt=id==='mclaren-gt',m720=id==='mclaren-720s',supra=id==='supra-mk4',wrx=id==='subaru-wrx',tesla=id==='tesla-model-3-performance',stock=id===DEFAULT_CAR,spec=PLAYER_CARS[id];
+  const group = new THREE.Group(); group.name = gt?'PlayerMcLarenGT':m720?'PlayerMcLaren720S':supra?'PlayerSupraMk4':wrx?'PlayerSubaruWRX':tesla?'PlayerTeslaModel3Performance':'PlayerCoupe';group.userData.carId=id;
   const carbonTexture=tesla?createTeslaCarbonTexture():null;
   const materials: Record<VehicleSurface, THREE.MeshStandardMaterial> = {
-    paint: new THREE.MeshPhysicalMaterial({ color: gt?0xc87935:m720?0x176bc1:supra?0xb91823:tesla?0xc11122:0xc8c5b0, metalness: gt||m720?.62:tesla?.32:supra?.28:.38, roughness: tesla?.27:.23, clearcoat: 1, clearcoatRoughness: tesla?.12:.13, side: stock||gt?THREE.FrontSide:THREE.DoubleSide }),
+    paint: new THREE.MeshPhysicalMaterial({ color: gt?0xc87935:m720?0x176bc1:supra?0xb91823:wrx?0x1767d9:tesla?0xc11122:0xc8c5b0, metalness: gt||m720?.62:wrx?.30:tesla?.32:supra?.28:.38, roughness: wrx?.31:tesla?.27:.23, clearcoat: 1, clearcoatRoughness: wrx?.20:tesla?.12:.13, side: stock||gt?THREE.FrontSide:THREE.DoubleSide }),
     trim: new THREE.MeshStandardMaterial({ color: 0x151b1e, metalness: .24, roughness: .48, side: THREE.DoubleSide }),
     carbon: new THREE.MeshPhysicalMaterial({color:0x4a4d50,map:carbonTexture,bumpMap:carbonTexture,bumpScale:.00012,metalness:.5,roughness:.32,clearcoat:.7,clearcoatRoughness:.2,side:THREE.DoubleSide}),
     rubber: new THREE.MeshStandardMaterial({ color: 0x171a1b, roughness: .94 }),
@@ -344,26 +345,29 @@ export function createCar(id:PlayerCarId=DEFAULT_CAR) {
     amber: new THREE.MeshStandardMaterial({ color: 0xb0651d, emissive: 0xd37817, emissiveIntensity: .15, roughness: .3 }),
     plate: new THREE.MeshStandardMaterial({ color: 0xdadacb, roughness: .48 }),
   };
-  for (const [surface, geometry] of gt?createMcLarenGeometry():m720?create720SGeometry():supra?createSupraGeometry():tesla?createTeslaGeometry():createVehicleGeometry('coupe', false)) {
+  for (const [surface, geometry] of gt?createMcLarenGeometry():m720?create720SGeometry():supra?createSupraGeometry():wrx?createWrxGeometry():tesla?createTeslaGeometry():createVehicleGeometry('coupe', false)) {
     const mesh = new THREE.Mesh(geometry, materials[surface]); mesh.castShadow = surface!=='cabinGlass'&&surface!=='roofGlass'; mesh.receiveShadow = surface!=='cabinGlass'&&surface!=='roofGlass'; if(tesla)mesh.name=`TeslaBody-${surface}`;group.add(mesh);
   }
   // Keep plate UVs separate from merged geometry so the tiny lettering stays crisp.
-  const plateMaterial = createMassachusettsPlateMaterial(m720?'7MS 720':supra?'2JZ 094':tesla?'3EV 024':'4BK 026');
+  const plateMaterial = createMassachusettsPlateMaterial(m720?'7MS 720':supra?'2JZ 094':wrx?'4VB 024':tesla?'3EV 024':'4BK 026');
   let plateGeometry:THREE.BufferGeometry;
   if(stock)plateGeometry=createVehiclePlateGeometry('coupe');
   else {
-    const front=new THREE.PlaneGeometry(.305,.1524);front.translate(0,gt?-.215:m720?-.27:tesla?-.27:-.13,gt?2.385:m720?2.30:tesla?teslaFrontSurfaceZ(0,-.27)+.014:2.298);
-    const rear=new THREE.PlaneGeometry(.305,.1524);rear.rotateY(Math.PI);rear.translate(0,gt?-.08:m720?-.23:tesla?-.03:-.09,gt?-2.367:m720?-2.31:tesla?teslaRearSurfaceZ(0,-.03)-.014:-2.296);
+    const front=new THREE.PlaneGeometry(.305,.1524);
+    if(wrx)front.translate(...wrxPlatePositions.front);else front.translate(0,gt?-.215:m720?-.27:tesla?-.27:-.13,gt?2.385:m720?2.30:tesla?teslaFrontSurfaceZ(0,-.27)+.014:2.298);
+    const rear=new THREE.PlaneGeometry(.305,.1524);rear.rotateY(Math.PI);
+    if(wrx)rear.translate(...wrxPlatePositions.rear);else rear.translate(0,gt?-.08:m720?-.23:tesla?-.03:-.09,gt?-2.367:m720?-2.31:tesla?teslaRearSurfaceZ(0,-.03)-.014:-2.296);
     plateGeometry=mergeGeometries([front,rear],false)!;front.dispose();rear.dispose();
   }
   const plates=new THREE.Mesh(plateGeometry,plateMaterial);plates.name='PlayerMassachusettsPlates';group.add(plates);
   if(!stock&&typeof document!=='undefined'){
     const canvas=document.createElement('canvas');canvas.width=512;canvas.height=96;
-    const context=canvas.getContext('2d')!;context.fillStyle='#d5d8da';context.textAlign='center';context.font=tesla?'52px Arial':'italic bold 68px Arial';context.fillText(tesla?'T  E  S  L  A':supra?'Supra':'McLaren',256,72);
+    const context=canvas.getContext('2d')!;context.fillStyle='#d5d8da';context.textAlign='center';context.font=tesla?'52px Arial':'italic bold 68px Arial';context.fillText(tesla?'T  E  S  L  A':supra?'Supra':wrx?'WRX':'McLaren',256,72);
     const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;
     const badge=new THREE.MeshStandardMaterial({map:texture,transparent:true,depthWrite:false,metalness:.4,roughness:.3});
     const geometry=tesla?createTeslaWordmarkGeometry():new THREE.PlaneGeometry(.25,.047);
-    if(!tesla){geometry.rotateY(Math.PI);geometry.translate(supra?.35:0,gt?.20:supra?.27:.115,gt?-2.44:supra?-2.268:-2.322);}
+    if(wrx){geometry.scale(.79,.79,1);geometry.rotateY(Math.PI);geometry.translate(...wrxPlatePositions.wordmark);}
+    else if(!tesla){geometry.rotateY(Math.PI);geometry.translate(supra?.35:0,gt?.20:supra?.27:.115,gt?-2.44:supra?-2.268:-2.322);}
     const wordmark=new THREE.Mesh(geometry,badge);if(tesla)wordmark.name='TeslaRearWordmark';group.add(wordmark);
   }
   // Satin B-pillars and fine window seals polish the existing coupe.
@@ -377,12 +381,13 @@ export function createCar(id:PlayerCarId=DEFAULT_CAR) {
     for(const [surface,geometry] of detail.finish())group.add(new THREE.Mesh(geometry,materials[surface]));
   }
   const caliperMaterial=tesla?new THREE.MeshStandardMaterial({color:0xe22b25,metalness:.28,roughness:.29}):undefined;
-  const wheelTrim=tesla?new THREE.MeshStandardMaterial({color:0x33373c,metalness:.85,roughness:.28,side:THREE.DoubleSide}):undefined;
+  const wheelTrim=tesla||wrx?new THREE.MeshStandardMaterial({color:wrx?0x48494e:0x33373c,metalness:wrx?.58:.85,roughness:.28,side:THREE.DoubleSide}):undefined;
   const wheels: { pivot: THREE.Group; spin: THREE.Group }[] = [];
   for (const z of [spec.wheelbase/2, -spec.wheelbase/2]) for (const side of [-1, 1]) {
     const pivot = new THREE.Group(); pivot.position.set(side * (z>0?spec.track:spec.rearTrack)/2, -.08-spec.suspensionRest, z); group.add(pivot);
     const spin = new THREE.Group(); pivot.add(spin);
-    for (const [surface, geometry] of gt?createMcLarenWheelGeometry(side,z>0):m720?create720SWheelGeometry(side,z>0):supra?createSupraWheelGeometry(side,z>0):tesla?createTeslaWheelGeometry(side,z>0):createVehicleWheelGeometry(side)) {
+    if(wrx){pivot.name=`WrxWheelPivot${wheels.length}`;spin.name=`WrxWheelSpin${wheels.length}`;}
+    for (const [surface, geometry] of gt?createMcLarenWheelGeometry(side,z>0):m720?create720SWheelGeometry(side,z>0):supra?createSupraWheelGeometry(side,z>0):wrx?createWrxWheelGeometry(side):tesla?createTeslaWheelGeometry(side,z>0):createVehicleWheelGeometry(side)) {
       const mesh = new THREE.Mesh(geometry, surface==='trim'&&wheelTrim?wheelTrim:materials[surface]); mesh.castShadow = true; spin.add(mesh);
     }
     if(tesla){

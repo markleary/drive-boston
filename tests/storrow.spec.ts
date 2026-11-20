@@ -1,3 +1,4 @@
+import {desktopDrivingSoundCount} from './helpers/audio-bank';
 import {test,expect} from '@playwright/test';
 const snapshot=(page:any)=>page.evaluate(()=>(window as any).__backbay.snapshot());
 test('Moving Truck strikes Longfellow, gets Storrowed once, and R repairs beyond the bridge',async({page},info)=>{
@@ -5,7 +6,7 @@ test('Moving Truck strikes Longfellow, gets Storrowed once, and R repairs beyond
  await page.addInitScript(()=>{localStorage.setItem('boston-player-car-v1','moving-truck');localStorage.setItem('backbay-drive-v1',JSON.stringify({x:194.9,z:-1208,yaw:3.075,roadId:'13129-0-0'}));});
  await page.goto('/');await expect(page.getByTestId('start-drive')).toBeEnabled({timeout:90000});await page.getByTestId('start-drive').click();
  await expect.poll(async()=>(await snapshot(page)).audio.engineProfile).toBe('moving-truck');
- await expect.poll(async()=>(await snapshot(page)).audio.loadedCount).toBe(37);
+ await expect.poll(async()=>(await snapshot(page)).audio.loadedCount).toBe(desktopDrivingSoundCount);
  await page.waitForTimeout(600); // Let the welcome-screen fade finish before the reference screenshot.
  await page.screenshot({path:info.outputPath('moving-truck-longfellow-before.png')});
  await page.keyboard.down('s');try{await expect.poll(async()=>(await snapshot(page)).state.speed).toBeLessThan(-.5);await expect.poll(async()=>(await snapshot(page)).audio.reverseAlarm).toBe(true);}finally{await page.keyboard.up('s');}

@@ -862,7 +862,8 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     state=next;touchDriving.setSpeed(state.speed);latestStats=stats??{};const speed=Math.abs(state.speed)*2.236936;
     const speedScale=travelMode==='helicopter'?HELICOPTER.cruiseSpeed*2.236936:travelMode==='walk'?WALKER.runSpeed*2.236936:travelMode==='bike'?56:PLAYER_CARS[carId].maxForwardSpeed*2.236936;
     el('speed-value').textContent=String(Math.round(speed));el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;el('gear').textContent=travelMode==='helicopter'?'H':travelMode==='walk'?'W':state.speed<-.3?'R':travelMode==='bike'?'E':isElectricCar(carId)?'D':`D${stats?.gear&&stats.gear>0?stats.gear:''}`;
-    el('gear').title=travelMode==='drive'?(isElectricCar(carId)?'Dual-motor electric · single-speed drive':stats?.rpm?`Automatic transmission · ${Math.round(stats.rpm)} rpm`:''):'';
+    const transmission=carId==='subaru-wrx'||carId==='supra-mk4'?'Six-speed manual with shift assist':'Automatic transmission';
+    el('gear').title=travelMode==='drive'?(isElectricCar(carId)?'Dual-motor electric · single-speed drive':stats?.rpm?`${transmission} · ${Math.round(stats.rpm)} rpm`:''):'';
     if(travelMode==='drive')el('journey-label').textContent=PLAYER_CARS[carId].name.toUpperCase();
     el('storrow-recovery').classList.toggle('hidden',!stats?.storrowed||travelMode!=='drive'||isPaused());
     el('storrow-toast').classList.toggle('hidden',isPaused()||travelMode!=='drive');

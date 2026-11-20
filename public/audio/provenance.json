@@ -446,6 +446,72 @@
       "generatedAt": "2026-11-18T18:58:46.036Z",
       "bytes": 160957,
       "sha256": "c36f5ec1e1622eb3bf345dd2239e8a66e3104d2b23ee13461b147db924909511"
+    },
+    {
+      "id": "subaru-wrx-idle",
+      "seconds": 5,
+      "loop": true,
+      "model": "eleven_text_to_sound_v3",
+      "prompt": "Stock 2024 Subaru WRX 2.4 liter FA24 turbo boxer four idling warm at a steady 750 RPM. Close dry tailpipe, low softly pulsing exhaust and a little valve ticking. Modern even firing note, subdued factory mufflers. Constant pitch and level throughout. Isolated engine only, no starting, revving, wind, road noise, voices or music.",
+      "file": "subaru-wrx-idle.mp3",
+      "generatedAt": "2026-11-20T20:59:40.676Z",
+      "bytes": 81127,
+      "sha256": "9103c499251d328fdee1afd7eed65cfe103eb592725f8a812d6b523375be95df"
+    },
+    {
+      "id": "subaru-wrx-drive",
+      "seconds": 6,
+      "loop": true,
+      "model": "eleven_text_to_sound_v3",
+      "prompt": "Close-miked stock Subaru WRX FA24 flat-four exhaust held at a steady 3200 RPM under load on a dynamometer. Warm throaty bass and clearly audible pitched, even firing pulses with a slightly grainy growl. Dry factory exhaust only, absolutely constant revs from beginning to end. No gear shifts, pitch sweeps, turbo hiss, wind, tires, voices or music.",
+      "file": "subaru-wrx-drive.mp3",
+      "generatedAt": "2026-11-20T20:59:42.349Z",
+      "bytes": 97009,
+      "sha256": "4950568c9662b666e1ef0dc7c8a611ab91b2970bbb5315a67a1e43c9d68cfcca"
+    },
+    {
+      "id": "subaru-wrx-high",
+      "seconds": 5,
+      "loop": true,
+      "model": "eleven_text_to_sound_v3",
+      "prompt": "Stock 2024 Subaru WRX FA24 2.4 liter four-cylinder boxer under full load held at exactly 5500 RPM, recorded at the tailpipe. Fast closely spaced exhaust pulses, tight midrange rasp over a low resonant growl. Realistic muffled production sports sedan. Constant pitch and level. No acceleration sweep, shifts, turbo whistle, wind, wheels, speech or music.",
+      "file": "subaru-wrx-high.mp3",
+      "generatedAt": "2026-11-20T20:59:43.908Z",
+      "bytes": 81127,
+      "sha256": "c9555d68764caa4046b29867b1690695ce0d5dcd485698da284db350879b6c66"
+    },
+    {
+      "id": "subaru-wrx-upshift",
+      "seconds": 1,
+      "loop": false,
+      "model": "eleven_text_to_sound_v3",
+      "prompt": "One quick manual shift in a stock turbocharged boxer-four sports sedan, heard just behind the car. A brief muted break in the exhaust followed by a low soft returning exhaust pulse as the clutch catches. Single short event and immediate natural decay. No bang, blowoff sound, repeated shifts, music or voices.",
+      "file": "subaru-wrx-upshift.mp3",
+      "generatedAt": "2026-11-20T20:59:44.954Z",
+      "bytes": 17179,
+      "sha256": "bbd3f97af3ce29da96ad9f9c16ca50ec8439626b63c2a5ba2e61c2c792a1267a"
+    },
+    {
+      "id": "subaru-wrx-downshift",
+      "seconds": 1,
+      "loop": false,
+      "model": "eleven_text_to_sound_v3",
+      "prompt": "One brief, natural rev-matched downshift blip of a stock 2.4 liter Subaru flat-four with factory exhaust. A quick warm, rounded exhaust note rising and settling within half a second, isolated close to the tailpipe. No bangs, hissing, repeated revs, voices or music.",
+      "file": "subaru-wrx-downshift.mp3",
+      "generatedAt": "2026-11-20T20:59:45.989Z",
+      "bytes": 17179,
+      "sha256": "6059ff0dda25305914f7fdcf6c4d24fc955072b1047bb51610560da0ab4cf0b1"
+    },
+    {
+      "id": "subaru-wrx-turbo-spool",
+      "seconds": 4,
+      "loop": true,
+      "model": "eleven_text_to_sound_v3",
+      "prompt": "An isolated stock automotive turbo compressor under steady boost, close microphone inside the intake airbox of a modern WRX. Fine smooth high turbine whir riding on a soft airy suction hiss, restrained and mechanical. Exactly constant pitch and pressure, seamless steady loop. Compressor only. No exhaust, release puffs, accelerating sweep, siren, road, wind, music or speech.",
+      "file": "subaru-wrx-turbo-spool.mp3",
+      "generatedAt": "2026-11-20T20:59:47.629Z",
+      "bytes": 65244,
+      "sha256": "d066cdb27723605c3d2655fa7baa869915dfb408ba8eea35bf032fbee7d04179"
     }
   ]
 }
