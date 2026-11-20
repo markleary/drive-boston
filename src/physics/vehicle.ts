@@ -514,16 +514,17 @@ export class DrivingPhysics {
     }
     // The WRX's clutch opens for each shift. Its common boost state supplies
     // both the torque curve at the driven tyres and the compressor audio.
+    const clutchOpen=handbrake||(wrx&&this.shiftRemaining>0);
     let wheelForce=spec.power*efficiency/Math.max(10,Math.abs(speed));
     if(wrx){
-      const load=handbrake||this.shiftRemaining>0||changeDirection||pedalBrake>.1?0:Math.abs(this.pedal);
+      const load=clutchOpen||changeDirection||pedalBrake>.1?0:Math.abs(this.pedal);
       this.turboBoost=wrxBoost(this.turboBoost,this.rpm,load,timestep);
-      wheelForce=this.shiftRemaining>0?0:wrxTorque(this.rpm,this.turboBoost)*wrxGearing(this.gear)*Math.PI/30*efficiency;
+      wheelForce=wrxTorque(this.rpm,this.turboBoost)*wrxGearing(this.gear)*Math.PI/30*efficiency;
     }
     const tractiveForce=Math.min(spec.traction,wheelForce);
     const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
     const held=electric&&!handbrake&&Math.abs(throttle)<.05&&(Math.abs(speed)<.25||this.held&&Math.abs(speed)<1);
-    const force = changeDirection || pedalBrake > 0.1 || handbrake || held ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
+    const force = changeDirection || pedalBrake > 0.1 || clutchOpen || held ? 0 : this.pedal * governedForce*(this.shiftRemaining>0?.2:1);
     const lift=1-Math.min(1,Math.abs(this.pedal)/.15);
     // Lift-off regeneration holds its rate down to a walk and then eases the car to rest, where Hold keeps it on
     // the friction brakes until the pedal is pressed again. It blends with the service brakes; actual braking
@@ -531,7 +532,7 @@ export class DrivingPhysics {
     const regenForce=electric&&!changeDirection&&!handbrake?REGEN.force*lift*Math.min(1,REGEN.ease+Math.abs(speed)/REGEN.walk):0;
     this.held=held;
     // A closed throttle leaves the engine to be turned by the driven wheels.
-    const engineBrake=electric||handbrake||this.loose||changeDirection?0:engineBrakeForce(id,this.rpm,this.gear)*lift;
+    const engineBrake=electric||clutchOpen||this.loose||changeDirection?0:engineBrakeForce(id,this.rpm,this.gear)*lift;
     this.braking = pedalBrake > 0.05 || handbrake || changeDirection || this.held || regenForce>spec.mass*1.3;
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
     const brakingImpulse = (changeDirection ? spec.brakeForce*Math.abs(throttle) : Math.max(pedalBrake * spec.brakeForce,this.held?spec.brakeForce*.5:0)) * timestep / 4;

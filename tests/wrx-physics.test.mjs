@@ -72,6 +72,25 @@ for (const dt of [1/60, 1/120]) test(`WRX AWD, boost, timed shifts, acceleration
   } finally { car.dispose(); }
 });
 
+test('WRX coasting downshift disconnects engine braking while the service brakes stay available', async () => {
+  const car = await DrivingPhysics.create(city), dt = 1/60;
+  const wheelBrakes = () => [0, 1, 2, 3].map(i => car.controller.wheelBrake(i));
+  try {
+    car.setCar('subaru-wrx');
+    advance(car, idle, 2, dt);
+    assert.equal(advance(car, full, 3.4, dt).gear, 2);
+    for (let i = 0; i < 30 / dt && car.getState().gear === 2; i++) car.step(idle, dt);
+    assert.equal(car.getState().gear, 1);
+    assert.deepEqual(wheelBrakes(), [0, 0, 0, 0], 'open clutch isolates the engine');
+    car.step({...idle, brake: .3}, dt);
+    assert.ok(wheelBrakes().every(impulse => impulse > 0), 'brake pedal still acts on all four wheels');
+    advance(car, idle, .15, dt);
+    assert.deepEqual(wheelBrakes(), [0, 0, 0, 0]);
+    advance(car, idle, .2, dt);
+    assert.ok(wheelBrakes().every(impulse => impulse > 0), 'engine braking returns in first gear');
+  } finally { car.dispose(); }
+});
+
 test('WRX sustains a 300-foot skidpad turn and loads the outside suspension in either direction', async () => {
   const car = await DrivingPhysics.create(city), dt = 1/60;
   const target = Math.sqrt(.95 * 9.81 * 45.72);
