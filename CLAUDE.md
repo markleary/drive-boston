@@ -87,6 +87,7 @@ node scripts/grade-terrain.mjs --data-dir /tmp/boston-staging        # offline r
 mkdir -p /tmp/boston-baseline
 git archive 9392b18 public/data | tar -x -C /tmp/boston-baseline
 .venv-data/bin/python scripts/merge-north-extension.py --data-dir /tmp/boston-staging --base-data /tmp/boston-baseline/public/data --baseline-commit 9392b18
+.venv-data/bin/python scripts/roof_soffits.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/connect-source-seams.py --data-dir /tmp/boston-staging --source-dir data-source-cache
 .venv-data/bin/python scripts/build-charles-dam.py --data-dir /tmp/boston-staging
 .venv-data/bin/python scripts/level-water-crossings.py --data-dir /tmp/boston-staging

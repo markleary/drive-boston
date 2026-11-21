@@ -23,12 +23,11 @@ NORTH=('Everett','Malden','Medford','Melrose')
 GAP=.6;WIDEST=3.2;NARROWEST=2.6;WALK=2.9;REACH=40;FLARE=.75;CLEAR=.25
 
 
-def parcel_polygons(source_dir,xy):
+def parcel_polygons(source_dir,xy,towns=NORTH):
  """One polygon per assessor parcel (condominium unit records repeat their parcel)."""
  out=[]
- for town in NORTH:
+ for town in towns:
   path=source_dir/f'parcels-{town.lower()}.json'
-  if not path.exists():continue
   seen=set()
   for f in json.loads(path.read_text())['features']:
    g=f.get('geometry');p=f['properties'];key=p.get('LOC_ID') or p.get('MAP_PAR_ID') or str(p['OBJECTID'])

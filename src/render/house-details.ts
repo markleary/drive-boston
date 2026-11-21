@@ -4,6 +4,7 @@ import { sampleElevation } from '../simulation/terrain';
 import { PartBatches, TriangleWriter, box, type Part } from './geometry-writer';
 import { due, type Pace } from './pacing';
 import { housePlan, outwardNormal, type HousePlan } from './house-plan';
+import { FLORENCE_HOUSE } from './melrose-entrances';
 import { housePalette, houseRoof, HOUSE_PALETTES, victorianEra } from './house-styles';
 import { planPorchStairs, stairFootprint } from './porch-stairs.ts';
 import { pointInside } from '../simulation/roads.ts';
@@ -129,7 +130,8 @@ export function* houseDetailSteps(scene:THREE.Scene,city:CityData,options:HouseD
     if(b.houseStyle==='garage'){garageDoor(b,plan);continue;}
     if(plan.chimney)chimney(b,plan.chimney);
     if(plan.tower){place(box(.07,.9,.07),m.finial,plan.tower.center[0],plan.tower.apex+.4,plan.tower.center[1],0);stats.finials++;}
-    const f=plan.front;if(!f)continue;
+    // The Florence house has its own porch and door, built with the tile shell.
+    const f=plan.front;if(!f || b.id===FLORENCE_HOUSE)continue;
     const yaw=Math.atan2(f.nx,f.nz),tx=f.nz,tz=-f.nx,flip=((f.b[0]-f.a[0])*tx+(f.b[1]-f.a[1])*tz)<0;
     const ox=(f.a[0]+f.b[0])/2,oz=(f.a[1]+f.b[1])/2,floor=base+plan.foundation;
     // Local frame: x along (nz,-nx) from the wall's midpoint, d out from the wall.

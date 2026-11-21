@@ -63,6 +63,8 @@ import { landmarkShellMaterial } from './metro-landmarks';
 import { museumShellMaterial } from './museum-of-science';
 import { stationShellMaterial } from './lechmere-viaduct';
 import { buildMelroseLandmark, replacesTileShell } from './melrose-landmarks';
+import { FLORENCE_HOUSE, MELROSE_SCHOOL, fitFlorenceWindows, florenceEntrance, schoolEntrance } from './melrose-entrances';
+import { siteKit } from './site-kit';
 import { buildSite, hasSiteFinish, replacesSiteShell, siteAdditions, siteExactShell, siteFor, siteShellMaterial } from './site-landmarks';
 import { sourceWallSampler, facadeDetailSteps } from './facade-details';
 import { streetscapeSteps } from './streetscape';
@@ -503,6 +505,13 @@ export function createTileBuilder(ctx: TileContext) {
           if (isChelseaLiftFrame(b)) material = chelseaLiftSteel;
           return material;
         };
+        if (b.id === MELROSE_SCHOOL || b.id === FLORENCE_HOUSE) {
+          const kit = siteKit(!!ctx.mobile);
+          const entrance = b.id === MELROSE_SCHOOL ? schoolEntrance(city, b, kit) : florenceEntrance(city, b, kit);
+          for (const mesh of entrance.meshes(b.name + ' entrance')) target.add(mesh);
+          const vertices = new Float32Array(entrance.solid);
+          colliders.push(physics.addStaticMesh(vertices, Uint32Array.from({ length: vertices.length / 3 }, (_, i) => i)));
+        }
         if (usesExactBuildingCollision(b) || siteExactShell(b)) {
           colliders.push(physics.addStaticMesh(data.positions, tileCollisionIndices(data))); stats.exactMeshes++;
           // The map draws this shell's outline instead of its convex hull, which would cover the streets it spans.
@@ -521,7 +530,11 @@ export function createTileBuilder(ctx: TileContext) {
             const { roof, trim } = splitHouseRoof(g); g.dispose();
             for (const [material, part] of [[roofMaterial, roof], [house.trim, trim]] as const) if (part.getAttribute('position').count) bucket(material, part, b.center[0], b.center[1]); else part.dispose();
           };
-          const walls = tileShellGeometry(data, b, false); if (walls) { paint(walls); bucket(house.facade, walls, b.center[0], b.center[1]); }
+          const walls = tileShellGeometry(data, b, false);
+          if (walls) {
+            if (b.id === FLORENCE_HOUSE) fitFlorenceWindows(walls, b);
+            paint(walls); bucket(house.facade, walls, b.center[0], b.center[1]);
+          }
           const roof = tileShellGeometry(data, b, true); if (roof) roofParts(roof);
           const tower = houseTowerGeometry(b, housePlan(city, b));
           if (tower) {

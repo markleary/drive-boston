@@ -23,6 +23,8 @@ def _order_generated_fields(entry):
 
 def independent_collision(entry):
  """Exact collision requested independently of the generated road cuts."""
+ # The entrance stairs at the Melrose schools enter an open courtyard inside the convex hull.
+ if entry['id']=='osm-way-135425346':return True
  prior=entry.get('buildingPassage') or {}
  return bool(entry.get('collision')=='mesh' and (entry.get('structure') or entry['id'] in KEY_BUILDING_IDS or
              prior.get('sourceCollision')=='mesh' or (not prior and 'roadOverlaps' not in entry and 'highwayOverlaps' not in entry)))
