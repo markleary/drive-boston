@@ -1,6 +1,6 @@
 # Back Bay sound effects
 
-The game ships 44 synthetic effects, including 40 original ElevenLabs Sound Effects generations (33 v2 and seven v3) and four locally mastered variations of the GT exhaust. The Storrowing reaction includes a generated nonverbal crowd boo. Generation prompts, requested durations, provider settings, timestamps, and file checksums are recorded in [provenance.json](./provenance.json).
+The game ships 50 synthetic effects, including 46 original ElevenLabs Sound Effects generations (33 v2 and 13 v3) and four locally mastered variations of the GT exhaust. The Storrowing reaction includes a generated nonverbal crowd boo. Generation prompts, requested durations, provider settings, timestamps, and file checksums are recorded in [provenance.json](./provenance.json).
 
 | File | Requested duration | Use |
 | --- | ---: | --- |
@@ -52,6 +52,26 @@ The mastered 720S drive/high files use the `gt-exhaust-4` query revision; the Su
 Six ElevenLabs Sound Effects v3 clips provide 22 seconds of stock WRX-inspired audio (359 KB). Three loops cover warm idle, loaded exhaust and high-RPM exhaust. The mixer follows engine RPM, matching the two loaded loops’ measured firing-pulse frequencies across their crossfade. The six-speed drivetrain triggers the two shift clips. Above 45% of peak boost, a narrow band around the recorded compressor’s 600 Hz whir rises slightly in pitch and volume under throttle. The whir fades beneath the exhaust on lift and through a shift.
 
 On phones, selecting the WRX loads its six files and switching away releases them. To generate missing WRX files, run `node scripts/generate-audio.mjs --only=subaru-wrx --generate`.
+
+## Maserati GT2 Stradale
+
+Five ElevenLabs Sound Effects v3 clips provide 21 seconds (342 KB) for the Nettuno twin-turbo V6, written to what road tests say of the car: a hushed, gruff idle, a bass-heavy gravelly roar that never becomes a scream, hard shifts and audible turbo induction. They are synthetic interpretations, not recordings of a Maserati.
+
+| File | Requested duration | Use |
+| --- | ---: | --- |
+| maserati-gt2-stradale-idle.mp3 | 5 s | Idle loop, heard alone at rest and faded out by 2,250 rpm |
+| maserati-gt2-stradale-drive.mp3 | 6 s | Loaded exhaust loop; its strongest tone is at 124 Hz |
+| maserati-gt2-stradale-high.mp3 | 5 s | Full-load exhaust loop; its strongest tone is at 202 Hz |
+| maserati-gt2-stradale-upshift.mp3 | 1 s | Dual-clutch upshift thump, entered 0.50 s in, where the event begins |
+| maserati-gt2-stradale-turbo.mp3 | 4 s | Induction rush of the two turbochargers, with a whistle at 611 Hz |
+
+The two exhaust loops are played at rpm/4,000 and rpm/6,500, the ratio of their measured tones, so the note is the same in both wherever they overlap (4,700 to 6,600 rpm) and rises in proportion to the revs. A closed throttle lowers the level and the low-pass cutoff, as the car's exhaust valves stay shut below 5,000 rpm in its road modes. The induction loop follows the physics' boost state through a band-pass on its whistle: it comes in with the boost at part throttle, stays under a fifth of the exhaust's level, and goes on the brakes. The upshift is loud under load and soft on a light pedal. The first high-rpm generation was 19 dB quieter than the other loops with a wandering pitch and was replaced by a second one with a reworded prompt; the rejected file is not shipped.
+
+A downshift has no clip of its own: the loops rise with the revs as the lower gear takes up. A generated rev-match blip was tried first (its prompt asked for a short exhaust "bark"). Played beside the engine it stood apart from it, and as the gearbox dropped from fourth to first on the way to a stop the three in a row were heard as a dog barking, so that clip is not shipped and the generator no longer lists it.
+
+The levels were set on recordings of the game's own output, not on the clips: a tap on the node that feeds the audio output while the real game ran muted, the car driven down Logan's runway 09/27 from a synthetic controller's triggers (idle, full throttle to 187 km/h, lift, brake to a stop; then the same at 30% pedal), and three other cars through the same run for comparison. The idle plays at -23.5 dBFS RMS, where the McLaren 720S and the WRX idle (-23.1 both; the Supra -27.7); full throttle at -21.0 (those three: -20.8 to -22.1); a closed throttle at speed at -26.8; 30% pedal at -23.7. No sample clips (peak -8.4 dBFS) and there is no step in the waveform. The idle loop's gain was 1.7 at first, which played it 7 dB over the car's own full throttle: every loop is normalized to one level as it loads, so a quiet file needs no more gain than a loud one, and the gain is .5 as on the other cars.
+
+On phones, selecting the car loads its five files and switching away releases them. To generate missing files, run `node scripts/generate-audio.mjs --only=maserati-gt2-stradale --generate`.
 
 ## Storrow Movers
 

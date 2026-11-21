@@ -1,6 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { DEFAULT_CAR, PLAYER_CARS, CAR_POWERTRAINS, HARBOR_DRIVE, ENGINES, MOVING_TRUCK, isPerformanceCar, isElectricCar, carGear, carRpm, roadLoad, engineBrakeForce, type PlayerCarId } from '../simulation/player-cars.ts';
 import { wrxBoost, wrxGearing, wrxTorque } from '../simulation/wrx-powertrain.ts';
+import { GT2, gt2Boost, gt2Downforce, gt2Gearing, gt2Torque } from '../simulation/gt2-powertrain.ts';
 import {lowClearanceAt} from '../simulation/low-clearance.ts';
 import {storrowRecoveryCandidates,storrowRetreatCandidates,storrowSolidRecoveryPlan,type StorrowRecoveryPlan} from '../simulation/storrow-recovery.ts';
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
@@ -15,7 +16,8 @@ import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
 import {tireSlipIntensity,type TireContact} from '../simulation/tire-tracks.ts';
 
 export const VEHICLE = PLAYER_CARS[DEFAULT_CAR];
-export const carSteeringLimit=(speed:number,spec:typeof PLAYER_CARS[PlayerCarId]=VEHICLE)=>Math.min(spec.maxSteering,Math.atan(spec.maxLateralAcceleration*spec.wheelbase/(speed*speed+16)));
+/** `grip` is the share by which aerodynamic load raises what the tyres hold (1 without any). */
+export const carSteeringLimit=(speed:number,spec:typeof PLAYER_CARS[PlayerCarId]=VEHICLE,grip=1)=>Math.min(spec.maxSteering,Math.atan(spec.maxLateralAcceleration*grip*spec.wheelbase/(speed*speed+16)));
 
 export interface PhysicsVehicleState extends VehicleState {
   rotation: { x: number; y: number; z: number; w: number };
@@ -24,7 +26,7 @@ export interface PhysicsVehicleState extends VehicleState {
   braking: boolean;
   gear: number;
   rpm: number;
-  /** WRX manifold pressure above atmosphere, normalized to full boost. */
+  /** Manifold pressure above atmosphere of a turbocharged car with a boost model (WRX, GT2 Stradale), normalized to full boost. */
   turboBoost: number;
   /** 0 to 1: how hard the rear tyres are spinning under power or sliding sideways (smoke, marks and squeal). */
   wheelspin: number;
@@ -195,7 +197,8 @@ export class DrivingPhysics {
   private configureCar() {
     const spec=this.carSpec,id=this.selectedCar,performance=isPerformanceCar(id),drive=performance?CAR_POWERTRAINS[id]:null;
     this.clearTruckBody();
-    this.chassisCollider.setTranslationWrtParent({x:0,y:-.06,z:0});
+    // The GT2 Stradale's nose overhangs its front axle by more than its tail the rear one.
+    this.chassisCollider.setTranslationWrtParent({x:0,y:-.06,z:id==='maserati-gt2-stradale'?(GT2.overhang[0]-GT2.overhang[1])/2:0});
     this.chassisCollider.setShape(new RAPIER.Cuboid(spec.halfWidth, performance?.19:.23, spec.halfLength));
     this.chassisCollider.setMassProperties(spec.mass, {x:0,y:isElectricCar(id)?-.24:performance?-.15:-.17,z:drive?.cgZ??0}, id==='mclaren-gt'?{x:2500,y:2850,z:750}:performance?{x:spec.mass*1.63,y:spec.mass*1.86,z:spec.mass*.49}:{x:2150,y:2250,z:720}, {x:0,y:0,z:0,w:1});
     this.body.setLinearDamping(spec.linearDamping); this.body.setAngularDamping(1.6);
@@ -463,7 +466,9 @@ export class DrivingPhysics {
     }
     const rearLoad=rear.reduce((sum,w)=>sum+w.load,0),rearSlide=rear.reduce((most,w)=>Math.max(most,Math.abs(w.sideways)),0),rearTravel=rear.reduce((most,w)=>Math.max(most,Math.hypot(w.forward,w.sideways)),0);
     // A tyre that slides holds four fifths of what it holds at its braking peak.
-    const wrx=id==='subaru-wrx';
+    const wrx=id==='subaru-wrx',gt2=id==='maserati-gt2-stradale';
+    // Aerodynamic load presses the tyres down, so they corner and brake harder the faster the car goes.
+    const downforce=gt2?gt2Downforce(speed):0,aeroGrip=1+downforce/(spec.mass*9.81);
     const rearShare=wrx||!performance ? .5 : electric ? .6 : 1;
     const grip=Math.max(.7,.8*spec.brakeForce/(spec.mass*9.81)),efficiency=(drive??HARBOR_DRIVE).efficiency;
     // The handbrake locks the rear wheels and opens the clutch (the electric car cuts its motors), so the pedal only
@@ -484,7 +489,7 @@ export class DrivingPhysics {
     // Slightly tighter arcs at parking and road speeds; cap lateral demand at the car's cornering limit. With the tail
     // out the front wheels may also turn by the angle the car is sliding at, or opposite lock could not catch it.
     const drift=this.sliding?Math.atan2(rearSlide,Math.max(1,Math.abs(speed))):0;
-    const steeringLimit = Math.min(spec.maxSteering,carSteeringLimit(speed,spec)+drift);
+    const steeringLimit = Math.min(spec.maxSteering,carSteeringLimit(speed,spec,aeroGrip)+drift);
     const desiredSteer = clamp(input.steer, -1, 1) * steeringLimit;
     this.steering += (desiredSteer - this.steering) * (1 - Math.exp(-(id==='moving-truck'?3.2:8) * timestep));
     const speedLimit = throttle >= 0 ? spec.maxForwardSpeed : spec.maxReverseSpeed;
@@ -521,6 +526,25 @@ export class DrivingPhysics {
       this.turboBoost=wrxBoost(this.turboBoost,this.rpm,load,timestep);
       wheelForce=wrxTorque(this.rpm,this.turboBoost)*wrxGearing(this.gear)*Math.PI/30*efficiency;
     }
+    if(gt2){
+      // The Nettuno's torque curve through the gear engaged. The twin clutches hand over without venting boost.
+      const load=handbrake||changeDirection||pedalBrake>.1?0:Math.abs(this.pedal);
+      this.turboBoost=gt2Boost(this.turboBoost,this.rpm,load,timestep);
+      wheelForce=gt2Torque(this.rpm,this.turboBoost)*gt2Gearing(this.gear)*Math.PI/30*efficiency;
+      if(downforce>0&&[0,1,2,3].filter(i=>c.wheelIsInContact(i)).length>=2){
+        // Splitter and wing: the load acts over each axle in the share Maserati gives for them.
+        // It is square to the car's travel, not to its floor: along the floor's normal, the pitch of the body
+        // would turn a share of it into thrust.
+        let ux=2*(q.x*q.y-q.w*q.z),uy=1-2*(q.x*q.x+q.z*q.z),uz=2*(q.y*q.z+q.w*q.x);
+        const travel=Math.hypot(lin.x,lin.y,lin.z)||1,along=(ux*lin.x+uy*lin.y+uz*lin.z)/travel;
+        ux-=along*lin.x/travel;uy-=along*lin.y/travel;uz-=along*lin.z/travel;
+        const at=this.body.translation(),half=spec.wheelbase/2,size=Math.hypot(ux,uy,uz)||1;
+        for(const [share,z] of [[GT2.frontShare,half],[1-GT2.frontShare,-half]]){
+          const push=-downforce*share*timestep/size;
+          this.body.applyImpulseAtPoint({x:ux*push,y:uy*push,z:uz*push},{x:at.x+fx*z,y:at.y+fy*z,z:at.z+fz*z},true);
+        }
+      }
+    }
     const tractiveForce=Math.min(spec.traction,wheelForce);
     const governedForce=Math.min(tractiveForce,Math.max(0,speedLimit-Math.abs(speed))*spec.mass*4+resistance);
     const held=electric&&!handbrake&&Math.abs(throttle)<.05&&(Math.abs(speed)<.25||this.held&&Math.abs(speed)<1);
@@ -535,7 +559,7 @@ export class DrivingPhysics {
     const engineBrake=electric||clutchOpen||this.loose||changeDirection?0:engineBrakeForce(id,this.rpm,this.gear)*lift;
     this.braking = pedalBrake > 0.05 || handbrake || changeDirection || this.held || regenForce>spec.mass*1.3;
     // Wheel brake is an impulse, so scale it with the physics step, not render FPS.
-    const brakingImpulse = (changeDirection ? spec.brakeForce*Math.abs(throttle) : Math.max(pedalBrake * spec.brakeForce,this.held?spec.brakeForce*.5:0)) * timestep / 4;
+    const brakingImpulse = (changeDirection ? spec.brakeForce*Math.abs(throttle) : Math.max(pedalBrake * spec.brakeForce*aeroGrip,this.held?spec.brakeForce*.5:0)) * timestep / 4;
     const rollingImpulse = !performance&&Math.abs(throttle) < 0.05&&Math.abs(speed)<1.5 ? 90*timestep : 0;
     for (let i = 0; i < 4; i++) {
       const radius=spec.wheelbase/Math.tan(this.steering||1e-8);
@@ -774,7 +798,7 @@ export class DrivingPhysics {
       const rx=point.x-p.x,ry=point.y-p.y,rz=point.z-p.z;
       const vx=v.x+w.y*rz-w.z*ry,vz=v.z+w.x*ry-w.y*rx,heading=yaw+(c.wheelSteering(i)??0);
       const speed=vx*Math.sin(heading)+vz*Math.cos(heading),side=vx*Math.cos(heading)-vz*Math.sin(heading);
-      contacts.push({wheel:i,x:point.x,y:point.y,z:point.z,normal:{x:normal.x,y:normal.y,z:normal.z},width:bike?.11:this.carId==='supra-mk4'?(i<2?.235:.255):this.carId==='mclaren-720s'?(i<2?.245:.305):this.carId==='mclaren-gt'?(i<2?.225:.295):.235,intensity:Math.max(tireSlipIntensity(input,speed,side,bike?i===1:i>=2,bike),!bike&&i>=2?Math.min(1,this.slip/3):0)});
+      contacts.push({wheel:i,x:point.x,y:point.y,z:point.z,normal:{x:normal.x,y:normal.y,z:normal.z},width:bike?.11:this.carId==='supra-mk4'?(i<2?.235:.255):this.carId==='mclaren-720s'||this.carId==='maserati-gt2-stradale'?(i<2?.245:.305):this.carId==='mclaren-gt'?(i<2?.225:.295):.235,intensity:Math.max(tireSlipIntensity(input,speed,side,bike?i===1:i>=2,bike),!bike&&i>=2?Math.min(1,this.slip/3):0)});
     }
     return contacts;
   }
