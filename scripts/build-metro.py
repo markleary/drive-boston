@@ -28,6 +28,7 @@ from building_clearance_package import prepare_buildings,prepare_package
 from building_collision_policy import KEY_BUILDING_IDS,exact_far_collision
 from osm_road_tags import bridge_source_layer,road_width,source_layer
 from house_shapes import eave_height,house_mesh,parse_stories,typology
+from roof_soffits import close_roof_soffits
 from mesh_winding import orient_patches
 spec=importlib.util.spec_from_file_location('city_compiler',ROOT/'scripts/build-city.py');central=importlib.util.module_from_spec(spec);spec.loader.exec_module(central)
 xy,rounded,hull,load_layer,feature_polygons,polygon_rings,polygon_parts,context_polygons,visible_floor,geographic_polygon=central.xy,central.rounded,central.hull,central.load_layer,central.feature_polygons,central.polygon_rings,central.polygon_parts,central.context_polygons,central.visible_floor,central.geographic_polygon
@@ -727,6 +728,7 @@ def build_buildings(cache,args,coverage,covered,legacy,districts,grid,osm_buildi
    shape=house_mesh(poly,base,eave,house['typology'],stories=house['stories'],attic=house['attic'],turrets=False)
    if shape:vertices,faces,roof_mask,roof_meta=shape;record=tileformat.mesh_record(vertices,faces,[ax,base,az],base,repair_winding=False,roof_mask=roof_mask)
   if record is None:continue
+  record=close_roof_soffits(record,height)
   name=tags.get('name') or ' '.join(v for v in [tags.get('addr:housenumber'),tags.get('addr:street')] if v) or f'{town} building'
   entry={'id':identifier,'name':name,'center':center,'height':round(max(v[1] for v in vertices)-base,2),'eaveHeight':height,'footprint':footprint,'baseElevation':base,'district':town,'anchor':[ax,base,az],'source':'osm-extrusion','kind':tags.get('building','yes')}
   if tags.get('amenity'):entry['amenity']=tags['amenity']

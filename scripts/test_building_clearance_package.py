@@ -76,6 +76,12 @@ class BuildingClearancePackageTest(unittest.TestCase):
   fresh=self.path/'fresh.bin';tileformat.write_tile(fresh,header,geometry)
   self.assertEqual(fresh.read_bytes(),(self.path/'tiles/t_0_0.bin').read_bytes())
 
+ def test_melrose_school_courtyard_uses_the_shell_without_a_road_overlap(self):
+  school=building('osm-way-135425346',20)
+  prepare_buildings([school],[record(school)],[])
+  self.assertEqual(school.get('collision'),'mesh')
+  self.assertNotIn('roadOverlaps',school)
+
  def test_a_building_over_a_highway_record_takes_exact_collision_from_the_stage_record(self):
   # build-boston-highways.py lists the buildings whose convex proxy would stand in one of its roads; no surface street says so.
   self.city['roads']=[];self.write_city()

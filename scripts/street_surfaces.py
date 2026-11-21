@@ -1118,6 +1118,15 @@ def encode_edges(left,right,tx,tz,size):
 
 def install(data_dir,source_dir,xy,log=print):
  city_path=data_dir/'city.json';city=json.loads(city_path.read_text());size=city['tiles']['size'];tile_dir=data_dir/city['tiles']['directory']
+ # An old core-only cache lacks both the mapped northern service roads and the
+ # assessor parcels. Rebuilding from one erased the driveways of four towns.
+ from house_driveways import NORTH,house_driveways,parcel_polygons,cut_curbs
+ package_towns={n['name'] for n in city['neighborhoods'] if n.get('town')}
+ north=[town for town in NORTH if town in package_towns]
+ extracts=['osm-metro-driveways.json','osm-north-driveways.json']
+ required=extracts+[f'parcels-{town.lower()}.json' for town in north] if north else []
+ missing=[name for name in required if not (source_dir/name).is_file()]
+ if missing:raise FileNotFoundError(f"Missing driveway sources in {source_dir}: {', '.join(missing)}. Populate the cache with fetch-metro-sources.py.")
  headers={};payloads={}
  for key in city['tiles']['keys']:headers[key],payloads[key]=unpack(tile_dir/f't_{key}.bin')
  from reviewed_road_inputs import restore_street_sources
@@ -1152,7 +1161,7 @@ def install(data_dir,source_dir,xy,log=print):
   survey+=len(kept);added+=len(fillets.get(key,[]))
   tile['curbs']=kept+fillets.get(key,[])
  # The core and northern extracts overlap along their shared edge; an element counts once.
- elements={(e['type'],e['id']):e for name in ('osm-metro-driveways.json','osm-north-driveways.json') if (source_dir/name).exists() for e in json.loads((source_dir/name).read_text())['elements']}
+ elements={(e['type'],e['id']):e for name in extracts if (source_dir/name).is_file() for e in json.loads((source_dir/name).read_text())['elements']}
  lines,widths,lots=driveway_features([elements[k] for k in sorted(elements)],xy);log('Driveway features: service roads',len(lines),'parking lots',len(lots),flush=True)
  # (the Turnpike's and Storrow Drive's cuts are roads too: their records are in the stage's sidecar, not among city.roads)
  from boston_highways import open_roads
@@ -1194,8 +1203,7 @@ def install(data_dir,source_dir,xy,log=print):
  welded=weld_records(surface,records,road_key);log('Welded aligned street ends',welded,flush=True)
  # A curb face one of those roads runs through in the open is its roadway, not an island or a lot: the stage paves it (highway_roadways.py).
  islands,faces,stats=curb_islands(curb_lines,surface+highway_roads,city['parks'],[b['center'] for t in headers.values() for b in t['buildings']],walks_tree,(lines,lots));log('Islands',stats,flush=True)
- from house_driveways import house_driveways,parcel_polygons,cut_curbs
- lanes,cuts=house_driveways([b for t in headers.values() for b in t['buildings']],parcel_polygons(source_dir,xy),surface,records,road_key,lines);log('House driveways from assessor parcels',len(lanes),flush=True)
+ lanes,cuts=house_driveways([b for t in headers.values() for b in t['buildings']],parcel_polygons(source_dir,xy,north),surface,records,road_key,lines);log('House driveways from assessor parcels',len(lanes),flush=True)
  drives=driveway_surfaces(lines,widths,list(lots)+lanes,faces,coverage,walks_tree,curb_lines);log('Driveway surfaces',len(drives),flush=True)
  # Dropped curbs at the house driveway mouths: only the town curbs (the suffix after each tile's survey curbs) are cut.
  cut_tree=STRtree(cuts) if cuts else None;curb_cuts=0

@@ -5,9 +5,25 @@ import {drapedStripInto,drapedRibbonInto} from '../src/render/terrain-ground.ts'
 import {pavementEdges,pavementSpan,polylineLength,roadwaySpan,stationAlong} from '../src/simulation/tile-format.ts';
 import {pointInside} from '../src/simulation/roads.ts';
 import {roadMidpoint} from '../src/simulation/road-tile-coverage.ts';
-import {hasMetroData,loadMetroCity} from './helpers/metro-city.mjs';
+import {hasMetroData,loadMetroCity,loadTileHeaders,readJson} from './helpers/metro-city.mjs';
 
 const flat={bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},elevation:{width:3,height:3,cellSize:100,originX:-100,originZ:-100,heights:[2,2,2,2,2,2,2,2,2]},roads:[],tunnels:[]};
+
+test('the northern towns ship their residential driveway lanes',{skip:!hasMetroData()},()=>{
+  const homes=[
+    ['0_-12','125 Florence Street, Melrose',[80.33,-11558.08]],
+    ['-4_-8','13 Florence Street, Medford',[-3106.96,-7016.76]],
+    ['1_-10','25 Porter Street, Malden',[1198.74,-9005.25]],
+    ['2_-7','15 Partridge Terrace, Everett',[2102.45,-6101.80]],
+  ];
+  const tiles=loadTileHeaders(readJson('city.json'),homes.map(([key])=>key));
+  for(const [key,address,point] of homes){
+    assert.ok(tiles.get(key).driveways.some(([outer,...holes])=>pointInside(point,outer)&&!holes.some(ring=>pointInside(point,ring))),address);
+  }
+  // A continuous lane on the left of 125 Florence runs from the sidewalk to the rear corner.
+  const lane=tiles.get('0_-12').driveways.find(([outer])=>pointInside([80.33,-11558.08],outer));
+  for(const point of [[73,-11562.6],[87.6,-11553.5]])assert.ok(pointInside(point,lane[0]));
+});
 
 test('pavement edges decode from tile-origin centimetres',()=>{
   const {left,right}=pavementEdges({tx:2,tz:-1,size:1000},{road:'r',edges:[150,25,-120,75,1000,0,900,0,7]});

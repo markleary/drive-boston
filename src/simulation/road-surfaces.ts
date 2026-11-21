@@ -229,7 +229,7 @@ export function deckEdgeElevation(road:Road,index:number,side:number){return roa
 /** Match the rendered/collidable ribbon plane, including crossfall at merges.
  * Centerline projection alone gives the wrong support on a banked ramp or a
  * sloping bend. Only adjacent segments are needed after the road projection. */
-function deckPlaneAt(road:Road,x:number,z:number){
+export function deckPlaneAt(road:Road,x:number,z:number){
   const hit=roadProjection(road,x,z);let best:{height:number;gx:number;gz:number;outside:number}|undefined;
   for(let i=Math.max(0,hit.index-1);i<Math.min(road.points.length-1,hit.index+2);i++){
     const points=[deckEdge(road,i,-1),deckEdge(road,i,1),deckEdge(road,i+1,-1),deckEdge(road,i+1,1)];

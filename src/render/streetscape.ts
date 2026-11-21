@@ -8,6 +8,8 @@ import { sourceWallSampler, type DetailOptions } from './facade-details';
 import { architectureFor } from './neighborhood-profiles';
 import { isFenwayBuilding } from './fenway-park';
 import { storefrontStreet } from './street-character';
+import { storefrontGrade } from './storefront-grade.ts';
+import { inTunnelApproach } from '../simulation/tunnels.ts';
 
 let shopResources:{trim:THREE.Material;sill:THREE.Material;frame:THREE.Material;bronze:THREE.Material;glass:THREE.Material;interiors:THREE.Material[];warm:THREE.Material;awnings:THREE.Material[];labels:string[];signs:THREE.Material[]}|undefined;
 function shopMaterials(){
@@ -60,7 +62,7 @@ export function* streetscapeSteps(scene: THREE.Scene, city: CityData, options: D
     if(due(pace))yield;
     if(architectureFor(building)||isFenwayBuilding(building))continue;
     if (building.landmark || building.height<7 || building.height>75) continue;
-    const base=building.baseElevation??0,area=`${Math.floor(building.center[0]/320)},${Math.floor(building.center[1]/320)}`;
+    const shellBase=building.baseElevation??0,area=`${Math.floor(building.center[0]/320)},${Math.floor(building.center[1]/320)}`;
     const random=seeded(hash(building.id));
     const points=building.footprint;
     for(let e=0;e<points.length;e++) {
@@ -79,28 +81,37 @@ export function* streetscapeSteps(scene: THREE.Scene, city: CityData, options: D
         if(Math.abs(Math.sin(road.yaw)*dx/length+Math.cos(road.yaw)*dz/length)<.86)continue;
         if(road.road.points.some((p,i)=> (i===0||i===road.road.points.length-1) && Math.hypot(p[0]-x,p[1]-z)<12))continue;
         const key=`${Math.round(x/5)},${Math.round(z/5)}`;if(used.has(key))continue;
-        // Verify the middle and both ends of a storefront against source wall triangles.
-        const checks=[-2.5,0,2.5];let valid=true;
-        for(const offset of checks) {
-          const sx=x+Math.cos(yaw)*offset,sz=z-Math.sin(yaw)*offset;
-          const hit=sampler.sample(sx,sz,nx,nz,base+2.1);
-          if(!hit || Math.abs(hit.depth)>.28){valid=false;break;}
-        }
-        if(!valid)continue;
-        used.add(key);count++;areaCount.set(area,(areaCount.get(area)??0)+1);
+        // Verify the source wall before drawing the seeded width and shop art.
+        const offsets=[-2.5,0,2.5];
+        const onWall=(offset:number,y:number)=>{
+          const hit=sampler.sample(x+nz*offset,z-nx*offset,nx,nz,y);
+          return hit && Math.abs(hit.depth)<=.28;
+        };
+        if(!offsets.every(offset=>onWall(offset,shellBase+2.1)))continue;
         const width=5.7+random()*.45;
+        const grade=storefrontGrade(city,road.road,x,z,nx,nz,width);
+        if(!grade)continue;
+        const {threshold:base,bottom}=grade;
+        // The footing can back a shop on a cut slope only where the source wall
+        // reaches its base. Also check for excavations and room above the sign.
+        if(!offsets.every(offset=>!inTunnelApproach(city,x+nz*offset+nx*.55,z-nx*offset+nz*.55)
+          && onWall(offset,Math.max(shellBase,base)+.1) && onWall(offset,Math.max(shellBase+.1,base+4.28))))continue;
+        used.add(key);count++;areaCount.set(area,(areaCount.get(area)??0)+1);
         const draw=(geo:Part,mat:THREE.Material,xx:number,yy:number,depth=.1,rx=0)=>add(geo,mat,x+Math.cos(yaw)*xx+nx*depth,base+yy,z-Math.sin(yaw)*xx+nz*depth,yaw,rx);
-        // Ground floor: masonry base, display glazing, inset door and narrow frames.
-        draw(box(width,.62,.22),sill,0,.32,.13);
+        // The common threshold reaches into the soil at its downhill end. The
+        // display sill stops at the door jamb so the entrance opens at grade.
+        const footing=base-bottom;
+        draw(box(width,footing,.48),sill,0,-footing/2,.24);
+        draw(box(width-1.32,.62,.22),sill,-.66,.31,.13);
         const interior=interiors[count%interiors.length];
-        draw(box(width,3.4,.12),frame,0,2.0,.075);
+        draw(box(width,3.7,.12),frame,0,1.85,.075);
         draw(new THREE.PlaneGeometry(width-1.65,2.5),interior,-.66,1.92,.145);
         draw(new THREE.PlaneGeometry(width-1.65,2.5),glass,-.66,1.92,.43);
-        draw(new THREE.PlaneGeometry(1.05,2.65),interior,width/2-.69,1.86,.15);
-        draw(new THREE.PlaneGeometry(1.05,2.65),glass,width/2-.69,1.86,.43);
-        for(const xx of [-width/2+.12,width/2-1.32,width/2-.1])draw(box(.16,3.0,.46),trim,xx,1.8,.28);
+        draw(new THREE.PlaneGeometry(1.05,2.65),interior,width/2-.69,1.365,.15);
+        draw(new THREE.PlaneGeometry(1.05,2.65),glass,width/2-.69,1.365,.43);
+        for(const xx of [-width/2+.12,width/2-1.32,width/2-.1])draw(box(.16,3.3,.46),trim,xx,1.65,.28);
         draw(box(width,.19,.55),trim,0,3.48,.31);
-        draw(box(width,.16,.28),trim,0,.65,.23);
+        draw(box(width-1.32,.16,.28),trim,-.66,.65,.23);
         draw(box(.075,2.5,.16),bronze,-.66,1.92,.46);
         draw(box(width-1.65,.08,.16),bronze,-.66,2.6,.46);
         draw(box(.055,.45,.12),bronze,width/2-1.05,1.42,.55);

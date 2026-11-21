@@ -428,6 +428,18 @@ class StaleTest(unittest.TestCase):
 
 
 class InstallTest(unittest.TestCase):
+ def test_northern_towns_require_their_driveway_sources_before_reading_tiles(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   data=pathlib.Path(temporary)
+   (data/'city.json').write_text(json.dumps({'neighborhoods':[{'name':'Melrose','town':True}],
+    'tiles':{'size':1000,'directory':'tiles','keys':['0_-12']}}))
+   (data/'osm-metro-driveways.json').write_text('{"elements":[]}')
+   with self.assertRaisesRegex(FileNotFoundError,'osm-north-driveways.json, parcels-melrose.json'):
+    ss.install(data,data,lambda x,y:(x,y))
+   (data/'osm-north-driveways.json').write_text('{"elements":[]}')
+   with self.assertRaisesRegex(FileNotFoundError,'parcels-melrose.json'):
+    ss.install(data,data,lambda x,y:(x,y))
+
  def test_install_is_idempotent_and_measures_the_roadway(self):
   with tempfile.TemporaryDirectory() as temporary:
    data=pathlib.Path(temporary);source=data/'source';source.mkdir();(data/'tiles').mkdir()
