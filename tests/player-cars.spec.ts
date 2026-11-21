@@ -40,7 +40,7 @@ test('garage selection swaps model and audio, survives bike/flight and reload, a
   await page.screenshot({path:info.outputPath('harbor-s4-boston.png')});expect(errors).toEqual([]);
 });
 
-test('touch settings expose all seven cars and load only the selected engine bank',async({browser},info)=>{
+test('touch settings expose all eight cars and load only the selected engine bank',async({browser},info)=>{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const page=await context.newPage();
   try{
     await context.addInitScript(()=>Object.defineProperty(navigator,'getGamepads',{value:()=>[],configurable:true}));
@@ -63,10 +63,10 @@ test('touch settings expose all seven cars and load only the selected engine ban
     await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(16);
     await expect.poll(async()=>(await snap(page)).audio.engineProfile).toBe('supra-mk4');
     expect(requests.filter(name=>name.startsWith('supra-mk4'))).toHaveLength(5);
-    expect(requests.some(name=>name.startsWith('mclaren')||name.startsWith('subaru-wrx'))).toBe(false);
+    expect(requests.some(name=>name.startsWith('mclaren')||name.startsWith('subaru-wrx')||name.startsWith('maserati'))).toBe(false);
     const supraBytes=(await snap(page)).audio.decodedBytes;
     await page.locator('#open-settings').click();
-    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Moving Truck','moving-truck'],['Subaru WRX','subaru-wrx'],['Tesla Model 3 Performance','tesla-model-3-performance'],['Toyota Supra Mk4','supra-mk4']]){
+    for(const [name,id] of [['Harbor S4','harbor-s4'],['McLaren GT','mclaren-gt'],['McLaren 720S','mclaren-720s'],['Maserati GT2 Stradale','maserati-gt2-stradale'],['Moving Truck','moving-truck'],['Subaru WRX','subaru-wrx'],['Tesla Model 3 Performance','tesla-model-3-performance'],['Toyota Supra Mk4','supra-mk4']]){
       const car=page.getByRole('combobox',{name:'Your car'});await car.scrollIntoViewIfNeeded();await car.selectOption({label:name});
       await expect(car).toHaveValue(id);expect((await snap(page)).carId).toBe(id);
       const bounds=await car.boundingBox();expect(bounds!.x).toBeGreaterThanOrEqual(0);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(390);
@@ -79,6 +79,11 @@ test('touch settings expose all seven cars and load only the selected engine ban
         await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(20);
         expect((await snap(page)).audio.failed).toEqual([]);
         expect(requests.filter(name=>name.startsWith('moving-truck'))).toHaveLength(9);
+      }
+      if(id==='maserati-gt2-stradale'){
+        await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(16);
+        expect((await snap(page)).audio.failed).toEqual([]);
+        expect(requests.filter(name=>name.startsWith('maserati-gt2-stradale'))).toHaveLength(5);
       }
       if(id==='subaru-wrx'){
         await expect.poll(async()=>(await snap(page)).audio.loadedCount).toBe(17);
@@ -133,7 +138,7 @@ for(const scenario of ['missing GT loops','corrupt high-RPM loop','only generic 
   });
 }
 
-for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'],['supra-mk4','Toyota Supra Mk4','PlayerSupraMk4'],['subaru-wrx','Subaru WRX','PlayerSubaruWRX']]){
+for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'],['supra-mk4','Toyota Supra Mk4','PlayerSupraMk4'],['subaru-wrx','Subaru WRX','PlayerSubaruWRX'],['maserati-gt2-stradale','Maserati GT2 Stradale','PlayerMaseratiGT2Stradale']]){
   test(`${name}: selection, actual shifting, matching plates, mode changes and persistence`,async({page},info)=>{
     test.setTimeout(150000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
     await start(page);await page.keyboard.press('Escape');await page.getByRole('combobox',{name:'Your car'}).selectOption(id);
@@ -151,6 +156,15 @@ for(const [id,name,model] of [['mclaren-720s','McLaren 720S','PlayerMcLaren720S'
         await expect.poll(async()=>(await snap(page)).audio.turboGain).toBeGreaterThan(.012);
       }finally{await page.keyboard.up('w');}
       await expect.poll(async()=>(await snap(page)).audio.turboGain).toBeLessThan(.005);
+    }
+    if(id==='maserati-gt2-stradale'){
+      await expect(page.locator('#gear')).toHaveAttribute('title',/Eight-speed dual-clutch transmission/);
+      await expect(page.locator('#car-description')).toContainText('Nettuno V6');
+      const accents=await page.evaluate(()=>{const g=(window as any).__backbay.scene.getObjectByName('PlayerMaseratiGT2Stradale');return ['Gt2Tridents','Gt2ExhaustTips','Gt2BrakeCaliper0','Gt2BrakeCaliper3'].map(name=>!!g.getObjectByName(name));});
+      expect(accents).toEqual([true,true,true,true]);
+      await page.keyboard.down('w');
+      try{await expect.poll(async()=>(await snap(page)).audio.turboGain).toBeGreaterThan(.05);}finally{await page.keyboard.up('w');}
+      await expect.poll(async()=>(await snap(page)).audio.turboGain).toBeLessThan(.01);
     }
     await page.keyboard.down('w');
     try{await expect.poll(async()=>(await snap(page)).audio.shiftCount,{timeout:15000}).toBeGreaterThan(0);}finally{await page.keyboard.up('w');}

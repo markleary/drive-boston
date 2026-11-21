@@ -18,6 +18,26 @@ const model = 'eleven_text_to_sound_v2';
 const format = 'mp3_44100_128';
 const clips = [
   {
+    id:'maserati-gt2-stradale-idle', seconds:5, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'Maserati GT2 Stradale Nettuno 3.0 litre twin-turbo V6 idling warm at a steady 900 RPM, close microphone behind the two round tailpipes. Low gruff burble with deep bass, slightly gravelly and uneven six-cylinder pulses, faint mechanical ticking. Hushed for a supercar. Constant pitch and level throughout, seamless loop. Isolated engine only, no starting, revving, wind, road noise, voices or music.'
+  },
+  {
+    id:'maserati-gt2-stradale-drive', seconds:6, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'Close-miked Maserati Nettuno twin-turbo V6 exhaust held at a steady 4000 RPM under load on a dynamometer. Guttural bass-heavy roar, gravelly and gruff, with clearly pitched fast even firing pulses and a hard metallic edge. Dry exhaust only, absolutely constant revs from beginning to end. No gear shifts, pitch sweeps, turbo whistle, wind, tires, voices or music.'
+  },
+  {
+    id:'maserati-gt2-stradale-high', seconds:5, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'Very loud close tailpipe recording of a twin-turbo V6 supercar engine held flat out at a constant 7000 RPM on a dynamometer. Hard, raspy, gravelly full-throttle exhaust roar with a strong steady pitched tone, dense rapid firing pulses and deep bass. Exactly constant revs, pitch and loudness from start to end, seamless loop. No acceleration sweep, gear shifts, limiter, wind, tires, speech or music.'
+  },
+  {
+    id:'maserati-gt2-stradale-upshift', seconds:1, loop:false, model:'eleven_text_to_sound_v3',
+    prompt:'One full-throttle upshift of an eight-speed dual-clutch gearbox in a twin-turbo V6 supercar, heard just behind the car. A single hard dry exhaust thump as the next gear engages, with a very short turbo flutter, then immediate natural decay. One brief event. No repeated shifts, long revving, tire noise, music or voices.'
+  },
+  {
+    id:'maserati-gt2-stradale-turbo', seconds:4, loop:true, model:'eleven_text_to_sound_v3',
+    prompt:'Isolated intake noise of two turbochargers under steady boost, microphone at the air intake behind the cabin of a mid-engined supercar. A broad airy rushing whoosh with a soft smooth high turbine whistle inside it, restrained and mechanical. Exactly constant pitch and pressure, seamless steady loop. Induction only. No exhaust, blow-off puffs, flutter, accelerating sweep, siren, road, wind, music or speech.'
+  },
+  {
     id:'subaru-wrx-idle', seconds:5, loop:true, model:'eleven_text_to_sound_v3',
     prompt:'Stock 2024 Subaru WRX 2.4 liter FA24 turbo boxer four idling warm at a steady 750 RPM. Close dry tailpipe, low softly pulsing exhaust and a little valve ticking. Modern even firing note, subdued factory mufflers. Constant pitch and level throughout. Isolated engine only, no starting, revving, wind, road noise, voices or music.'
   },

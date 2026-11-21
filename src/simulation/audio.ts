@@ -3,28 +3,36 @@ import {DEFAULT_CAR, CAR_POWERTRAINS, isPerformanceCar, isElectricCar, type Perf
 import type { DriveInput, TravelMode } from '../types';
 
 type CombustionCarId = Exclude<PerformanceCarId, 'tesla-model-3-performance'>;
-type CarSound = `${CombustionCarId}-${'idle'|'drive'|'high'|'upshift'|'downshift'}`;
-const carSound=(id:CombustionCarId,layer:'idle'|'drive'|'high'|'upshift'|'downshift'):CarSound=>`${id}-${layer}`;
+type CarLayer = 'idle'|'drive'|'high'|'upshift'|'downshift';
+type CarSound = `${CombustionCarId}-${CarLayer}`;
+const carSound=(id:CombustionCarId,layer:CarLayer):CarSound=>`${id}-${layer}`;
 type TruckEffect = 'moving-truck-horn' | 'moving-truck-storrow-crash' | 'moving-truck-boo' | 'moving-truck-reverse';
 const EV_DRIVE='tesla-model-3-performance-drive', EV_REVERSE='tesla-model-3-performance-reverse';
 const EV_SOUNDS=[EV_DRIVE,EV_REVERSE] as const;
-const WRX_SPOOL='subaru-wrx-turbo-spool';
+const WRX_SPOOL='subaru-wrx-turbo-spool',GT2_TURBO='maserati-gt2-stradale-turbo';
+const GT2='maserati-gt2-stradale';
+/** The Maserati has no downshift clip: its loops rise with the revs as the lower gear takes up, and a blip played
+ * beside them stood apart from the engine (the generated one was taken for a dog's bark). */
+const carLayers=(id:CombustionCarId):readonly CarLayer[]=>id===GT2?['idle','drive','high','upshift']:['idle','drive','high','upshift','downshift'];
+/** Turbocharger loops, each heard through a band-pass that follows its pitch. */
+const TURBO_SOUNDS=[WRX_SPOOL,GT2_TURBO] as const;
+const turboSound=(id:PlayerCarId)=>id==='subaru-wrx'?[WRX_SPOOL] as const:id===GT2?[GT2_TURBO] as const:[];
 const FOUNTAIN = 'pond-fountain';
 const FOUNTAIN_RANGE = 145; // metres from a jet
-type SoundName = typeof FOUNTAIN | CarSound | TruckEffect | typeof EV_SOUNDS[number] | typeof WRX_SPOOL | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
+type SoundName = typeof FOUNTAIN | CarSound | TruckEffect | typeof EV_SOUNDS[number] | typeof TURBO_SOUNDS[number] | 'engine-idle' | 'engine-drive' | 'city-ambience' | 'tire-road' | 'horn' | 'tire-skid' | 'helicopter-rotor' | 'crash-light' | 'crash-car' | 'crash-heavy' | 'pedestrian-thump';
 /** What the player struck: another car (traffic or parked), a bus or tram, a building or barrier, the ground, or a walker. */
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
 type ListenerPosition = { x: number; z: number };
 type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean; wheelspin?:number; turboBoost?:number };
 interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; releaseEnd?:number; }
 const CAR_IDS=(Object.keys(CAR_POWERTRAINS) as PerformanceCarId[]).filter((id):id is CombustionCarId=>!isElectricCar(id));
-const CAR_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high','upshift','downshift'] as const).map(layer=>carSound(id,layer)));
+const CAR_SOUNDS=CAR_IDS.flatMap(id=>carLayers(id).map(layer=>carSound(id,layer)));
 const CAR_ENGINE_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high'] as const).map(layer=>carSound(id,layer)));
 const COMMON_SOUNDS: SoundName[] = ['engine-idle', 'engine-drive', 'city-ambience', 'tire-road', 'horn', 'tire-skid', 'helicopter-rotor', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump'];
 const REVERSE_ALARM:TruckEffect='moving-truck-reverse';
 const TRUCK_EFFECTS:TruckEffect[]=['moving-truck-horn','moving-truck-storrow-crash','moving-truck-boo',REVERSE_ALARM];
-const SOUNDS:SoundName[] = [...CAR_SOUNDS, ...COMMON_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS,WRX_SPOOL];
-const ONE_SHOTS = new Set<SoundName>([...TRUCK_EFFECTS.filter(name=>name!==REVERSE_ALARM),...CAR_IDS.flatMap(id=>[carSound(id,'upshift'),carSound(id,'downshift')]),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
+const SOUNDS:SoundName[] = [...CAR_SOUNDS, ...COMMON_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS,...TURBO_SOUNDS];
+const ONE_SHOTS = new Set<SoundName>([...TRUCK_EFFECTS.filter(name=>name!==REVERSE_ALARM),...CAR_IDS.flatMap(id=>carLayers(id).filter(layer=>layer==='upshift'||layer==='downshift').map(layer=>carSound(id,layer))),'horn', 'crash-light', 'crash-car', 'crash-heavy', 'pedestrian-thump']);
 /** Velocity change (m/s in one physics step) below which a knock is a bump rather than a crash. */
 const LIGHT_IMPACT = 3.5;
 const clamp = (value: number, low = 0, high = 1) => Math.max(low, Math.min(high, value));
@@ -63,8 +71,8 @@ export class DriveAudio {
     if(this.context)for(const name of ['engine-idle','engine-drive',...CAR_SOUNDS,...EV_SOUNDS] as SoundName[])this.loops.get(name)?.gain.gain.setTargetAtTime(0,this.context.currentTime,.025);
     this.electric?.gain.gain.setTargetAtTime(0,this.context!.currentTime,.025);
     if (this.mobile) {
-      this.vehicleSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[]),...(isElectricCar(id)?EV_SOUNDS:[]),...(id==='subaru-wrx'?[WRX_SPOOL] as const:[])];
-      for (const name of [...CAR_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS,WRX_SPOOL] as const) {
+      this.vehicleSounds = [...COMMON_SOUNDS.slice(0, 3), ...CAR_SOUNDS.filter(name => name.startsWith(id + '-')), ...COMMON_SOUNDS.slice(3),...(id==='moving-truck'?TRUCK_EFFECTS:[]),...(isElectricCar(id)?EV_SOUNDS:[]),...turboSound(id)];
+      for (const name of [...CAR_SOUNDS,...TRUCK_EFFECTS,...EV_SOUNDS,...TURBO_SOUNDS] as const) {
         if (this.wantedSounds.includes(name)) continue;
         this.releaseSound(name);
         this.failed.delete(name);
@@ -126,7 +134,7 @@ export class DriveAudio {
       reverseAlarm:this.loops.has(REVERSE_ALARM),electricReverse:this.loops.has(EV_REVERSE),
       electricReverseGain:this.loops.get(EV_REVERSE)?.gain.gain.value??0,
       electricReverseRate:this.loops.get(EV_REVERSE)?.source.playbackRate.value??0,
-      turboGain:this.loops.get(WRX_SPOOL)?.gain.gain.value??0,
+      turboGain:TURBO_SOUNDS.reduce((sum,name)=>sum+(this.loops.get(name)?.gain.gain.value??0),0),
       engineProfile:this.mode!=='drive'?'off':this.carEngineReady?this.carId:isElectricCar(this.carId)?'electric-fallback':this.loops.has('engine-idle')||this.loops.has('engine-drive')?'generic':this.fallback?'synthesized':'loading',
       engineGain: (this.loops.get('engine-idle')?.gain.gain.value ?? 0) + (this.loops.get('engine-drive')?.gain.gain.value ?? 0)+CAR_ENGINE_SOUNDS.reduce((sum,name)=>sum+(this.loops.get(name)?.gain.gain.value??0),0)+(this.fallback?.gain.gain.value??0)+(this.loops.get(EV_DRIVE)?.gain.gain.value??0)+(isElectricCar(this.carId)&&this.mode==='drive'?(this.electric?.gain.gain.value??0):0),
     };
@@ -238,11 +246,21 @@ export class DriveAudio {
         // Follow the recorded compressor's ~600 Hz whir as playback speeds up.
         this.setLoop(WRX_SPOOL,underLoad ? .034*charge*charge*load : 0,rate,600*rate);
       }
+      if (id===GT2 && !this.muted) {
+        // Induction rush of the two turbochargers: it comes in with the boost, part throttle included, and
+        // follows the generated loop's 611 Hz whistle as the compressors speed up.
+        const boost=clamp(controls?.turboBoost??0),rate=.82+.42*boost;
+        this.setLoop(GT2_TURBO,controls?.handbrake||(controls?.brake??0)>.1?0:.10*boost**1.5*(.35+.65*load),rate,611*rate);
+      }
       if(shifting&&velocity>2&&now-this.lastShift>.12){
         const buffer=this.buffers.get(carSound(id,nextGear>this.previousDriveGear?'upshift':'downshift'));
         if(buffer&&!this.muted){
-          const gentle=id!=='mclaren-gt';
-          this.playOneShot(buffer,gentle?(nextGear>this.previousDriveGear?.11:.14):(nextGear>this.previousDriveGear?.26:.24),1,gentle?'exhaust':'gt');this.shiftCount++;
+          const gentle=id!=='mclaren-gt',up=nextGear>this.previousDriveGear;
+          // The dual-clutch upshift is a hard thump under load and close to silent on a light pedal; its generated
+          // clip is entered .50 s in, where the thump begins. A downshift finds no clip (carLayers) and plays nothing.
+          if(id===GT2)this.playOneShot(buffer,.10+.24*load,1,'thump',0,.50);
+          else this.playOneShot(buffer,gentle?(up?.11:.14):(up?.26:.24),1,gentle?'exhaust':'gt');
+          this.shiftCount++;
         }
         this.lastShift=now;
       }
@@ -263,6 +281,16 @@ export class DriveAudio {
       this.setLoop(carSound(id,'idle'),Math.cos(mid)*.50,clamp(this.rpm/1080,.65,1.65),1450+load*550);
       this.setLoop(carSound(id,'drive'),Math.sin(mid)*Math.cos(high)*level,clamp(this.rpm/2400,.39,2.7),1750+load*2400);
       this.setLoop(carSound(id,'high'),Math.sin(high)*level,clamp(this.rpm/2340,.7,2.8),2400+load*3300);
+    }else if(useCar&&id===GT2){
+      // The generated loops carry their strongest tone at 124 Hz (drive) and 202 Hz (high). Played at rpm/4000
+      // and rpm/6500 that tone is the same in both wherever they overlap, and rises with the revs. A closed
+      // throttle shuts the exhaust valves: quieter and duller, as the car is below 5,000 rpm. The idle is as loud as
+      // the other cars' (every loop is normalized to one level as it loads, so a quiet file needs no more gain).
+      const mid=clamp((this.rpm-950)/1300)*Math.PI/2,high=clamp((this.rpm-4700)/1900)*Math.PI/2;
+      const level=(.30+load*.46)*(now-this.lastShift<.08?.62:1);
+      this.setLoop(carSound(id,'idle'),Math.cos(mid)*.5,clamp(this.rpm/900,.8,1.7),1300+load*500);
+      this.setLoop(carSound(id,'drive'),Math.sin(mid)*Math.cos(high)*level,clamp(this.rpm/4000,.36,1.9),1400+load*3300);
+      this.setLoop(carSound(id,'high'),Math.sin(high)*level,clamp(this.rpm/6500,.6,1.3),2300+load*4300);
     }else if(useCar&&id==='moving-truck'){
       // The heavy diesel works below 3,000 RPM, with injector clatter at idle
       // and a loaded exhaust layer through its long automatic gear changes.
@@ -356,7 +384,7 @@ export class DriveAudio {
     else if (this.failed.has('horn')) this.fallbackHorn();
   }
 
-  private playOneShot(buffer: AudioBuffer, volume: number, rate: number, softShift:false|'gt'|'exhaust'=false,delay=0) {
+  private playOneShot(buffer: AudioBuffer, volume: number, rate: number, softShift:false|'gt'|'exhaust'|'thump'=false,delay=0,offset=0) {
     const context = this.context!;
     const source = context.createBufferSource(); source.buffer = buffer; source.playbackRate.value = rate;
     const gain = context.createGain(); gain.gain.value = volume;
@@ -364,16 +392,16 @@ export class DriveAudio {
     if(softShift){
       // Preserve the approved GT mix. The new banks use a slower, softer
       // exhaust transition to soften generated transients and suppress clicking.
-      const exhaust=softShift==='exhaust',attack=exhaust?.065:.025,release=exhaust?.18:.08;
-      filter=context.createBiquadFilter();filter.type='lowpass';filter.frequency.value=exhaust?650:1100;filter.Q.value=.5;
+      const exhaust=softShift==='exhaust',thump=softShift==='thump',attack=exhaust?.065:thump?.008:.025,release=exhaust?.18:thump?.12:.08;
+      filter=context.createBiquadFilter();filter.type='lowpass';filter.frequency.value=exhaust?650:thump?2200:1100;filter.Q.value=.5;
       source.connect(filter);filter.connect(gain);
-      const now=context.currentTime,duration=buffer.duration/rate;
+      const now=context.currentTime,duration=(buffer.duration-offset)/rate;
       gain.gain.setValueAtTime(0,now);gain.gain.linearRampToValueAtTime(volume,now+attack);
       gain.gain.setValueAtTime(volume,now+Math.max(attack,duration-release));gain.gain.linearRampToValueAtTime(0,now+duration);
     }else source.connect(gain);
     gain.connect(this.master!); this.oneShots.add(source);
     source.onended = () => { this.oneShots.delete(source); if(this.hornShot===source)this.hornShot=undefined;source.disconnect(); filter?.disconnect(); gain.disconnect(); };
-    source.start(context.currentTime+delay);
+    source.start(context.currentTime+delay,offset);
     return source;
   }
 
@@ -559,7 +587,7 @@ export class DriveAudio {
   private resetVehicleEffects(){
     this.stopLoop(REVERSE_ALARM);
     this.stopElectricReverse();
-    this.setLoop(WRX_SPOOL,0,1,600);
+    for(const name of TURBO_SOUNDS)this.setLoop(name,0,1,600);
   }
 
   private updateElectricReverse(speed:number,reverseGear:boolean){
@@ -602,8 +630,9 @@ export class DriveAudio {
     const source = context.createBufferSource(); source.buffer = buffer; source.loop = true;
     source.playbackRate.value=initialRate;
     const filter = context.createBiquadFilter();
-    filter.type = name===WRX_SPOOL ? 'bandpass' : 'lowpass';
-    filter.Q.value = name===WRX_SPOOL ? 2 : .5;
+    const turbo=(TURBO_SOUNDS as readonly SoundName[]).includes(name);
+    filter.type = turbo ? 'bandpass' : 'lowpass';
+    filter.Q.value = turbo ? (name===GT2_TURBO?1.1:2) : .5;
     const gain = context.createGain(); gain.gain.value = 0;
     source.connect(filter); filter.connect(gain); gain.connect(this.master!);
     this.loops.set(name, { source, gain, filter }); source.start();
