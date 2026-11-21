@@ -53,6 +53,14 @@ function point(f: Frame, u: number, v: number, y: number): V3 {
   return [x, y, z];
 }
 
+function schoolRailing(S: Shapes, k: SiteKit, points: V3[], height: number) {
+  // The site kit normally treats rails as decoration. Keep these same posts
+  // and bars in the school collider, including the slopes along the flight.
+  const iron = S.writer(k.iron), from = iron.count * 3;
+  railing(S, k.iron, points, height);
+  for (let i = from; i < iron.count * 3; i++) S.solid.push(iron.position[i]);
+}
+
 /** Descend from the landing in even risers, sizing the flight against the
  * terrain at its toe. Long flights have a level rest halfway down. */
 function entranceSteps(S: Shapes, k: SiteKit, city: CityData, f: Frame, u: number, v: number, width: number, top: number) {
@@ -82,7 +90,7 @@ function entranceSteps(S: Shapes, k: SiteKit, city: CityData, f: Frame, u: numbe
   }
   railProfile.push([run, top - count * rise]);
   if (width > 3) for (const s of [-width / 2 + .12, 0, width / 2 - .12]) {
-    railing(S, k.iron, railProfile.map(([d, h]) => point(f, u + s, v - d, h)), .94);
+    schoolRailing(S, k, railProfile.map(([d, h]) => point(f, u + s, v - d, h)), .94);
   }
 }
 
@@ -104,8 +112,8 @@ export function schoolEntrance(city: CityData, b: Building, k: SiteKit): Shapes 
   S.cap(k.paving, path, y + .025, true, false);
   const doorWall = wallFrame([646.74, -12717.19], [662.88, -12720.16], [-f.V[0], -f.V[1]]);
   door(S, k, doorWall, centre - f.uOf(doorWall.a), y + .025, 2.6, 2.6, { glazed: true });
-  railing(S, k.iron, [point(f, 28.6, .15, y), point(f, left - .12, .15, y), point(f, left - .12, inset, y)], 1.05);
-  railing(S, k.iron, [point(f, right - .12, inset, y), point(f, right - .12, loopSetback + .15, y), point(f, 159, loopSetback + .15, y)], 1.05);
+  schoolRailing(S, k, [point(f, 28.6, .15, y), point(f, left - .12, .15, y), point(f, left - .12, inset, y)], 1.05);
+  schoolRailing(S, k, [point(f, right - .12, inset, y), point(f, right - .12, loopSetback + .15, y), point(f, 159, loopSetback + .15, y)], 1.05);
   entranceSteps(S, k, city, f, centre, inset, width, y);
   return S;
 }

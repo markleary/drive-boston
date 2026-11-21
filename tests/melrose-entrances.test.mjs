@@ -124,7 +124,7 @@ test('Florence windows fit each wall including the painted trim, leaving the gab
   walls.dispose(); mesh.material.dispose();
 });
 
-async function walkIn(building, entrance, frontage, along, start, seconds) {
+async function walkIn(building, entrance, frontage, along, start, seconds, { direction = frontage.V, height } = {}) {
   const [cx, cz] = building.center;
   const city = windowCity(metro, { minX: cx - 170, maxX: cx + 170, minZ: cz - 170, maxZ: cz + 170 });
   city.buildings = [building]; city.geometry = metro.geometry;
@@ -135,14 +135,14 @@ async function walkIn(building, entrance, frontage, along, start, seconds) {
     const vertices = new Float32Array(entrance.solid);
     physics.addStaticMesh(vertices, Uint32Array.from({ length: vertices.length / 3 }, (_, i) => i));
     const [x, z] = frontage.W(along, start);
-    walker.place(x, sampleElevation(city, x, z), z, Math.atan2(frontage.V[0], frontage.V[1]));
+    walker.place(x, height ?? sampleElevation(city, x, z), z, Math.atan2(direction[0], direction[1]));
     for (let i = 0; i < seconds * 60; i++) {
       walker.update(1 / 60, { forward: 1, strafe: 0, turn: 0, run: false, jump: false });
       physics.step({ throttle: 0, brake: 1, steer: 0, handbrake: true }, 1 / 60);
     }
     const state = walker.state;
     assert.ok(state.grounded);
-    return { depth: frontage.vOf([state.x, state.z]), feet: state.y };
+    return { along: frontage.uOf([state.x, state.z]), depth: frontage.vOf([state.x, state.z]), feet: state.y };
   } finally {
     walker.dispose(); physics.dispose();
   }
@@ -155,4 +155,25 @@ test('walking from the grass reaches both the school courtyard and the Florence 
   assert.ok(upper.depth > 14 && Math.abs(upper.feet - school.baseElevation) < .08, 'climbed the steps and continued across the level court');
   const deck = await walkIn(home, houseModel, porch, porch.uOf(home.center), -7, 8);
   assert.ok(deck.depth > -.6 && deck.depth < 0 && Math.abs(deck.feet - (home.baseElevation + .6)) < .08, 'climbed to the porch and stopped at the door');
+});
+
+test('the school guardrails stop a walker above the drop and the stair handrails separate the lanes', async () => {
+  const outward = campus.V.map(x => -x), left = campus.U.map(x => -x);
+  for (const [u, edge] of [[65, .15], [132, 11.15]]) {
+    const stopped = await walkIn(school, schoolModel, campus, u, edge + 2, 4, { direction: outward, height: school.baseElevation });
+    assert.ok(stopped.depth > edge && stopped.depth < edge + .6, `walker stopped at the guardrail at u=${u}`);
+    assert.ok(Math.abs(stopped.feet - school.baseElevation) < .08, 'walker stayed on the raised court');
+  }
+  const meshes = schoolModel.meshes('school entrance');
+  for (const [start, direction, rail] of [[97.4, left, 95.12], [97.4, campus.U, 99], [100.6, campus.U, 102.88]]) {
+    const point = campus.W(start, -3);
+    const tread = hit(meshes, point, school.baseElevation + 1, [0, -1, 0], 15);
+    assert.equal(tread?.object.material, kit.concrete);
+    const stopped = await walkIn(school, schoolModel, campus, start, -3, 3, { direction, height: tread.point.y });
+    assert.ok((stopped.along - rail) * (start - rail) > 0 && Math.abs(stopped.along - rail) < .6, `walker stopped at handrail u=${rail}`);
+    assert.ok(Math.abs(stopped.feet - tread.point.y) < .1, 'walker stayed on the flight');
+  }
+  for (const mesh of meshes) mesh.geometry.dispose();
+  const service = await walkIn(school, schoolModel, campus, 93, -12, 8, { direction: campus.U });
+  assert.ok(service.along > 104 && Math.abs(service.depth + 12) < .25, 'the service lane crosses the entire stair frontage');
 });
