@@ -89,7 +89,9 @@ export function* streetscapeSteps(scene: THREE.Scene, city: CityData, options: D
         };
         if(!offsets.every(offset=>onWall(offset,shellBase+2.1)))continue;
         const width=5.7+random()*.45;
-        const {threshold:base,bottom}=storefrontGrade(city,x,z,nx,nz,width);
+        const grade=storefrontGrade(city,road.road,x,z,nx,nz,width);
+        if(!grade)continue;
+        const {threshold:base,bottom}=grade;
         // The footing can back a shop on a cut slope only where the source wall
         // reaches its base. Also check for excavations and room above the sign.
         if(!offsets.every(offset=>!inTunnelApproach(city,x+nz*offset+nx*.55,z-nx*offset+nz*.55)
