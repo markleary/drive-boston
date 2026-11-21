@@ -151,8 +151,10 @@ async function walkIn(building, entrance, frontage, along, start, seconds, { dir
 test('walking from the grass reaches both the school courtyard and the Florence front door without jumping', async () => {
   const hulls = ownFarHulls(metro, school);
   assert.ok(hulls.length && hulls.every(b => b.exactMesh), 'the helicopter also uses the open school plan');
-  const upper = await walkIn(school, schoolModel, campus, 97.5, -19, 26);
-  assert.ok(upper.depth > 14 && Math.abs(upper.feet - school.baseElevation) < .08, 'climbed the steps and continued across the level court');
+  for (const lane of [97.5, 100.5]) {
+    const upper = await walkIn(school, schoolModel, campus, lane, -19, 26);
+    assert.ok(upper.depth > 14 && Math.abs(upper.feet - school.baseElevation) < .08, `climbed the stair lane at u=${lane} and continued across the court`);
+  }
   const deck = await walkIn(home, houseModel, porch, porch.uOf(home.center), -7, 8);
   assert.ok(deck.depth > -.6 && deck.depth < 0 && Math.abs(deck.feet - (home.baseElevation + .6)) < .08, 'climbed to the porch and stopped at the door');
 });
