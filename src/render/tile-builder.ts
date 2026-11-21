@@ -63,6 +63,7 @@ import { landmarkShellMaterial } from './metro-landmarks';
 import { museumShellMaterial } from './museum-of-science';
 import { stationShellMaterial } from './lechmere-viaduct';
 import { buildMelroseLandmark, replacesTileShell } from './melrose-landmarks';
+import { buildSite, hasSiteFinish, replacesSiteShell, siteAdditions, siteExactShell, siteFor, siteShellMaterial } from './site-landmarks';
 import { sourceWallSampler, facadeDetailSteps } from './facade-details';
 import { streetscapeSteps } from './streetscape';
 import { rooftopDetailSteps } from './rooftops';
@@ -486,13 +487,15 @@ export function createTileBuilder(ctx: TileContext) {
         stats.triangles += (data.facade.length + data.roof.length) / 3;
         // Hand-modelled northern landmarks replace their extruded shell, hull and foundation skirt.
         if (replacesTileShell(b)) { const model = buildMelroseLandmark(city, b, !!ctx.mobile); if (model) { target.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); continue; } }
+        // So do the site landmarks (site-landmarks.ts): the owner's tile builds the model, and the other shells it replaces are left out.
+        if (replacesSiteShell(b)) { const site = siteFor(b); if (site) { const model = buildSite(city, site, b, !!ctx.mobile); target.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); } continue; }
         const style = facadeStyleIndex(b), isStone = parkStructure(b), fenway = isFenwayBuilding(b);
         const choose = (isRoof: boolean) => {
           let material: THREE.Material = isRoof ? materials.roof : materials.facades[style];
           if (!isRoof && b.landmark === 'hancock') material = materials.glass;
           else if (!isRoof && b.landmark === 'library') material = materials.library;
           else if (!isRoof && b.landmark === 'trinity') material = materials.church;
-          else material = museumShellMaterial(b, isRoof) ?? stationShellMaterial(b, isRoof) ?? loganShellMaterial(city, b, isRoof) ?? landmarkShellMaterial(b, isRoof, materials) ?? material;
+          else material = siteShellMaterial(b, isRoof) ?? museumShellMaterial(b, isRoof) ?? stationShellMaterial(b, isRoof) ?? loganShellMaterial(city, b, isRoof) ?? landmarkShellMaterial(b, isRoof, materials) ?? material;
           if (isStone) material = parkStone;
           if (fenway) material = isRoof ? fenwayMaterials.roof : fenwayMaterials.wall;
           // This source footprint is bridge machinery spanning an open road,
@@ -500,7 +503,7 @@ export function createTileBuilder(ctx: TileContext) {
           if (isChelseaLiftFrame(b)) material = chelseaLiftSteel;
           return material;
         };
-        if (usesExactBuildingCollision(b)) {
+        if (usesExactBuildingCollision(b) || siteExactShell(b)) {
           colliders.push(physics.addStaticMesh(data.positions, tileCollisionIndices(data))); stats.exactMeshes++;
           // The map draws this shell's outline instead of its convex hull, which would cover the streets it spans.
           if (!b.structure) addBuildingPlan(city, b, data);
@@ -545,12 +548,14 @@ export function createTileBuilder(ctx: TileContext) {
           if (parts[0].geometry !== geometry) geometry.dispose();
         }
       }
+      // Site additions: structures no building record stands for (a ship at its pier, a sculpture on a plaza).
+      for (const site of siteAdditions(key)) { if (due(pace)) yield 'buildings'; const model = buildSite(city, site, undefined, !!ctx.mobile); target.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); }
       for (const { material, geometries } of buckets.values()) {
         if (due(pace)) yield 'buildings';
         const geometry = mergeGeometries(geometries, false); for (const g of geometries) g.dispose(); if (!geometry) continue;
         const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'Boston surveyed buildings'; computeBounds(geometry, false); meshes.push(mesh); target.add(mesh);
       }
-      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b) && !replacesTileShell(b) && !ctx.replacedBuildings?.has(b.id)) });
+      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b) && !siteExactShell(b) && !replacesTileShell(b) && !replacesSiteShell(b) && !ctx.replacedBuildings?.has(b.id)) });
       if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; target.add(mesh); } else footings.dispose();
       addTileBuildings(city, tile);
     }
@@ -612,7 +617,7 @@ export function createTileBuilder(ctx: TileContext) {
     {
       const sampler = sourceWallSampler(scene, meshes);
       yield 'details';
-      const detailBuildings = tile.buildings.filter(b => !isChelseaLiftFrame(b) && !replacesTileShell(b) && !ctx.replacedBuildings?.has(b.id));
+      const detailBuildings = tile.buildings.filter(b => !isChelseaLiftFrame(b) && !replacesTileShell(b) && !replacesSiteShell(b) && !hasSiteFinish(b) && !ctx.replacedBuildings?.has(b.id));
       const half = Math.ceil(detailBuildings.length / 2), subsets = [detailBuildings.slice(0, half), detailBuildings.slice(half)];
       for (const subset of ctx.mobile ? [] : subsets) {
         if (!subset.length) continue;
