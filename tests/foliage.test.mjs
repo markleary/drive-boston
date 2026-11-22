@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import { createTreeField, treeLodBands, updateFoliage } from '../src/render/foliage.ts';
+import { mainStreetPlantings } from '../src/simulation/melrose-main-street.ts';
 
 /** Tree assets paint their leaf textures on a canvas: a stand-in context is enough for geometry and pools. */
 function withCanvas(run) {
@@ -25,6 +26,20 @@ function cards(geometry) {
 const drawn = (card, blend) => { const s = Math.sqrt(card.fade > 0 ? 1 - blend : card.fade < 0 ? blend : 1); return card.corners.map(corner => corner.map((v, k) => card.centre[k] + (v - card.centre[k]) * s)); };
 const area = corners => { const [a, b, c] = corners.map(v => new THREE.Vector3(...v)); return b.clone().sub(a).cross(c.clone().sub(a)).length(); };
 const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+test('Melrose autumn tree batches appear with the authored row and empty when it streams away', () => withCanvas(() => {
+  const scene = new THREE.Scene(), field = createTreeField();
+  scene.add(field.group);
+  const autumnCrowns = () => field.group.children.filter(m => m.name.startsWith('October') && m.name.includes('foliage'));
+  assert.equal(autumnCrowns().length, 0);
+  const sites = mainStreetPlantings.map(({ point: [x, z], species, scale }) => ({ position: new THREE.Vector3(x, 0, z), species, scale }));
+  field.add('Main Street', sites);
+  updateFoliage(scene, sites[0].position, 0);
+  assert.equal(autumnCrowns().reduce((n, m) => n + m.count, 0), sites.length);
+  field.remove('Main Street');
+  updateFoliage(scene, sites[0].position, .5);
+  assert.ok(autumnCrowns().every(m => m.count === 0));
+}));
 
 test('each detail level carries the next level\'s leaf cards, so the pools show the same tree where one hands over to the other', () => withCanvas(() => {
   const field = createTreeField({ grates: false }), leaves = name => field.group.children.find(m => m.name === name).geometry;

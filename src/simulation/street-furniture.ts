@@ -4,6 +4,7 @@ import { mallGroundTest } from './commonwealth-mall.ts';
 import { canopyHitsDeck, STREET_CANOPY } from './deck-canopy.ts';
 import { drawnStreets, STALL_REACH, type DrawnStreets, type StreetTile } from './drawn-streets.ts';
 import { inGreenway } from './greenway.ts';
+import { inMainStreetFurnishingArea, MAIN_STREET_TILE, mainStreetCrossingPosts, mainStreetLamps, mainStreetTrees } from './melrose-main-street.ts';
 import { airfieldPaved } from './logan-airfield.ts';
 import { openStretches } from './motorway.ts';
 import type { RoadCells } from './road-cells.ts';
@@ -213,6 +214,12 @@ export function* tileFurnitureSteps(city: MetroCity, tile: StreetTile, roads: Ro
   const airside = city.airfield ? airfieldPaved(city.airfield) : undefined;
   const occupied = (x: number, z: number) => !!(forecourt?.(x, z) || inGreenway(x, z) || inTransitCorridor(city, x, z) || inTunnelApproach(city, x, z) || city.index.at(x, z) || airside?.(x, z));
   const furniture = yield* streetFurnitureSteps(city, tile, about, { occupied, reserved, shaded: (x, z) => canopyHitsDeck(city, x, z, sampleElevation(city, x, z), STREET_CANOPY), random: tileDraws(tileKey(tile.tx, tile.tz)) }, ribbons);
+  if (tileKey(tile.tx, tile.tz) === MAIN_STREET_TILE) {
+    const elsewhere = (p: Point2) => !inMainStreetFurnishingArea(p);
+    furniture.trees = [...furniture.trees.filter(elsewhere), ...mainStreetTrees];
+    furniture.lamps = [...furniture.lamps.filter(elsewhere), ...mainStreetLamps];
+    furniture.posts = [...furniture.posts.filter(elsewhere), ...mainStreetLamps, ...mainStreetTrees, ...mainStreetCrossingPosts];
+  }
   const signs = planStreetSigns(roads.near(grow(160)), (x, z) => !occupied(x, z) && (streets ? !ribbons.raised(x, z) && postClear(streets, x, z, SIGN_ROOM) : !ribbons.any(x, z)), (x, z) => x >= bounds.minX && x < bounds.maxX && z >= bounds.minZ && z < bounds.maxZ);
   return { ...furniture, signs, posts: [...furniture.posts, ...signs.map(sign => sign.position)] };
 }

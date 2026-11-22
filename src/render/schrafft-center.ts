@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import shell from '../data/schrafft-shell.json' with { type: 'json' };
-import { finish, LandmarkModel, landmarkTexture } from './landmark-model.ts';
+import { americanFlagTexture, finish, LandmarkModel, landmarkTexture } from './landmark-model.ts';
 import { seeded } from './materials.ts';
 
 export const SCHRAFFT_ID = shell.building.id;
@@ -159,14 +159,7 @@ export function buildSchrafftCenter(mobile = false) {
   for (let z = -2.3; z > -12; z -= 3.2) for (const x of [0, 13.3]) details.box(stone, x, 51.35, z, .5, .55, 2.1);
   details.box(iron, 6.6, 57.1, -6.55, .16, 11.2, .16);
   const detail = details.build(); group.add(detail.group);
-  const flagMap = landmarkTexture(512, 270, ctx => {
-    for (let stripe = 0; stripe < 13; stripe++) { ctx.fillStyle = stripe % 2 ? '#f3eee1' : '#bd3443'; ctx.fillRect(0, stripe * 270 / 13, 512, 270 / 13 + 1); }
-    ctx.fillStyle = '#213b68'; ctx.fillRect(0, 0, 205, 270 * 7 / 13); ctx.fillStyle = '#fff9e8';
-    for (let row = 0; row < 9; row++) for (let col = 0; col < (row % 2 ? 5 : 6); col++) {
-      const x = 17 + col * 34 + (row % 2 ? 17 : 0), y = 9 + row * 16;
-      ctx.beginPath(); for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, r = k % 2 ? 2.5 : 6; ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } ctx.closePath(); ctx.fill();
-    }
-  });
+  const flagMap = americanFlagTexture();
   const flagMaterial = new THREE.MeshStandardMaterial({ map: flagMap, side: THREE.DoubleSide, roughness: .85, emissiveMap: flagMap, emissive: '#fff', emissiveIntensity: 0 });
   const flagGeometry = new THREE.PlaneGeometry(6.2, 3.26, 20, 8); flagGeometry.translate(3.1, -1.63, 0);
   const flag = new THREE.Mesh(flagGeometry, flagMaterial); const [fx, fz] = schrafftWorld(6.6, 6.55); flag.position.set(fx, 62.4, fz); flag.rotation.y = .35; flag.frustumCulled = false; group.add(flag);

@@ -3,7 +3,7 @@ import {NPC_VEHICLES,type NPCVehicleSpec,type NPCVehicleType} from './npc-vehicl
 /** Cars parked in the surface lots. build-street-surfaces.py lays every lot's stalls out
  * (scripts/parking_lots.py, the tile header's `parking`); a fixed share of them is occupied, the same ones on
  * every visit, and the cars of the stalls nearest the player are drawn from a small pool (src/render/parking-lots.ts). */
-export interface Stall {x:number;z:number;/** Vehicle yaw of a car parked nose in. */yaw:number}
+export interface Stall {x:number;z:number;/** Vehicle yaw of a car parked nose in or with the flow of traffic. */yaw:number;parallel?:true}
 export interface ParkedCar extends Stall {spec:NPCVehicleSpec;color:number;key:string}
 /** Share of the stalls that hold a car. */
 export const OCCUPANCY=.58;
@@ -34,9 +34,9 @@ export function stallDraw(x:number,z:number){
 /** The car standing in a stall, or undefined when it is empty. One in eight is backed in. Every model that parks
  * fits a stall (PARKED_TYPES), so a car stands in the middle of its own. */
 export function parkedCar(stall:Stall):ParkedCar|undefined{
-  const [taken,type,paint,turn]=stallDraw(stall.x,stall.z);if(taken>=OCCUPANCY)return undefined;
+  const [taken,type,paint,turn]=stallDraw(stall.x,stall.z);if(taken >= (stall.parallel ? .82 : OCCUPANCY))return undefined;
   const spec=NPC_VEHICLES.find(s=>s.type===TYPES[Math.floor(type*TYPES.length)])!;
-  return{...stall,yaw:turn<.125?stall.yaw+Math.PI:stall.yaw,spec,color:spec.colors[Math.floor(paint*spec.colors.length)],key:`${Math.round(stall.x*100)},${Math.round(stall.z*100)}`};
+  return{...stall,yaw:!stall.parallel && turn<.125?stall.yaw+Math.PI:stall.yaw,spec,color:spec.colors[Math.floor(paint*spec.colors.length)],key:`${Math.round(stall.x*100)},${Math.round(stall.z*100)}`};
 }
 /** The parked cars a pool of `capacity` slots draws: of each model the nearest to (x, z) within `radius`, as many as the
  * pool has slots of that model, nearest first. The pool is shared out by model and not filled with whichever cars are

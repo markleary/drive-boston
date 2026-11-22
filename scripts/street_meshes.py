@@ -154,11 +154,13 @@ def compile_headers(headers,roads,contacts=(),highways=()):
  """Use the serialized measurement precision for fresh builds and rebuilds. `highways`: the pavement of the
  highway records in the open, which no fallback sidewalk band covers (install_surfaces)."""
  from street_surfaces import road_key
+ from melrose_parking import apply_bays
  from reviewed_road_inputs import reviewed_pavement,reviewed_streets,reviewed_parking_edges,restore_street_sources,street_source_hash
  highways=tuple(highways)
  restore_street_sources(headers)
  normalize_overlays(headers)
  reviewed_street_tiles=reviewed_streets(headers,roads,highways=highways)
+ reviewed_street_tiles.extend(apply_bays(headers))
  reviewed_tiles=reviewed_pavement(headers)
  by=defaultdict(list)
  for r in roads:

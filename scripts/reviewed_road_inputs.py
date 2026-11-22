@@ -20,7 +20,9 @@ def source_inputs():
  source.setdefault('streetCorridors',[]).extend(json.loads(STREET_SOURCE.read_text())['streetCorridors'])
  return source
 def source_hash():return hashlib.sha256(SOURCE.read_bytes()).hexdigest()
-def street_source_hash():return hashlib.sha256(SOURCE.read_bytes()+STREET_SOURCE.read_bytes()).hexdigest()
+def street_source_hash():
+ from melrose_parking import SOURCE as melrose_source
+ return hashlib.sha256(SOURCE.read_bytes()+STREET_SOURCE.read_bytes()+melrose_source.read_bytes()).hexdigest()
 
 
 def reviewed_profiles(roads,ground,source=None):

@@ -16,6 +16,17 @@ export function landmarkTexture(width: number, height: number, paint: (ctx: Canv
   return canvasTexture(canvas, repeat);
 }
 
+export function americanFlagTexture() {
+  return landmarkTexture(512, 270, ctx => {
+    for (let stripe = 0; stripe < 13; stripe++) { ctx.fillStyle = stripe % 2 ? '#f3eee1' : '#bd3443'; ctx.fillRect(0, stripe * 270 / 13, 512, 270 / 13 + 1); }
+    ctx.fillStyle = '#213b68'; ctx.fillRect(0, 0, 205, 270 * 7 / 13); ctx.fillStyle = '#fff9e8';
+    for (let row = 0; row < 9; row++) for (let col = 0; col < (row % 2 ? 5 : 6); col++) {
+      const x = 17 + col * 34 + (row % 2 ? 17 : 0), y = 9 + row * 16;
+      ctx.beginPath(); for (let k = 0; k < 10; k++) { const a = k * Math.PI / 5 - Math.PI / 2, r = k % 2 ? 2.5 : 6; ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } ctx.closePath(); ctx.fill();
+    }
+  });
+}
+
 export function lettering(text: string, color: string, font: string, fill = false) {
   const map = landmarkTexture(512, 128, ctx => {
     ctx.font = font;

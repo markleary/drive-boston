@@ -1,0 +1,15 @@
+{
+  "origin": [710.555, -11630.135],
+  "north": [0.395675, -0.918390],
+  "road": "osm-591493182-0",
+  "tile": "0_-12",
+  "curbOffset": 6.05,
+  "taper": 2.2,
+  "bays": [
+    { "east": 1, "start": 10, "end": 48, "stalls": 5 },
+    { "east": 1, "start": 60, "end": 84, "stalls": 0 },
+    { "east": 1, "start": 106, "end": 157, "stalls": 7 },
+    { "east": -1, "start": 10, "end": 86, "stalls": 10 },
+    { "east": -1, "start": 100, "end": 157, "stalls": 8 }
+  ]
+}
