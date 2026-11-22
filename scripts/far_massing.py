@@ -148,14 +148,17 @@ def encode(parts, primary, ox, oz):
  return bytes(out)
 
 
-def rewrite(raw, massing):
+def rewrite(raw, massing, extra_complexes=()):
  """far.bin bytes with every hidden primary followed by massing(tile key, primary ordinal) and previous fragments dropped."""
  header, records = read_far(raw); size = header['size']; rebuilt = {}
  for key in records:
   tx, tz = map(int, key.split('_')); out = bytearray(); count = 0; ordinal = -1
   for record in records[key]:
    if record[6] & 8:continue
-   ordinal += 1; out += record; count += 1
+   ordinal += 1
+   if (key, ordinal) in extra_complexes:
+    record = bytearray(record); record[6] |= 4
+   out += record; count += 1
    if record[6] & 4:
     parts = massing(key, ordinal); out += encode(parts, record, tx * size, tz * size); count += len(parts)
   rebuilt[key] = count, out

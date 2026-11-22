@@ -1,18 +1,23 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { CityData } from '../types';
+import type { CityData, Point2 } from '../types';
 import { sampleElevation } from '../simulation/terrain';
-import { addFenwayPark } from './fenway-park';
+import { fenwayParkSteps } from './fenway-park';
+import { isFenwayStadium } from './fenway-field';
+import { drain } from './pacing';
 import {addStateHouseFacade} from './state-house';
 import {addSymphonyHallFacade} from './symphony-hall';
 import {addSouthStationFacade} from './south-station';
-import { landmarkBuildings } from '../simulation/city-tiles.ts';
+import { isMetroCity, landmarkBuildings } from '../simulation/city-tiles.ts';
 
 /** Original landmark accents. Dome profile follows the actual Boston source
  * mesh's upper rings; the ceremonial gate follows OSM way 212123982's location,
  * alignment and 9.1m height. Decorative details are interpretive. */
-export function addCityLandmarkDetails(scene:THREE.Scene,city:CityData){
-  addFenwayPark(scene,city);
+export function addCityLandmarkDetails(scene:THREE.Scene,city:CityData,onField:(vertices:Float32Array,indices:Uint32Array,boundary:Point2[])=>void){
+  if(!isMetroCity(city)){
+    const stadium=city.buildings.find(isFenwayStadium);
+    if(stadium)drain(fenwayParkSteps(scene,city,stadium,onField));
+  }
   const stateHouse=addStateHouseFacade(scene,city);
   const symphonyHall=addSymphonyHallFacade(scene,city);
   const southStation=addSouthStationFacade(scene,city);

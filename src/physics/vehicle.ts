@@ -7,9 +7,9 @@ import {storrowRecoveryCandidates,storrowRetreatCandidates,storrowSolidRecoveryP
 import { BikeDynamics, ULTRA_BEE } from './bike.ts';
 import {closestRoad,pointInside} from '../simulation/roads.ts';
 import {parkRecoveryCandidates} from '../simulation/park-recovery.ts';
-import type { CityData, DriveInput, ParkPath, VehicleState } from '../types';
+import type { CityData, DriveInput, ParkPath, Point2, VehicleState } from '../types';
 import { buildTerrainGeometryData, buildingBaseElevation, sampleElevation, sampleTerrainNormal, terrainGrid, rotationFromNormal } from '../simulation/terrain.ts';
-import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, sampleVehicleSurface, registerDriveSurface, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
+import { roadSlabGeometry, bridgeBarriers, bridgeSupports, sampleDriveSurface, sampleVehicleSurface, registerDriveSurface, registerPlayingField, closedEndBarriers, JERSEY } from '../simulation/road-surfaces.ts';
 import {footbridgeRoad,footbridgeSupports,FOOTBRIDGE_COLUMN} from '../simulation/footbridges.ts';
 import {medianBarriers,medianBarrierBoxes} from '../simulation/median-barriers.ts';
 import {clipTunnelPortals,tunnelGeometry} from '../simulation/tunnels.ts';
@@ -265,6 +265,12 @@ export class DrivingPhysics {
   addStaticMesh(vertices: Float32Array, indices: Uint32Array) {
     return this.addDetailedCollider(RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES)
       .setFriction(0.5).setRestitution(0.04));
+  }
+
+  addPlayingField(vertices:Float32Array,indices:Uint32Array,boundary:Point2[]){
+    const collider=this.addStaticMesh(vertices,indices);
+    this.surfaceCleanup.set(collider.handle,registerPlayingField(this.city,boundary,vertices[1]));
+    return collider;
   }
 
   /** Ground for one streamed tile: the same trimesh flags as the whole-city collider. */

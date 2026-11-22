@@ -87,6 +87,10 @@ class RewriteTest(unittest.TestCase):
   # Decimetres from the tile origin (1000, -2000).
   self.assertEqual(struct.unpack_from('<8h', fragments_[0], 8), (-9990, 20020, -9890, 20020, -9890, 20320, -9990, 20320))
   self.assertEqual(rewrite(raw, lambda key, ordinal: parts[ordinal]), raw)
+  # The archived central package predates the decision to keep Fenway's bowl open.
+  visible = record(square, 9000, 250, 2, 7)
+  archive = far_bytes([plain, visible, structure], '1_-2')
+  self.assertEqual(rewrite(archive, lambda key, ordinal: parts[ordinal], {('1_-2', 1)}), raw)
 
 
 class WriteFarTest(unittest.TestCase):

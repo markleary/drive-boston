@@ -52,7 +52,8 @@ import { surveyDeckCarriagewaySteps } from '../simulation/survey-deck-lanes.ts';
 import { surveyDeckParapetSteps } from '../simulation/survey-deck-parapets.ts';
 import { addSourceFooting } from './source-footings';
 import { prepareNeighborhoodArchitecture } from './neighborhood-profiles';
-import { isFenwayBuilding, createFenwayShellMaterials } from './fenway-park';
+import { isFenwayBuilding, createFenwayShellMaterials, fenwayParkSteps } from './fenway-park';
+import { isFenwayStadium } from './fenway-field';
 import { isStateHouse, createStateHouseShellMaterials, splitStateHouseShell } from './state-house';
 import { isSymphonyHall, createSymphonyHallMaterials, splitSymphonyHallShell } from './symphony-hall';
 import { isSouthStation, createSouthStationMaterials, splitSouthStationShell } from './south-station';
@@ -567,6 +568,14 @@ export function createTileBuilder(ctx: TileContext) {
         if (due(pace)) yield 'buildings';
         const geometry = mergeGeometries(geometries, false); for (const g of geometries) g.dispose(); if (!geometry) continue;
         const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'Boston surveyed buildings'; computeBounds(geometry, false); meshes.push(mesh); target.add(mesh);
+      }
+      const stadium = tile.buildings.find(isFenwayStadium);
+      if (stadium) {
+        const park = yield* stage('buildings', fenwayParkSteps(target, subCity, stadium,
+          (vertices, indices, boundary) => { colliders.push(physics.addPlayingField(vertices, indices, boundary)); }, pace));
+        park.traverse(part => {
+          if (part instanceof THREE.Mesh) owned.push(...(Array.isArray(part.material) ? part.material : [part.material]));
+        });
       }
       const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b) && !siteExactShell(b) && !replacesTileShell(b) && !replacesSiteShell(b) && !ctx.replacedBuildings?.has(b.id)) });
       if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; target.add(mesh); } else footings.dispose();
