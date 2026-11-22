@@ -5,7 +5,7 @@ import {inTransitClearance} from './transit-corridors.ts';
 import {inTunnelPortal,openCutFloorAt,tunnelAt,tunnelsNear} from './tunnels.ts';
 import {CLOSURE_SETBACK,LANE_WIDTH,isHighwayDeck,motorwayLanes,pointAtDistance,speedClass,stations} from './motorway.ts';
 import {medianStretches} from './median-barriers.ts';
-import {pointInPolygon} from './city-tiles.ts';
+import {pointInPolygon} from './polygon.ts';
 
 /** Bounding boxes of 16-segment runs of a long polyline (a highway deck has
  * hundreds of points and is projected for every car on it every step). */

@@ -7,6 +7,8 @@ import {restoreWaterPaths} from './water-paths.ts';
 import {refineFrogPond} from './boston-common.ts';
 import {STORROW_SOURCE_CARRIAGEWAYS} from './cars-only-roads.ts';
 import {longfellowDeckOwnsPath} from './longfellow.ts';
+import {pointInPolygon} from './polygon.ts';
+export {pointInPolygon} from './polygon.ts';
 
 /** A metro city streams its buildings from 1 km tiles. `city.buildings` holds
  * the currently loaded detailed set; `far` holds every building's hull. */
@@ -97,15 +99,6 @@ export function tilesNear(city: MetroCity, x: number, z: number, radius: number)
     if (distance <= radius) result.push({ tx, tz, key, distance });
   }
   return result.sort((a, b) => a.distance - b.distance);
-}
-
-export function pointInPolygon(x: number, z: number, polygon: Point2[]) {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i], b = polygon[j];
-    if ((a[1] > z) !== (b[1] > z) && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
-  }
-  return inside;
 }
 
 /** Spatial index over every building hull in the metro, so point and range
