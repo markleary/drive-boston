@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import {drawnStreets,CLEARANCE,STALL_REACH} from '../src/simulation/drawn-streets.ts';
 import {LAMP_ROOM,SIGN_ROOM,TREE_ROOM,VERGE,postClear,roadwayEdge,streetFurnitureSteps,streetRibbons,vergePlace} from '../src/simulation/street-furniture.ts';
 import {roadCells} from '../src/simulation/road-cells.ts';
+import {pointInside} from '../src/simulation/roads.ts';
+import {inMainStreetFurnishingArea, MAIN_STREET_TILE, mainStreetCrossingPosts, mainStreetLamps, mainStreetTrees} from '../src/simulation/melrose-main-street.ts';
 import {createStreetLife} from '../src/render/street-life.ts';
 import {hasMetroData,loadTileHeaders} from './helpers/metro-city.mjs';
 import {alongWalk,drawnGround,loadStreetCity,openStretchGround,residentTiles,roadIndex,tileFurniture} from './helpers/street-furniture.mjs';
@@ -185,6 +187,20 @@ const clearOf=(plan,name)=>{
     assert.ok(!ground.stall(p[0],p[1],room/2-1e-6),`${name}: a ${kind} at ${p} stands in a parking stall`);
   }
 };
+
+test('Main Street in Melrose keeps its historic lamps, tree grates and crossing signs on the sidewalks around the parking bays', {skip}, () => {
+  const tile = loadTileHeaders(city, [MAIN_STREET_TILE]).get(MAIN_STREET_TILE);
+  const plan = tileFurniture(city, tile, roads), pavement = drawnStreets(tile);
+  assert.deepEqual(plan.lamps.filter(inMainStreetFurnishingArea), mainStreetLamps);
+  assert.deepEqual(plan.trees.filter(inMainStreetFurnishingArea), mainStreetTrees);
+  for (const [points, room] of [[mainStreetLamps, LAMP_ROOM], [mainStreetTrees, TREE_ROOM], [mainStreetCrossingPosts, SIGN_ROOM]]) {
+    for (const p of points) {
+      assert.ok(plan.posts.some(([x, z]) => x === p[0] && z === p[1]), 'walkers see the fixture');
+      assert.ok(!pavement.near(...p, room) && !pavement.stall(...p, room / 2), `road clearance at ${p}`);
+      assert.ok(tile.streetSidewalks.some(([outer, ...holes]) => pointInside(p, outer) && !holes.some(h => pointInside(p, h))), `sidewalk at ${p}`);
+    }
+  }
+});
 
 test('Newmarket Square: the trees and lamps of a roadway twice its street\'s width stand on its sidewalks',{skip},()=>{
   const tile=city.loadedTiles.get('0_2'),plan=tileFurniture(city,tile,roads),square=city.roads.find(r=>r.name==='Newmarket Square'&&r.points.some(p=>Math.hypot(p[0]-720,p[1]-2560)<60));

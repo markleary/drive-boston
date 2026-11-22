@@ -20,7 +20,12 @@ export function treeLodBands(high:boolean):[number,number,number,number]{
   return [near-LOD_LAG-near*.3,near-LOD_LAG,mid-LOD_LAG-mid*.28,mid-LOD_LAG];
 }
 const treeLod={value:new THREE.Vector4(...treeLodBands(true))},treeObserver={value:new THREE.Vector3()};
-const SPECIES=[
+interface TreeSpecies {
+  name:string; height:number; spread:number; tall:number; hue:number; color:string;
+  taper?:number; cardWidth?:number; parkOnly?:boolean;
+  autumn?:{ family:number; count:number; brightness:number; };
+}
+const BASE_SPECIES:TreeSpecies[]=[
   {name:'maple',height:7.8,spread:3.1,tall:2.5,hue:70,color:'#aabf85'},
   {name:'elm',height:9.4,spread:3.4,tall:3.7,hue:79,color:'#9fb484'},
   {name:'honey locust',height:7.2,spread:3.5,tall:2.0,hue:88,color:'#b7c78c'},
@@ -28,8 +33,17 @@ const SPECIES=[
   {name:'ginkgo',height:9.55,spread:1.9,tall:3.8,hue:60,color:'#c1cd79',taper:.36,cardWidth:.78},
   {name:'red oak',height:7.7,spread:3.55,tall:2.65,hue:93,color:'#9db381',taper:-.22},
 ];
-const STREET_SPECIES=SPECIES.flatMap((s,i)=>s.parkOnly?[]:[i]);
-const PARK_SPECIES=SPECIES.map((_,i)=>i);
+// Only explicitly planted trees use these late-season crowns. The leaves, branches
+// and instance pools are created on the first tile that asks for a variety.
+const AUTUMN_SPECIES:TreeSpecies[]=[
+  {name:'October elm',height:8.05,spread:3.8,tall:2.75,hue:53,color:'#fff2ce',cardWidth:.86,taper:-.22,autumn:{family:1,count:97,brightness:59}},
+  {name:'October honey locust',height:6.4,spread:2.85,tall:1.95,hue:61,color:'#f7edc1',cardWidth:.82,autumn:{family:2,count:125,brightness:57}},
+  {name:'October maple',height:6.35,spread:3.1,tall:2.3,hue:35,color:'#fff0c7',cardWidth:.78,autumn:{family:0,count:77,brightness:58}},
+];
+const SPECIES=[...BASE_SPECIES,...AUTUMN_SPECIES];
+const STREET_SPECIES=BASE_SPECIES.flatMap((s,i)=>s.parkOnly?[]:[i]);
+const PARK_SPECIES=BASE_SPECIES.map((_,i)=>i);
+const explicitSpecies=new Map(AUTUMN_SPECIES.map((s,i)=>[s.name,i+BASE_SPECIES.length]));
 const LODS=[0,1,2];
 let resources:{bark:THREE.MeshStandardMaterial;leaves:{material:THREE.MeshStandardMaterial;depth:THREE.MeshDepthMaterial}[];geometries:{wood:THREE.BufferGeometry;leaves:THREE.BufferGeometry}[][]}|undefined;
 /** `flutter`: a leaf material. Its cards carry `cardCentre` and `cardFade` (see `geometryFor`) and are scaled about
@@ -57,28 +71,29 @@ function leafTexture(species:number){
   const canvas=document.createElement('canvas');canvas.width=canvas.height=256;const c=canvas.getContext('2d')!,random=seeded(1207+species*391);
   // Small individual leaves form a dense, irregular branch silhouette rather
   // than an opaque geometric crown. Species share no copied bitmap artwork.
-  for(let i=0;i<(species===2?260:170);i++){
+  const fall=SPECIES[species].autumn,family=fall?.family??species;
+  for(let i=0;i<(fall?.count??(family===2?260:170));i++){
     const angle=random()*Math.PI*2,r=Math.sqrt(random())*108,x=128+Math.cos(angle)*r,y=128+Math.sin(angle)*r;
-    const size=species===2?4+random()*5:8+random()*10;
+    const size=family===2?4+random()*5:8+random()*10;
     c.save();c.translate(x,y);c.rotate(random()*Math.PI*2);
-    c.fillStyle=`hsl(${SPECIES[species].hue+random()*22},${29+random()*24}%,${30+random()*23}%)`;
+    c.fillStyle=`hsl(${SPECIES[species].hue+random()*22},${29+random()*24}%,${(fall?.brightness??30)+random()*23}%)`;
     c.beginPath();
-    if(species===0){for(let j=0;j<10;j++){const a=j*Math.PI/5,radius=size*(j%2?.48:1);c.lineTo(Math.cos(a)*radius,Math.sin(a)*radius);}}
-    else if(species===3){c.moveTo(0,-size*1.3);c.lineTo(size*.25,size);c.lineTo(-size*.25,size);}
-    else if(species===4){
+    if(family===0){for(let j=0;j<10;j++){const a=j*Math.PI/5,radius=size*(j%2?.48:1);c.lineTo(Math.cos(a)*radius,Math.sin(a)*radius);}}
+    else if(family===3){c.moveTo(0,-size*1.3);c.lineTo(size*.25,size);c.lineTo(-size*.25,size);}
+    else if(family===4){
       c.moveTo(0,size*.75);
       for(let j=0;j<=8;j++){
         const a=-Math.PI*.95+j*Math.PI*.9/8;
         c.lineTo(Math.cos(a)*size,Math.sin(a)*size*(j===4?.72:1));
       }
     }
-    else if(species===5){
+    else if(family===5){
       for(let j=0;j<16;j++){
         const a=j*Math.PI/8,radius=j%2?.64:1;
         c.lineTo(Math.cos(a)*size*.63*radius,Math.sin(a)*size*radius);
       }
     }
-    else c.ellipse(0,0,size*(species===2?.5:.57),size,0,0,Math.PI*2);
+    else c.ellipse(0,0,size*(family===2?.5:.57),size,0,0,Math.PI*2);
     c.fill();c.strokeStyle='#d4d99855';c.lineWidth=.65;c.beginPath();c.moveTo(0,-size*.7);c.lineTo(0,size*.7);c.stroke();c.restore();
   }
   return canvasTexture(canvas);
@@ -91,7 +106,9 @@ function leafCards(species:number,lod:number){
     const a=j*2.399963,unit=(j+.5)/count,vertical=1-2*unit,radius=Math.sqrt(Math.max(0,1-vertical*vertical));
     const spread=s.spread*(species===3?.25+.75*unit:1-(s.taper??0)*vertical);
     const x=Math.cos(a)*radius*spread,z=Math.sin(a)*radius*spread,y=s.height+vertical*s.tall-(species===3?1.2:0);
-    const card=new THREE.PlaneGeometry([2.6,3.8,5.1][lod]*(s.cardWidth??(species===2?.85:1)),[2.4,3.5,4.8][lod]),centre=new THREE.Vector3(x,y,z);
+    const width=[2.6,3.8,5.1][lod]*(s.cardWidth??(species===2?.85:1));
+    const height=[2.4,3.5,4.8][lod]*(s.autumn?.family === 2 ? .77 : 1);
+    const card=new THREE.PlaneGeometry(width,height),centre=new THREE.Vector3(x,y,z);
     const euler=new THREE.Euler((random()-.5)*1.9,a,(random()-.5)*1.2);q.setFromEuler(euler);matrix.compose(centre,q,new THREE.Vector3(1,1,1));card.applyMatrix4(matrix);cards.push({card,centre});
   }
   return cards;
@@ -100,11 +117,21 @@ function geometryFor(species:number,lod:number){
   const s=SPECIES[species],wood:THREE.BufferGeometry[]=[],leaves:THREE.BufferGeometry[]=[];
   const matrix=new THREE.Matrix4(),q=new THREE.Quaternion(),up=new THREE.Vector3(0,1,0);
   function branch(a:THREE.Vector3,b:THREE.Vector3,r:number){const d=b.clone().sub(a);q.setFromUnitVectors(up,d.clone().normalize());matrix.compose(a.clone().add(b).multiplyScalar(.5),q,new THREE.Vector3(1,1,1));wood.push(new THREE.CylinderGeometry(r*.5,r,d.length(),lod===0?7:5).applyMatrix4(matrix));}
-  branch(new THREE.Vector3(),new THREE.Vector3(.12,s.height,0),species===1?.24:.19);
+  const elm=(s.autumn?.family??species)===1;
+  branch(new THREE.Vector3(),new THREE.Vector3(.12,s.height,0),elm ? .24 : .19);
   if(lod<2)for(let j=0;j<(lod===0?8:5);j++){
-    const angle=j*2.39996,startY=s.height*(species===1?.35:.5),endY=s.height+Math.sin(j)*.5;
+    const angle=j*2.39996,startY=s.height*(elm ? .35 : .5),endY=s.height+Math.sin(j)*.5;
     const a=new THREE.Vector3(.08,startY+j*.23,0),b=new THREE.Vector3(Math.cos(angle)*s.spread*.6,endY,Math.sin(angle)*s.spread*.6);
-    branch(a,b,.075);if(lod===0){const end=b.clone().add(new THREE.Vector3(Math.cos(angle+.4)*s.spread*.35,-.3,Math.sin(angle+.4)*s.spread*.35));branch(b,end,.032);}
+    branch(a,b,.075);
+    if(lod===0){
+      const end=b.clone().add(new THREE.Vector3(Math.cos(angle+.4)*s.spread*.35,s.autumn ? .65 : -.3,Math.sin(angle+.4)*s.spread*.35));
+      branch(b,end,.032);
+    }
+    if(s.autumn){
+      const fork=b.clone().add(new THREE.Vector3(Math.cos(angle-.53)*s.spread*.35,.85+Math.sin(j)*.4,Math.sin(angle-.53)*s.spread*.35));
+      branch(b,fork,.035);
+      if(lod===0)branch(fork,fork.clone().add(new THREE.Vector3(Math.cos(angle)*.4,.55,Math.sin(angle)*.4)),.018);
+    }
   }
   // The level's own cards, which give way toward its far edge (`cardFade` +1 in the first level, +2 in the second,
   // 0 in the last, which has no further level), then the next level's, which take over there (-1, -2): exactly the
@@ -117,20 +144,18 @@ function geometryFor(species:number,lod:number){
   if(lod<2)for(const {card,centre} of leafCards(species,lod+1))tag(card,centre,-(lod+1));
   const result={wood:mergeGeometries(wood,false)!,leaves:mergeGeometries(leaves,false)!};for(const g of [...wood,...leaves])g.dispose();return result;
 }
+function leafMaterials(species:number){
+  // Alpha-test cutouts keep subpixel leaves free of pale fringes at distance.
+  const material=new THREE.MeshStandardMaterial({map:leafTexture(species),color:SPECIES[species].color,roughness:.92,alphaTest:.42,side:THREE.DoubleSide});
+  material.forceSinglePass=true;
+  const depth=new THREE.MeshDepthMaterial({map:material.map,alphaTest:material.alphaTest,side:THREE.DoubleSide,depthPacking:THREE.RGBADepthPacking});
+  wind(material,true);wind(depth,true);
+  return{material,depth};
+}
 function assets(){
   if(resources)return resources;
   const bark=new THREE.MeshStandardMaterial({color:'#665949',roughness:.98});wind(bark);
-  const leaves=SPECIES.map((s,i)=>{
-    // Use opaque alpha-test cutouts at every distance. Even the nearest pool
-    // contains subpixel leaves as its cards shrink during the LOD blend;
-    // alpha-to-coverage there brings back the pale fringes fixed for far trees.
-    const material=new THREE.MeshStandardMaterial({map:leafTexture(i),color:s.color,roughness:.92,alphaTest:.42,side:THREE.DoubleSide});
-    material.forceSinglePass=true;
-    const depth=new THREE.MeshDepthMaterial({map:material.map,alphaTest:material.alphaTest,side:THREE.DoubleSide,depthPacking:THREE.RGBADepthPacking});
-    wind(material,true);wind(depth,true);
-    return{material,depth};
-  });
-  resources={bark,leaves,geometries:SPECIES.map((_,i)=>LODS.map(lod=>geometryFor(i,lod)))};return resources;
+  resources={bark,leaves:[],geometries:[]};return resources;
 }
 
 /** Instance scale range applied to every site (see TreeField.add). */
@@ -158,14 +183,15 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
   const palette=options.grates===false?PARK_SPECIES:STREET_SPECIES;
   let sites:Site[]=[];
   const make=(species:number,lod:number,capacity:number)=>{
-    const {material,depth}=shared.leaves[species];
+    const {material,depth}=shared.leaves[species]??=leafMaterials(species);
+    shared.geometries[species]??=LODS.map(level=>geometryFor(species,level));
     const wood=new THREE.InstancedMesh(shared.geometries[species][lod].wood,shared.bark,capacity),leaf=new THREE.InstancedMesh(shared.geometries[species][lod].leaves,material,capacity);
     wood.name=`${SPECIES[species].name} branches LOD${lod}`;leaf.name=`${SPECIES[species].name} foliage LOD${lod}`;
     leaf.customDepthMaterial=depth;leaf.userData.noAO=true;
     for(const mesh of [wood,leaf]){mesh.castShadow=lod<2;mesh.receiveShadow=true;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);mesh.frustumCulled=false;mesh.count=0;group.add(mesh);}
     return{wood,leaf,count:0,capacity};
   };
-  const batches=SPECIES.map((_,species)=>LODS.map(lod=>make(species,lod,8)));
+  const batches=BASE_SPECIES.map((_,species)=>LODS.map(lod=>make(species,lod,8)));
   const ensure=(species:number,lod:number,needed:number)=>{
     const b=batches[species][lod];if(needed<=b.capacity)return b;
     group.remove(b.wood,b.leaf);b.wood.dispose();b.leaf.dispose();
@@ -185,6 +211,7 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
       pending[site.species][d2<near**2?0:d2<mid**2?1:2].push(site);
     }
     pending.forEach((row,species)=>row.forEach((list,lod)=>{
+      if(!batches[species])return;
       const b=ensure(species,lod,list.length);
       list.forEach((site,i)=>{dummy.position.copy(site.p);dummy.rotation.set(0,site.yaw,0);dummy.scale.setScalar(site.scale);dummy.updateMatrix();b.wood.setMatrixAt(i,dummy.matrix);b.leaf.setMatrixAt(i,dummy.matrix);});
       b.count=list.length;for(const mesh of [b.wood,b.leaf]){mesh.count=b.count;mesh.visible=b.count>0;mesh.castShadow=lod<2||(high&&flightShadows);mesh.instanceMatrix.needsUpdate=true;}
@@ -208,7 +235,9 @@ export function createTreeField(options:{scale?:number;grates?:boolean}={}):Tree
         const planting=tree instanceof THREE.Vector3?undefined:tree;
         const p=tree instanceof THREE.Vector3?tree:tree.position;
         if(inLongfellowCorridor(p.x,p.z))continue;
-        const species=(planting?palette.find(i=>SPECIES[i].name===planting.species):undefined)??palette[Math.floor(random()*palette.length)];
+        const chosen=planting && (explicitSpecies.get(planting.species) ?? palette.find(i=>SPECIES[i].name===planting.species));
+        const species=chosen ?? palette[Math.floor(random()*palette.length)];
+        if(!batches[species])batches[species]=LODS.map(lod=>make(species,lod,8));
         const size=planting?.scale??(TREE_SCALE_RANGE[0]+random()*(TREE_SCALE_RANGE[1]-TREE_SCALE_RANGE[0]));
         sites.push({p,species,scale:scale*size,yaw:random()*Math.PI*2,owner});
       }

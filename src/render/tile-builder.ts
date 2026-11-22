@@ -28,6 +28,8 @@ import { inTunnelApproach } from '../simulation/tunnels.ts';
 import { greenway, obsoleteGreenwayCurb } from '../simulation/greenway.ts';
 import { roadCells } from '../simulation/road-cells.ts';
 import { tileFurnitureSteps } from '../simulation/street-furniture.ts';
+import { inMainStreetFurnishingArea, MAIN_STREET_CROSSING, MAIN_STREET_TILE, mainStreetLamps, mainStreetPlantings, mainStreetPoint } from '../simulation/melrose-main-street.ts';
+import { buildMainStreetFurniture } from './melrose-streetscape.ts';
 import { spatialInstances } from './spatial-batches';
 import { PartBatches, box } from './geometry-writer';
 import { computeBounds } from './fast-bounds';
@@ -66,6 +68,8 @@ import { stationShellMaterial } from './lechmere-viaduct';
 import { buildMelroseLandmark, replacesTileShell } from './melrose-landmarks';
 import { FLORENCE_HOUSE, MELROSE_SCHOOL, fitFlorenceWindows, florenceEntrance, schoolEntrance } from './melrose-entrances';
 import { siteKit } from './site-kit';
+import { MAIN_STREET_FRONTAGES } from './melrose-main-street-data.ts';
+import { mainStreetBlock } from './melrose-main-street.ts';
 import { buildSite, hasSiteFinish, replacesSiteShell, siteAdditions, siteExactShell, siteFor, siteShellMaterial } from './site-landmarks';
 import { sourceWallSampler, facadeDetailSteps } from './facade-details';
 import { streetscapeSteps } from './streetscape';
@@ -73,6 +77,7 @@ import { rooftopDetailSteps } from './rooftops';
 import { neighborhoodDetailSteps } from './neighborhood-architecture';
 import { houseDetailSteps, houseTowerGeometry } from './house-details';
 import { townFrontages } from './town-frontages';
+import { mainStreetParking } from '../simulation/melrose-parking.ts';
 import { housePlan } from './house-plan';
 import { housePalette, houseRoof } from './house-styles';
 import { cityParkDetailSteps, areaBoundsOf, type Bounds } from './city-parks';
@@ -393,6 +398,11 @@ export function createTileBuilder(ctx: TileContext) {
           if (road.width >= 9) for (let d = 8; d < len - 7; d += 9) { const end = Math.min(d + 3, len - 7); ribbon(road.oneway ? materials.paint : materials.yellow, [[a[0] + tx * d, a[1] + tz * d], [a[0] + tx * end, a[1] + tz * end]], .12, .065); }
         }
       }
+      if (key === MAIN_STREET_TILE) {
+        const parking = mainStreetParking();
+        for (const line of parking.white) ribbon(materials.paint, line, .105, .067);
+        for (const line of parking.yellow) ribbon(materials.yellow, line, .11, .067);
+      }
       // Crosswalks: at junctions only, just beyond the crossing roadway, thinned along each roadway (crosswalks.ts).
       // The stripes span the roadway measured at their own station, not the road-wide median width: Boylston
       // Street's west end closes from 21.8 m to 14 m, and its east end sits 6 m off the centerline. Records of twin
@@ -416,6 +426,12 @@ export function createTileBuilder(ctx: TileContext) {
             const x = at[0] - tz * side, z = at[1] + tx * side;
             ribbon(materials.paint, [[x, z], [x + tx * STRIPE_LENGTH, z + tz * STRIPE_LENGTH]], .65, .068);
           }
+        }
+      }
+      if (key === MAIN_STREET_TILE) {
+        for (let i = -3; i <= 3; i++) {
+          const east = i * 1.02;
+          ribbon(materials.paint, [mainStreetPoint(MAIN_STREET_CROSSING - 1.48, east), mainStreetPoint(MAIN_STREET_CROSSING + 1.48, east)], .49, .068);
         }
       }
       addBatches(batches);
@@ -481,12 +497,20 @@ export function createTileBuilder(ctx: TileContext) {
       const bucket = (material: THREE.Material, geometry: THREE.BufferGeometry, cx: number, cz: number, tag = '') => {
         const k = `${material.uuid}:${tag || `${Math.floor(cx / 500)}:${Math.floor(cz / 500)}`}`; let entry = buckets.get(k); if (!entry) { entry = { material, geometries: [] }; buckets.set(k, entry); } entry.geometries.push(geometry);
       };
+      let mainStreet: ReturnType<typeof mainStreetBlock> | undefined;
       for (const b of tile.buildings) {
         if (b === zakim) continue;
         if (due(pace)) yield 'buildings';
         const data = tile.geometry.get(b.id); if (!data) continue;
         ctx.buildingMap.set(b.id, b); stats.buildings++;
         if (ctx.replacedBuildings?.has(b.id)) continue;
+        const frontage = MAIN_STREET_FRONTAGES[b.id];
+        if (frontage) {
+          mainStreet ??= mainStreetBlock(!!ctx.mobile, owned);
+          mainStreet.add(city, b, frontage);
+          stats.storefronts += frontage.shops.length;
+          continue;
+        }
         stats.triangles += (data.facade.length + data.roof.length) / 3;
         // Hand-modelled northern landmarks replace their extruded shell, hull and foundation skirt.
         if (replacesTileShell(b)) { const model = buildMelroseLandmark(city, b, !!ctx.mobile); if (model) { target.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); continue; } }
@@ -562,6 +586,16 @@ export function createTileBuilder(ctx: TileContext) {
           if (parts[0].geometry !== geometry) geometry.dispose();
         }
       }
+      if (mainStreet) {
+        const shops=mainStreet.shapes;
+        for (const mesh of shops.meshes('Melrose Main Street architecture')) {
+          if ((mesh.material as THREE.Material).transparent) mesh.castShadow = false;
+          target.add(mesh);
+        }
+        const vertices = Float32Array.from(shops.solid);
+        colliders.push(physics.addStaticMesh(vertices, Uint32Array.from({length: vertices.length / 3}, (_,i) => i)));
+        stats.triangles += shops.triangles;
+      }
       // Site additions: structures no building record stands for (a ship at its pier, a sculpture on a plaza).
       for (const site of siteAdditions(key)) { if (due(pace)) yield 'buildings'; const model = buildSite(city, site, undefined, !!ctx.mobile); target.add(model.group); for (const mesh of model.collisions) colliders.push(physics.addStaticMesh(mesh.vertices, mesh.indices)); }
       for (const { material, geometries } of buckets.values()) {
@@ -577,7 +611,7 @@ export function createTileBuilder(ctx: TileContext) {
           if (part instanceof THREE.Mesh) owned.push(...(Array.isArray(part.material) ? part.material : [part.material]));
         });
       }
-      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !usesExactBuildingCollision(b) && !siteExactShell(b) && !replacesTileShell(b) && !replacesSiteShell(b) && !ctx.replacedBuildings?.has(b.id)) });
+      const footings = foundationGeometry({ ...city, buildings: tile.buildings.filter(b => !MAIN_STREET_FRONTAGES[b.id] && !usesExactBuildingCollision(b) && !siteExactShell(b) && !replacesTileShell(b) && !replacesSiteShell(b) && !ctx.replacedBuildings?.has(b.id)) });
       if (footings.attributes.position.count) { const mesh = new THREE.Mesh(footings, foundation); mesh.name = 'Foundations'; mesh.receiveShadow = true; target.add(mesh); } else footings.dispose();
       addTileBuildings(city, tile);
     }
@@ -586,15 +620,28 @@ export function createTileBuilder(ctx: TileContext) {
     // Street furniture: trees, lamps and name signs, stood beside the roadway as this tile draws it (street-furniture.ts).
     {
       const furniture = yield* paced('props', tileFurnitureSteps(city, tile, roadIndex, ctx.landmarkForecourt), pace);
-      const treePositions = furniture.trees.map(([x, z]) => new THREE.Vector3(x, height(x, z), z)), streetSigns = furniture.signs;
-      for (const [x, z] of furniture.lamps) lamps.push(new THREE.Vector3(x, height(x, z), z));
+      const treePositions = furniture.trees.map(([x, z]) => {
+        const position = new THREE.Vector3(x, height(x, z), z);
+        const tree = key === MAIN_STREET_TILE && mainStreetPlantings.find(({ point }) => point[0] === x && point[1] === z);
+        return tree ? { position, species: tree.species, scale: tree.scale } : position;
+      }), streetSigns = furniture.signs;
+      for (const p of furniture.lamps) {
+        if (key === MAIN_STREET_TILE && inMainStreetFurnishingArea(p)) continue;
+        lamps.push(new THREE.Vector3(p[0], height(...p), p[1]));
+      }
       posts.push(...furniture.posts);
-      if (treePositions.length) ctx.trees.add(key, treePositions); stats.trees = treePositions.length; stats.lamps = lamps.length; stats.signs = streetSigns.length;
+      if (treePositions.length) ctx.trees.add(key, treePositions); stats.trees = treePositions.length; stats.lamps = furniture.lamps.length; stats.signs = streetSigns.length;
       const dummy = new THREE.Object3D();
       if (lamps.length) {
         const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(.055, .1, 5.7, 6), ctx.iron, lamps.length), bulbs = new THREE.InstancedMesh(new THREE.SphereGeometry(.27, 8, 6), ctx.lampMat, lamps.length);
         lamps.forEach((p, i) => { dummy.position.copy(p).add(new THREE.Vector3(0, 2.85, 0)); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix(); poles.setMatrixAt(i, dummy.matrix); dummy.position.y = p.y + 5.85; dummy.updateMatrix(); bulbs.setMatrixAt(i, dummy.matrix); });
         poles.castShadow = true; poles.name = 'Lamp poles'; bulbs.name = 'Lamp globes'; target.add(...spatialInstances(poles, 500), ...spatialInstances(bulbs, 500));
+      }
+      if (key === MAIN_STREET_TILE) {
+        const downtown = buildMainStreetFurniture(height, ctx.lampMat, !!ctx.mobile);
+        target.add(downtown.group);
+        colliders.push(physics.addStaticMesh(downtown.solid, Uint32Array.from({ length: downtown.solid.length / 3 }, (_, i) => i)));
+        for (const [x, z] of mainStreetLamps) lamps.push(Object.assign(new THREE.Vector3(x, height(x, z), z), { light: { rise: 4.3, distance: 18, intensity: 52 } }));
       }
       const hardware = new PartBatches(500), matrix = new THREE.Matrix4();
       for (const { position: [x, z], blades } of streetSigns) {
@@ -639,14 +686,14 @@ export function createTileBuilder(ctx: TileContext) {
     {
       const sampler = sourceWallSampler(scene, meshes);
       yield 'details';
-      const detailBuildings = tile.buildings.filter(b => !isChelseaLiftFrame(b) && !replacesTileShell(b) && !replacesSiteShell(b) && !hasSiteFinish(b) && !ctx.replacedBuildings?.has(b.id));
+      const detailBuildings = tile.buildings.filter(b => !MAIN_STREET_FRONTAGES[b.id] && !isChelseaLiftFrame(b) && !replacesTileShell(b) && !replacesSiteShell(b) && !hasSiteFinish(b) && !ctx.replacedBuildings?.has(b.id));
       const half = Math.ceil(detailBuildings.length / 2), subsets = [detailBuildings.slice(0, half), detailBuildings.slice(half)];
       for (const subset of ctx.mobile ? [] : subsets) {
         if (!subset.length) continue;
         const facades = yield* stage('details', facadeDetailSteps(scene, subCity, { buildings: subset, sampler, budget: 1300, target, pace }));
         stats.facades += facades.userData.facades ?? 0;
       }
-      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 35 : 100, target, pace })); stats.storefronts = shops.userData.storefrontCount ?? 0;
+      const shops = yield* stage('details', streetscapeSteps(scene, subCity, { buildings: detailBuildings, sampler, budget: ctx.mobile ? 35 : 100, target, pace })); stats.storefronts += shops.userData.storefrontCount ?? 0;
       if (!ctx.mobile) {
         const roofs = yield* stage('details', rooftopDetailSteps(scene, subCity, { buildings: detailBuildings, meshes, budget: 90, target, pace })); stats.rooftops = roofs.userData.units ?? 0;
       }

@@ -7,6 +7,8 @@ import { createNPCVehicleColliders } from '../physics/npc-vehicle.ts';
 import { NPC_BODY_LIFT } from '../simulation/npc-vehicle-specs.ts';
 import { sampleElevation, sampleTerrainNormal, terrainRotation } from '../simulation/terrain.ts';
 import { nearestParked, parkedCar, poolSlots, slotType, stallLines, tileStalls, type ParkedCar } from '../simulation/parking-lots.ts';
+import { MAIN_STREET_TILE } from '../simulation/melrose-main-street.ts';
+import { mainStreetParking } from '../simulation/melrose-parking.ts';
 
 /** The resident tiles, as the streamer lists them. */
 export interface ParkingTiles { readonly loaded: ReadonlyMap<string, { tile: { tx: number; tz: number; size: number; parking?: number[] } }>; }
@@ -78,7 +80,11 @@ export function createParkingLots(scene: THREE.Scene, city: CityData, physics: D
     const keys = [...loaded.keys()].sort().join(' ');
     if (keys !== tilesSeen) {
       tilesSeen = keys; last = undefined; cars = [];
-      for (const key of [...loaded.keys()].sort()) for (const stall of tileStalls(loaded.get(key)!.tile)) { const car = parkedCar(stall); if (car) cars.push(car); }
+      for (const key of [...loaded.keys()].sort()) {
+        const stalls = tileStalls(loaded.get(key)!.tile);
+        if (key === MAIN_STREET_TILE) stalls.push(...mainStreetParking().stalls);
+        for (const stall of stalls) { const car = parkedCar(stall); if (car) cars.push(car); }
+      }
     }
     // Re-choose the nearest when the player has moved a few car lengths; in between only the solid set follows, twice a second.
     if (!last || Math.hypot(observer.x - last.x, observer.z - last.z) > 12) {
