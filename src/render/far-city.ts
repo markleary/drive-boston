@@ -8,6 +8,7 @@ import { tileKey, tileOf } from '../simulation/tile-format.ts';
 import { FACADE_STYLES } from './materials.ts';
 import { HOUSE_FAR_STYLE, HOUSE_PALETTES } from './house-styles.ts';
 import { clipPortalSurface } from './terrain-ground.ts';
+import { tunnelPortalBoundsIntersect } from '../simulation/tunnels.ts';
 import { farPassageFootprints, isTunnelPassageFar } from '../simulation/tunnel-passages.ts';
 import { fenwayDiamond, fenwayInfield } from './fenway-layout.ts';
 import { fenwayFieldElevation, fenwayFieldPatch, fenwayGrassBoundary, isFenwayStadium } from './fenway-field.ts';
@@ -106,24 +107,34 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     const chunk = chunks.get(tile.key)!; chunk.buildings = mesh; chunk.count = count;
   }
   // Coarse ground shares the full-resolution terrain's datum and chunk edges.
+  let groundIndices: Uint16Array | undefined, groundIndexUsers = 0;
   function buildGround(key: string) {
     if (!grid) return;
     const step = grid.cellSize * FAR_STEP;
     const cellsX = Math.ceil(size / step), cellsZ = cellsX;
     const [tx, tz] = key.split('_').map(Number), x0 = tx * size, z0 = tz * size;
-    const w = cellsX + 1, h = cellsZ + 1, positions = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2), indices = new Uint16Array(cellsX * cellsZ * 6);
+    const w = cellsX + 1, h = cellsZ + 1, positions = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2);
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
       const x = Math.min(x0 + i * step, x0 + size), z = Math.min(z0 + j * step, z0 + size), n = j * w + i;
       positions[n * 3] = x; positions[n * 3 + 1] = sampleGrid(grid, x, z) - .35; positions[n * 3 + 2] = z; uv[n * 2] = x / 4; uv[n * 2 + 1] = z / 4;
     }
-    let o = 0;
-    for (let j = 0; j < cellsZ; j++) for (let i = 0; i < cellsX; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; indices.set([a, c, b, b, c, d], o); o += 6; }
+    // Every patch starts with the same grid. Each gets its own BufferAttribute
+    // for GPU disposal, but the immutable CPU index data can be shared.
+    if (!groundIndices) {
+      groundIndices = new Uint16Array(cellsX * cellsZ * 6);
+      let o = 0;
+      for (let j = 0; j < cellsZ; j++) for (let i = 0; i < cellsX; i++) { const a = j * w + i, b = a + 1, c = a + w, d = c + 1; groundIndices.set([a, c, b, b, c, d], o); o += 6; }
+    }
     const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geometry.setIndex(new THREE.BufferAttribute(indices, 1)); geometry.computeVertexNormals(); geometry.computeBoundingSphere();
-    clipPortalSurface(city,geometry);
+    geometry.setIndex(new THREE.BufferAttribute(groundIndices, 1)); geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+    // The first and last vertices bound the uploaded Float32 coordinates.
+    if (tunnelPortalBoundsIntersect(city, positions[0], positions[positions.length - 3], positions[2], positions[positions.length - 1])) clipPortalSurface(city,geometry);
     const mesh = key === stadiumKey && stadium && stadiumMaterial
       ? new THREE.Mesh(addFenwayField(geometry, fenwayFieldElevation(stadium), groundMaterial.color), stadiumMaterial)
       : new THREE.Mesh(geometry, groundMaterial);
+    // Portal clipping and the stadium can replace the regular grid indices.
+    if (mesh.geometry.index?.array === groundIndices) groundIndexUsers++;
+    else if (!groundIndexUsers) groundIndices = undefined;
     mesh.name = `Distant ground ${key}`; mesh.renderOrder = -4; mesh.userData.noAO = true; group.add(mesh);
     chunks.get(key)!.ground = mesh;
   }
@@ -131,7 +142,13 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     const chunk = chunks.get(key)!;
     // The boxes' geometry is shared: a chunk owns only its instance buffers.
     if (chunk.buildings) { group.remove(chunk.buildings); chunk.buildings.dispose(); }
-    if (chunk.ground) { group.remove(chunk.ground); chunk.ground.geometry.dispose(); }
+    if (chunk.ground) {
+      if (groundIndices && chunk.ground.geometry.index?.array === groundIndices) {
+        groundIndexUsers--;
+        if (!groundIndexUsers) groundIndices = undefined;
+      }
+      group.remove(chunk.ground); chunk.ground.geometry.dispose();
+    }
     buildingCount -= chunk.count; chunk.count = 0; chunk.buildings = undefined; chunk.ground = undefined;
   }
   function build(key: string) {
@@ -163,13 +180,14 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     if (next) build(next.key);
   }
   function stats() {
-    let residentChunks = 0, geometryBytes = 0;
+    let residentChunks = 0, geometryBytes = groundIndices?.byteLength ?? 0;
     for (const chunk of chunks.values()) {
       if (chunk.buildings || chunk.ground) residentChunks++;
       if (chunk.buildings) geometryBytes += chunk.buildings.instanceMatrix.array.byteLength + (chunk.buildings.instanceColor?.array.byteLength ?? 0);
       if (chunk.ground) {
         for (const attribute of Object.values(chunk.ground.geometry.attributes)) geometryBytes += attribute.array.byteLength;
-        geometryBytes += chunk.ground.geometry.index?.array.byteLength ?? 0;
+        const indices = chunk.ground.geometry.index?.array;
+        if (indices && indices !== groundIndices) geometryBytes += indices.byteLength;
       }
     }
     return { residentChunks, buildings: buildingCount, geometryBytes };

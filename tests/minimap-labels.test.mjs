@@ -1,10 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createMinimapLabeler,abbreviateRoadName} from '../src/ui/minimap-labels.ts';
+import {mapLayer,pointBounds} from '../src/ui/map-layer.ts';
 
 import {loadMetroCity} from './helpers/metro-city.mjs';
 const city=await loadMetroCity({tiles:[]});
 const labeler=createMinimapLabeler(city.roads),measureText=text=>text.length*5.6;
+
+test('minimap panning, zoom and teleport preserve exact atlas feature order and edge visibility',()=>{
+  const items=[
+    [[300,10],[300,90]], [[-5,15],[20,30]], [[30,30],[35,35]],
+    [[12,20],[31,25]], [[30,30],[35,35]], [[-800,20],[320,25]],
+  ].map((points,id)=>({id,...pointBounds(points)}));
+  const visible=mapLayer(items);
+  for(const [left,right,expected] of [
+    [0,30,[1,3,5]], [5,40,[1,2,3,4,5]], [299,310,[0,5]],
+    [300,310,[5]], [-850,-750,[5]], [-850,400,[0,1,2,3,4,5]],
+  ]){
+    const box={minX:left,maxX:right,minZ:0,maxZ:100};
+    for(const atlas of [false,true])assert.deepEqual(visible(box,atlas).map(item=>item.id),expected);
+  }
+});
 
 test('connected short GIS fragments label a named through road once and ignore public alleys',()=>{
   const roads=Array.from({length:12},(_,i)=>({id:String(i),name:'Beacon Street',width:12,oneway:0,points:[[-300+i*50,70],[-250+i*50,70]]}));

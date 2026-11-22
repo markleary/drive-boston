@@ -3,6 +3,7 @@ import type { CameraMode, CityData, DriveInput, LightingMode, Point2, TravelMode
 import type { QualityMode } from '../render/graphics';
 import {DEFAULT_PEDESTRIAN_DENSITY,DEFAULT_TRAFFIC_DENSITY,isDensityLevel,type DensityLevel} from '../simulation/npc-density.ts';
 import { areaAt, indexAreas } from './geography';
+import {mapLayer, overlaps, pointBounds} from './map-layer';
 import {createDiagnostics} from './diagnostics';
 import type {HUDPerformanceData} from './diagnostic-report';
 import {closestRoad} from '../simulation/roads';
@@ -213,9 +214,13 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   const neighborhoods=indexAreas(city.neighborhoods??[]);
   // Draw order: tunnels beneath the streets, motorway decks above them.
   // A highway's walled cut is a tunnel record too: its open stretches draw as the highway they are, over the dashed line of its roofed parts.
-  const mapRoads=mapRoadList.flatMap(road=>[road,...(road.highway?openStretches(road).map(points=>({...road,points,tunnel:undefined})):[])]).map(road=>({road,highway:isMotorway(road)&&!road.tunnel||(!!road.highway&&!road.tunnel),rank:road.tunnel?0:isMotorway(road)||road.highway?2:1,minX:Math.min(...road.points.map(p=>p[0])),maxX:Math.max(...road.points.map(p=>p[0])),minZ:Math.min(...road.points.map(p=>p[1])),maxZ:Math.max(...road.points.map(p=>p[1]))}));
-  const boxed=<T extends {rings:Point2[][]}>(areas:T[])=>areas.filter(a=>a.rings[0]?.length).map(area=>{const ring=area.rings[0];let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;for(const [x,z] of ring){minX=Math.min(minX,x);maxX=Math.max(maxX,x);minZ=Math.min(minZ,z);maxZ=Math.max(maxZ,z);}return{area,minX,maxX,minZ,maxZ};});
-  const mapParks=boxed(city.parks??[]),mapWater=boxed(city.water??[]);
+  const roadStretches=mapRoadList.flatMap(road=>[road,...(road.highway?openStretches(road).map(points=>({...road,points,tunnel:undefined})):[])]);
+  const mapRoads=mapLayer(roadStretches.map(road=>{
+    const highway=!!(isMotorway(road)||road.highway);
+    return {road,highway:highway&&!road.tunnel,rank:road.tunnel?0:highway?2:1,...pointBounds(road.points)};
+  }).sort((a,b)=>a.rank-b.rank));
+  const boxed=<T extends {rings:Point2[][]}>(areas:T[])=>areas.filter(a=>a.rings[0]?.length).map(area=>({area,...pointBounds(area.rings[0])}));
+  const mapParks=mapLayer(boxed(city.parks??[])),mapWater=mapLayer(boxed(city.water??[]));
   // Logan's airfield (airfield.json): aprons, taxiways and runways in three greys, the runways named on the large map.
   const AIRFIELD_INK:Record<string,string>={shoulder:'#d3d4cb',apron:'#d0cec4',taxiway:'#bcbdb7',runway:'#8a9190'};
   // Boot attaches the airfield after the interface exists, so its polygons are boxed at the first draw that finds it.
@@ -470,7 +475,7 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
   function setDestination(x:number,z:number){
     const point=nav.setDestination(x,z,state,travelMode);
     if(!point){toast('No streets near there');return null;}
-    guidance=nav.update(state,travelMode);lastGuidance=performance.now();reroutes=nav.snapshot().reroutes;
+    guidance=nav.update(state,travelMode);lastGuidance=performance.now();reroutes=nav.reroutes;
     renderRouteCard();renderGuide();drawFullMap();drawMiniMap();
     const plan=nav.plan;
     toast(plan?`Route set · ${formatRouteDistance(plan.length)} · ${formatRouteTime(plan.duration)}`:`Destination set · ${formatRouteDistance(guidance?.distance??0)} away`);
@@ -642,9 +647,10 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     else ctx.fillRect(b1[0], b1[1], b2[0] - b1[0], b2[1] - b1[1]);
     const traceRings=(rings:Point2[][])=>{ctx.beginPath();for(const ring of rings){ring.forEach((point,i)=>{const p=project(point);if(i)ctx.lineTo(...p);else ctx.moveTo(...p);});ctx.closePath();}};
     const viewMinX=center[0]-centerX/scale-30,viewMaxX=center[0]+(w-centerX)/scale+30,viewMinZ=center[1]-centerY/scale-30,viewMaxZ=center[1]+(h-centerY)/scale+30;
-    const inView=(item:{minX:number;maxX:number;minZ:number;maxZ:number})=>item.maxX>viewMinX&&item.minX<viewMaxX&&item.maxZ>viewMinZ&&item.minZ<viewMaxZ;
-    for(const {area} of mapParks.filter(inView)){traceRings(area.rings);ctx.fillStyle='#c6d4b3';ctx.fill('evenodd');}
-    for(const {area} of mapWater.filter(inView)){traceRings(area.rings);ctx.fillStyle='#a7c8ca';ctx.fill('evenodd');}
+    const view={minX:viewMinX,maxX:viewMaxX,minZ:viewMinZ,maxZ:viewMaxZ};
+    const inView=(item:CityData['bounds'])=>overlaps(view,item);
+    for(const {area} of mapParks(view,large)){traceRings(area.rings);ctx.fillStyle='#c6d4b3';ctx.fill('evenodd');}
+    for(const {area} of mapWater(view,large)){traceRings(area.rings);ctx.fillStyle='#a7c8ca';ctx.fill('evenodd');}
     for(const {area} of (mapAirfield()??[]).filter(inView)){traceRings(area.rings);ctx.fillStyle=AIRFIELD_INK[area.layer];ctx.fill('evenodd');}
     if(city.airfield&&scale>=.12)for(const runway of city.airfield.runways){
       // A dashed centre line, and the designation at each end where the map is large enough to read it.
@@ -663,14 +669,14 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       for(const area of neighborhoods){traceRings(area.rings);ctx.stroke();}ctx.setLineDash([]);
     }
     const plans=metro&&scale>=.09?[...buildingPlans(metro)].filter(inView):[],replaced=new Set(plans.flatMap(plan=>plan.hulls));
-    const footprints=mapBuildings(viewMinX,viewMaxX,viewMinZ,viewMaxZ,scale).filter(b=>b.footprint.length&&!replaced.has(b.n??-1)&&inside(project(b.center),large?180:90));
+    const footprints=mapBuildings(viewMinX,viewMaxX,viewMinZ,viewMaxZ,scale).filter(b=>!replaced.has(b.n??-1)&&inside(project(b.center),large?180:90)&&b.footprint.length);
     const fillFootprint=(building:MapBuilding)=>{
       ctx.beginPath(); building.footprint.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0],q[1]); }); ctx.closePath();
       ctx.fillStyle = building.landmark ? '#b9a28b' : '#bbc3b7'; ctx.fill();
       if (large && scale > .8) { ctx.strokeStyle = '#8a9b8e55'; ctx.lineWidth = .55; ctx.stroke(); }
     };
     for(const building of footprints)if(building.fragment)fillFootprint(building);
-    const visibleRoads=mapRoads.filter(inView).sort((a,b)=>a.rank-b.rank);
+    const visibleRoads=mapRoads(view,large);
     for (const {road,highway} of visibleRoads) {
       if (road.points.length < 2) continue;
       ctx.beginPath(); road.points.forEach((p,i) => { const q = project(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); });
@@ -861,18 +867,21 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
     if(stats?.travelMode && stats.travelMode!==travelMode)setTravelMode(stats.travelMode);
     state=next;touchDriving.setSpeed(state.speed);latestStats=stats??{};const speed=Math.abs(state.speed)*2.236936;
     const speedScale=travelMode==='helicopter'?HELICOPTER.cruiseSpeed*2.236936:travelMode==='walk'?WALKER.runSpeed*2.236936:travelMode==='bike'?56:PLAYER_CARS[carId].maxForwardSpeed*2.236936;
-    el('speed-value').textContent=String(Math.round(speed));el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;el('gear').textContent=travelMode==='helicopter'?'H':travelMode==='walk'?'W':state.speed<-.3?'R':travelMode==='bike'?'E':isElectricCar(carId)?'D':`D${stats?.gear&&stats.gear>0?stats.gear:''}`;
+    setText('speed-value',String(Math.round(speed)));
+    el('speed-fill').style.width=`${Math.min(100,speed/speedScale*100)}%`;
+    setText('gear',travelMode==='helicopter'?'H':travelMode==='walk'?'W':state.speed<-.3?'R':travelMode==='bike'?'E':isElectricCar(carId)?'D':`D${stats?.gear&&stats.gear>0?stats.gear:''}`);
     const transmission=carId==='subaru-wrx'||carId==='supra-mk4'?'Six-speed manual with shift assist':carId==='maserati-gt2-stradale'?'Eight-speed dual-clutch transmission':'Automatic transmission';
-    el('gear').title=travelMode==='drive'?(isElectricCar(carId)?'Dual-motor electric · single-speed drive':stats?.rpm?`${transmission} · ${Math.round(stats.rpm)} rpm`:''):'';
-    if(travelMode==='drive')el('journey-label').textContent=PLAYER_CARS[carId].name.toUpperCase();
+    const gear=el('gear'),title=travelMode==='drive'?(isElectricCar(carId)?'Dual-motor electric · single-speed drive':stats?.rpm?`${transmission} · ${Math.round(stats.rpm)} rpm`:''):'';
+    if(gear.getAttribute('title')!==title)gear.title=title;
+    if(travelMode==='drive')setText('journey-label',PLAYER_CARS[carId].name.toUpperCase());
     el('storrow-recovery').classList.toggle('hidden',!stats?.storrowed||travelMode!=='drive'||isPaused());
     el('storrow-toast').classList.toggle('hidden',isPaused()||travelMode!=='drive');
     if(!stats?.storrowed||travelMode!=='drive')clearStorrowed();
-    if(travelMode==='bike')el('journey-label').textContent=(stats?.wheelieRemaining??0)>0?`WHEELIE · ${Math.ceil(stats!.wheelieRemaining!)}s`:'ULTRA BEE · ELECTRIC';
-    if(travelMode==='walk')el('journey-label').textContent=state.speed>WALKER.walkSpeed+.8?'RUNNING':'ON FOOT';
+    if(travelMode==='bike')setText('journey-label',(stats?.wheelieRemaining??0)>0?`WHEELIE · ${Math.ceil(stats!.wheelieRemaining!)}s`:'ULTRA BEE · ELECTRIC');
+    if(travelMode==='walk')setText('journey-label',state.speed>WALKER.walkSpeed+.8?'RUNNING':'ON FOOT');
     if(travelMode==='helicopter'){
-      altitude=Math.max(0,stats?.altitude??state.y);el('altitude-value').textContent=String(Math.round(altitude*3.28084));
-      const climb=stats?.verticalSpeed??0;el('vertical-speed').textContent=Math.abs(climb)<.25?'LEVEL':`${climb>0?'↑':'↓'} ${Math.round(Math.abs(climb)*3.28084)} FT/S`;
+      altitude=Math.max(0,stats?.altitude??state.y);setText('altitude-value',String(Math.round(altitude*3.28084)));
+      const climb=stats?.verticalSpeed??0;setText('vertical-speed',Math.abs(climb)<.25?'LEVEL':`${climb>0?'↑':'↓'} ${Math.round(Math.abs(climb)*3.28084)} FT/S`);
     }
     const now=performance.now();
     diagnostics.update(now);
@@ -883,21 +892,21 @@ export function createInterface(city: CityData, callbacks: InterfaceCallbacks) {
       // vehicle's actual level instead of naming the first road underneath it.
       const near=closestRoad(city,state.x,state.z,false,travelMode==='helicopter'?{survey:true}:{height:state.y,survey:true});
       const label=near.distance<=110&&near.road?.name?near.road.name:neighborhood;
-      el('neighborhood-label').textContent=`${neighborhood}, Massachusetts`;
-      if(travelMode==='helicopter')el('journey-label').textContent=`Above ${neighborhood}`;
-      el('location-label').textContent=travelMode==='helicopter'?`Above ${label}`:label;lastLocation=now;
+      setText('neighborhood-label',`${neighborhood}, Massachusetts`);
+      if(travelMode==='helicopter')setText('journey-label',`Above ${neighborhood}`);
+      setText('location-label',travelMode==='helicopter'?`Above ${label}`:label);lastLocation=now;
       // Cross street ahead in the direction of travel (facing, or behind while reversing). Mid-turn or
       // inside an intersection the car is not lined up with the snapped road, so keep the last answer.
       const onRoad=travelMode!=='helicopter'&&near.distance<=40&&!!near.road?.name;
       if(!onRoad||Math.abs(Math.cos(state.yaw-near.yaw))>.6){
         const next=onRoad?nextIntersection(city,near.road,state.x,state.z,state.yaw+(state.speed<-1?Math.PI:0)):null;
-        if(next)el('next-street-label').textContent=next.names.join(' & ');nextShown=!!next;
+        if(next)setText('next-street-label',next.names.join(' & '));nextShown=!!next;
       }
       el('next-street').classList.toggle('hidden',!nextShown||el('next-street-label').textContent===label);
     }
     if(nav.active&&now-lastGuidance>100){
       lastGuidance=now;guidance=nav.update(state,travelMode,now);
-      const count=nav.snapshot().reroutes;if(count>reroutes&&!isPaused())toast('Rerouting');reroutes=count;
+      const count=nav.reroutes;if(count>reroutes&&!isPaused())toast('Rerouting');reroutes=count;
       if(guidance?.arrived)clearDestination('You have arrived');else renderGuide();
     }
   }

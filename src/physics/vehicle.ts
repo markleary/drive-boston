@@ -19,8 +19,13 @@ export const VEHICLE = PLAYER_CARS[DEFAULT_CAR];
 /** `grip` is the share by which aerodynamic load raises what the tyres hold (1 without any). */
 export const carSteeringLimit=(speed:number,spec:typeof PLAYER_CARS[PlayerCarId]=VEHICLE,grip=1)=>Math.min(spec.maxSteering,Math.atan(spec.maxLateralAcceleration*grip*spec.wheelbase/(speed*speed+16)));
 
-export interface PhysicsVehicleState extends VehicleState {
+interface VehicleMotion extends VehicleState {
   rotation: { x: number; y: number; z: number; w: number };
+  halfLength: number;
+  halfWidth: number;
+}
+
+export interface PhysicsVehicleState extends VehicleMotion {
   wheelAngles: number[];
   suspension: number[];
   braking: boolean;
@@ -32,8 +37,6 @@ export interface PhysicsVehicleState extends VehicleState {
   wheelspin: number;
   vehicle: 'car' | 'ultrabee';
   carId: PlayerCarId;
-  halfLength: number;
-  halfWidth: number;
   lean: number;
   wheelie: number;
   wheelieRemaining: number;
@@ -242,7 +245,7 @@ export class DrivingPhysics {
     if(id===this.selectedCar)return;
     this.selectedCar=id;
     if(this.bike)return;
-    const state=this.getState(),surface=sampleVehicleSurface(this.city,state.x,state.z,state.y);
+    const state=this.getMotionState(),surface=sampleVehicleSurface(this.city,state.x,state.z,state.y);
     this.world.removeVehicleController(this.controller);this.configureCar();
     this.body.recomputeMassPropertiesFromColliders();
     if(this.canResetAt(state.x,state.z,state.yaw,surface.road?.id))this.reset(state.x,state.z,state.yaw,surface.road?.id);
@@ -251,7 +254,7 @@ export class DrivingPhysics {
 
   setVehicleType(kind: 'car' | 'ultrabee') {
     if (kind === this.vehicleType) return;
-    const state = this.getState();
+    const state = this.getMotionState();
     this.world.removeVehicleController(this.controller);
     this.clearTruckBody();
     this.bike = kind === 'ultrabee' ? new BikeDynamics(this.world, this.body, this.chassisCollider) : undefined;
@@ -383,7 +386,7 @@ export class DrivingPhysics {
   /** A tall box contacting a solid above an otherwise open lane is a bridge
    * strike. Side walls, vehicles, pavement and upside-down contacts do not
    * qualify. Rapier supplies the actual contact and stopping impulse. */
-  private detectStorrow(before:PhysicsVehicleState,severity:number){
+  private detectStorrow(before:VehicleMotion,severity:number){
     const cargo=this.cargoCollider!;
     if(1-2*(before.rotation.x**2+before.rotation.z**2)<.8)return;
     let hit:RAPIER.Collider|undefined,point:{x:number;y:number;z:number}|undefined;
@@ -430,7 +433,7 @@ export class DrivingPhysics {
     if (!Number.isFinite(dt) || dt <= 0) return;
     const timestep = Math.min(dt, 1 / 30);
     this.world.timestep = timestep;
-    const state = this.getState();
+    const state = this.getMotionState();
     if(this.cargoCollider){
       if(Math.abs(state.speed)>.25){this.truckApproachSpeed=state.speed;this.truckApproachAge=.3;}
       else this.truckApproachAge=Math.max(0,this.truckApproachAge-timestep);
@@ -718,7 +721,7 @@ export class DrivingPhysics {
     const spawnHeight=this.bike?ULTRA_BEE.spawnHeight:this.carSpec.spawnHeight;
     if([position.x,position.y,position.z].every(Number.isFinite)){
       const crashSurface=sampleVehicleSurface(this.city,position.x,position.z,position.y);
-      const heading=this.getState().yaw;
+      const heading=this.getMotionState().yaw;
       // Keep recovery inside the already-streamed neighborhood (and on a survey mesh's traces only after a crash on one, where the mesh is loaded).
       const accept=(spot:{x:number;z:number;yaw:number;road:CityData['roads'][number]})=>{
         if(spot.x<this.bounds.minX+1||spot.x>this.bounds.maxX-1||spot.z<this.bounds.minZ+1||spot.z>this.bounds.maxZ-1)return false;
@@ -765,14 +768,15 @@ export class DrivingPhysics {
         }
       }
       if(Number.isFinite(road.distance)){
-        const yaw=road.road.oneway===0&&Math.cos(road.yaw-this.getState().yaw)<0?road.yaw+Math.PI:road.yaw;
+        const yaw=road.road.oneway===0&&Math.cos(road.yaw-this.getMotionState().yaw)<0?road.yaw+Math.PI:road.yaw;
         this.reset(road.x,road.z,yaw,road.road.id);return;
       }
     }
     this.reset(this.rescue.x,this.rescue.z,this.rescue.yaw,this.rescue.roadId);
   }
 
-  getState(): PhysicsVehicleState {
+  /** Current chassis movement and footprint, used by the fixed-step simulation. */
+  getMotionState(): VehicleMotion {
     const p = this.body.translation();
     const q = this.body.rotation();
     const velocity = this.body.linvel();
@@ -783,10 +787,17 @@ export class DrivingPhysics {
       x: p.x, y: p.y, z: p.z,
       yaw: Math.atan2(fx, fz), speed: this.bike ? (velocity.x*fx+velocity.z*fz)/(Math.hypot(fx,fz)||1) : velocity.x * fx + velocity.y * fy + velocity.z * fz,
       steering: this.steering, rotation: { x: q.x, y: q.y, z: q.z, w: q.w },
-      wheelAngles: Array.from({length:this.controller.numWheels()}, (_,i) => (this.controller.wheelRotation(i) ?? 0)+(this.bike?0:this.wheelTurn[i]??0)),
-      suspension: Array.from({length:this.controller.numWheels()}, (_,i) => this.controller.wheelSuspensionLength(i) ?? this.carSpec.suspensionRest),
-      braking: this.braking,gear:this.gear,rpm:this.rpm,turboBoost:this.turboBoost,wheelspin:this.bike?0:this.wheelspin,vehicle:this.vehicleType,carId:this.carId,
       halfLength:this.bike?.8:this.carSpec.halfLength,halfWidth:this.bike?.4:this.carSpec.halfWidth,
+    };
+  }
+
+  getState(): PhysicsVehicleState {
+    const wheels=this.controller.numWheels();
+    return {
+      ...this.getMotionState(),
+      wheelAngles: Array.from({length:wheels}, (_,i) => (this.controller.wheelRotation(i) ?? 0)+(this.bike?0:this.wheelTurn[i]??0)),
+      suspension: Array.from({length:wheels}, (_,i) => this.controller.wheelSuspensionLength(i) ?? this.carSpec.suspensionRest),
+      braking: this.braking,gear:this.gear,rpm:this.rpm,turboBoost:this.turboBoost,wheelspin:this.bike?0:this.wheelspin,vehicle:this.vehicleType,carId:this.carId,
       lean:this.bike?.lean??0,wheelie:this.bike?.wheelie??0,wheelieRemaining:this.bike?.wheelieRemaining??0,
       storrowDamage:this.storrow?.damage??0,storrowDirection:this.storrow?.direction??1,storrowed:!!this.storrow,
     };
