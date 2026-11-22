@@ -60,6 +60,33 @@ function harness(){
   return{audio,context,sources,add,advance(seconds){context.currentTime+=seconds;for(const source of sources)if(source.stopTime<=context.currentTime)source.onended?.();},restore(){globalThis.document=originalDocument;globalThis.window=originalWindow;}};
 }
 
+test('unused engine layers keep their initial gain and pitch until the driver selects the car', t => {
+  const { audio, add, advance, restore } = harness();
+  t.after(restore);
+  for (const name of [DRIVE, 'mclaren-gt-idle', 'mclaren-gt-drive', 'mclaren-gt-high']) add(name);
+  const { source, gain, filter } = audio.loops.get('mclaren-gt-drive');
+  function driveFrame() {
+    advance(1 / 60);
+    audio.update(10, 1, false, {gear: 1, rpm: 3500});
+  }
+  for (let i = 0; i < 60; i++) driveFrame();
+  assert.equal(gain.gain.value, 0);
+  assert.equal(source.playbackRate.value, 1);
+  assert.equal(gain.gain.events.length, 0);
+  assert.equal(source.playbackRate.events.length, 0);
+  assert.equal(filter.frequency.events.length, 60, 'the filter follows its original curve before the layer becomes audible');
+
+  audio.setCar('mclaren-gt');
+  driveFrame();
+  assert.ok(gain.gain.events.at(-1).value > 0);
+  assert.notEqual(source.playbackRate.events.at(-1).value, 1);
+  audio.setCar(ID);
+  driveFrame();
+  driveFrame();
+  assert.deepEqual(gain.gain.events.slice(-2).map(e => [e.value, e.constant]), [[0, .14], [0, .14]]);
+  assert.deepEqual(source.playbackRate.events.slice(-2).map(e => [e.value, e.constant]), [[1, .12], [1, .12]]);
+});
+
 test('EV forward hum is silent at rest, follows speed without gears, and never falls back to gas sounds',()=>{
   const h=harness(),{audio,context,add}=h;
   try{

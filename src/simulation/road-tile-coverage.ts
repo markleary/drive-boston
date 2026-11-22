@@ -39,10 +39,22 @@ export class RoadTileCoverage {
   private city: MetroCity;
   private roadsNear: (bounds: Bounds) => Road[];
   private pavementMargin = 0;
+  private boundaryRoads = new WeakSet<Road>();
   private surveys: { road: Road; owner: Omit<WantedTile, 'distance'>; bounds: Bounds }[] = [];
   constructor(city: MetroCity, roadsNear: (bounds: Bounds) => Road[]) {
     this.city = city; this.roadsNear = roadsNear; this.keys = new Set(city.tiles.keys);
-    for (const road of city.roads) this.pavementMargin = Math.max(this.pavementMargin, road.width / 2);
+    const size = city.tiles.size;
+    for (const road of city.roads) {
+      const half = road.width / 2;
+      this.pavementMargin = Math.max(this.pavementMargin, half);
+      if (road.points.length < 2) continue;
+      const [tx, tz] = tileOf(...road.points[0], size), x0 = tx * size, z0 = tz * size;
+      // If the whole pavement lies inside one tile, the tile square is at
+      // least as close as any part of the road. Keep a centimetre of slack
+      // so a distance that rounds to the tile edge takes the exact road test.
+      const inset = half + .01;
+      if (road.points.some(([x, z]) => x <= x0 + inset || x >= x0 + size - inset || z <= z0 + inset || z >= z0 + size - inset)) this.boundaryRoads.add(road);
+    }
     for (const road of city.surveyRoads ?? []) {
       const mesh = city.landmarkBuildings?.find(b => b.id === road.surveyDeck); if (!mesh || road.points.length < 2) continue;
       const [tx, tz] = tileOf(mesh.center[0], mesh.center[1], city.tiles.size), key = tileKey(tx, tz); if (!this.keys.has(key)) continue;
@@ -70,7 +82,7 @@ export class RoadTileCoverage {
     // Include centerlines just outside the radius whose pavement reaches it.
     const margin = radius + this.pavementMargin;
     for (const road of includeOrdinaryRoads ? this.roadsNear({ minX: x - margin, maxX: x + margin, minZ: z - margin, maxZ: z + margin }) : []) {
-      if (road.points.length < 2) continue;
+      if (!this.boundaryRoads.has(road)) continue;
       const distance = pavementDistance(road, x, z);
       if (distance > radius) continue;
       const owner = this.owner(road);

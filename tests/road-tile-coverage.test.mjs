@@ -36,6 +36,29 @@ test('road dependencies are local, deduplicated and released once the road leave
   assert.ok(index.tilesNear(950,587,180).some(t=>t.key==='2_0'),'pavement width reaches the query even if its centerline does not');
 });
 
+test('pavement crossing a tile edge brings its owner even when the entire centerline stays inside',()=>{
+  const road={id:'edge',width:10,points:[[-2,400],[-2,600]]};
+  const city={tiles:{size:1000,keys:['-1_0','0_0']},roads:[road]};
+  const coverage=new RoadTileCoverage(city,()=>city.roads);
+  const distance=x=>coverage.tilesNear(x,500,20).find(tile=>tile.key==='-1_0')?.distance;
+  assert.equal(distance(2),0);
+  assert.equal(distance(12),9);
+  assert.equal(distance(24),undefined);
+});
+
+test('at the exact west or north edge of a search window a touching pavement still brings its owner',()=>{
+  const tiles={size:1000,keys:['0_0','1_0','0_1']};
+  for(const [x,z,points] of [[1450,500,[[995,400],[995,600]]],[500,1450,[[400,995],[600,995]]]]){
+    const wantsOwner=(roads,radius)=>new RoadTileCoverage({tiles,roads},()=>roads).tilesNear(x,z,radius).some(t=>t.key==='0_0');
+    assert.equal(wantsOwner([],450),false);
+    assert.equal(wantsOwner([],700),true);
+    assert.equal(wantsOwner([{width:10,points}],450),true);
+  }
+  const roads=[{width:10,points:[[-5.000000000000001,400],[-5.000000000000001,600]]}];
+  const negative=new RoadTileCoverage({tiles:{size:1000,keys:['-1_0','0_0']},roads},()=>roads);
+  assert.equal(negative.tilesNear(450,500,450).find(t=>t.key==='-1_0')?.distance,450,'the pavement distance rounds to the radius');
+});
+
 test('the desktop Tobin southbound arrival includes its distant supporting deck owner',()=>{
   const arrival=city.landmarks.find(l=>l.id==='tobin-bridge-southbound')?.driveStart;
   assert.ok(arrival,'the Chelsea bridge arrival is shipped');

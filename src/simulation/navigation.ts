@@ -362,6 +362,7 @@ export function createNavigator(city:CityData){
     },
     clear(){destination=null;plan=null;progress=0;index=0;},
     get active(){return !!destination;},
+    get reroutes(){return reroutes;},
     get destination(){return destination?.anchors[0].point??null;},
     /** Name of the street the destination is on, or null for an unnamed way. */
     get street(){return destination?streetName(routeGraph(city).edges[destination.anchors[0].edge].road):null;},

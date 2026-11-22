@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type {CityData,Point2,Road,VehicleState} from '../types';
 import type {DrivingPhysics} from '../physics/vehicle';
-import {sampleElevation,sampleTerrainNormal,rotationFromNormal} from './terrain.ts';
-import {sampleRoadElevation,roadNormal,roadProjection} from './road-surfaces.ts';
+import {sampleElevation,rotationFromNormal} from './terrain.ts';
+import {sampleRoadElevation,sampleRoadSurface,roadProjection} from './road-surfaces.ts';
 import {signalPhase} from './signals.ts';
 import {createGreenLine,createTransitBus} from '../render/transit-vehicles.ts';
 import {createTransitTracks} from '../render/transit-tracks.ts';
@@ -77,7 +77,7 @@ export function routeDecks(city:CityData,route:Pick<Route,'points'|'distances'|'
 export function routeSurface(city:CityData,route:Pick<Route,'decks'|'rail'>,distance:number,x:number,z:number){
  if(route.rail)return railSurface(route.rail,distance);
  const deck=route.decks[Math.round(distance/DECK_STEP)];
- return deck?{height:sampleRoadElevation(city,deck,x,z),normal:roadNormal(city,deck,x,z)}:{height:sampleElevation(city,x,z),normal:sampleTerrainNormal(city,x,z)};
+ return sampleRoadSurface(city,deck,x,z);
 }
 const BUS_HALF=1.3,TRACK_CLEARANCE=BUS_HALF+1.25+.35,CURB_MARGIN=.3,TRACK_CELL=32;
 /** The offset of the right-hand lane traffic drives on a street (see `lane()` in traffic.ts). */

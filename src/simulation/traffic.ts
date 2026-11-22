@@ -8,12 +8,12 @@ import {shrinkPool} from './npc-density.ts';
 import {NPC_BODY_LIFT,TRAFFIC_CAPACITY,npcVehicleAt,npcPaint,type NPCVehicleSpec,type NPCVehicleType} from './npc-vehicle-specs.ts';
 import {npcRoadAllowed} from './cars-only-roads.ts';
 import {createNPCVehicleColliders} from '../physics/npc-vehicle.ts';
-import { sampleElevation } from './terrain.ts';
+import { rotationFromNormal,sampleElevation } from './terrain.ts';
 import {headOnThreat,advanceEvasion,type Evasion,type PlayerTrafficState} from './traffic-evasion.ts';
 import {CONFLICT,firstContact,clearance,crossing,rightOfWay,yieldSpeed,blockingCycle,type Pose,type Trajectory} from './traffic-conflicts.ts';
 import { pointInside } from './roads.ts';
 import { coverageTester } from './coverage.ts';
-import { sampleRoadElevation,roadNormal,roadRotation,sampleVehicleSurface,roadProjection,roadWidthAt } from './road-surfaces.ts';
+import { sampleRoadElevation,sampleRoadSurface,sampleVehicleSurface,roadProjection,roadWidthAt } from './road-surfaces.ts';
 import { signalPhase } from './signals.ts';
 import type { TrafficObstacle } from './transit.ts';
 import { createActivityProfile } from './activity.ts';
@@ -713,9 +713,9 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
   function addActor(candidate:Placement,spec:NPCVehicleSpec){
     const { path, d, p } = candidate;
     const q = at(path, d + 2), yaw = Math.atan2(q[0] - p[0], q[1] - p[1]);
-    const road=pathRoad(path,d),normal=roadNormal(city,road,p[0],p[1]),ground=sampleRoadElevation(city,road,p[0],p[1]);
+    const road=pathRoad(path,d),{height:ground,normal}=sampleRoadSurface(city,road,...p);
     const body = physics.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
-      .setTranslation(p[0]+normal.x*NPC_BODY_LIFT,ground+normal.y*NPC_BODY_LIFT,p[1]+normal.z*NPC_BODY_LIFT).setRotation(roadRotation(city,road,p[0],p[1],yaw)));
+      .setTranslation(p[0]+normal.x*NPC_BODY_LIFT,ground+normal.y*NPC_BODY_LIFT,p[1]+normal.z*NPC_BODY_LIFT).setRotation(rotationFromNormal(normal,yaw)));
     const colliders=createNPCVehicleColliders(physics.world,body,spec),collider=colliders[0];
     fleet.bind(actors.length,spec.type);
     const actor:Actor={ body, collider, colliders, spec, registration:fleet.registration(actors.length),path, distance: d, speed: 0, cruise: 5.5 + random() * 3.5, x: p[0], z: p[1], yaw, steering:0,color: new THREE.Color(npcPaint(spec)),waiting:0 };
@@ -839,9 +839,9 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
     restore(actor);actor.rejoin=undefined;actor.evasion=undefined;actor.steering=0;actor.parked=false;
     actor.path=path;actor.distance=d;actor.speed=0;actor.signalStop=undefined;actor.signalCommitted=false;actor.waiting=0;actor.priorityUntil=undefined;actor.ended=undefined;
     actor.x=start[0];actor.z=start[1];actor.yaw=Math.atan2(next[0]-start[0],next[1]-start[1]);
-    const road=pathRoad(path,d),normal=roadNormal(city,road,...start);
-    actor.body.setTranslation({x:start[0]+normal.x*NPC_BODY_LIFT,y:sampleRoadElevation(city,road,...start)+normal.y*NPC_BODY_LIFT,z:start[1]+normal.z*NPC_BODY_LIFT},true);
-    actor.body.setRotation(roadRotation(city,road,...start,actor.yaw),true);
+    const road=pathRoad(path,d),{height,normal}=sampleRoadSurface(city,road,...start);
+    actor.body.setTranslation({x:start[0]+normal.x*NPC_BODY_LIFT,y:height+normal.y*NPC_BODY_LIFT,z:start[1]+normal.z*NPC_BODY_LIFT},true);
+    actor.body.setRotation(rotationFromNormal(normal,actor.yaw),true);
     setDeckVisibility(actor,road);
     if(speedClass(road)>0)actor.speed=Math.min(cruiseOn(actor,road)*.9,leaderLimit(actor,fleetObstacles(),actors.indexOf(actor)));
   }
@@ -872,7 +872,8 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
       const width=(point.road.deckWidths?roadWidthAt(point.road,x,z):point.road.pavedWidth??point.road.width)/2;
       if(x<city.bounds.minX||x>city.bounds.maxX||z<city.bounds.minZ||z>city.bounds.maxZ||roadProjection(point.road,x,z).distance>width)return false;
     }
-    const h=sampleRoadElevation(city,point.road,point.x,point.z)+NPC_BODY_LIFT,from=actor.body.translation(),pose=roadRotation(city,point.road,point.x,point.z,heading);
+    const {height,normal}=sampleRoadSurface(city,point.road,point.x,point.z);
+    const h=height+NPC_BODY_LIFT,from=actor.body.translation(),pose=rotationFromNormal(normal,heading);
     evasionShapeQ.set(pose.x,pose.y,pose.z,pose.w);
     return !physics.world.castShape(from,evasionShapeQ,{x:point.x-from.x,y:h-from.y,z:point.z-from.z},new RAPIER.Cuboid(actor.spec.width/2+.08,.48,actor.spec.length/2+.1),0,1,true,undefined,undefined,undefined,actor.body,c=>!c.isSensor()&&!physics.terrainColliders.has(c.handle)&&(includePlayer||c.handle!==physics.chassisCollider.handle));
   }
@@ -1327,7 +1328,7 @@ export function createTraffic(scene: THREE.Scene, city: CityData, physics: Drivi
         const travel=Math.hypot(actor.x-previousX,actor.z-previousZ),turnAngle=Math.atan2(Math.sin(yaw-previousYaw),Math.cos(yaw-previousYaw));
         const steering=travel>.001?Math.max(-.5,Math.min(.5,Math.atan((actor.spec.frontAxle-actor.spec.rearAxle)*turnAngle/travel))):0;
         actor.steering+=Math.max(-2.5*dt,Math.min(2.5*dt,steering-actor.steering));
-        const road=pathRoad(actor.path,actor.distance),normal=roadNormal(city,road,actor.x,actor.z),ground=sampleRoadElevation(city,road,actor.x,actor.z),pose=roadRotation(city,road,actor.x,actor.z,actor.yaw);
+        const road=pathRoad(actor.path,actor.distance),{height:ground,normal}=sampleRoadSurface(city,road,actor.x,actor.z),pose=rotationFromNormal(normal,actor.yaw);
         rotation.set(pose.x,pose.y,pose.z,pose.w);position.set(actor.x+normal.x*NPC_BODY_LIFT,ground+normal.y*NPC_BODY_LIFT,actor.z+normal.z*NPC_BODY_LIFT);
         if(actor.rejoin){
           // Hold the blend while the chassis is in what is left of the way: a still kinematic car is a kerb, one moving at the chassis a shove.

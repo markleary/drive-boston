@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {Ray} from '@dimforge/rapier3d-compat';
 import {DrivingPhysics} from '../src/physics/vehicle.ts';
-import {roadDeckGeometry,roadNormal,sampleDriveSurface,sampleRoadElevation} from '../src/simulation/road-surfaces.ts';
+import {roadDeckGeometry,roadNormal,sampleDriveSurface,sampleRoadElevation,sampleRoadSurface} from '../src/simulation/road-surfaces.ts';
 
 const road={id:'banked-merge',name:'Banked tunnel merge',width:10,oneway:1,points:[[0,0],[0,30],[15,60]],elevations:[-12,-10,-8],deckEdgeElevations:[[-11.6,-12.4],[-9.8,-10.2],[-8,-8]],tunnel:{clearance:5.2}};
 const city={bounds:{minX:-50,maxX:70,minZ:-50,maxZ:100},roads:[road],buildings:[],spawn:{x:0,z:0,yaw:0}};
@@ -28,4 +28,15 @@ test('banked ramp support and normals match the physical triangles across the wh
 test('roads without explicit crossfall keep their original deck heights',()=>{
   const flat={...road,deckEdgeElevations:undefined},geometry=roadDeckGeometry(city,flat);
   for(let i=0;i<flat.points.length;i++)for(const side of [0,1])assert.ok(Math.abs(geometry.vertices[(i*2+side)*3+1]-flat.elevations[i])<1e-6);
+});
+
+test('traffic samples the same height and normal for terrain, ordinary profiles and banked decks',()=>{
+  const ground={...road,elevations:undefined},profile={...road,deckEdgeElevations:undefined};
+  const local={...city,elevation:{width:2,height:2,cellSize:30,originX:0,originZ:0,heights:[0,2,7,1]}};
+  // Zero-width ribbons have no triangle plane and fall back to the centreline profile.
+  for(const surface of [ground,profile,road,{...road,width:0}])for(const [x,z] of [[0,0],[0,30],[3,28],[-2,45],[20,65]]){
+    const expected={height:sampleRoadElevation(local,surface,x,z),normal:roadNormal(local,surface,x,z)};
+    assert.deepEqual(sampleRoadSurface(local,surface,x,z),expected);
+    if(surface===ground)assert.deepEqual(sampleRoadSurface(local,undefined,x,z),expected);
+  }
 });

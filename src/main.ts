@@ -342,7 +342,7 @@ async function boot(){
       const touch=ui.getTouchInput();let throttle=(keys.has('KeyW')||keys.has('ArrowUp')?1:0)-(keys.has('KeyS')||keys.has('ArrowDown')?1:0)+touch.throttle;
       let steer=(keys.has('KeyA')||keys.has('ArrowLeft')?1:0)-(keys.has('KeyD')||keys.has('ArrowRight')?1:0)+touch.steer;
       let brake=touch.brake,handbrake=keys.has('Space')||touch.handbrake,wheelie=keys.has('KeyX')||!!touch.wheelie;
-      const gamepadInput=padDriveInput(pad,physics!.getState().speed);throttle+=gamepadInput.throttle;steer+=gamepadInput.steer;brake=Math.max(brake,gamepadInput.brake);handbrake||=gamepadInput.handbrake;wheelie||=!!gamepadInput.wheelie;
+      const gamepadInput=padDriveInput(pad,pad.connected?physics!.getMotionState().speed:0);throttle+=gamepadInput.throttle;steer+=gamepadInput.steer;brake=Math.max(brake,gamepadInput.brake);handbrake||=gamepadInput.handbrake;wheelie||=!!gamepadInput.wheelie;
       return {throttle:THREE.MathUtils.clamp(throttle,-1,1),steer:THREE.MathUtils.clamp(steer,-1,1),brake,handbrake,wheelie};
     }
     function flightInput():FlightInput{
@@ -406,7 +406,7 @@ async function boot(){
       // A dragged view turns the walker's own heading rather than orbiting a fixed one.
       if(walking&&lookOffset){afoot.viewYaw+=lookOffset;lookOffset=0;}
       if(!paused){accumulator+=dt;while(accumulator>=1/60){
-        const before=physics!.getState(),observer=flying?flight!.state:walking?afoot:before;
+        const before=physics!.getMotionState(),observer=flying?flight!.state:walking?afoot:before;
         // Traffic and buses treat the player on foot as something in the lane; one that still reaches them at speed knocks them down.
         const cars=traffic!.obstacles(),buses=transit!.obstacles();if(walking){const body=walker!.obstacle();cars.push(body);buses.push(body);}
         transit!.update(1/60,before,observer,cars);traffic!.update(1/60,before,observer,buses);
@@ -490,7 +490,8 @@ async function boot(){
       scene.updateMatrixWorld();renderer.info.reset();world!.updateReflections(target,elapsed,flying?helicopter.group:walking?player.group:riding?bike.group:playerCar!.group);
       if(warmNightPasses){const shown=switchedLights.map(light=>light.visible);for(const lampsOnly of [false,true]){switchedLights.forEach(light=>{light.visible=!lampsOnly||light instanceof THREE.PointLight;});graphics!.render(0);}switchedLights.forEach((light,i)=>{light.visible=shown[i];});warmNightPasses=false;}
       graphics!.render(dt);frameCount++;fpsTimer+=raw;frameMs=raw*1000;if(fpsTimer>=.5){fps=Math.round(frameCount/fpsTimer);averageFrameMs=fpsTimer/frameCount*1000;frameCount=0;fpsTimer=0;}
-      ui.update(state,{fps,distance,travelMode,quality,groundHeight:sampleElevation(city,state.x,state.z),performance:{fps,frameMs:averageFrameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,traffic:traffic!.count,transit:transit!.count,pedestrians:streetLife.count},gear:carState.gear,rpm:carState.rpm,wheelieRemaining:carState.wheelieRemaining,storrowed:carState.storrowed,altitude:flying?state.y-sampleElevation(city,state.x,state.z):0,verticalSpeed:flying?flight!.state.verticalSpeed:0});saveTimer+=dt;if(saveTimer>5){saveTimer=0;save();}
+      const groundHeight=sampleElevation(city,state.x,state.z);
+      ui.update(state,{fps,distance,travelMode,quality,groundHeight,performance:{fps,frameMs:averageFrameMs,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,traffic:traffic!.count,transit:transit!.count,pedestrians:streetLife.count},gear:carState.gear,rpm:carState.rpm,wheelieRemaining:carState.wheelieRemaining,storrowed:carState.storrowed,altitude:flying?state.y-groundHeight:0,verticalSpeed:flying?flight!.state.verticalSpeed:0});saveTimer+=dt;if(saveTimer>5){saveTimer=0;save();}
       if(journal.startedAt&&now-lastSessionCapture>=15000)captureSession();
       if(scheduleNext)requestAnimationFrame(tick);
     };

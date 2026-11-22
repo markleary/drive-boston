@@ -24,7 +24,14 @@ type SoundName = typeof FOUNTAIN | CarSound | TruckEffect | typeof EV_SOUNDS[num
 export type ImpactKind = 'vehicle' | 'heavy' | 'static' | 'ground' | 'pedestrian';
 type ListenerPosition = { x: number; z: number };
 type AudioControls = Partial<Pick<DriveInput, 'steer' | 'brake' | 'handbrake'>> & { lift?: number; verticalSpeed?: number; gear?:number; rpm?:number; storrowed?:boolean; wheelspin?:number; turboBoost?:number };
-interface Loop { source: AudioBufferSourceNode; gain: GainNode; filter: BiquadFilterNode; releaseEnd?:number; }
+interface Loop {
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+  filter: BiquadFilterNode;
+  gainAlwaysZero: boolean;
+  constantRate?: number;
+  releaseEnd?: number;
+}
 const CAR_IDS=(Object.keys(CAR_POWERTRAINS) as PerformanceCarId[]).filter((id):id is CombustionCarId=>!isElectricCar(id));
 const CAR_SOUNDS=CAR_IDS.flatMap(id=>carLayers(id).map(layer=>carSound(id,layer)));
 const CAR_ENGINE_SOUNDS=CAR_IDS.flatMap(id=>(['idle','drive','high'] as const).map(layer=>carSound(id,layer)));
@@ -635,7 +642,8 @@ export class DriveAudio {
     filter.Q.value = turbo ? (name===GT2_TURBO?1.1:2) : .5;
     const gain = context.createGain(); gain.gain.value = 0;
     source.connect(filter); filter.connect(gain); gain.connect(this.master!);
-    this.loops.set(name, { source, gain, filter }); source.start();
+    this.loops.set(name, { source, gain, filter, gainAlwaysZero: name !== REVERSE_ALARM, constantRate: initialRate });
+    source.start();
   }
 
   private setLoop(name: SoundName, volume: number, rate: number, cutoff: number) {
@@ -644,8 +652,17 @@ export class DriveAudio {
     const now = this.context.currentTime;
     if (volume>0 && name === 'engine-idle' && this.failed.has('engine-drive')) volume = Math.max(volume, 0.46);
     if (volume>0 && name === 'engine-drive' && this.failed.has('engine-idle')) volume = Math.max(volume, 0.4);
-    loop.gain.gain.setTargetAtTime(volume, now, name === 'tire-skid' ? 0.07 : 0.14);
-    loop.source.playbackRate.setTargetAtTime(rate, now, name===EV_REVERSE?.2:.12);
+    // A never-used engine layer is already silent and runs at its initial rate.
+    // Once a parameter has moved, keep scheduling it normally, including fades
+    // back to the initial value. Its current value may still be approaching it.
+    if (!loop.gainAlwaysZero || volume !== 0) {
+      loop.gainAlwaysZero = false;
+      loop.gain.gain.setTargetAtTime(volume, now, name === 'tire-skid' ? 0.07 : 0.14);
+    }
+    if (rate !== loop.constantRate) {
+      loop.constantRate = undefined;
+      loop.source.playbackRate.setTargetAtTime(rate, now, name === EV_REVERSE ? 0.2 : 0.12);
+    }
     loop.filter.frequency.setTargetAtTime(cutoff, now, 0.12);
   }
 
@@ -656,7 +673,7 @@ export class DriveAudio {
     const output = this.context!.createBuffer(input.numberOfChannels, length, input.sampleRate);
     for (let channel = 0; channel < input.numberOfChannels; channel++) {
       const source = input.getChannelData(channel), target = output.getChannelData(channel);
-      target.set(source.subarray(overlap));
+      target.set(source.subarray(overlap, length));
       for (let i = 0; i < overlap; i++) {
         const t = i / (overlap - 1);
         target[length - overlap + i] = source[input.length - overlap + i] * (1 - t) + source[i] * t;

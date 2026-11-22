@@ -51,16 +51,32 @@ export function roadProjection(road:Pick<Road,'points'>,x:number,z:number){
 /** Elevations are road-specific: crossing paths may occupy independent levels. */
 export function sampleRoadElevation(city:CityData,road:Road,x:number,z:number){
   if(!road.elevations)return sampleElevation(city,x,z);
-  const plane=road.deckEdgeElevations&&deckPlaneAt(road,x,z);if(plane)return plane.height;
-  const hit=roadProjection(road,x,z),a=road.elevations[hit.index],b=road.elevations[hit.index+1]??a;
+  const hit=roadProjection(road,x,z),plane=road.deckEdgeElevations&&deckPlaneAt(road,x,z,hit.index);
+  return plane?plane.height:profileHeight(road.elevations,hit);
+}
+function profileHeight(elevations:number[],hit:{index:number;t:number}){
+  const a=elevations[hit.index],b=elevations[hit.index+1]??a;
   return a+(b-a)*hit.t;
+}
+function slopeNormal(gx:number,gz:number){
+  const n=Math.hypot(gx,1,gz);return{x:-gx/n,y:1/n,z:-gz/n};
+}
+function profileNormal(road:Road,elevations:number[],i:number){
+  const a=road.points[i],b=road.points[i+1]??a,dx=b[0]-a[0],dz=b[1]-a[1];
+  const slope=((elevations[i+1]??elevations[i])-elevations[i])/(dx*dx+dz*dz||1);
+  return slopeNormal(dx*slope,dz*slope);
+}
+/** Height and normal for a vehicle pose share one projection and, on a banked deck, one triangle search. */
+export function sampleRoadSurface(city:CityData,road:Road|undefined,x:number,z:number){
+  if(!road?.elevations)return{height:sampleElevation(city,x,z),normal:sampleTerrainNormal(city,x,z)};
+  const hit=roadProjection(road,x,z),plane=road.deckEdgeElevations&&deckPlaneAt(road,x,z,hit.index);
+  if(plane)return{height:plane.height,normal:slopeNormal(plane.gx,plane.gz)};
+  return{height:profileHeight(road.elevations,hit),normal:profileNormal(road,road.elevations,hit.index)};
 }
 export function roadNormal(city:CityData,road:Road,x:number,z:number){
   if(!road.elevations)return sampleTerrainNormal(city,x,z);
-  const plane=road.deckEdgeElevations&&deckPlaneAt(road,x,z);if(plane){const n=Math.hypot(plane.gx,1,plane.gz);return{x:-plane.gx/n,y:1/n,z:-plane.gz/n};}
-  const hit=roadProjection(road,x,z),a=road.points[hit.index],b=road.points[hit.index+1]??a;
-  const dx=b[0]-a[0],dz=b[1]-a[1],slope=((road.elevations[hit.index+1]??road.elevations[hit.index])-road.elevations[hit.index])/(dx*dx+dz*dz||1);
-  const gx=dx*slope,gz=dz*slope,n=Math.hypot(gx,1,gz);return{x:-gx/n,y:1/n,z:-gz/n};
+  const hit=roadProjection(road,x,z),plane=road.deckEdgeElevations&&deckPlaneAt(road,x,z,hit.index);
+  return plane?slopeNormal(plane.gx,plane.gz):profileNormal(road,road.elevations,hit.index);
 }
 export function roadRotation(city:CityData,road:Road,x:number,z:number,yaw:number){return rotationFromNormal(roadNormal(city,road,x,z),yaw);}
 
@@ -113,7 +129,7 @@ function elevatedNear(city:CityData,x:number,z:number){
  * (a survey trace's ID too: only sampleVehicleSurface picks one unasked). */
 export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sampleElevation(city,x,z)+.4,roadId?:string){
   const registered=streamedSurfaces.get(city),chosen=roadId?city.roads?.find(r=>r.id===roadId)??city.surveyRoads?.find(r=>r.id===roadId)??registered?.get(roadId)?.road:undefined;
-  if(chosen&&roadProjection(chosen,x,z).distance<=roadWidthAt(chosen,x,z)/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
+  if(chosen&&roadProjection(chosen,x,z).distance<=roadWidthAt(chosen,x,z)/2+.3)return{...sampleRoadSurface(city,chosen,x,z),road:chosen};
   const ground=sampleElevation(city,x,z),below=tunnelAt(city,x,z,yReference),portal=inTunnelPortal(city,x,z);
   let height=(portal||below&&ground>yReference+.4)?-Infinity:ground,normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
   const fields=playingFields.get(city);
@@ -249,9 +265,9 @@ export function deckEdgeElevation(road:Road,index:number,side:number){return roa
 /** Match the rendered/collidable ribbon plane, including crossfall at merges.
  * Centerline projection alone gives the wrong support on a banked ramp or a
  * sloping bend. Only adjacent segments are needed after the road projection. */
-export function deckPlaneAt(road:Road,x:number,z:number){
-  const hit=roadProjection(road,x,z);let best:{height:number;gx:number;gz:number;outside:number}|undefined;
-  for(let i=Math.max(0,hit.index-1);i<Math.min(road.points.length-1,hit.index+2);i++){
+export function deckPlaneAt(road:Road,x:number,z:number,index=roadProjection(road,x,z).index){
+  let best:{height:number;gx:number;gz:number;outside:number}|undefined;
+  for(let i=Math.max(0,index-1);i<Math.min(road.points.length-1,index+2);i++){
     const points=[deckEdge(road,i,-1),deckEdge(road,i,1),deckEdge(road,i+1,-1),deckEdge(road,i+1,1)];
     const heights=[deckEdgeElevation(road,i,-1),deckEdgeElevation(road,i,1),deckEdgeElevation(road,i+1,-1),deckEdgeElevation(road,i+1,1)];
     for(const [ia,ib,ic]of [[0,1,2],[1,3,2]]){
