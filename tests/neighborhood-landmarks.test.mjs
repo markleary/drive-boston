@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {fenwayDiamond,createFenwayRoofSampler} from '../src/render/fenway-layout.ts';
+import {fenwayDiamond,createFenwayRoofSampler,fenwayScoreboardMount} from '../src/render/fenway-layout.ts';
 import {prepareNeighborhoodArchitecture,architectureFor} from '../src/render/neighborhood-profiles.ts';
 
 import {loadCentralCity,loadMetroCity} from './helpers/metro-city.mjs';
@@ -56,4 +56,19 @@ test('Fenway seat supports include the separate lower-bowl slab without covering
   assert.ok(roofAt(-1840,470)>7.4,'the rising main-shell stand must still take precedence farther uphill');
   assert.equal(roofAt(-1850,390),-Infinity,'the open playing field must not acquire a fabricated roof');
   assert.ok(Math.abs(createFenwayRoofSampler(2)(-1840,460)-roofAt(-1840,460)-2)<1e-6,'the source datum offset is applied once');
+});
+
+test('the center-field scoreboard faces the diamond with every upright on the surveyed bleachers',()=>{
+  const roofAt=createFenwayRoofSampler(),mount=fenwayScoreboardMount(roofAt);
+  assert.ok(mount);
+  const {x,z,yaw,feet,bottom}=mount,{home}=fenwayDiamond();
+  assert.ok((home[0]-x)*Math.sin(yaw)+(home[1]-z)*Math.cos(yaw)>0);
+  assert.ok(Math.hypot(feet.at(-1).x-feet[0].x,feet.at(-1).z-feet[0].z)>15,'supports span the cabinet');
+  for(const foot of feet){
+    assert.ok(Number.isFinite(foot.y));
+    assert.equal(foot.y,roofAt(foot.x,foot.z));
+    assert.ok(bottom-foot.y>0&&bottom-foot.y<3,'the cabinet stands just above the deck');
+  }
+  assert.equal(fenwayScoreboardMount(createFenwayRoofSampler(4)).bottom,bottom+4);
+  assert.equal(fenwayScoreboardMount(()=>-Infinity),undefined,'a missing deck cannot carry a board');
 });

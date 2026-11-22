@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
-import {meshBuildingIds} from '../src/simulation/building-collisions.ts';
+import RAPIER from '@dimforge/rapier3d-compat';
+import {meshBuildingIds,usesExactBuildingCollision} from '../src/simulation/building-collisions.ts';
 import {sampleElevation} from '../src/simulation/terrain.ts';
+import {sampleVehicleSurface} from '../src/simulation/road-surfaces.ts';
+import {DrivingPhysics} from '../src/physics/vehicle.ts';
+import {createWalker} from '../src/simulation/walker.ts';
+import {fenwayPlayingSurface} from '../src/render/fenway-field.ts';
 import {sourceFootingGeometry,addSourceFooting} from '../src/render/source-footings.ts';
-import {tileSourceGeometry} from '../src/render/tile-geometry.ts';
+import {tileCollisionIndices,tileSourceGeometry} from '../src/render/tile-geometry.ts';
 import {loadCentralCity} from './helpers/metro-city.mjs';
 
 test('real concave source wall bottoms ground to terrain without filling streets or Fenway field',async()=>{
@@ -53,4 +58,33 @@ test('real concave source wall bottoms ground to terrain without filling streets
   ray.set(new THREE.Vector3(x+nx,1.2,z+nz),new THREE.Vector3(-nx,0,-nz));ray.far=2;
   assert.ok(ray.intersectObject(generated.get('BOS-73AP7-T4BL0-O4QDM'),false).length>0,'the street-visible gap below Fenway must be closed along the real wall');
   for(const mesh of scene.children)mesh.geometry.dispose();
+});
+
+test('Fenway carries the player on its visible field and releases that support with its tile',async()=>{
+  const city=await loadCentralCity({bounds:{minX:-1980,maxX:-1640,minZ:320,maxZ:535}});
+  const stadium=city.buildings.find(b=>b.id==='BOS-73AP7-T4BL0-O4QDM');
+  const physics=await DrivingPhysics.create(city,{streaming:true,meshBuildingIds}),walker=createWalker(city,physics);
+  const field=fenwayPlayingSurface(stadium),x=-1850,z=390;
+  try{
+    for(const b of city.buildings){
+      const data=city.geometry.get(b.id);
+      if(usesExactBuildingCollision(b))physics.addStaticMesh(data.positions,tileCollisionIndices(data));
+      else physics.addBuildingHull(b);
+    }
+    const collider=physics.addPlayingField(field.vertices,field.indices,field.boundary);
+    physics.world.step();
+    const ray=new RAPIER.Ray({x,y:20,z},{x:0,y:-1,z:0});
+    const hit=physics.world.castRay(ray,30,true,RAPIER.QueryFilterFlags.ONLY_FIXED);
+    assert.equal(hit?.collider.handle,collider.handle,'the convex lower-bowl roof must not enclose the turf');
+    const surface=sampleVehicleSurface(city,x,z);
+    assert.ok(Math.abs(surface.height-field.y)<1e-5,'default walkTo and vehicle placement use the playing surface');
+    walker.place(x,surface.height,z,0);
+    for(let i=0;i<90;i++){
+      walker.update(1/60,{forward:1,strafe:0,turn:0,run:true,jump:false});physics.world.step();
+    }
+    assert.ok(walker.state.z>z+5&&walker.state.grounded&&Math.abs(walker.state.y-field.y)<.08);
+    physics.removeColliders([collider]);physics.world.step();
+    assert.equal(physics.world.castRay(ray,30,true,RAPIER.QueryFilterFlags.ONLY_FIXED),null);
+    assert.equal(sampleVehicleSurface(city,x,z).height,sampleElevation(city,x,z));
+  }finally{field.geometry.dispose();walker.dispose();physics.dispose();}
 });

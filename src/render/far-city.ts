@@ -1,12 +1,16 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CityData } from '../types';
 import type { MetroCity } from '../simulation/city-tiles.ts';
 import { drawsFarMassing, type FarBuilding, type FarTile } from '../simulation/far-format.ts';
 import { terrainGrid } from '../simulation/terrain.ts';
+import { tileKey, tileOf } from '../simulation/tile-format.ts';
 import { FACADE_STYLES } from './materials.ts';
 import { HOUSE_FAR_STYLE, HOUSE_PALETTES } from './house-styles.ts';
 import { clipPortalSurface } from './terrain-ground.ts';
 import { farPassageFootprints, isTunnelPassageFar } from '../simulation/tunnel-passages.ts';
+import { fenwayDiamond, fenwayInfield } from './fenway-layout.ts';
+import { fenwayFieldElevation, fenwayFieldPatch, fenwayGrassBoundary, isFenwayStadium } from './fenway-field.ts';
 
 /** Distant representation of the whole metro: one flat-shaded box per hull
  * (its minimum-area oriented rectangle; a sprawling complex by its massing
@@ -29,12 +33,31 @@ function styleColor(style: number) {
   return base.lerp(new THREE.Color('#b9bcb8'), .22);
 }
 
+// The terraces are far.bin massing fragments. The dirt and grass stay
+// legible from the air and share the surrounding ground's draw and lifetime.
+function addFenwayField(ground: THREE.BufferGeometry, y: number, groundColor: THREE.Color) {
+  const { dirt, grass: diamond } = fenwayInfield(fenwayDiamond());
+  const layers = [ground, fenwayFieldPatch(fenwayGrassBoundary, y, dirt), fenwayFieldPatch(dirt, y, diamond), fenwayFieldPatch(diamond, y)];
+  const grass = new THREE.Color('#567f40'), colors = [groundColor, grass, new THREE.Color('#a77b56'), grass];
+  layers.forEach((geometry, layer) => {
+    const values = new Float32Array(geometry.getAttribute('position').count * 3);
+    for (let offset = 0; offset < values.length; offset += 3) colors[layer].toArray(values, offset);
+    geometry.setAttribute('color', new THREE.BufferAttribute(values, 3));
+  });
+  const combined = mergeGeometries(layers)!;
+  layers.forEach(geometry => geometry.dispose());
+  return combined;
+}
+
 export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false, replaced?: ReadonlySet<FarBuilding>): FarCityView | undefined {
   const metro = city as MetroCity; if (!metro.far || !metro.tiles) return undefined;
   const group = new THREE.Group(); group.name = 'Distant metro'; scene.add(group);
   const chunks = new Map<string, { buildings?: THREE.InstancedMesh; ground?: THREE.Mesh; detailed: boolean; center: THREE.Vector3; count: number }>();
   const size = metro.tiles.size;
   const groundMaterial = new THREE.MeshLambertMaterial({ color: '#b9bea8' });
+  const stadium = metro.landmarkBuildings?.find(isFenwayStadium);
+  const stadiumKey = stadium && tileKey(...tileOf(...stadium.center, size));
+  const stadiumMaterial = stadium && new THREE.MeshLambertMaterial({ vertexColors: true });
   let buildingCount = 0;
   const colors = Array.from({ length: HOUSE_FAR_STYLE + HOUSE_PALETTES.length }, (_, i) => styleColor(i)), roofColor = new THREE.Color('#7d7a72');
   // Colours travel as bytes, walls per instance and the roof's in the shader, at the eight bits the vertex colours had.
@@ -98,7 +121,10 @@ export function createFarCity(scene: THREE.Scene, city: CityData, mobile = false
     const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geometry.setIndex(new THREE.BufferAttribute(indices, 1)); geometry.computeVertexNormals(); geometry.computeBoundingSphere();
     clipPortalSurface(city,geometry);
-    const mesh = new THREE.Mesh(geometry, groundMaterial); mesh.name = `Distant ground ${key}`; mesh.renderOrder = -4; mesh.userData.noAO = true; group.add(mesh);
+    const mesh = key === stadiumKey && stadium && stadiumMaterial
+      ? new THREE.Mesh(addFenwayField(geometry, fenwayFieldElevation(stadium), groundMaterial.color), stadiumMaterial)
+      : new THREE.Mesh(geometry, groundMaterial);
+    mesh.name = `Distant ground ${key}`; mesh.renderOrder = -4; mesh.userData.noAO = true; group.add(mesh);
     chunks.get(key)!.ground = mesh;
   }
   function release(key: string) {

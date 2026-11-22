@@ -5,6 +5,7 @@ import {inTransitClearance} from './transit-corridors.ts';
 import {inTunnelPortal,openCutFloorAt,tunnelAt,tunnelsNear} from './tunnels.ts';
 import {CLOSURE_SETBACK,LANE_WIDTH,isHighwayDeck,motorwayLanes,pointAtDistance,speedClass,stations} from './motorway.ts';
 import {medianStretches} from './median-barriers.ts';
+import {pointInPolygon} from './polygon.ts';
 
 /** Bounding boxes of 16-segment runs of a long polyline (a highway deck has
  * hundreds of points and is projected for every car on it every step). */
@@ -65,6 +66,19 @@ export function roadRotation(city:CityData,road:Road,x:number,z:number,yaw:numbe
 
 const elevatedIndexes=new WeakMap<CityData,Map<string,Road[]>>();
 const streamedSurfaces=new WeakMap<CityData,Map<string,{road:Road;references:number}>>();
+interface PlayingField { boundary:Point2[]; height:number; minX:number; maxX:number; minZ:number; maxZ:number; }
+const playingFields=new WeakMap<CityData,Set<PlayingField>>();
+
+/** Fenway's turf replaces the bare-earth DEM within its warning track. A
+ * vehicle switch or on-foot placement must choose the same ground as Rapier. */
+export function registerPlayingField(city:CityData,boundary:Point2[],height:number){
+  let fields=playingFields.get(city);
+  if(!fields){fields=new Set();playingFields.set(city,fields);}
+  const xs=boundary.map(p=>p[0]),zs=boundary.map(p=>p[1]);
+  const field={boundary,height,minX:Math.min(...xs),maxX:Math.max(...xs),minZ:Math.min(...zs),maxZ:Math.max(...zs)};
+  fields.add(field);
+  return()=>{if(fields.delete(field)&&!fields.size)playingFields.delete(city);};
+}
 /** Park paths arrive in tiles, outside city.roads. Keep their support query alive
  * for exactly as long as their physical decks (including overlapping owners). */
 export function registerDriveSurface(city:CityData,road:Road){
@@ -102,6 +116,12 @@ export function sampleDriveSurface(city:CityData,x:number,z:number,yReference=sa
   if(chosen&&roadProjection(chosen,x,z).distance<=roadWidthAt(chosen,x,z)/2+.3)return{height:sampleRoadElevation(city,chosen,x,z),normal:roadNormal(city,chosen,x,z),road:chosen};
   const ground=sampleElevation(city,x,z),below=tunnelAt(city,x,z,yReference),portal=inTunnelPortal(city,x,z);
   let height=(portal||below&&ground>yReference+.4)?-Infinity:ground,normal=sampleTerrainNormal(city,x,z),road:Road|undefined;
+  const fields=playingFields.get(city);
+  if(fields&&!below&&!portal)for(const field of fields){
+    if(x>=field.minX&&x<=field.maxX&&z>=field.minZ&&z<=field.maxZ&&pointInPolygon(x,z,field.boundary)){
+      height=field.height;normal={x:0,y:1,z:0};break;
+    }
+  }
   for(const candidate of [...elevatedNear(city,x,z),...[...(registered?.values()??[])].map(s=>s.road)]){
     if(!candidate.elevations)continue;
     const hit=roadProjection(candidate,x,z);if(hit.distance>roadWidthAt(candidate,x,z)/2+.05)continue;

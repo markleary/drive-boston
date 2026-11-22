@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {createFarCity} from '../src/render/far-city.ts';
 import {BuildingIndex} from '../src/simulation/city-tiles.ts';
 import {drawsFarMassing,parseFar} from '../src/simulation/far-format.ts';
+import {loadMetroCity} from './helpers/metro-city.mjs';
 
 // A tile shaped like far.bin's 0_0: an ordinary hull, a hidden complex whose 400 m hull spans the
 // street between its wings, its two massing fragments (which repeat the hidden flag), and a hidden
@@ -56,6 +57,28 @@ test('fragments hide and return with their detailed tile',()=>{
   view.setChunkDetailed('0_0',true);assert.equal(mesh.visible,false);
   view.update(new THREE.Vector3(500,0,500),0);assert.equal(mesh.visible,false);
   view.setChunkDetailed('0_0',false);view.update(new THREE.Vector3(500,0,500),0);assert.equal(mesh.visible,true);
+});
+
+test('distant Fenway keeps the field open between its surveyed grandstands',async()=>{
+  const metro=await loadMetroCity({tiles:[]}),key='-2_0';
+  metro.tiles={...metro.tiles,keys:[key]};
+  const view=createFarCity(new THREE.Scene(),metro,true);
+  view.update(new THREE.Vector3(-1850,90,390),90);
+  const blocks=view.group.getObjectByName('Distant blocks -2_0'),ground=view.group.getObjectByName('Distant ground -2_0');
+  const ray=new THREE.Raycaster(),down=new THREE.Vector3(0,-1,0);
+  for(const [x,z,color] of [[-1850,390,'567f40'],[-1862,416,'a77b56'],[-1874,428,'567f40']]){
+    ray.set(new THREE.Vector3(x,100,z),down);
+    assert.equal(ray.intersectObject(blocks).length,0,'a stadium hull must not roof over the grass or dirt');
+    const field=ray.intersectObject(ground).filter(hit=>hit.point.y>0);
+    assert.equal(field.length,1,'adjoining field finishes must not fight for depth at skyline distance');
+    assert.equal(new THREE.Color().fromBufferAttribute(ground.geometry.attributes.color,field[0].face.a).getHexString(),color);
+  }
+  for(const [x,z] of [[-1840,460],[-1760,381]]){
+    ray.set(new THREE.Vector3(x,100,z),down);
+    assert.ok(ray.intersectObject(blocks)[0]?.point.y>6,'the lower bowl and outfield bleachers remain visible');
+  }
+  view.setChunkDetailed(key,true);
+  assert.equal(view.stats().geometryBytes,0,'mobile releases the whole proxy when the detailed tile arrives');
 });
 
 test('packed phone hulls keep map and collision queries exact after their decoded footprints are evicted',()=>{

@@ -277,7 +277,7 @@ async function boot(){
     physics.world.step();
     // Desktop prewarms the metro GPS graph. Phones build it when a destination is selected.
     if(!mobile)routeGraph(city);
-    ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city);prudential=addPrudentialCrown(scene,city);
+    ui.setLoading('Opening the streets',.82);addLandmarkDetails(scene,city);const cityLandmarks=addCityLandmarkDetails(scene,city,(vertices,indices,boundary)=>physics!.addPlayingField(vertices,indices,boundary));prudential=addPrudentialCrown(scene,city);
     // Streamed tiles carry their own storefronts, facade depth, porches, parks and rooftops.
     const streetscape=metro?undefined:addStreetscape(scene,city);const facadeDetails=metro?undefined:addFacadeDetails(scene,city);const neighborhoodDetails=metro?undefined:addNeighborhoodDetails(scene,city);const park=addParkDetails(scene,city);const cityParks=metro?undefined:addCityParkDetails(scene,city,{mobile,detailed:()=>quality==='high',onShore:(vertices,indices)=>physics!.addStaticMesh(vertices,indices),onSolids:boxes=>{physics!.addParapets(boxes);}});const groundCover=createGroundCover(scene,city,world.streamer);const rooftops=metro?undefined:addRooftopDetails(scene,city);
     const constructionZones=planConstructionZones(city,{seed:crypto.getRandomValues(new Uint32Array(1))[0],transitRoutes:transitData.routes});
